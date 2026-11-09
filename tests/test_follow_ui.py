@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import json
 import sys
 import tempfile
 from pathlib import Path

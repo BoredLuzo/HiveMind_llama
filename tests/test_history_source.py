@@ -17,7 +17,6 @@ import shutil
 import sys
 import tempfile
 import threading
-import inspect
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent

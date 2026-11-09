@@ -273,7 +273,8 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           summary["raw"]["median_seconds"] == 15.0,
           f" ({summary['raw']['median_seconds']})")
     check("aggregate: tokens summed",
-          summary["hivemind_direct"]["tokens_total"] == 1200,
+          summary["hivemind_direct"]["tokens_total"] == 1200
+          and summary["hivemind_direct"]["net_tokens_total"] == 1200,
           f" ({summary['hivemind_direct']['tokens_total']})")
 
     buf = io.StringIO()
@@ -284,6 +285,136 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
         name in out for name in ("raw", "hivemind_direct", "hivemind_duo")), f" ({out!r})")
     check("report: shows the delta column", "+1.00" in out and "+0.50" in out,
           f" ({out!r})")
+
+    # ── D1 relative metrics ───────────────────────────────────────────────
+    # 4 synthetic tasks. Cell pass rates: raw 0.0, raw_files 0.25 (fix_a),
+    # hivemind_direct 0.5 (fix_a+fix_c), aider 0.75.
+    rows = [
+        {"task": "fix_a", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "fix_c", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "feature_b", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "feature_d", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "fix_a", "condition": "raw_files", "ok": True, "seconds": 1, "tokens": 100},
+        {"task": "fix_c", "condition": "raw_files", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "feature_b", "condition": "raw_files", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "feature_d", "condition": "raw_files", "ok": False, "seconds": 1, "tokens": 100},
+        {"task": "fix_a", "condition": "hivemind_direct", "ok": True, "seconds": 2,
+         "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 4},
+        {"task": "fix_c", "condition": "hivemind_direct", "ok": True, "seconds": 2,
+         "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 2},
+        {"task": "feature_b", "condition": "hivemind_direct", "ok": False, "seconds": 2,
+         "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 0},
+        {"task": "feature_d", "condition": "hivemind_direct", "ok": False, "seconds": 2,
+         "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 0},
+        {"task": "fix_a", "condition": "aider", "ok": True, "seconds": 1, "tokens": 50},
+        {"task": "fix_c", "condition": "aider", "ok": True, "seconds": 1, "tokens": 50},
+        {"task": "feature_b", "condition": "aider", "ok": True, "seconds": 1, "tokens": 50},
+        {"task": "feature_d", "condition": "aider", "ok": False, "seconds": 1, "tokens": 50},
+    ]
+    rel_summary = aggregate(rows)
+    check("relative: delta_vs_raw kept",
+          rel_summary["hivemind_direct"]["delta_vs_raw"] == 0.5,
+          f" ({rel_summary['hivemind_direct'].get('delta_vs_raw')})")
+    check("relative: delta_vs_raw_files when the baseline exists",
+          rel_summary["hivemind_direct"]["delta_vs_raw_files"] == 0.25
+          and rel_summary["raw"]["delta_vs_raw_files"] == -0.25,
+          f" ({rel_summary['hivemind_direct'].get('delta_vs_raw_files')}/"
+          f"{rel_summary['raw'].get('delta_vs_raw_files')})")
+    check("relative: cached share is cached/total",
+          rel_summary["hivemind_direct"]["cached_share"] == 0.5
+          and rel_summary["aider"]["cached_share"] == 0.0,
+          f" ({rel_summary['hivemind_direct'].get('cached_share')})")
+    check("relative: rounds counted",
+          rel_summary["hivemind_direct"]["rounds_total"] == 6
+          and rel_summary["hivemind_direct"]["rounds_median"] == 1.0,
+          f" ({rel_summary['hivemind_direct'].get('rounds_total')})")
+
+    from bench.relative import build_relative  # noqa: E402
+    rel = build_relative(rows)
+    direct = rel["conditions"]["hivemind_direct"]
+    check("relative: block lists present baselines",
+          rel["baselines_present"] == ["raw", "raw_files"], f" ({rel['baselines_present']})")
+    check("relative: condition deltas vs both baselines",
+          direct["delta_vs_raw"] == 0.5 and direct["delta_vs_raw_files"] == 0.25,
+          f" ({direct['delta_vs_raw']}/{direct['delta_vs_raw_files']})")
+    check("relative: category rates and deltas",
+          direct["categories"]["bugfix"] == {"pass_rate": 1.0, "delta_vs_raw": 1.0,
+                                             "delta_vs_raw_files": 0.5}
+          and direct["categories"]["feature"]["delta_vs_raw"] == 0.0,
+          f" ({direct['categories']})")
+    check("relative: baseline itself has zero self-delta",
+          rel["conditions"]["raw"]["delta_vs_raw"] == 0.0
+          and rel["conditions"]["raw_files"]["delta_vs_raw"] == 0.25,
+          f" ({rel['conditions']['raw']}/{rel['conditions']['raw_files']})")
+    check("relative: token ratios vs aider",
+          direct["tokens"]["net_vs_aider_ratio"] == 6.0
+          and direct["tokens"]["total_vs_aider_ratio"] == 8.0
+          and rel["conditions"]["aider"]["tokens"]["net_vs_aider_ratio"] == 1.0,
+          f" ({direct['tokens']})")
+    check("relative: cached share and rounds in the block",
+          direct["tokens"]["cached_share"] == 0.5
+          and direct["rounds"] == {"total": 6, "median": 1.0},
+          f" ({direct['tokens']['cached_share']}/{direct['rounds']})")
+
+    # Missing baseline: no raw rows -> every delta_vs_raw is None, not a crash.
+    no_raw = build_relative([r for r in rows if r["condition"] != "raw"])
+    check("relative: missing raw baseline -> delta None, flagged absent",
+          no_raw["baselines_present"] == ["raw_files"]
+          and all(v["delta_vs_raw"] is None for v in no_raw["conditions"].values()),
+          f" ({no_raw['baselines_present']})")
+    check("relative: missing baseline -> category delta None",
+          no_raw["conditions"]["hivemind_direct"]["categories"]["bugfix"]["delta_vs_raw"] is None,
+          f" ({no_raw['conditions']['hivemind_direct']['categories']})")
+
+    # Zero tokens: shares and ratios are None, never ZeroDivisionError.
+    zero_tokens = build_relative([
+        {"task": "fix_a", "condition": "raw", "ok": True, "seconds": 1, "tokens": 0},
+        {"task": "fix_a", "condition": "hivemind_direct", "ok": True, "seconds": 1,
+         "tokens": 0, "cached_tokens": 0, "net_tokens": 0},
+        {"task": "fix_a", "condition": "aider", "ok": True, "seconds": 1, "tokens": 0},
+    ])
+    zero_entry = zero_tokens["conditions"]["hivemind_direct"]
+    check("relative: zero tokens -> share and ratios None",
+          zero_entry["tokens"]["cached_share"] is None
+          and zero_entry["tokens"]["net_vs_aider_ratio"] is None
+          and zero_entry["tokens"]["total_vs_aider_ratio"] is None,
+          f" ({zero_entry['tokens']})")
+    check("relative: all-pass -> all deltas 0.0",
+          zero_entry["delta_vs_raw"] == 0.0,
+          f" ({zero_entry['delta_vs_raw']})")
+    all_fail = build_relative([
+        {"task": "fix_a", "condition": "raw", "ok": False, "seconds": 1, "tokens": 10},
+        {"task": "fix_a", "condition": "hivemind_direct", "ok": False, "seconds": 1,
+         "tokens": 10, "rounds": 0},
+    ])
+    check("relative: all-fail -> deltas 0.0 and rounds reported",
+          all_fail["conditions"]["hivemind_direct"]["delta_vs_raw"] == 0.0
+          and all_fail["conditions"]["hivemind_direct"]["rounds"]["total"] == 0,
+          f" ({all_fail['conditions']['hivemind_direct']})")
+
+    # The persisted JSON carries the relative block alongside the old fields.
+    out_file = root / "results" / "run_relative.json"
+    _persist(out_file, rows, cfg,
+             ["raw", "raw_files", "hivemind_direct", "aider"], "2026-11-09T00:00:00")
+    saved = json.loads(out_file.read_text(encoding="utf-8"))
+    check("results: relative block persisted",
+          saved["relative"]["conditions"]["hivemind_direct"]["delta_vs_raw"] == 0.5,
+          f" ({str(saved.get('relative'))[:120]})")
+    check("results: old summary fields untouched",
+          saved["summary"]["hivemind_direct"]["pass_rate"] == 0.5
+          and saved["summary"]["hivemind_direct"]["delta_vs_raw"] == 0.5
+          and "tokens_total" in saved["summary"]["hivemind_direct"],
+          f" ({saved['summary']['hivemind_direct']})")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_summary(rel_summary, rel)
+    out = buf.getvalue()
+    check("report: relative block is readable output",
+          "d_raw" in out and "d_raw_files" in out and "net/aider" in out
+          and "6.00x" in out, f" ({out[-400:]!r})")
+    check("report: category deltas printed",
+          "bugfix" in out and "feature" in out, f" ({out[-400:]!r})")
 
 # ── shipped starter corpus ─────────────────────────────────────────────────
 corpus = load_tasks(ROOT / "bench" / "tasks")

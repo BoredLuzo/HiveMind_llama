@@ -313,12 +313,13 @@ def test_source_structure():
         ok("D2: run_bash-only detection before the tool execution")
     else:
         fail("D2: run_bash-only detection missing")
-    if "_explore_only_rounds = resolve_explore_reset(" in text:
+    _gate = (Path(__file__).parent.parent / "core" / "duo_explore_gate.py").read_text(
+        encoding="utf-8")
+    if "res.explore_only_rounds = resolve_explore_reset(" in _gate:
         ok("D3: hook calls resolve_explore_reset() (pure function)")
     else:
         fail("D3: resolve_explore_reset call missing")
-    seg = text[text.find("_round_tool_names & _WRITE_TOOLS:"):]
-    seg = seg[:seg.find("ctx.exec_ctrl.sync_tool_rounds")]
+    seg = _gate[_gate.find("_WRITE_TOOLS:"):]
     if "_explore_only_rounds = 0" not in seg and "if _bash_changed:" not in seg:
         ok("D4: old duplicate '_explore_only_rounds = 0' cascade is gone")
     else:
@@ -327,7 +328,7 @@ def test_source_structure():
         ok("D5: hook segment delegates to resolve_explore_reset")
     else:
         fail("D5: no resolve_explore_reset delegation in the hook segment")
-    if "compute_bash_changed(_snap_before, _snap_after)" in seg:
+    if "compute_bash_changed(snap_before, _snap_after)" in seg:
         ok("D6: snapshot comparison delegates to compute_bash_changed")
     else:
         fail("D6: compute_bash_changed call missing in the hook segment")

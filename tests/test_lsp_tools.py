@@ -627,6 +627,122 @@ _out, _mgr = run("lsp_diagnostics", {"path": "sample.py"}, _auto_ws,
 check("12f cold diagnostics says 'still analyzing', not 'no diagnostics'",
       "still analyzing" in _out, f"({_out[:100]})")
 
+# ── 12n. per-run settings snapshot (F10, 2026-11-08) ─────────────────────
+# chat_run.run_stream lifts the merged run settings into
+# tools.runner._run_settings_snapshot; the LSP handlers must prefer that
+# snapshot over the live core.state.settings, and fall back when it is
+# missing (direct calls/tests). Each flow runs in its own asyncio.run(),
+# whose task context isolates the ContextVar set inside it.
+_snap_ws, _snap_sample, _snap_other = new_ws()
+
+
+def _snap_flow(snapshot, *, started=True, warm=True, diag=DIAGS):
+    """One auto_diagnostics_block call under a pinned run snapshot.
+
+    The snapshot value must win over the LIVE settings this flow sets to
+    the opposite value."""
+    async def _go():
+        # Live settings say the OPPOSITE of the snapshot everywhere the
+        # snapshot speaks - only the snapshot may decide the outcome.
+        # snapshot=None (12n5: no run context) speaks nothing, so live is
+        # simply OFF everywhere and the fallback path must keep it that way.
+        _snap = snapshot if isinstance(snapshot, dict) else {}
+        set_settings(lsp_enabled=True, lsp_auto_diagnostics=not _snap.get(
+            "lsp_auto_diagnostics", True),
+            lsp_auto_warm_on_write=not _snap.get(
+                "lsp_auto_warm_on_write", True))
+        LH._AUTO_DIAG_CACHE.clear()
+        LH._LSP_WARM_TASKS.clear()
+        fake = FakeManager(_snap_ws)
+        fake.started = started
+        fake.published = True
+        fake.diag_result = list(diag or [])
+        LH._MANAGERS[_auto_key(_snap_ws)] = fake
+        try:
+            if snapshot is not None:
+                R._run_settings_snapshot.set(dict(snapshot))
+            try:
+                return await LH.auto_diagnostics_block(
+                    _snap_ws, "sample.py", return_status=True)
+            finally:
+                R._run_settings_snapshot.set(None)
+        finally:
+            LH._MANAGERS.clear()
+            LH._LSP_WARM_TASKS.clear()
+            restore_settings()
+    return asyncio.run(_go())
+
+
+# 12n1: snapshot lsp_auto_diagnostics=false beats live true -> no block,
+# and the manager was never asked to run diagnostics.
+_txt, _handled = _snap_flow({"lsp_auto_diagnostics": False})
+check("12n1 snapshot lsp_auto_diagnostics=false beats live true",
+      _txt == "" and _handled is False, f"({_txt[:60]})")
+# 12n2: snapshot warm_on_write=false + cold server -> stays cold, no warm
+# task spawned (write does not pay for a server start).
+_txt, _handled = _snap_flow({"lsp_auto_diagnostics": True,
+                             "lsp_auto_warm_on_write": False},
+                            started=False)
+check("12n2 snapshot lsp_auto_warm_on_write=false keeps the write cold",
+      _txt == "" and _handled is False and not LH._LSP_WARM_TASKS,
+      f"({_txt[:60]})")
+# 12n3: snapshot turns auto diagnostics ON while live says off.
+_txt, _handled = _snap_flow({"lsp_auto_diagnostics": True})
+check("12n3 snapshot lsp_auto_diagnostics=true wins over live false",
+      _handled is True and _txt.startswith("[LSP auto-diagnostics"),
+      f"({_txt[:60]})")
+# 12n4: a key missing from the snapshot falls back to the live value.
+_txt, _handled = _snap_flow({"lsp_auto_diagnostics": True,
+                             "lsp_auto_warm_on_write": False},
+                            started=True)
+check("12n4 snapshot without the key keeps the warm server usable",
+      _handled is True and _txt.startswith("[LSP auto-diagnostics"),
+      f"({_txt[:60]})")
+# 12n5: no snapshot at all (unset ContextVar) -> live settings govern,
+# exactly the pre-F10 behavior for direct handler calls.
+_txt, _handled = _snap_flow(None)
+check("12n5 missing snapshot falls back to live settings (live off -> off)",
+      _txt == "" and _handled is False, f"({_txt[:60]})")
+# 12n6: the snapshot also reaches the explicit lsp_diagnostics tool
+# (wait_s comes from _lsp_settings()).
+def _snap_tool_flow(snapshot, wait_live):
+    async def _go():
+        set_settings(lsp_enabled=True, lsp_diagnostics_wait_s=wait_live)
+        LH._MANAGERS.clear()
+        created = []
+
+        class SnapFake(FakeManager):
+            def __init__(self, workspace, settings=None):
+                super().__init__(workspace, settings)
+                created.append(self)
+                self.started = True
+                self.published = True
+                self.diag_result = [DIAGS[0]]
+
+        with unittest.mock.patch.object(LC, "LspManager", SnapFake):
+            if snapshot is not None:
+                R._run_settings_snapshot.set(dict(snapshot))
+            try:
+                out = await call("lsp_diagnostics",
+                                 {"path": "sample.py"}, _snap_ws)
+            finally:
+                R._run_settings_snapshot.set(None)
+                LH._MANAGERS.clear()
+                restore_settings()
+        return out, (created[0] if created else None)
+    return asyncio.run(_go())
+
+
+# live wait_s=9.0 would win without the snapshot; the snapshot pins 0.5.
+_out, _mgr = _snap_tool_flow({"lsp_diagnostics_wait_s": 0.5}, 9.0)
+check("12n6 snapshot wait_s wins over live in lsp_diagnostics",
+      ("diagnostics", str(_snap_sample), 0.5) in _mgr.calls,
+      f"({[c for c in _mgr.calls if c[0] == 'diagnostics']})")
+_out, _mgr = _snap_tool_flow(None, 9.0)
+check("12n7 without a snapshot the live wait_s applies",
+      ("diagnostics", str(_snap_sample), 9.0) in _mgr.calls,
+      f"({[c for c in _mgr.calls if c[0] == 'diagnostics']})")
+
 # ── 15. watched-change notify from the write path ────────────────────────
 _ws_ws, _ws_sample, _ws_other = new_ws()
 def _watch_flow(path):

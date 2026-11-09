@@ -1,5 +1,4 @@
 """Test: aggregate_by_model + neue Recorder-Felder (phases_ms, mode)."""
-import io
 import json
 import sys
 import tempfile

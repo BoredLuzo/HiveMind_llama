@@ -12,7 +12,7 @@
   "except_pass": 0
  },
  "backend/llama_config.py": {
-  "broad_except": 13,
+  "broad_except": 11,
   "except_pass": 4
  },
  "backend/llama_manager_utils.py": {
@@ -68,6 +68,198 @@
   "except_pass": 0
  },
  "backend/runtime_sync.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/analyze.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/runner.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_chunk/repo/chunks.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_chunk/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_clamp/repo/limits.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_clamp/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_flatten/repo/nested.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_flatten/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_parse_bool/repo/bools.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_parse_bool/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_word_freq/repo/freq.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/feature_word_freq/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_add/repo/calc.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_add/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_int_div/repo/stats.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_int_div/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_json_serialize/repo/jsonio.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_json_serialize/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_mutable_default/repo/tags.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_mutable_default/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_none_guard/repo/words.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_none_guard/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_off_by_one/repo/range_sum.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_off_by_one/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_path_join/repo/paths.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_path_join/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_regex_word/repo/words2.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_regex_word/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_sort_key/repo/people.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/fix_sort_key/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_config/repo/config.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_config/repo/service.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_config/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_move/repo/text_utils.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_move/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_shape/repo/report.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_shape/repo/shapes.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_shape/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_wire/repo/main.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_wire/repo/mathx.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/multi_wire/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/refactor_dedupe/repo/validators.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/refactor_dedupe/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/refactor_extract/repo/calc_even.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/refactor_extract/tests/test_task.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/refactor_rename/repo/pricing.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "bench/tasks/refactor_rename/tests/test_task.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -132,7 +324,7 @@
   "except_pass": 0
  },
  "core/chat_run.py": {
-  "broad_except": 12,
+  "broad_except": 11,
   "except_pass": 9
  },
  "core/chat_shortcuts.py": {
@@ -169,7 +361,7 @@
  },
  "core/duo/_pre_explore.py": {
   "broad_except": 48,
-  "except_pass": 18
+  "except_pass": 17
  },
  "core/duo/_utils.py": {
   "broad_except": 1,
@@ -199,6 +391,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "core/duo_ctx_meter.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "core/duo_dtool_setup.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -207,11 +403,19 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "core/duo_explore_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "core/duo_finalgate.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "core/duo_finalize.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/duo_finish_round.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -227,13 +431,25 @@
   "broad_except": 5,
   "except_pass": 2
  },
+ "core/duo_plan_round.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/duo_policies.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/duo_round_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "core/duo_round_input.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "core/duo_runner.py": {
-  "broad_except": 46,
-  "except_pass": 13
+  "broad_except": 39,
+  "except_pass": 10
  },
  "core/duo_task_complete_gate.py": {
   "broad_except": 5,
@@ -315,12 +531,20 @@
   "broad_except": 11,
   "except_pass": 3
  },
+ "core/tool_guards.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "core/tool_loop.py": {
   "broad_except": 1,
   "except_pass": 0
  },
  "core/toolcall_sanitize.py": {
   "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/truncated_write_salvage.py": {
+  "broad_except": 0,
   "except_pass": 0
  },
  "core/tts_audio.py": {
@@ -792,7 +1016,7 @@
   "except_pass": 0
  },
  "server.py": {
-  "broad_except": 38,
+  "broad_except": 37,
   "except_pass": 19
  },
  "settings.py": {
@@ -816,6 +1040,18 @@
   "except_pass": 0
  },
  "tests/_harness.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/browser/test_ask_user_toggle.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/coverage_run.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/coverage_site/sitecustomize.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -848,6 +1084,10 @@
   "except_pass": 0
  },
  "tests/test_action_approval.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_agentic_5xx_policy.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -891,11 +1131,23 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_background_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_bat_block_parens.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "tests/test_bat_encoding.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_bench_analyze.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_bench_runner.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -935,8 +1187,20 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_chat_route_decision_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chat_run_helpers.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_chat_search.py": {
   "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_chat_tools_route_guards.py": {
+  "broad_except": 0,
   "except_pass": 0
  },
  "tests/test_chat_vision_pre.py": {
@@ -987,6 +1251,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_compression_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_compression_empty_summary.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1004,6 +1272,10 @@
   "except_pass": 0
  },
  "tests/test_content_budget_tokens.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_coverage_setup.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1091,7 +1363,43 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_duo_coder_post_wait.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_core_tier.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_ctx_meter.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_ctx_shrink.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_duo_e2e_smoke.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_explore_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_finish_round.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_loop_guards.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_plan_round.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_round_gate.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1148,6 +1456,10 @@
   "except_pass": 0
  },
  "tests/test_feature_search_coverage.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_find_loaded_race.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1343,6 +1655,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_keep_awake_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_langrun_guard_failclosed.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1363,6 +1679,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_llama_client_retry.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_llama_start_phases.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1380,6 +1700,10 @@
   "except_pass": 0
  },
  "tests/test_log_archive.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_log_noise_behavior.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1419,7 +1743,15 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_manager_health_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_manager_lock.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_manager_vram_lock.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1579,6 +1911,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_pipeline_runner_helpers.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_planner_cancel_race.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1624,6 +1960,10 @@
   "except_pass": 0
  },
  "tests/test_prefetch_order.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_prefill_log_tail.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1679,6 +2019,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_project_state_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_read_after_write.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1700,6 +2044,10 @@
   "except_pass": 0
  },
  "tests/test_reaudit_polish.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_regression_runner_b9.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1815,6 +2163,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_simple_tool_routing.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_skip_trap.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1891,6 +2243,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_testmap_behavior.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_token_stats_by_model.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1927,6 +2283,14 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_tool_loop_nonstream.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_loop_phase_mode.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_tool_python_interpreter.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1936,6 +2300,10 @@
   "except_pass": 0
  },
  "tests/test_tool_round_default.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_route_repeat_guard.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1956,6 +2324,10 @@
   "except_pass": 0
  },
  "tests/test_tree_scout_workspace.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_truncated_write_salvage.py": {
   "broad_except": 0,
   "except_pass": 0
  },

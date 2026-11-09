@@ -131,3 +131,8 @@ lsp_auto_warm_on_write
 # Automations scheduler kill switch (settings.json only; jobs live in
 # automations.json - a UI control would suggest they are editable here).
 automations_enabled
+
+duo_selective_tests
+
+# D2 context engine: pre-seed char budget (engine-side cap, no UI control).
+duo_context_budget_chars

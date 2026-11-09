@@ -1,6 +1,6 @@
 name: windows-full
 
-# FULL-WINDOWS-GATE (2026-11-04): the complete 343-suite gate needs fixtures
+# FULL-WINDOWS-GATE (2026-11-04): the complete 353-suite gate needs fixtures
 # and tools that exist on a developer box, not on a clean hosted runner
 # (model configs, rust-analyzer, local model files). It was previously part
 # of linux-core.yml and failed on every push, which turned the Linux workflow

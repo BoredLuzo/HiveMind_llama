@@ -45,6 +45,9 @@ HELPERS = [
     # 2026-11-08: the newer split seams must honor the same contract.
     "_duo_coder_round_input", "_duo_compress_cycle", "_duo_coder_preloop",
     "_duo_task_complete_gate", "_duo_loop_guards",
+    # F13 carve (2026-11-08): coder POST wait + result sync (ps = result
+    # carrier _DuoCoderPostWaitState).
+    "_duo_coder_post_wait",
 ]
 
 from tests._harness import Harness  # noqa: E402
@@ -179,5 +182,99 @@ if _cc_fn is not None:
                     _direct.append(_tgt.attr)
     check("compress cycle: no direct ps write bypasses the sync helper",
           not _direct, f"({sorted(set(_direct))})" if _direct else "")
+
+# ---- carry-key integrity (2026-11-08 deep audit) -----------------------
+# `ps.carry` is the untyped side channel every split helper uses for the
+# runner locals it cannot model as fields. It bypassed the field checks
+# above and produced three real split bugs (a missing `_final_verdict`, an
+# unthreaded `_explore_has_contents`, and the epilogue diagnostics keys).
+# Contract: every literal key a helper reads must be present in the carry
+# dict of the state object that helper is actually called with.
+_CARRY_HELPERS = {
+    "_duo_session_epilogue", "_duo_run_finalize", "_duo_coder_round_input",
+    "_duo_dtool_setup", "_duo_inloop_planner", "_duo_compress_cycle",
+    "_duo_coder_preloop", "_duo_task_complete_gate", "_duo_loop_guards",
+    "_duo_query_actual_slot_ctx", "_duo_resolve_coder_port_cache",
+    "_duo_resolve_tool_budgets",
+}
+
+_carry_assigns: list[tuple[int, str, set[str]]] = []
+for _node in ast.walk(run_node) if run_node is not None else []:
+    if not (isinstance(_node, ast.Assign) and len(_node.targets) == 1
+            and isinstance(_node.targets[0], ast.Name)
+            and isinstance(_node.value, ast.Call)):
+        continue
+    _keys: set[str] = set()
+    for _kw in _node.value.keywords:
+        if _kw.arg == "carry" and isinstance(_kw.value, ast.Dict):
+            for _k in _kw.value.keys:
+                if isinstance(_k, ast.Constant) and isinstance(_k.value, str):
+                    _keys.add(_k.value)
+    if _keys:
+        _carry_assigns.append((_node.lineno, _node.targets[0].id, _keys))
+
+_carry_declared: dict[str, set[str]] = {}
+for _node in ast.walk(run_node) if run_node is not None else []:
+    if not (isinstance(_node, ast.Call) and isinstance(_node.func, ast.Name)
+            and _node.func.id in _CARRY_HELPERS):
+        continue
+    if len(_node.args) < 2 or not isinstance(_node.args[1], ast.Name):
+        continue
+    _var = _node.args[1].id
+    _before = [a for a in _carry_assigns if a[1] == _var and a[0] <= _node.lineno]
+    if _before:
+        _carry_declared.setdefault(_node.func.id, set()).update(
+            max(_before, key=lambda a: a[0])[2])
+
+_carry_missing: dict[str, list[str]] = {}
+for _name in sorted(_CARRY_HELPERS):
+    _hnode = helper_nodes.get(_name)
+    if _hnode is None:
+        continue
+    _reads: set[str] = set()
+    # Keys the helper writes itself are outputs, not call-site inputs
+    # (e.g. the epilogue seeds _read_final/_last_plan before consuming them).
+    _written: set[str] = set()
+    for _n in ast.walk(_hnode):
+        if isinstance(_n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            _targets = _n.targets if isinstance(_n, ast.Assign) else [_n.target]
+            for _t in _targets:
+                if isinstance(_t, ast.Subscript) and isinstance(_t.value, ast.Attribute) \
+                        and _t.value.attr == "carry" and isinstance(_t.slice, ast.Constant) \
+                        and isinstance(_t.slice.value, str):
+                    _written.add(_t.slice.value)
+        if isinstance(_n, ast.Subscript) and isinstance(_n.value, ast.Attribute) \
+                and _n.value.attr == "carry" and isinstance(_n.slice, ast.Constant) \
+                and isinstance(_n.slice.value, str):
+            _reads.add(_n.slice.value)
+        elif (isinstance(_n, ast.Call) and isinstance(_n.func, ast.Attribute)
+              and _n.func.attr == "get" and isinstance(_n.func.value, ast.Attribute)
+              and _n.func.value.attr == "carry" and _n.args
+              and isinstance(_n.args[0], ast.Constant)
+              and isinstance(_n.args[0].value, str)):
+            _reads.add(_n.args[0].value)
+    _missing = sorted((_reads - _written) - _carry_declared.get(_name, set()))
+    if _missing:
+        _carry_missing[_name] = _missing
+check("every ps.carry key a helper reads is passed at its call site",
+      not _carry_missing,
+      f"(fehlend: {_carry_missing})" if _carry_missing else
+      f"({len(_carry_declared)} Helfer geprüft)")
+
+# ---- constructor/output contracts caught by the 2026-11-08 split audit ----
+# The C2 carve dropped duo_coder_sys from the preloop constructor, so the
+# helper rebuilt the prompt from "" and overwrote base/dynamic/image hints.
+check("preloop receives the built coder system prompt",
+      "duo_coder_sys=_duo_coder_sys" in SRC)
+# The final-cleanup carve never wrote the run-counted flag back, so
+# duo_finalize incremented ProjectState.total_runs a second time.
+check("final cleanup syncs the project run counter back",
+      "ps._project_state_run_counted = _project_state_run_counted" in SRC
+      and "_project_state_run_counted = _cleanup_ps._project_state_run_counted" in SRC)
+# The pre-explore phase runs BEFORE the VRAM phase and reads
+# state["_exec_tc"]; removing it as "dead" broke every run with a KeyError.
+_vram_src = (ROOT / "core" / "duo" / "_vram.py").read_text(encoding="utf-8")
+check("pre-explore state keys are seeded before the phase",
+      '"_exec_tc": False' in SRC and '"_exec_tc": _exec_tc' in _vram_src)
 
 sys.exit(h.finish("duo_split_integrity"))

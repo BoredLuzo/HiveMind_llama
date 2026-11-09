@@ -129,7 +129,6 @@ def _roundtrip_one(sessions: Path, cid: str, disk_file: Path, expect_inline=Fals
     """The assertion block the live sampler used, on one prepared chat:
     restore(disk) has no placeholders, save -> load -> restore is cycle
     stable. expect_inline: saved file must stay ref-free (legacy chat)."""
-    import core.state as _state
     from routers import chats as C
 
     data = json.loads(disk_file.read_text(encoding="utf-8"))

@@ -14,7 +14,7 @@ import httpx
 
 from infra.run_control import drain_steer_messages
 from tools.errors import tool_call_failed
-from tools.definitions import get_tools_for_phase
+from tools.definitions import get_tools_for_phase, _tool_names_for_mode
 from tools.runner import _run_inline_tool, _current_run_id, _tool_loop_emit
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, build_steer_user_message as _build_steer_user_message
@@ -342,7 +342,31 @@ class ToolLoop:
             if self.cfg.tool_phase and self.cfg.tool_phase != "all":
                 _phase_tools = get_tools_for_phase(self.cfg.tool_phase)
                 if _phase_tools:
-                    _tools_payload = _phase_tools
+                    # F12 (2026-11-08): cfg.tool_mode used to gate EXECUTION
+                    # only (_run_inline_tool), not the advertised schema - a
+                    # mode-restricted caller with a phase advertised tools
+                    # the executor then rejected. Intersect the phase subset
+                    # with the mode allowlist. Behavior is identical when no
+                    # phase is set (payload = cfg.tools, no filtering) and
+                    # when tool_mode is empty (phase subset as before).
+                    if self.cfg.tool_mode:
+                        _mode_allowed = _tool_names_for_mode(
+                            self.cfg.tool_mode,
+                            include_websearch=self.cfg.include_websearch)
+                        _kept = [t for t in _phase_tools
+                                 if t.get("function", {}).get("name") in _mode_allowed]
+                        if _kept:
+                            _tools_payload = _kept
+                        else:
+                            # Empty intersection: never ship an empty tool
+                            # list - keep the phase subset and leave a trace.
+                            _tools_payload = _phase_tools
+                            _log.debug(
+                                "[TOOL-LOOP] phase=%r x tool_mode=%r intersect is "
+                                "empty - shipping the unfiltered phase subset (%d tools)",
+                                self.cfg.tool_phase, self.cfg.tool_mode, len(_phase_tools))
+                    else:
+                        _tools_payload = _phase_tools
             # N1: Model-aware sampling profile
             _smp = get_sampling_profile(self.cfg.model, thinking=bool(self.cfg.thinking))
             # IMAGES→PARTS (2026-10-04, live run D finding): the direct-chat

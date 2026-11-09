@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**280 settings keys.**
+**282 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -60,6 +60,7 @@ its comment) in either file, then re-run the generator.
 | `duo_compress_overflow_reserve` | int | `1024` | - |  |
 | `duo_compress_tail_tool_max_chars` | int | `8000` | yes | Chars kept from tool output when a compression tail-caps it (read by duo_runner with an 8000 fallback). |
 | `duo_compress_threshold` | int | `0` | - |  |
+| `duo_context_budget_chars` | int | `8000` | - | CONTEXT BUDGET (D2, ): upper char cap for the tiny-workspace pre-seed block (core/duo_helpers.build_preseed_context). The effective cap is min(this, ctx_tokens/4, floor 2000); 8000 keeps the old behavior. |
 | `duo_critic_ctx` | null | `None` | yes |  |
 | `duo_critic_model` | str | `` | - |  |
 | `duo_critic_tools` | bool | `False` | yes |  |
@@ -120,6 +121,7 @@ its comment) in either file, then re-run the generator.
 | `duo_run_timeout_critical_seconds` | int | `900` | yes |  |
 | `duo_run_timeout_seconds` | int | `420` | yes |  |
 | `duo_runtime_profile` | str | `balanced` | - |  |
+| `duo_selective_tests` | bool | `True` | - | SELECTIVE-TESTS (D4, ): run_tests scopes pytest/npm to the testmap-mapped tests of this run's written files; [] falls back to the full suite. Explicit paths/targets win; set false to always run all. |
 | `duo_soft_planner_wall_timeout_s` | int | `300` | - |  |
 | `duo_static_map_chars` | int | `0` | yes | 0 = tier-derived (rich: 8000); >0 = explicit static repo-map char budget |
 | `duo_symbol_ref_enabled` | bool | `True` | - |  |

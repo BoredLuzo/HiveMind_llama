@@ -501,6 +501,16 @@ _tools_restricted_run: _contextvars.ContextVar[bool] = \
 _phone_source_run: _contextvars.ContextVar[bool] = \
     _contextvars.ContextVar("phone_source_run", default=False)
 
+# F10 (2026-11-08): per-run settings snapshot. chat_run.run_stream lifts the
+# merged run settings (copy of the live dict + body overrides) into this
+# ContextVar; tool handlers that must honor the values a run STARTED with
+# read them from here (first consumer: the LSP handlers' lsp_auto_* knobs,
+# so a benchmark/gateway can pin them per request via the /stream body).
+# None = no run context (direct API calls, tests) -> live settings.
+# Propagates into asyncio.create_task children like the overrides above.
+_run_settings_snapshot: _contextvars.ContextVar[dict | None] = \
+    _contextvars.ContextVar("run_settings_snapshot", default=None)
+
 # The safe set for restricted runs (keep in sync with
 # definitions._READ_ONLY_INLINE_TOOL_NAMES + web + dialog):
 _PHONE_SAFE_TOOLS = frozenset({
@@ -1595,7 +1605,7 @@ async def _run_inline_tool(
         # write_file/edit_file on existing files there produced red errors and
         # empty diffs ("Waiting for coder output.").
         _guard_active = (not _is_external_dispatch() and _read_guard_enabled()
-                         and (tool_mode or "") not in ("duo_full", "duo_core"))
+                         and (tool_mode or "") not in ("duo_full", "duo_core", "duo_lean"))
         if _guard_active and _fp_check.exists() and _target not in _read_set and _target not in _any_read_set and _target not in _written_set and not _in_context:
             if name == "write_file":
                 return _normalize_meta_paths(
@@ -1626,7 +1636,7 @@ async def _run_inline_tool(
         #   - _in_context                = real pre-explore content in context
         #   - allow_overwrite            = explicit escape hatch
         if (
-            (tool_mode or "") in ("duo_full", "duo_core")
+            (tool_mode or "") in ("duo_full", "duo_core", "duo_lean")
             and name == "write_file"
             and _fp_check.exists()
             and not args.get("allow_overwrite")
@@ -1865,15 +1875,22 @@ async def _run_inline_tool(
             # so the model reads the guidance together with the outcome
             _result = f"{_result}\n[USER NOTE]: {_appr_note}"
 
-        if name == "read_file" and not args.get("start_line") and not args.get("end_line"):
+        if name == "read_file" and "path" in args:
+            _is_range_read = bool(args.get("start_line") or args.get("end_line"))
             _rp_ok = _normalize_tool_path(args["path"], workspace)
             if "[FILE TRUNCATED" in _result or "[TRUNCATED:" in _result:
-                _read_set.discard(_rp_ok)
+                if not _is_range_read:
+                    _read_set.discard(_rp_ok)
+            elif _result.startswith("[TOOL_ERROR"):
+                if _rp_ok not in _read_set:
+                    _any_read_set.discard(_rp_ok)
             elif not _result.startswith("[TOOL_ERROR"):
                 # H-audit: record ONLY successful reads - a BINARY_FILE /
                 # FILE_TOO_LARGE result used to arm the skip + the fuzzy-edit
                 # gate for content the model never saw.
-                _read_set.add(_rp_ok)
+                if not _is_range_read:
+                    _read_set.add(_rp_ok)
+                _any_read_set.add(_rp_ok)
                 # T2 (audit r2): the signature block used to run on ANY
                 # outcome at its own indent level - a FAILED re-read
                 # refreshed the signature for content the model never saw,

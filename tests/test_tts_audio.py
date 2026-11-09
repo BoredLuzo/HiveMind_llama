@@ -12,9 +12,7 @@ The interesting property is measurable without ears:
 
 Run: python tests/test_tts_audio.py
 """
-import io
 import sys
-import wave
 
 import numpy as np
 

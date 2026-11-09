@@ -182,9 +182,11 @@ finally:
 print("\n=== duo_runner push helper (single implementation) ===\n")
 _dsrc = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8",
                                                     errors="replace")
+_psrc = (ROOT / "core" / "duo" / "preflight.py").read_text(encoding="utf-8",
+                                                           errors="replace")
 check("7a exactly one push_after_commit import (inside the helper)",
-      _dsrc.count("push_after_commit as _pap") == 1)
-check("7b the helper exists", "async def _auto_push_after_commit" in _dsrc)
+      _psrc.count("push_after_commit as _pap") == 1)
+check("7b the helper exists in preflight", "async def _auto_push_after_commit" in _psrc)
 check("7c no dead consolidate prefix read left", "_pfx" not in _dsrc)
 
 print("\n=== empty file list is a silent skip ===\n")

@@ -7,7 +7,6 @@ through the same HiveMindMemory the auto-extraction uses.
 Run: python tests/test_remember_tool.py
 Exit 0 = all pass, Exit 1 = failures.
 """
-import ast
 import sys
 from pathlib import Path
 

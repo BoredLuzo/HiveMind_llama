@@ -7,9 +7,109 @@ import logging
 import re
 from pathlib import Path
 
+from utils.token import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
+
 # ── Constants ──────────────────────────────────────────────────────────
 
 DEFAULT_VRAM_BUDGET_GB = 7.5
+
+# PRE-SEED (2026-11-09): small workspaces don't need a read_file round. The
+# coder gets the complete files in its first user message, exactly like the
+# one-shot harnesses it competes with; the read guard is pre-populated so
+# edit_file is allowed immediately. Only top-level, small, text-like files —
+# never a recursive scan of a real repo.
+_PRESEED_EXTS = frozenset({
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml",
+    ".yaml", ".yml", ".md", ".txt", ".html", ".css", ".sh",
+})
+
+
+def _duo_context_budget_chars() -> int:
+    """duo_context_budget_chars (D2): upper cap for the pre-seed block.
+    Settings read is best-effort — a broken settings object falls back to
+    the previous fixed 8000."""
+    try:
+        from core import state as _st
+        return max(1000, int(_st.settings.get("duo_context_budget_chars", 8000)))
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return 8000
+
+
+def build_preseed_context(workspace: str, ctx_tokens: int = 0,
+                          max_files: int = 4, query: str = "",
+                          budget_chars: int | None = None) -> tuple[str, list[str]]:
+    """Return (prompt_block, relative_paths) for a tiny workspace.
+
+    Empty block/paths when the workspace has no top-level code files, or the
+    combined content exceeds the character cap. The cap scales with the coder
+    context and never exceeds duo_context_budget_chars (default 8 KB).
+
+    Up to `max_files` top-level files are inlined. D2 (2026-11-09): when the
+    workspace has MORE than `max_files` such files, the workspace index
+    (context/repo_index) selects the `max_files` files most relevant to
+    `query` (the task text) instead of refusing — but only when the query
+    actually matches something; an empty query keeps the old no-preseed
+    behavior for big workspaces.
+    """
+    try:
+        root = Path(str(workspace or ""))
+        if not root.is_dir():
+            return "", []
+        files = [
+            p for p in sorted(root.iterdir(), key=lambda x: x.name.lower())
+            if p.is_file()
+            and p.suffix.lower() in _PRESEED_EXTS
+            and not p.name.startswith(".")
+        ]
+        if not files:
+            return "", []
+        if len(files) > int(max_files):
+            if not str(query or "").strip():
+                return "", []
+            try:
+                from context.repo_index import search_workspace as _idx_search
+                _picked = _idx_search(str(root), str(query), limit=int(max_files))
+            except (ImportError, OSError):
+                _picked = []
+            if not _picked:
+                return "", []
+            _want = {name for name, _score in _picked}
+            files = [p for p in files if p.name in _want]
+        cap = 4000
+        _budget = int(budget_chars) if budget_chars is not None \
+            else _duo_context_budget_chars()
+        if int(ctx_tokens or 0) > 0:
+            cap = min(_budget, max(2000, int(ctx_tokens) // 4))
+        if cap > _budget:
+            cap = _budget
+        parts: list[str] = []
+        names: list[str] = []
+        total = 0
+        for path in files:
+            try:
+                body = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return "", []
+            if "\x00" in body:
+                return "", []
+            total += len(body)
+            if total > cap:
+                return "", []
+            names.append(path.name)
+            lang = path.suffix.lstrip(".").lower()
+            parts.append(f"### FILE: {path.name}\n```{lang}\n{body.rstrip()}\n```")
+        if not parts:
+            return "", []
+        block = (
+            "[PRE-SEEDED WORKSPACE FILES — already read, do not call read_file "
+            "for them]\n"
+            "These are the complete current contents. Edit directly with "
+            "edit_file/write_file; preserve all existing top-level symbols.\n\n"
+            + "\n\n".join(parts)
+        )
+        return block, names
+    except (OSError, ValueError, TypeError):
+        return "", []
 
 # READ-ONLY-CODER-NOTE (moved from duo_runner 2026-11-08): duo_round_input
 # needs it too; keeping it here removes the extracted-module back-edge.
@@ -553,7 +653,12 @@ def resolve_coder_tool_mode(settings: dict | None, read_only: bool = False) -> s
     if read_only:
         return "duo_readonly"
     tier = str((settings or {}).get("duo_coder_tool_tier", "core") or "core")
-    return "duo_full" if tier.strip().lower() == "full" else "duo_core"
+    _t = tier.strip().lower()
+    if _t == "full":
+        return "duo_full"
+    if _t == "lean":
+        return "duo_lean"
+    return "duo_core"
 
 
 async def _run_parallel_pre_explore(
@@ -978,3 +1083,47 @@ def should_evict_vision_after_prepro(mode, vision_model, duo_models) -> bool:
     the vision model per image."""
     return str(mode) == "code_duo" and bool(vision_model) and \
         str(vision_model) not in {str(m) for m in (duo_models or [])}
+
+
+def _log_msgsig_drift(messages, prev_sig_ref, *, round_no, chunk_no) -> None:
+    """DEBUG-only message-shape diagnostics (moved from duo_runner).
+
+    Logs the role dump and, when the message signature changed below 10k
+    tokens, a [MSGSIG-CHANGE] warning that explains a prompt-cache miss.
+    `prev_sig_ref` is a one-element list updated in place.
+    """
+    logger = logging.getLogger("hivemind.duo")
+    logger.debug(
+        "[ROLE-DUMP] round=%d system_count=%d roles=%s",
+        chunk_no,
+        sum(1 for m in messages if m.get("role") == "system"),
+        _json.dumps([m.get("role") for m in messages]),
+    )
+    try:
+        _sig_now = [(m.get("role", ""), len(str(m.get("content", "") or "")))
+                    for m in messages]
+        _prev_sig = prev_sig_ref[0] if prev_sig_ref else None
+        _changed_early = []
+        if _prev_sig:
+            _cum_chars = 0
+            for _mi in range(max(len(_sig_now), len(_prev_sig))):
+                if _mi >= len(_prev_sig):
+                    break
+                _s_cur = _sig_now[_mi] if _mi < len(_sig_now) else None
+                _s_prev = _prev_sig[_mi]
+                if _s_cur != _s_prev:
+                    if _cum_chars / _CHARS_PER_TOKEN < 10000:
+                        _changed_early.append(
+                            (_mi, int(_cum_chars / _CHARS_PER_TOKEN),
+                             _s_prev, _s_cur))
+                    break
+                if _s_cur:
+                    _cum_chars += _s_cur[1]
+        prev_sig_ref[0] = _sig_now
+        if _changed_early:
+            logger.warning(
+                "[MSGSIG-CHANGE] round=%d change below 10k tokens: %s (msgs=%d)",
+                round_no, _changed_early[:5], len(_sig_now),
+            )
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as _sig_err:
+        logger.debug("[MSGSIG-CHANGE] Signature error: %s", _sig_err)

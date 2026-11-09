@@ -14,7 +14,6 @@ Run: python tests/test_compress_plan_reinject.py
 Exit 0 = all pass, Exit 1 = failures.
 """
 import asyncio
-import re
 import sys
 from pathlib import Path
 
@@ -25,7 +24,6 @@ from context.compression import (  # noqa: E402
     _validate_compression_summary,
 )
 from core.duo.preflight import (  # noqa: E402
-    _build_plan_anchor_text,
     _strip_stale_ctx_notices,
 )
 

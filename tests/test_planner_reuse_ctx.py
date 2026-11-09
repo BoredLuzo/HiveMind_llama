@@ -13,7 +13,6 @@ ctx-mismatch kill+reload, different model → SERIAL-SLOTS evict.
 Run: python tests/test_planner_reuse_ctx.py
 Exit 0 = all pass, Exit 1 = failures.
 """
-import ast
 import sys
 from pathlib import Path
 

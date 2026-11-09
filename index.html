@@ -1598,10 +1598,15 @@
         <button class="btn" onclick="gitStash('push')" style="font-size:9px;padding:3px 9px">Stash</button>
         <button class="btn" onclick="gitStash('pop')" style="font-size:9px;padding:3px 9px">Stash Pop</button>
         <button class="btn" onclick="gitStash('list')" style="font-size:9px;padding:3px 9px">Stash List</button>
+        <button class="btn" onclick="gitShowDiff()" style="font-size:9px;padding:3px 9px">View Changes</button>
+        <button class="btn" onclick="gitLoadCheckpoints()" style="font-size:9px;padding:3px 9px">Checkpoints</button>
+        <select id="git-checkpoint-sel" style="display:none;max-width:220px;font-size:9px;padding:3px"></select>
+        <button class="btn" id="git-checkpoint-restore" onclick="gitRestoreCheckpoint()" style="display:none;font-size:9px;padding:3px 9px;color:var(--amber);border-color:rgba(224,144,48,.3)">Restore</button>
         <button class="btn" onclick="gitReset(false)" style="font-size:9px;padding:3px 9px;color:var(--amber);border-color:rgba(224,144,48,.3)">Soft Reset</button>
         <button class="btn danger" onclick="gitReset(true)" style="font-size:9px;padding:3px 9px">Hard Reset</button>
       </div>
       <div id="git-ops-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
+      <pre id="git-diff-view" style="display:none;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:9px;line-height:1.35;background:rgba(0,0,0,.25);border:1px solid rgba(120,140,170,.25);border-radius:4px;padding:6px;margin:4px 0"></pre>
       <!-- Git Auto-Push + Email + Branch Default -->
       <div class="tgl-row" style="margin-top:6px">
         <span class="tgl-text">Auto-Push</span>

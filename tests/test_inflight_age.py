@@ -6,7 +6,6 @@ clear), so a slot could stay non-evictable until restart. The mark carries a
 timestamp; older than 30 minutes counts as leaked.
 """
 import sys
-import time
 from pathlib import Path
 from unittest import mock
 

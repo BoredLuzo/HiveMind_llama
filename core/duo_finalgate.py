@@ -7,6 +7,8 @@ the state object.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import logging
 
 from core.duo.preflight import needs_test_verification
@@ -15,7 +17,7 @@ logger = logging.getLogger("hivemind.duo")
 
 
 async def _duo_final_verify_gate(ctx, ps):
-    from core.duo_runner import _write_resume_block
+    from context.resume import _write_resume_block
     if ps._duo_timed_out:
         if ps._written_files:
             yield await ctx.emit({
@@ -82,3 +84,24 @@ async def _duo_final_verify_gate(ctx, ps):
             len(ps._written_files or []),
         )
 
+
+
+@dataclasses.dataclass
+class _DuoFinalGateState:
+    """Final-gate state (split 2.3, 2026-11-05): fields the verify-gate tail
+    reads/writes; `critic_issues` is the shared list (appends in place)."""
+    _duo_hard_stop: bool = False
+    final_verdict: str = ""
+    _duo_timed_out: bool = False
+    _written_files: list = dataclasses.field(default_factory=list)
+    _verify_mutation_serial: int = 0
+    _verify_last_ok_serial: int = 0
+    _verify_warned: bool = False
+    _ws_str: str = ""
+    _explore_ctx: str = ""
+    _di: int = 0
+    _n_items: int = 1
+    _loop_items: list = dataclasses.field(default_factory=list)
+    _done_tasks: list = dataclasses.field(default_factory=list)
+    _pending_send_files: list = dataclasses.field(default_factory=list)
+    critic_issues: list = dataclasses.field(default_factory=list)

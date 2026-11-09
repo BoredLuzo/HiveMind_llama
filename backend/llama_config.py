@@ -343,8 +343,6 @@ _MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
 # Hermes3.6 Genesis V10 MTP APEX (2026-08-25): identische Launchsettings wie
 # V7 (n-cpu-moe 35, GPU-Offload 99, KV q4_0) — parallel zu V7 nutzbar.
 _HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
-# APEX-Mini (2026-10-27): same MTP head as the Compact line.
-_HERMES_APEX_MINI = "hermes3.6:35b-a3b-uncensored-genesis-apex-mini"
 _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
@@ -474,8 +472,6 @@ _DENSE_KV_CACHE_TYPES: dict[str, str] = {
 # 35B-A3B). A/B via env before pinning per-model config.
 MTP_SPEC_TYPE = "draft-mtp"
 
-MTP_ENABLED = os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off")
-
 MTP_DRAFT_N_MAX = int(os.environ.get("HIVEMIND_MTP_DRAFT_N_MAX", "2") or 2)
 
 MTP_DRAFT_N_MIN = 1
@@ -523,8 +519,6 @@ CONTEXT_SIZE_DEFAULT = 4096
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
-PRELOAD_JUDGE_ON_START = True
-
 DEFAULT_IDLE_TIMEOUT_SECONDS = 600   # 10 Minuten
 
 
@@ -553,56 +547,3 @@ BINARY_MIN_BUILD: dict[str, int] = {
 # ── Windows-Vulkan mlock/mmap-Regression (b10300+) ───────────────────────────
 #   --mlock (or --load-mode mlock) → GGML_ASSERT(addr) failed in
 NO_MMAP_MIN_BUILD = 10300
-
-# ── Physical cores (2026-10-19) ──────────────────────────────────────────────
-# MoE decode with experts in RAM is memory-bound; on an SMT CPU the logical count
-# oversubscribes the physical pipelines (measured: 16 threads 12.6 tok/s vs 8
-# threads 16.5 tok/s on an 8c/16t Ryzen). Cached - one query per process.
-_PHYS_CORES: int | None = None
-
-
-def physical_cores() -> int | None:
-    """Physical core count, or None when it cannot be determined."""
-    global _PHYS_CORES
-    if _PHYS_CORES is not None:
-        return _PHYS_CORES or None
-    import os as _os
-    import subprocess as _sp
-    try:
-        if _os.name == "nt":
-            _cnf = getattr(_sp, "CREATE_NO_WINDOW", 0)
-            r = _sp.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance Win32_Processor | Measure-Object -Property "
-                 "NumberOfCores -Sum).Sum"],
-                capture_output=True, text=True, timeout=8,
-                encoding="utf-8", errors="replace", creationflags=_cnf,
-            )
-            _n = int((r.stdout or "").strip() or 0)
-        else:
-            try:
-                r = _sp.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True,
-                            text=True, timeout=5)
-                _n = int((r.stdout or "").strip() or 0)
-            except Exception:
-                _n = 0
-            if not _n:
-                # Linux audit 2026-11-03: sysctl exits non-zero on Linux with
-                # empty stdout, which is not an exception - the /proc fallback
-                # never ran and physical_cores() returned None.
-                with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as _f:
-                    _pairs = set()
-                    _phys_id = _core_id = None
-                    for _ln in _f:
-                        if _ln.startswith("physical id"):
-                            _phys_id = _ln.split(":")[1].strip()
-                        elif _ln.startswith("core id"):
-                            _core_id = _ln.split(":")[1].strip()
-                        elif not _ln.strip() and _phys_id and _core_id:
-                            _pairs.add((_phys_id, _core_id))
-                            _phys_id = _core_id = None
-                    _n = len(_pairs)
-    except Exception:
-        _n = 0
-    _PHYS_CORES = _n if 0 < _n < 1024 else 0
-    return _PHYS_CORES or None

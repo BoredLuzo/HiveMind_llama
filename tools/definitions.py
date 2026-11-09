@@ -132,17 +132,22 @@ _INLINE_CODING_TOOLS = [
         "name": "edit_file",
         "description": (
             "Replace ONE unique passage in an EXISTING file. Copy old_text "
-            "VERBATIM from your last read_file (exact match — no markers, no "
-            "fuzzy guessing); it must appear exactly once. new_text is the "
-            "replacement. For multiple changes send multiple calls. To create a "
-            "new file use write_file."
+            "VERBATIM from your last read_file; it must appear exactly once. "
+            "new_text is the replacement. For several changes in the SAME file "
+            "use edits=[{old_text,new_text}, ...] (max 20, one atomic write). "
+            "To create a new file use write_file."
         ),
         "parameters": {"type": "object", "properties": {
             "path":     {"type": "string", "description": "File path"},
             "old_text": {"type": "string", "description": "Exact text to replace — copied verbatim from read_file, unique in the file"},
             "new_text": {"type": "string", "description": "Replacement text"},
-            "confirm_shrink": {"type": "boolean", "description": "Only when a replacement intentionally removes most of the file; the guard blocks a >75 % collapse otherwise"}
-        }, "required": ["path", "old_text", "new_text"]}
+            "edits":    {"type": "array", "description": "Up to 20 {old_text,new_text} replacements for this file, applied in order.",
+                         "items": {"type": "object", "properties": {
+                             "old_text": {"type": "string", "description": "Exact unique text at this point"},
+                             "new_text": {"type": "string", "description": "Replacement text"}
+                         }, "required": ["old_text", "new_text"]}},
+            "confirm_shrink": {"type": "boolean", "description": "Only when a replacement intentionally removes most of the file"}
+        }, "required": ["path"]}
     }},
     {"type": "function", "function": {
         "name": "write_file",
@@ -559,10 +564,18 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
         "read_file", "get_signatures", "find_references", "list_dir",
         "find_files", "search_code", "edit_file", "write_file",
         "write_file_append", "undo_last", "run_bash", "run_python",
-        "run_tests", "task_complete", "ask_user", "get_datetime",
+        "run_tests", "task_complete", "ask_user",
         # LSP diagnostics stays in core: post-write auto-diagnostics only
         # fire when a server is warm, and this is the tool that warms it.
-        "lsp_diagnostics",
+        # LSP auto-diagnostics runs automatically on write/edit; explicit lsp_*
+        # tools, get_datetime, and send_file stay in duo_core; duo_lean has 10.
+        "get_datetime", "lsp_diagnostics", "send_file",
+    },
+    "duo_lean": {
+        "read_file", "edit_file", "write_file",
+        "run_bash", "run_tests",
+        "search_code", "find_files", "list_dir", "get_signatures",
+        "task_complete",
     },
     # WEDGE-HANDOFF (2026-09-17): fresh-context repair delegate. Read + write
     # family, deliberately NO run_bash/git/ask_user/browser — minimal-invasive
@@ -721,7 +734,10 @@ _TOOL_PRIORITY = [
     "read_file", "edit_file", "write_file", "run_bash", "task_complete",
     # tier 1 — the working set
     "run_tests", "search_code", "list_dir", "find_files", "get_signatures",
-    "undo_last", "ask_user", "get_datetime", "write_file_append",
+    "find_references", "run_python",
+    "undo_last", "ask_user", "write_file_append",
+    # tier 1b — full/direct extras
+    "get_datetime",
     "send_file",
     # LSP: the two tools a small-ctx run needs most. Without priority they
     # were dropped first by the schema fitter (audit 2026-10-31, P2-5).

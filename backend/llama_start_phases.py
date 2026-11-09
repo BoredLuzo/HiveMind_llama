@@ -469,7 +469,8 @@ class _MoePhase:
 
 
 async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
-                     moe_cache: bool, _def_threads) -> _MoePhase:
+                     moe_cache: bool, _def_threads,
+                     _def_threads_batch: int | None = None) -> _MoePhase:
     from backend.manager_load import _help_supports  # lazy: module cycle
     from . import llama_config as _llama_cfg
     _moe_model_key = _strip_alias(model).replace("-ud", "")
@@ -625,13 +626,24 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             _half = max(1, _logical // 2) if _logical else 0
             _target = min(_def_threads, _half) if _half else _def_threads
             if _target < _def_threads:
-                for _tflag in ("--threads", "--threads-batch"):
-                    if _tflag in cmd:
-                        _ti = cmd.index(_tflag)
-                        cmd[_ti + 1] = str(_target)
+                # DECODE vs PREFILL (2026-11-09): batch=1 decode is
+                # memory-bound and wins from physical cores only. Prefill
+                # (ubatch 512+) is compute-bound; halving --threads-batch
+                # leaves SMT throughput unused. Keep --threads at half,
+                # leave --threads-batch at the full default/logical count.
+                if "--threads" in cmd:
+                    cmd[cmd.index("--threads") + 1] = str(_target)
+                _batch_target = max(
+                    int(_def_threads_batch or 0),
+                    int(_def_threads or 0),
+                    int(_target),
+                )
+                if "--threads-batch" in cmd:
+                    cmd[cmd.index("--threads-batch") + 1] = str(_batch_target)
                 logger.info(
-                    "MoE threads: %d -> %d (half of %d logical CPUs, "
-                    "experts on CPU)", _def_threads, _target, _logical,
+                    "MoE threads: decode %d -> %d, prefill batch %d "
+                    "(half of %d logical CPUs; experts on CPU)",
+                    _def_threads, _target, _batch_target, _logical,
                 )
             # EXPERT-CACHE (2026-11-03): opt-in --moe-cache-mib.
             if moe_cache and _moe_cache_mib > 0:

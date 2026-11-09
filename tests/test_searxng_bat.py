@@ -23,7 +23,6 @@ What this test pins:
 
 Run: python tests/test_searxng_bat.py
 """
-import io
 import os
 import re
 import subprocess

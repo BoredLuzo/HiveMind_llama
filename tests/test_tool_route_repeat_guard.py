@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from core.chat_tools_route import _repeat_guard  # noqa: E402
+from core.tool_guards import repeat_guard as _repeat_guard  # noqa: E402
 from core.tool_loop import ToolLoop, ToolLoopConfig  # noqa: E402
 from tests._harness import Harness  # noqa: E402
 

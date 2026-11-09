@@ -596,3 +596,94 @@ async def git_detail_ep(request: Request):
             status_code=400)
     ws = _resolve_ws(_ws_from_query(request))
     return await _state.exec_git_status_detailed(ws)
+
+
+@router.get("/diff")
+async def git_diff_ep(request: Request):
+    """Current workspace diff for the UI review panel (D7, 2026-11-09).
+
+    Read-only. Capped so a generated binary/lockfile cannot flood the browser;
+    the UI shows the stat first and the patch body second.
+    """
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
+    ws = _resolve_ws(_ws_from_query(request))
+
+    def _run() -> dict:
+        try:
+            _stat = subprocess.run(
+                ["git", "diff", "--no-color", "--stat"],
+                cwd=ws, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=10,
+            )
+            _body = subprocess.run(
+                ["git", "diff", "--no-color"],
+                cwd=ws, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "error": str(exc)[:300]}
+        if _stat.returncode != 0 or _body.returncode != 0:
+            return {"ok": False,
+                    "error": ((_stat.stderr or "") + (_body.stderr or ""))[:300]}
+        _cap = 200_000
+        _diff = _body.stdout or ""
+        _truncated = len(_diff) > _cap
+        return {
+            "ok": True,
+            "stat": (_stat.stdout or "")[:20_000],
+            "diff": _diff[:_cap],
+            "truncated": _truncated,
+            "bytes": len(_diff),
+        }
+
+    return await asyncio.to_thread(_run)
+
+
+@router.get("/checkpoints")
+async def git_checkpoints_ep(request: Request):
+    """Checkpoint list for the D7 run-review panel (read-only)."""
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
+    ws = _resolve_ws(_ws_from_query(request))
+    try:
+        limit = int(request.query_params.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        from hive_functions.git_tools import list_checkpoints
+        rows = await list_checkpoints(ws, limit=limit)
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        return {"ok": False, "error": str(exc)[:300], "checkpoints": []}
+    return {"ok": True, "checkpoints": rows}
+
+
+@router.post("/checkpoint/restore")
+async def git_checkpoint_restore_ep(request: Request):
+    """Restore tracked files to one checkpoint, with a safety stash snapshot."""
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
+    try:
+        data = await request.json()
+    except (ValueError, TypeError):
+        data = {}
+    ws = _resolve_ws(await _ws_from_body(request))
+    target = str(data.get("target") or "").strip()
+    if not target:
+        return {"ok": False, "error": "target missing"}
+    try:
+        from hive_functions.git_tools import exec_git_restore_checkpoint
+        result = await exec_git_restore_checkpoint(ws, target)
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        return {"ok": False, "error": str(exc)[:300]}
+    return {"ok": "restored" in result and "\u274c" not in result,
+            "message": result}

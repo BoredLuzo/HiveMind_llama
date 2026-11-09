@@ -154,4 +154,23 @@ check("the chunk loop passes written files to the mapping",
       "written_files=written_files or list(self.written_files)" in
       (ROOT / "hive_functions" / "chunking.py").read_text(encoding="utf-8", errors="replace"))
 
+import tempfile  # noqa: E402
+from core.duo_task_complete_gate import _deterministic_syntax_verify  # noqa: E402
+
+with tempfile.TemporaryDirectory() as _td:
+    _ok_py = Path(_td) / "ok.py"
+    _ok_py.write_text("x = 1 + 2\n", encoding="utf-8")
+    _ok_json = Path(_td) / "ok.json"
+    _ok_json.write_text('{"a": 1}\n', encoding="utf-8")
+    check("deterministic syntax verify passes on valid py and json",
+          _deterministic_syntax_verify(_td, ["ok.py", "ok.json"]) == "")
+    _bad_py = Path(_td) / "bad.py"
+    _bad_py.write_text("def broken(:\n", encoding="utf-8")
+    _err = _deterministic_syntax_verify(_td, ["ok.py", "bad.py"])
+    check("deterministic syntax verify catches syntax error in py",
+          "bad.py" in _err)
+check("no-suite syntax verify reports syntax_verified status",
+      'state["verify_status"] = "syntax_verified"' in src
+      and "status=syntax_verified" in src)
+
 sys.exit(h.finish("verify_gate"))

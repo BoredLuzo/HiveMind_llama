@@ -62,9 +62,26 @@ workspaces under `bench/.work/` for inspection.
 ## Metrics
 
 - **pass_rate** — fraction of runs whose check exits 0.
-- **delta_vs_raw** — pass-rate difference (fraction, not percent) to `raw`.
+- **delta_vs_raw** — pass-rate difference (fraction, not percent) to `raw`;
+  `delta_vs_raw_files` adds the same against the easier full-file baseline
+  when it is in the run (`null` when absent).
 - **median_seconds**, **tokens_total** — a harness that takes twice as long
   has to earn that with better results.
+- **Relative block (D1)** — the result JSON carries a `relative` block
+  (built by `bench/relative.py`, shared with `bench/analyze.py`): per
+  category rates AND deltas vs both baselines, `cached_share` (cached /
+  total tokens), `net_vs_aider_ratio` / `total_vs_aider_ratio` (token cost
+  of the gain vs the same-model CLI reference; `null` when aider is absent
+  or spent zero tokens) and the tool-`rounds` counts. Missing baselines and
+  zero tokens are `null`, never fabricated zeros; all pre-existing JSON
+  fields are unchanged. The console summary prints `d_raw`, `d_raw_files`,
+  `net/aider`, cached % and rounds per condition.
+- **External reference (D8)** — `bench/external/run_external.py` runs the
+  same tasks through Claude Code/Codex CLI when installed (dry-run
+  `--list`, clean skip when binaries/credentials are missing). Their
+  numbers use other models/servers and are reported separately; see
+  `bench/external/README.md` and
+  `docs/benchmarks/README.md#relative-block-d1-since-2026-11-09`.
 
 ## Starter corpus (21 tasks)
 

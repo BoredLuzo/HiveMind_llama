@@ -73,4 +73,108 @@ check("summary: duplicate (condition, task, run) is deduped",
       and _dup["conditions"]["raw"]["pass_rate"] == 0.0,
       f" ({_dup['conditions']})")
 
+# ── D1 relative block (2026-11-09) ────────────────────────────────────────
+# Cells: raw 0/4, raw_files 1/4 (fix_a), hivemind_direct 2/4 (fix_a+fix_c),
+# aider 3/4. Tokens: direct 400/cell with 200 cached, 300 net; aider 50/cell.
+_rel_rows = [
+    {"task": "fix_a", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "fix_c", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "feature_b", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "multi_e", "condition": "raw", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "fix_a", "condition": "raw_files", "ok": True, "seconds": 1, "tokens": 100},
+    {"task": "fix_c", "condition": "raw_files", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "feature_b", "condition": "raw_files", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "multi_e", "condition": "raw_files", "ok": False, "seconds": 1, "tokens": 100},
+    {"task": "fix_a", "condition": "hivemind_direct", "ok": True, "seconds": 2,
+     "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 4},
+    {"task": "fix_c", "condition": "hivemind_direct", "ok": True, "seconds": 2,
+     "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 0},
+    {"task": "feature_b", "condition": "hivemind_direct", "ok": False, "seconds": 2,
+     "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 2},
+    {"task": "multi_e", "condition": "hivemind_direct", "ok": False, "seconds": 2,
+     "tokens": 400, "cached_tokens": 200, "net_tokens": 300, "rounds": 0},
+    {"task": "fix_a", "condition": "aider", "ok": True, "seconds": 1, "tokens": 50},
+    {"task": "fix_c", "condition": "aider", "ok": True, "seconds": 1, "tokens": 50},
+    {"task": "feature_b", "condition": "aider", "ok": True, "seconds": 1, "tokens": 50},
+    {"task": "multi_e", "condition": "aider", "ok": False, "seconds": 1, "tokens": 50},
+]
+_sum = summarize(_rel_rows)
+_rel = _sum["relative"]
+_direct = _rel["conditions"]["hivemind_direct"]
+check("relative: block present with both baselines",
+      _rel["baselines_present"] == ["raw", "raw_files"], f" ({_rel.get('baselines_present')})")
+check("relative: condition deltas vs raw and raw_files",
+      _direct["delta_vs_raw"] == 0.5 and _direct["delta_vs_raw_files"] == 0.25,
+      f" ({_direct.get('delta_vs_raw')}/{_direct.get('delta_vs_raw_files')})")
+check("relative: per-category deltas (bugfix 1.0 vs raw, 0.5 vs raw_files)",
+      _direct["categories"]["bugfix"] == {"pass_rate": 1.0, "delta_vs_raw": 1.0,
+                                          "delta_vs_raw_files": 0.5},
+      f" ({_direct.get('categories')})")
+check("relative: multi-file category carried",
+      _direct["categories"].get("multi-file", {}).get("pass_rate") == 0.0
+      and _direct["categories"]["multi-file"]["delta_vs_raw"] == 0.0,
+      f" ({_direct.get('categories')})")
+check("relative: token ratios vs aider reference",
+      _direct["tokens"]["net_vs_aider_ratio"] == 6.0
+      and _direct["tokens"]["total_vs_aider_ratio"] == 8.0
+      and _direct["tokens"]["cached_share"] == 0.5,
+      f" ({_direct.get('tokens')})")
+check("relative: rounds totals and median",
+      _direct["rounds"]["total"] == 6 and _direct["rounds"]["median"] == 1.0,
+      f" ({_direct.get('rounds')})")
+check("relative: aider reference ratios are 1.0",
+      _sum["relative"]["conditions"]["aider"]["tokens"]["net_vs_aider_ratio"] == 1.0,
+      f" ({_sum['relative']['conditions']['aider']['tokens']})")
+check("relative: legacy summarize keys unchanged",
+      set(_sum["conditions"]) == {"raw", "raw_files", "hivemind_direct", "aider"}
+      and "paired" in _sum and "categories" in _sum,
+      f" ({sorted(_sum)})")
+
+# Missing baseline: drop every raw row -> delta_vs_raw None everywhere.
+_no_raw = summarize([r for r in _rel_rows if r["condition"] != "raw"])["relative"]
+check("relative: missing raw -> deltas None, absent flagged",
+      _no_raw["baselines_present"] == ["raw_files"]
+      and all(v["delta_vs_raw"] is None for v in _no_raw["conditions"].values()),
+      f" ({_no_raw['baselines_present']})")
+
+# Zero tokens: shares/ratios None, never ZeroDivisionError.
+_zero = summarize([
+    {"task": "fix_a", "condition": "raw", "ok": True, "seconds": 1, "tokens": 0},
+    {"task": "fix_a", "condition": "hivemind_direct", "ok": True, "seconds": 1,
+     "tokens": 0, "cached_tokens": 0, "net_tokens": 0},
+    {"task": "fix_a", "condition": "aider", "ok": True, "seconds": 1, "tokens": 0},
+])["relative"]
+check("relative: zero tokens -> None share and ratios",
+      _zero["conditions"]["hivemind_direct"]["tokens"]["cached_share"] is None
+      and _zero["conditions"]["hivemind_direct"]["tokens"]["net_vs_aider_ratio"] is None,
+      f" ({_zero['conditions']['hivemind_direct']['tokens']})")
+check("relative: all-pass -> deltas 0.0",
+      _zero["conditions"]["hivemind_direct"]["delta_vs_raw"] == 0.0,
+      f" ({_zero['conditions']['hivemind_direct']['delta_vs_raw']})")
+
+# All-fail: deltas 0.0, rows without token keys tolerated.
+_fail = summarize([
+    {"task": "fix_a", "condition": "raw", "ok": False, "seconds": 1},
+    {"task": "fix_a", "condition": "hivemind_direct", "ok": False, "seconds": 1},
+])["relative"]
+check("relative: all-fail -> deltas 0.0 without token keys",
+      _fail["conditions"]["hivemind_direct"]["delta_vs_raw"] == 0.0
+      and _fail["conditions"]["hivemind_direct"]["tokens"]["total"] == 0,
+      f" ({_fail['conditions']['hivemind_direct']})")
+
+# Readable analyzer output carries the relative lines.
+import io  # noqa: E402
+from contextlib import redirect_stdout  # noqa: E402
+from bench.analyze import _print  # noqa: E402
+
+_buf = io.StringIO()
+with redirect_stdout(_buf):
+    _print(_sum)
+_out = _buf.getvalue()
+check("relative: printed in readable output",
+      "relative" in _out and "d_raw_files" in _out and "net/aider" in _out
+      and "6.00x" in _out, f" ({_out[-300:]!r})")
+check("relative: category deltas printed",
+      "bugfix" in _out and "multi-file" in _out, f" ({_out[-300:]!r})")
+
 sys.exit(h.finish("bench_analyze"))

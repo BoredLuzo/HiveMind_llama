@@ -25,6 +25,8 @@ logger = logging.getLogger("hivemind.ctx_guard")
 # ── Defaults (werden pro Aufruf ueber die Settings ueberschrieben) ──────────
 DEFAULT_COMPRESS_FLOOR = 0.70          # compress from X% context (matches settings default)
 DEFAULT_EMERGENCY_PCT = 0.90           # Notfall-Eviction erst >90%
+DEFAULT_EVICT_TARGET_PCT = 0.70        # in-place eviction target
+DEFAULT_EVICT_HARD_FLOOR_PCT = 0.62    # emergency eviction hard floor
 DEFAULT_OVERFLOW_RESERVE = 1024        # extra Reserve neben num_predict (P2)
 DEFAULT_MIN_FREE_TOKENS = 0            # 0 = auto (siehe resolve_compress_threshold)
 DEFAULT_PARTIAL_POST_FRACTION = 0.60   # partial-Ziel: Kontext <=60% nach Kompression
@@ -200,7 +202,7 @@ def clamp_request_max_tokens(
 
 
 def min_viable_tool_budget(max_output: int, floor: int = 1024,
-                           cap: int = 4096) -> int:
+                           cap: int = 4096, ctx_tokens: int = 0) -> int:
     """Smallest output budget a tool round may ship before compressing.
 
     A fixed 1024 floor let a 2404-token budget through although an edit-heavy
@@ -213,7 +215,10 @@ def min_viable_tool_budget(max_output: int, floor: int = 1024,
     req = int(max_output or 0)
     if req <= 0:
         return int(floor)
-    return max(int(floor), min(int(cap), req // 2))
+    eff_cap = int(cap)
+    if int(ctx_tokens or 0) > 0:
+        eff_cap = max(int(floor), min(eff_cap, int(ctx_tokens) // 5))
+    return max(int(floor), min(eff_cap, req // 2))
 
 
 def clamp_coder_ctx_to_slot(requested: int, actual: int) -> int:

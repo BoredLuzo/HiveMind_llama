@@ -30,7 +30,6 @@ fail = h.fail
 def _hermes_needs(ctx):
     # vram_of_moe(hermes3.6:35b-a3b, ctx)*1024 — Werte aus _MOE_TABLE
     # (base 4.66 GB, measured_bytes_per_token 6272). Gerundet wie can_fit.
-    import math
     base_mib = 4.66 * 1024
     if ctx <= 4096:
         return base_mib

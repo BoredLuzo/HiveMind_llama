@@ -67,7 +67,7 @@ TREE = ast.parse(SRC)
 SPLIT_FILES = ["duo_runner", "duo_finalize", "duo_epilogue", "duo_finalgate",
                "duo_round_input", "duo_dtool_setup", "duo_inloop_planner",
                "duo_coder_load", "duo_compress_cycle", "duo_coder_preloop",
-               "duo_task_complete_gate", "duo_loop_guards"]
+               "duo_task_complete_gate", "duo_loop_guards", "duo_plan_round"]
 TREES = []
 NODE_SRC = {}
 for _mod in SPLIT_FILES:
@@ -268,7 +268,7 @@ if _ft is not None:
 # ── block 4: tool-round exec + wedge handoff + ctx pressure ────────────────
 EXEC_FIELDS = [
     "duo_deadline_at", "exec_result", "snap_before",
-    "last_too_large_ref", "cached_port_ref", "timed_out",
+    "last_too_large_ref", "cached_port_ref",
 ]
 check_seam("_duo_exec_round_task", "_DuoExecRoundState", EXEC_FIELDS, "b4")
 
@@ -285,7 +285,8 @@ if _h is not None:
     check("[b4] runner no longer launches execute_tool_round",
           "execute_tool_round(" not in _runseg)
     check("[b4] runner still owns the post-round ref syncs",
-          "_last_too_large_ref[0]" in _runseg and "_cached_port_ref[0]" in _runseg)
+          "_last_too_large_ref=_last_too_large_ref" in _runseg
+          and "_cached_port_ref[0]" in _runseg)
 
 WEDGE_FIELDS = ["loop_detected", "wedge_escalated", "duo_deadline_at", "break_out"]
 check_seam("_duo_wedge_handoff", "_DuoWedgeHandoffState", WEDGE_FIELDS, "b4")
@@ -314,6 +315,23 @@ if _h is not None:
     _runseg = SRC[SRC.index("async def run_code_duo"):]
     check("[b4] runner no longer builds the pressure prompt",
           "[CTX CRITICAL — ~" not in _runseg)
+
+# ── plan-tracker round (F13, 2026-11-08) ───────────────────────────────────
+PLAN_FIELDS = ["replan_count", "replan_bonus_granted", "max_tool_rounds",
+               "accumulated_replan_bonus", "action"]
+check_seam("_duo_plan_tracker_round", "_DuoPlanRoundState", PLAN_FIELDS, "plan")
+_h = fn("_duo_plan_tracker_round")
+if _h is not None:
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
+    check("[plan] advance/tick/replan ladder moved into the helper",
+          "should_advance" in _seg and "needs_replan" in _seg
+          and "replan_prompt" in _seg and "reset_stuck_detection" in _seg)
+    check("[plan] stall counter is interpolated, not a literal f-string bug",
+          "tracking stalls ({tracker._stall_ticks}/6)" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[plan] runner keeps the tracker guard and the continue",
+          "_plan_tracker is not None and not _plan_tracker.is_finished" in _runseg
+          and '_pt_action == "continue"' in _runseg)
 
 # ── block 2: coder tool-loop setup (port cache / slot ctx / budgets) ───────
 PORTCACHE_FIELDS = ["dport", "cached_coder_port", "cached_coder_port_ctx"]

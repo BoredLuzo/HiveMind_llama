@@ -23,7 +23,10 @@ _duo = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
 check("in-round deadline cancel exists", "[RUN-DEADLINE]" in _duo
       and "_exec_task.cancel()" in _duo)
 check("cancelled round is reported as timeout",
-      "_timed_out = True" in _duo and "ps.timed_out = _timed_out" in _duo)
+      "_timed_out = True" in _duo
+      and "_exec_result = None if _timed_out" in _duo
+      and "if _exec_result is None:" in _duo
+      and "_duo_timed_out = True" in _duo)
 # P0 from the 2026-10-31 re-audit: cancel produced _exec_result=None and the
 # consumer block dereferenced it outside every guard.
 check("cancel path never dereferences None",
@@ -53,7 +56,9 @@ check("416 with an unknown size warns",
       "unknown expected size" in _fm)
 check("416 with an unknown size asks the server (HEAD)",
       'method="HEAD"' in _fm)
+_gate = (ROOT / "core" / "duo_round_gate.py").read_text(encoding="utf-8")
 check("throttled ctx-full round is skipped, not shipped",
-      "skipping this round instead of" in _duo)
+      "skipping this round instead of" in _gate
+      and 'res.action = "continue"' in _gate)
 
 sys.exit(h.finish("deadline_and_416"))

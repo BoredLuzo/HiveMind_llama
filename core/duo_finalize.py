@@ -9,12 +9,18 @@ of this path; the runner yields this generator last.
 """
 from __future__ import annotations
 
+import dataclasses
+from typing import TYPE_CHECKING
+
 import asyncio
 import logging
 import time
 from datetime import datetime
 
 from hive_functions.loop_machine import AgentState
+
+if TYPE_CHECKING:
+    from context.project_state import ProjectState
 
 logger = logging.getLogger("hivemind.duo")
 
@@ -26,12 +32,14 @@ async def _duo_run_finalize(ctx, ps):
     ctx.duo_stop_reason is SET here (the ladder) and must only be read
     after the runner's sync.
     """
-    from core.duo.preflight import _git_checkpoints_enabled
-    from core.duo_runner import (
-        _auto_commit_chunk, _auto_push_after_commit,
-        _load_resume_block, _write_resume_block, _cleanup_governor, _cleanup_pause_state,
+    from core.duo.preflight import (
+        _auto_commit_chunk, _auto_push_after_commit, _git_checkpoints_enabled,
     )
-    from infra.run_control import clear_graceful_stop
+    from context.resume import _load_resume_block, _write_resume_block
+    from infra.ask_user_governor import cleanup_governor as _cleanup_governor
+    from infra.run_control import (
+        clear_graceful_stop, cleanup_pause_state as _cleanup_pause_state,
+    )
     from context.pause_state import clear_pause_state as _clear_pause_state
     from utils.bg_tasks import spawn
     from vram.loader import _refresh_judge_keepalive
@@ -125,8 +133,6 @@ async def _duo_run_finalize(ctx, ps):
             raise
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                 AttributeError, IndexError) as _d2_err:
-            if isinstance(_d2_err, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
-                raise
             logger.warning("[RESUME-SAFETY-NET] Write failed: %s", _d2_err)
     if ctx.chat_id and ctx.duo_stop_reason == "completed":
         ctx.clear_resume_block(ctx.chat_id)
@@ -154,6 +160,7 @@ async def _duo_run_finalize(ctx, ps):
         record_run_audit(ctx.chat_id, {
             "run_id": ctx.run_id,
             "event": "run_end",
+            "route": "code_duo",
             "stop_reason": str(ctx.duo_stop_reason or ""),
             "written_files": sorted(ps._written_files or []),
             "loop_detected": bool(ps._loop_detected),
@@ -217,7 +224,7 @@ async def _duo_run_finalize(ctx, ps):
     if ctx.chat_id:
         _clear_pause_state(ctx.chat_id)
     _cleanup_governor(ctx.chat_id or ctx.run_id)
-    from core.duo_runner import _current_project_state
+    from tools.runner import _current_project_state
     _current_project_state.set(None)
     # AUDIT-FIX 2026-08-03 (preload_workers_after_run, strenges Opt-in, Default False):
     if bool(ctx.settings.get("preload_workers_after_run", False)):
@@ -256,3 +263,32 @@ async def _duo_run_finalize(ctx, ps):
     _vis_mdl = ctx.vision_cfg.get("model", "") if ctx.vision_cfg.get("enabled") else ""
     if _vis_mdl:
         spawn(ps.carry["_keepalive_vision_fn"](_vis_mdl))
+
+
+@dataclasses.dataclass
+class _DuoRunFinalizeState:
+    """Finalize-tail state (split 2.1, 2026-11-05): one field per
+    run_code_duo local the finalize tail reads or writes, plus `carry`
+    for the runner-local bindings the tail also consumes (exec_mdl,
+    final_verdict, critic_issues, _recent_focus_paths, _worker_slots,
+    this_file, _warm_workers_fn, _keepalive_vision_fn)."""
+    _duo_hard_stop: bool = False
+    _graceful_stopped: bool = False
+    _duo_timed_out: bool = False
+    _loop_detected: bool = False
+    _wedge_escalated: bool = False
+    _model_load_failed: bool = False
+    _pending_send_files: list = dataclasses.field(default_factory=list)
+    _written_files: list = dataclasses.field(default_factory=list)
+    _done_tasks: list = dataclasses.field(default_factory=list)
+    _cs: object = None
+    _ws_str: str = ""
+    _explore_ctx: str = ""
+    _project_state: "ProjectState | None" = None
+    _project_state_run_counted: bool = False
+    _explore_only_rounds: int = 0
+    _lifetime_tool_rounds: int = 0
+    _di: int = 0
+    _n_items: int = 1
+    _loop_items: list = dataclasses.field(default_factory=list)
+    carry: dict = dataclasses.field(default_factory=dict)

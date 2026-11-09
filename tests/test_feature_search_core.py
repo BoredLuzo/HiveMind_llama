@@ -8,7 +8,6 @@ is missing. Fails on any assertion failure or syntax error in the core.
 import shutil
 import subprocess
 import os
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "js", "test_feature_search_core.mjs")

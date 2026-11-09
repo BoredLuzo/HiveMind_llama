@@ -19,7 +19,6 @@ What this pins:
 
 Run: python tests/test_readme_currency.py
 """
-import io
 import re
 import sys
 from pathlib import Path

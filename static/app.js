@@ -58,6 +58,20 @@
   });
 })();
 
+// STORAGE-GUARD (2026-11-08): Firefox with blocked cookies/storage throws
+// SecurityError on localStorage access ("The operation is insecure"). That
+// surfaced as a Frontend-error toast on every load, because the panel-width
+// init read localStorage unguarded. All UI persistence goes through here.
+function _hmStorageGet(key, fallback) {
+  try {
+    var v = window.localStorage.getItem(key);
+    return v === null ? fallback : v;
+  } catch (e) { return fallback; }
+}
+function _hmStorageSet(key, value) {
+  try { window.localStorage.setItem(key, String(value)); } catch (e) {}
+}
+
 // -- State ------------------------------------------------------
 let S = {
   models: [],
@@ -6197,12 +6211,12 @@ setInterval(function() {
     h._wired = true;
     // --cp-w-user is INERT while the panel is closed (only
     // body.code-panel-open consumes it) — a stale width can't leave a gap.
-    var saved = parseInt(localStorage.getItem('cp_w') || '0', 10);
+    var saved = parseInt(_hmStorageGet('cp_w', '0') || '0', 10);
     if (saved >= 280 && saved <= 1000) document.body.style.setProperty('--cp-w-user', saved + 'px');
     h.addEventListener('mousedown', function(e) {
       e.preventDefault();
       var startX = e.clientX;
-      var startW = parseInt(localStorage.getItem('cp_w') || '440', 10) || 440;
+      var startW = parseInt(_hmStorageGet('cp_w', '440') || '440', 10) || 440;
       document.body.classList.add('resizing-col');
       function onMove(ev) {
         var w = Math.max(280, Math.min(1000, startW + (startX - ev.clientX)));
@@ -6213,7 +6227,7 @@ setInterval(function() {
         document.removeEventListener('mouseup', onUp);
         document.body.classList.remove('resizing-col');
         var w = parseInt(getComputedStyle(document.body).getPropertyValue('--cp-w-user'), 10);
-        if (w) { try { localStorage.setItem('cp_w', String(w)); } catch (e2) {} }
+        if (w) { _hmStorageSet('cp_w', w); }
       }
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
@@ -6389,7 +6403,7 @@ function _pbbEnsure() {
         + '<span class="ctx-perf-item live" id="pbb-tools" data-tip-title="Tool calls" data-tip="Tool calls in this run: count, total time, and the tool that is running right now (or the last one)." role="note" tabindex="0">tools: --</span>'
       + '</div></div>';
   try {
-    if ((localStorage.getItem('hivemind-pbb-collapsed') || '') === '1')
+    if ((_hmStorageGet('hivemind-pbb-collapsed', '') || '') === '1')
       _bar.classList.add('collapsed');
   } catch (e) {}
 }
@@ -6398,7 +6412,7 @@ function _pbbToggle() {
   var _bar = document.getElementById('perf-bar-bottom');
   if (!_bar) return;
   var _collapsed = _bar.classList.toggle('collapsed');
-  try { localStorage.setItem('hivemind-pbb-collapsed', _collapsed ? '1' : '0'); } catch (e) {}
+  _hmStorageSet('hivemind-pbb-collapsed', _collapsed ? '1' : '0');
 }
 window._pbbToggle = _pbbToggle;
 
@@ -6869,6 +6883,11 @@ async function sendMsg() {
         judge_bias:       S.judgeBias,
         duo_pair:          S.duoPair,
         duo_tool_rounds:   S.duoToolRounds  || 0,
+        // TIER-WITH-RUN (2026-11-09): pin the tool tiers with the request so
+        // a just-changed dropdown cannot race the async settings.json write.
+        direct_tools_tier: S.directToolsTier || 'readonly',
+        duo_coder_tool_tier: S.duoCoderToolTier || 'core',
+        lsp_auto_diagnostics: typeof S.lspAutoDiag === 'boolean' ? S.lspAutoDiag : undefined,
         duo_use_pipeline:  !!S.duoUsePipeline,
         duo_critic_tools:  !!S.duoCriticTools,
         duo_chunking:      !!S.duoChunking,
@@ -14166,6 +14185,75 @@ async function gitStash(action) {
     });
     var data = await res.json();
     if (statusEl) { statusEl.textContent = data.message || 'OK'; statusEl.style.color = data.ok ? 'var(--green)' : 'var(--red)'; }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '\u2717 Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+async function gitShowDiff() {
+  var view = document.getElementById('git-diff-view');
+  var statusEl = document.getElementById('git-ops-status');
+  if (!view) return;
+  if (view.style.display !== 'none') { view.style.display = 'none'; return; }
+  try {
+    var res = await fetch('/git/diff?workspace=' + encodeURIComponent(_gitWs()));
+    var data = await res.json();
+    if (!data.ok) {
+      if (statusEl) { statusEl.textContent = '\u2717 ' + (data.error || 'diff failed'); statusEl.style.color = 'var(--red)'; }
+      return;
+    }
+    view.textContent = (data.stat || '') + (data.stat && data.diff ? '\n\n' : '') +
+      (data.diff || '(no uncommitted changes)') +
+      (data.truncated ? '\n\n[... diff truncated at 200 KB]' : '');
+    view.style.display = 'block';
+    if (statusEl) { statusEl.textContent = data.truncated ? 'Diff truncated' : ''; statusEl.style.color = 'var(--tx2)'; }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '\u2717 Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+async function gitLoadCheckpoints() {
+  var sel = document.getElementById('git-checkpoint-sel');
+  var btn = document.getElementById('git-checkpoint-restore');
+  var statusEl = document.getElementById('git-ops-status');
+  if (!sel) return;
+  try {
+    var res = await fetch('/git/checkpoints?limit=20&workspace=' + encodeURIComponent(_gitWs()));
+    var data = await res.json();
+    if (!data.ok) {
+      if (statusEl) { statusEl.textContent = '\u2717 ' + (data.error || 'checkpoints failed'); statusEl.style.color = 'var(--red)'; }
+      return;
+    }
+    sel.innerHTML = '';
+    (data.checkpoints || []).forEach(function(cp) {
+      var opt = document.createElement('option');
+      opt.value = cp.hash;
+      var when = cp.ts ? new Date(cp.ts * 1000).toLocaleString() : '';
+      opt.textContent = cp.short + '  ' + (cp.label || 'checkpoint') + (when ? '  ' + when : '');
+      sel.appendChild(opt);
+    });
+    var has = sel.options.length > 0;
+    sel.style.display = has ? 'inline-block' : 'none';
+    if (btn) btn.style.display = has ? 'inline-block' : 'none';
+    if (statusEl) { statusEl.textContent = has ? '' : 'No checkpoints found'; statusEl.style.color = 'var(--tx2)'; }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '\u2717 Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+async function gitRestoreCheckpoint() {
+  var sel = document.getElementById('git-checkpoint-sel');
+  var statusEl = document.getElementById('git-ops-status');
+  if (!sel || !sel.value) return;
+  if (!confirm('Restore tracked files to this checkpoint? A safety stash snapshot is created first.')) return;
+  try {
+    var res = await fetch('/git/checkpoint/restore', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({workspace: _gitWs(), target: sel.value})
+    });
+    var data = await res.json();
+    if (statusEl) { statusEl.textContent = data.message || (data.ok ? 'Restored' : 'Restore failed'); statusEl.style.color = data.ok ? 'var(--green)' : 'var(--red)'; }
   } catch(e) {
     if (statusEl) { statusEl.textContent = '\u2717 Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
   }

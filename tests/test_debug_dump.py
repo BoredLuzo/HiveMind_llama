@@ -5,12 +5,10 @@ on DuoRoundState (one dump per RUN, not per round)."""
 import json
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import context.chat  # noqa: F402  (make sure module import works standalone)
 from core import telemetry as _tel  # noqa: E402
 from core.agentic_duo_state import DuoRoundState  # noqa: E402
 

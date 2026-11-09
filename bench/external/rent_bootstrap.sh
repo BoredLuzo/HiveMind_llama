@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Rented-GPU bootstrap for the HiveMind benchmark (NOT tested on a real host yet:
+# run `smoke` first and read the output before paying for `full`).
+#
+# One machine, one model (Qwen3.6-35B-A3B UD-Q4_K_XL), one llama-server:
+#   hivemind_duo -> raw -> aider  (same task list, same hidden-test check)
+# HiveMind starts and owns the llama-server; raw/aider reuse it (runner.py
+# auto-detects it on :8080/:8101/:8102), so the model is the same in every row.
+#
+# Usage (Ubuntu + NVIDIA driver, >= 40 GB VRAM, >= 100 GB disk, root or sudo):
+#   bash rent_bootstrap.sh setup     # deps, repo, python, llama.cpp, model, aider
+#   bash rent_bootstrap.sh serve     # start the HiveMind engine (background)
+#   bash rent_bootstrap.sh smoke     # 3 tasks x 3 conditions - check cost/time!
+#   bash rent_bootstrap.sh full      # detached tmux run, results in bench/results/
+#   bash rent_bootstrap.sh status    # tail the run
+#   bash rent_bootstrap.sh stop
+#
+# Env (all optional):
+#   HM_REPO     default https://github.com/BoredLuzo/HiveMind_llama.git
+#   HM_BRANCH   default dev  (must contain bench/, see BENCH_TGZ below)
+#   HM_DIR      default $HOME/HiveMind_llama
+#   BENCH_TGZ   tarball with the bench/ folder (default $HOME/bench_bundle.tgz);
+#               extracted over the clone when present. Needed while bench/ is
+#               not pushed to GitHub:  tar czf bench_bundle.tgz bench
+#   HM_MODEL    default qwen3.6:35b-a3b-ud (key from deploy/fetch_models.py)
+#   HM_RUNS     default 1       HM_CONDITIONS default hivemind_duo,raw,aider
+#   HM_TASKS    default bench/tasks (use bench/tasks_polyglot after `polyglot`)
+set -euo pipefail
+
+HM_REPO="${HM_REPO:-https://github.com/BoredLuzo/HiveMind_llama.git}"
+HM_BRANCH="${HM_BRANCH:-dev}"
+HM_DIR="${HM_DIR:-$HOME/HiveMind_llama}"
+BENCH_TGZ="${BENCH_TGZ:-$HOME/bench_bundle.tgz}"
+HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
+HM_RUNS="${HM_RUNS:-1}"
+HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,raw,aider}"
+HM_TASKS="${HM_TASKS:-bench/tasks}"
+AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
+MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
+PORT="${HIVEMIND_PORT:-8001}"
+HM_LLAMA_URL="${HM_LLAMA_URL:-http://127.0.0.1:8101}"
+LOG="$HM_DIR/bench_engine.log"
+
+log() { printf '\n[bench] %s\n' "$*"; }
+die() { printf '\n[bench][ERROR] %s\n' "$*" >&2; exit 1; }
+SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
+PY="$HM_DIR/.venv/bin/python"
+
+setup() {
+  command -v nvidia-smi >/dev/null || die "no NVIDIA driver (nvidia-smi missing) - wrong instance?"
+  nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+  log "system packages"
+  $SUDO apt-get update -qq
+  $SUDO apt-get install -y -qq git curl ca-certificates tmux rsync build-essential
+  command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
+  export PATH="$HOME/.local/bin:$PATH"
+
+  log "clone $HM_REPO ($HM_BRANCH)"
+  [ -d "$HM_DIR/.git" ] || git clone --branch "$HM_BRANCH" "$HM_REPO" "$HM_DIR"
+  if [ -f "$BENCH_TGZ" ]; then
+    log "overlay bench/ from $BENCH_TGZ"
+    tar xzf "$BENCH_TGZ" -C "$HM_DIR"
+  fi
+  [ -f "$HM_DIR/bench/runner.py" ] || die "bench/runner.py missing: push it or provide BENCH_TGZ"
+  git -C "$HM_DIR" log -1 --format='[bench] engine commit: %h %s'
+
+  log "python 3.14 + locked deps"
+  ( cd "$HM_DIR" && uv python install 3.14 && uv sync --all-extras --frozen )
+
+  log "llama.cpp (CUDA)"
+  ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda )
+
+  log "model $HM_MODEL -> $MODELS_DIR (~20 GB)"
+  mkdir -p "$MODELS_DIR"
+  ( cd "$HM_DIR" && "$PY" deploy/fetch_models.py --models-dir "$MODELS_DIR" \
+      --only-keys "$HM_MODEL" --yes )
+  ls -lh "$MODELS_DIR" | head
+
+  log "aider (own venv, python 3.12)"
+  [ -x "$AIDER_VENV/bin/aider" ] || {
+    uv venv --python 3.12 "$AIDER_VENV"
+    uv pip install --python "$AIDER_VENV/bin/python" -q aider-chat
+  }
+  "$AIDER_VENV/bin/aider" --version
+
+  log "setup done - next: serve, then smoke"
+}
+
+serve() {
+  [ -x "$PY" ] || die "run setup first"
+  if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    log "engine already up on :$PORT"; return
+  fi
+  log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
+  ( cd "$HM_DIR" && \
+    HIVEMIND_HOST=127.0.0.1 HIVEMIND_PORT="$PORT" HIVEMIND_GPU_BACKEND=cuda \
+    HIVEMIND_MODELS_DIR="$MODELS_DIR" PYTHONUNBUFFERED=1 \
+    nohup "$PY" run.py >"$LOG" 2>&1 & echo $! >"$HM_DIR/bench_engine.pid" )
+  for _ in $(seq 1 90); do
+    curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
+    sleep 2
+  done
+  curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
+  # A100: keep every MoE expert on the GPU (the shipped profile is tuned for 8 GB).
+  curl -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
+    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b-ud":0}}' >/dev/null \
+    || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
+}
+
+run_bench() {  # $1 = extra args
+  [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
+  # Cap per-cell time so one stuck agent cannot burn the rental budget.
+  ( cd "$HM_DIR" && "$PY" bench/runner.py \
+      --tasks "$HM_TASKS" \
+      --model "$HM_MODEL" \
+      --conditions "$HM_CONDITIONS" \
+      --runs "$HM_RUNS" \
+      --cell-timeout "${HM_CELL_TIMEOUT:-900}" \
+      --aider-bin "$AIDER_VENV/bin/aider" \
+      --hivemind "http://127.0.0.1:$PORT" \
+      --llama "$HM_LLAMA_URL" \
+      $1 )
+}
+
+smoke() {
+  serve
+  log "smoke: 3 tasks, all conditions - note the wall time per condition"
+  local t0; t0=$(date +%s)
+  HM_RUNS=1 run_bench "--only fix_add,fix_off_by_one,multi_move"
+  log "smoke wall time: $(( $(date +%s) - t0 )) s  (full run ~ this x tasks/3 x runs)"
+  log "check: pass/fail per condition, tokens > 0, 'aider is not installed' absent"
+}
+
+polyglot() {
+  # Fixed, seed-free subset of the Aider polyglot (python) exercises.
+  local src="$HOME/polyglot-benchmark"
+  [ -d "$src/.git" ] || git clone --depth 1 https://github.com/Aider-AI/polyglot-benchmark.git "$src"
+  ( cd "$HM_DIR" && "$PY" bench/import_polyglot.py \
+      --source "$src/python/exercises/practice" --out bench/tasks_polyglot )
+  log "now: HM_TASKS=bench/tasks_polyglot bash $0 full"
+}
+
+full() {
+  serve
+  local name="hmbench"
+  tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
+  log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
+  tmux new-session -d -s "$name" \
+    "cd '$HM_DIR' && HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' \
+     bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
+}
+
+status() { tail -n 40 "$HM_DIR/bench_full.log" 2>/dev/null || echo "no run log yet"; ls -1t "$HM_DIR"/bench/results/*.json 2>/dev/null | head -3; }
+
+stop() {
+  tmux kill-session -t hmbench 2>/dev/null || true
+  [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
+  log "stopped. Download bench/results/*.json, then DELETE the rental instance."
+}
+
+case "${1:-}" in
+  setup) setup ;;
+  serve) serve ;;
+  smoke) smoke ;;
+  polyglot) polyglot ;;
+  full) full ;;
+  _run) run_bench "" ;;
+  status) status ;;
+  stop) stop ;;
+  *) sed -n '2,25p' "$0"; exit 2 ;;
+esac

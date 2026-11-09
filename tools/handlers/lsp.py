@@ -54,14 +54,35 @@ _LSP_FALLBACKS: dict = {
 
 
 def _lsp_settings() -> dict:
-    """The LSP-relevant settings: live values (core.state.settings) with the
-    defaults above as fallback."""
+    """The LSP-relevant settings.
+
+    Precedence (F10, 2026-11-08): the per-run settings snapshot
+    (tools.runner._run_settings_snapshot, lifted by chat_run.run_stream)
+    wins over the live dict - a run keeps the values it STARTED with, and a
+    body override (bench: lsp_auto_diagnostics=false) pins just that run.
+    A snapshot key that is absent keeps the live/fallback value, and no
+    snapshot at all (direct handler calls, unit tests, the external tool
+    endpoint) behaves exactly as before: live values (core.state.settings)
+    with the defaults above as last fallback.
+    """
     try:
         from core.state import settings as _live
         live = _live if isinstance(_live, dict) else {}
     except (ImportError, AttributeError, TypeError):
         live = {}
-    return {key: live.get(key, _LSP_FALLBACKS[key]) for key in _LSP_FALLBACKS}
+    merged = {key: live.get(key, _LSP_FALLBACKS[key]) for key in _LSP_FALLBACKS}
+    try:
+        # Lazy: tools.runner imports this handler package - a module-level
+        # import here would be circular.
+        from tools.runner import _run_settings_snapshot as _snap_cv
+        snap = _snap_cv.get(None)
+    except (ImportError, AttributeError, TypeError):
+        snap = None
+    if isinstance(snap, dict):
+        for key in merged:
+            if key in snap:
+                merged[key] = snap[key]
+    return merged
 
 
 def _lsp_enabled() -> bool:

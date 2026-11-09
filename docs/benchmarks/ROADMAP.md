@@ -16,6 +16,15 @@ honestly with Aider/Claude Code/Codex on the same task suite.
   atomic write after every cell.
 - `bench/analyze.py`: Wilson 95% CI, paired majority verdicts, exact McNemar,
   per-category rates.
+- **Relative block (D1, 2026-11-09):** `bench/relative.py` computes the
+  explicit relative metrics shared by runner and analyzer - deltas vs
+  `raw` AND `raw_files`, per-category deltas, cached/net token ratios vs
+  the aider reference, tool-round counts (see
+  [README.md](README.md#relative-block-d1-since-2026-11-09)).
+- **External adapter scaffold (D8, 2026-11-09):**
+  `bench/external/run_external.py` runs the same tasks through Claude
+  Code/Codex CLI when installed (`--list` dry run, clean skips, same
+  hidden-test check); see [bench/external/README.md](../../bench/external/README.md).
 
 ## Phases
 
@@ -56,14 +65,29 @@ Result: `hivemind_direct` 2/2, `hivemind_duo` 1/1, `raw` 0/2,
 63 cells, 90.5%, 12.0 s, 946 tokens/cell. Aider 0.86.2, same model/server,
 workspace files in the chat.
 
-### Phase 5 - External harnesses (later)
-- Claude Code / Codex only with their default models; report them separately
-  from the same-model comparison.
+### Phase 5 - External harnesses - **scaffold ready 2026-11-09, no runs yet**
+- Adapter: `python bench/external/run_external.py --list` (dry run: tasks,
+  binaries, commands), then `--harness claude,codex --runs 3`.
+- Prerequisites are the harness binaries AND their credentials
+  (ANTHROPIC_API_KEY / OPENAI_API_KEY or logged-in sessions); missing ones
+  are skipped cleanly, nothing is auto-installed.
+- Claude Code / Codex only with their default models (`--claude-model` /
+  `--codex-model` override); report them separately from the same-model
+  comparison - their deltas vs `raw`/`raw_files` compare products, not
+  harnesses.
+- Same task suite, same hidden-test check, rows compatible with
+  `bench/analyze.py`; results under `bench/results/external/`.
 - No company API keys in the local instance; empty workspace.
+- **Nothing has been run yet - no external numbers exist, none are claimed.**
 
 ### Phase 6 - Analysis and weekly trend
-- Per condition: pass rate, delta, median duration, tokens, per category.
+- Per condition: pass rate, delta vs `raw` and `raw_files`, median duration,
+  tokens, per category - now explicit in the JSON `relative` block and the
+  analyzer output.
 - 3-5 runs, Wilson interval, paired McNemar per task.
+- Token efficiency is part of the verdict: `net_vs_aider_ratio` and
+  `cached_share` say what the pass-rate delta cost; `rounds` shows how many
+  tool rounds it took.
 - Fix a minimum effect size before the run (e.g. +10 percentage points);
   otherwise a delta inside the noise is not a win.
 

@@ -44,12 +44,13 @@ class _ChatRouteDecisionState:
     _pipeline_sess_msgs: list = dataclasses.field(default_factory=list)
     _route_as_tool: bool = False
     complexity: str = ""
+    chat_id: str = ""
 
 
 async def _chat_route_decision(ps):
     from routing.agent_intent import detect_tool_request, is_simple_tool_prompt
     from routing.model_automap import get_routing_suggestion
-    from core.chat_run import _history_budget_tokens
+    from core.llm_stream import _history_budget_tokens
     _decide_route = ps._decide_route
     _prepro_success = ps._prepro_success
     _run_settings = ps._run_settings
@@ -242,3 +243,23 @@ async def _chat_route_decision(ps):
     ps._pipeline_sess_msgs = _pipeline_sess_msgs
     ps._route_as_tool = _route_as_tool
     ps.complexity = complexity
+    # D6 OUTCOME HINT (2026-11-09): chat-scoped run_end history can flag a
+    # route with a clearly worse success rate. Hint only — never override an
+    # explicit mode or the judge; the owner can act on it.
+    try:
+        if getattr(ps, "chat_id", ""):
+            from core.run_audit import load_run_audit
+            from routing.outcome_hints import suggest_route
+            _oh = suggest_route(load_run_audit(ps.chat_id), complexity)
+            if _oh:
+                yield await emit({
+                    "type": "status",
+                    "content": (
+                        f"ℹ Outcome hint: {_oh['from']} succeeded "
+                        f"{_oh['from_rate']:.0%} ({_oh['runs']['from']} runs), "
+                        f"{_oh['to']} {_oh['to_rate']:.0%} "
+                        f"({_oh['runs']['to']} runs)."
+                    ),
+                })
+    except (ImportError, OSError, ValueError, TypeError, KeyError):
+        pass

@@ -1,0 +1,6 @@
+{
+ "id": "polyglot_robot_name",
+ "prompt": "# Instructions\n\nManage robot factory settings.\n\nWhen a robot comes off the factory floor, it has no name.\n\nThe first time you turn on a robot, a random name is generated in the format of two uppercase letters followed by three digits, such as RX837 or BC811.\n\nEvery once in a while we need to reset a robot to its factory settings, which means that its name gets wiped.\nThe next time you ask, that robot will respond with a new random name.\n\nThe names must be random: they should not follow a predictable sequence.\nUsing random names means a risk of collisions.\nYour solution must ensure that every existing robot has a unique name.\n\nImplement the missing function(s) in the existing Python file(s). Run the tests you can infer from the instructions. Do not modify or create test files.",
+ "check": "python -m pytest -q robot_name_test.py",
+ "timeout_s": 300
+}

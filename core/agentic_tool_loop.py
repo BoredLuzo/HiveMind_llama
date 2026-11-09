@@ -44,6 +44,20 @@ def _diag_newest_slot_log():
     return _path
 
 
+def _diag_read_slot_log_tail() -> str:
+    """SYNC helper — run via asyncio.to_thread to keep glob/stat/read off-loop."""
+    _slot_log = _diag_newest_slot_log()
+    if _slot_log is None:
+        return ""
+
+
+    with _slot_log.open("rb") as _fh:
+        _fh.seek(0, 2)
+        _fh.seek(max(0, _fh.tell() - 40000))
+        _path = _fh.read(40000).decode("utf-8", errors="replace")
+    return _path
+
+
 def _retract_vision_note_if_lost(msgs: list) -> list:
     """[VISION]-note handling when the outgoing window lost its image
     parts (2026-10-04, round 9 #4 / round 10 #3). Pure helper so the
@@ -78,6 +92,46 @@ def _retract_vision_note_if_lost(msgs: list) -> list:
     return msgs
 
 logger = logging.getLogger("hivemind.agentic_tool_loop")
+
+# F11 (2026-11-08): the generic-5xx fall-through in post_with_retry used to
+# retry ANY 500/502/503/504 up to max_post_attempts (duo_runner: 20) with the
+# FULL prompt body - on a 35B slot that is hours of repeated prefill while
+# the run looks alive, the exact bug F3 already fixed for llama_client.
+# Policy (backend/llama_client._should_retry_http_status, F3 2026-11-07):
+#   - an overflow-shaped error body never retries
+#   - generic 500/502/504 are capped at 3 total attempts
+#   - 408/429/503 keep the long retry (up to max_post_attempts, unchanged)
+# The 500-recovery branches above (parse-json -> thinking off, CallExpression
+# -> grammar/fallback) are self-bounded (parse_errors cap, one-shot
+# fallbacks) and keep their own continue paths - untouched.
+_OVERFLOW_MARKERS_LOCAL = ("exceed", "context", "too many tokens",
+                           "context window", "n_predict")
+
+
+def _f3_should_retry_status(status_code: int, body: str, attempt: int,
+                            max_attempts: int) -> bool:
+    """True only when another POST attempt can plausibly succeed (F3 policy).
+
+    Reuses the real helper from backend/llama_client when importable (lazy
+    import - backend never imports core, so there is no cycle; the codebase
+    imports backend modules lazily inside functions everywhere). Falls back
+    to an identical local predicate only if that import ever fails.
+    """
+    try:
+        from backend.llama_client import _should_retry_http_status as _impl
+        return _impl(status_code, body, attempt, max_attempts)
+    except ImportError:
+        # Local copy of the F3 policy (backend/llama_client.py) - keep in sync.
+        if status_code not in (408, 429, 500, 502, 503, 504):
+            return False
+        if attempt >= max_attempts - 1:
+            return False
+        if status_code in (500, 502, 504):
+            _low = (body or "").lower()
+            if any(marker in _low for marker in _OVERFLOW_MARKERS_LOCAL):
+                return False
+            return attempt < 2      # 3 total attempts, like F3
+        return True                 # 408/429/503: long retry, unchanged
 
 
 class AgenticToolLoop(ToolLoop):
@@ -339,6 +393,22 @@ class AgenticToolLoop(ToolLoop):
                                 _dr_post_errors["500-like(thinking_off)"] = _dr_post_errors.get("500-like(thinking_off)", 0) + 1
                                 self.round_state.last_err_body = _err_body[:200] or "(HTTP 500 with empty body)"
                                 break
+
+                        # F11 (2026-11-08): the GENERIC fall-through below used
+                        # to retry any 5xx up to max_post_attempts (duo: 20)
+                        # with the full prompt body. Apply the F3 policy
+                        # (backend/llama_client._should_retry_http_status):
+                        # overflow-shaped body -> fail now, plain
+                        # 500/502/504 -> 3 total attempts, 408/429/503 keep
+                        # the long retry. The recovery branches above are
+                        # self-bounded and keep their own continue paths.
+                        if not _f3_should_retry_status(
+                                _resp.status_code, _resp.text[:2000],
+                                _post_attempt, self.cfg.max_post_attempts):
+                            self.round_state.last_err_body = (
+                                _err_body[:200]
+                                or f"(HTTP {_resp.status_code} with empty body)")
+                            break
 
                         await asyncio.sleep(1.5 + min(1.0, _post_attempt * 0.1))
                         await self._emit({"type": "status", "content": f"? Server {_resp.status_code}, retry {_post_attempt+1}/{self.cfg.max_post_attempts}"})
@@ -765,13 +835,14 @@ class AgenticToolLoop(ToolLoop):
                             # the WHOLE slot log (hundreds of MB after a long
                             # run) to keep 40 KB, every coder round. The newest
                             # path itself is cached for 30 s (2026-11-07).
-                            _slot_log = _diag_newest_slot_log()
-                            if _slot_log is not None:
-                                with _slot_log.open("rb") as _fh:
-                                    _fh.seek(0, 2)
-                                    _fh.seek(max(0, _fh.tell() - 40000))
-                                    _txt = _fh.read(40000).decode(
-                                        "utf-8", errors="replace")
+                            _txt = await asyncio.to_thread(_diag_read_slot_log_tail)
+                            if _txt:
+
+
+
+
+
+
                                 _am = re.findall(
                                     r"draft acceptance = ([\d.]+)", _txt)
                                 if _am:

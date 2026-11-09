@@ -94,6 +94,8 @@ SUITES = [
     ("duo_loop_guards",           "tests/test_duo_loop_guards.py",              30),
     ("coverage_setup",            "tests/test_coverage_setup.py",               30),
     ("tool_loop_nonstream",       "tests/test_tool_loop_nonstream.py",          30),
+    ("agentic_5xx_policy",        "tests/test_agentic_5xx_policy.py",           30),
+    ("tool_loop_phase_mode",      "tests/test_tool_loop_phase_mode.py",         30),
     ("project_state_behavior",    "tests/test_project_state_behavior.py",        60),
     ("background_behavior",       "tests/test_background_behavior.py",           60),
     ("log_noise_behavior",        "tests/test_log_noise_behavior.py",            60),
@@ -196,6 +198,7 @@ SUITES = [
     ("safety_review_fixes",    "tests/test_safety_review_fixes.py",        30),
     ("followup_no_plan",       "tests/test_followup_no_plan.py",            20),
     ("coder_plan_dup_guard",   "tests/test_coder_plan_dup_guard.py",        20),
+    ("preseed_context",        "tests/test_preseed_context.py",            30),
     ("taint",                  "tests/test_taint.py",                      20),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
@@ -300,6 +303,14 @@ SUITES = [
     ("groot_profile",          "tests/test_groot_profile.py",               30),
     ("side_fallback",          "tests/test_side_fallback.py",              30),
     ("duo_split_integrity",    "tests/test_duo_split_integrity.py",        30),
+    ("duo_round_gate",         "tests/test_duo_round_gate.py",             30),
+    ("duo_finish_round",       "tests/test_duo_finish_round.py",           30),
+    ("duo_plan_round",         "tests/test_duo_plan_round.py",             30),
+    ("truncated_write_salvage", "tests/test_truncated_write_salvage.py",   30),
+    ("duo_ctx_meter",          "tests/test_duo_ctx_meter.py",              30),
+    ("duo_ctx_shrink",         "tests/test_duo_ctx_shrink.py",             30),
+    ("duo_coder_post_wait",    "tests/test_duo_coder_post_wait.py",         30),
+    ("duo_explore_gate",       "tests/test_duo_explore_gate.py",           30),
     ("cache_budget",           "tests/test_cache_budget.py",               30),
     ("tail_cap",               "tests/test_tail_cap.py",                    30),
     ("compression_empty_summary", "tests/test_compression_empty_summary.py", 30),
@@ -384,11 +395,31 @@ SUITES = [
     ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
     ("bench_runner",            "tests/test_bench_runner.py",                30),
     ("bench_analyze",           "tests/test_bench_analyze.py",               30),
+    ("bench_polyglot",          "tests/test_bench_polyglot.py",              30),
+    ("external_deepswe",        "tests/test_external_deepswe.py",           20),
+    ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           20),
     # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
     ("llama_client_retry",      "tests/test_llama_client_retry.py",          30),
     # F4 sync-I/O off the loop (deep audit 2026-11-07): prefill meter reads
     # the newest timestamped slot log via to_thread; walk helpers likewise
     ("prefill_log_tail",        "tests/test_prefill_log_tail.py",            30),
+    ("duo_compress_cycle_behavior", "tests/test_duo_compress_cycle_behavior.py", 30),
+    # B3/B8 behavior coverage (2026-11-09)
+    ("pipeline_runner_behavior", "tests/test_pipeline_runner_behavior.py", 60),
+    ("chat_run_behavior",       "tests/test_chat_run_behavior.py",          60),
+    ("llama_start_phases_behavior", "tests/test_llama_start_phases_behavior.py", 30),
+    ("pre_explore_behavior",     "tests/test_pre_explore_behavior.py",       30),
+    ("manager_load_behavior",    "tests/test_manager_load_behavior.py",      30),
+    # C4/C5/D4/D6/D7 (2026-11-09)
+    ("version_bump",             "tests/test_version_bump.py",               30),
+    ("live_integrations_offline", "tests/test_live_integrations_offline.py", 30),
+    ("selective_tests",          "tests/test_selective_tests.py",            30),
+    ("outcome_hints",            "tests/test_outcome_hints.py",              20),
+    ("git_diff_route",           "tests/test_git_diff_route.py",             20),
+    ("git_checkpoints",          "tests/test_git_checkpoints.py",            30),
+    # D2 context engine + D3 multi-edit (2026-11-09)
+    ("repo_index",               "tests/test_repo_index.py",                 30),
+    ("multi_edit",               "tests/test_multi_edit.py",                 30),
 
 ]
 

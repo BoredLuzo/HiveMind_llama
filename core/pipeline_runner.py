@@ -185,6 +185,10 @@ async def run_pipeline(ctx):
                 yield await ctx.emit({"type": "status", "content": "⚠ Vision-Agent: KV-cache poisoning detected — output discarded. Next request should be clean."})
 
         _va_parallel_task = None
+        # ABORT-BEFORE-ROUND (2026-11-09): the synthesizer block reads this
+        # after the loop; an abort before round 1 left it unbound and raised
+        # UnboundLocalError instead of ending the run cleanly.
+        _pipeline_ws_ctx = ""
         for i in range(ctx.iterations):
             if ctx.aborted():
                 yield await ctx.emit({"type": "status", "content": "Aborted."})

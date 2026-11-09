@@ -18,7 +18,6 @@ Guards (offline, real temp repos via the git CLI):
 Run: python tests/test_git_gate.py
 """
 import asyncio
-import re
 import shutil
 import subprocess
 import sys

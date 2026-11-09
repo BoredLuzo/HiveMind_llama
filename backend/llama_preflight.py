@@ -21,9 +21,6 @@ from pathlib import Path
 logger = logging.getLogger("hivemind.preflight")
 
 _RAM_HEADROOM_GB = 8.0
-LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
-_BENCH_LLAMA_NAMES = ("llama-server.exe", "llama-server", "llama-bench.exe",
-                      "llama-bench")
 
 
 def free_ram_gb() -> float:

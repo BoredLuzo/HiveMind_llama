@@ -20,7 +20,6 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from hive_functions.memory import ToolContextLRU, _recall_marker  # noqa: E402
 from context.compression import evict_stale_reads_for_path  # noqa: E402
-from core import tool_exec_helpers as H  # noqa: E402
 
 from tests._harness import Harness  # noqa: E402
 

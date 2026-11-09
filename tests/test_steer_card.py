@@ -13,7 +13,6 @@ dedicated `{"type": "steer"}` event that:
 Run: python tests/test_steer_card.py
 Exit 0 = all pass, Exit 1 = failures.
 """
-import ast
 import sys
 from pathlib import Path
 

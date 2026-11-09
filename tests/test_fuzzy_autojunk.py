@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.patch_2_fuzzy_edit import fuzzy_replace, best_match_location, _norm
+from tools.patch_2_fuzzy_edit import fuzzy_replace, best_match_location
 
 passed = 0
 failed = 0
@@ -86,6 +86,23 @@ check("T6 anchor on drifted run lands inside the block with honest ratio",
 res_drift = fuzzy_replace(block_content, old_drift, new_str)
 check("T7 ambiguous pure-repetition edit still declined by design",
       res_drift is None)
+
+import asyncio  # noqa: E402
+import tempfile  # noqa: E402
+from tools.runner import _run_inline_tool, _files_read_in_run, _files_seen_in_run  # noqa: E402
+with tempfile.TemporaryDirectory(prefix="hvm_fz_rng_", ignore_cleanup_errors=True) as _td:
+    _fp = Path(_td) / "mod.py"
+    _fp.write_text("\n".join(f"def fn_{i}():\n    return {i}\n" for i in range(20)), encoding="utf-8")
+    _files_read_in_run.set(set())
+    _files_seen_in_run.set(set())
+    _r_read = asyncio.run(_run_inline_tool("read_file", {"path": "mod.py", "start_line": 1, "end_line": 10}, _td, tool_mode="duo_core"))
+    _r_edit = asyncio.run(_run_inline_tool("edit_file", {
+        "path": "mod.py",
+        "old_text": "def fn_0():\n   return 0\n\ndef fn_1():\n    return 1",
+        "new_text": "def fn_0():\n    return 999\n\ndef fn_1():\n    return 1",
+    }, _td, tool_mode="duo_core"))
+    check("T8 range read_file arms fuzzy edit_file without adding to full-read skip set",
+          "return 999" in _fp.read_text(encoding="utf-8") and not _files_read_in_run.get())
 
 print(f"SUMMARY fuzzy_autojunk: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

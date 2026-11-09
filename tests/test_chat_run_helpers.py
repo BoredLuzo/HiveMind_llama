@@ -17,6 +17,8 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import core.chat_run as C  # noqa: E402
+import core.llm_stream as L  # noqa: E402
+import core.state as S  # noqa: E402
 from tests._harness import Harness  # noqa: E402
 
 h = Harness()
@@ -24,29 +26,29 @@ check = h.check
 
 # ── _history_budget_tokens ─────────────────────────────────────────────────
 check("history budget: explicit override wins",
-      C._history_budget_tokens({"session_history_budget_tokens": 12345}) == 12345)
+      L._history_budget_tokens({"session_history_budget_tokens": 12345}) == 12345)
 
-with mock.patch.object(C, "registry_get", return_value="direct_m"), \
-     mock.patch.object(C, "_get_num_ctx", return_value=20000):
-    derived = C._history_budget_tokens({})
+with mock.patch.object(S, "registry_get", return_value="direct_m"), \
+     mock.patch.object(S, "_get_num_ctx", return_value=20000):
+    derived = L._history_budget_tokens({})
 check("history budget: derives 35% of ctx minus reserve",
       derived == int((20000 - 4096) * 0.35), f" ({derived})")
 
-with mock.patch.object(C, "registry_get", return_value="direct_m"), \
-     mock.patch.object(C, "_get_num_ctx", return_value=5000):
-    floored = C._history_budget_tokens({"session_history_budget_tokens": 0})
+with mock.patch.object(S, "registry_get", return_value="direct_m"), \
+     mock.patch.object(S, "_get_num_ctx", return_value=5000):
+    floored = L._history_budget_tokens({"session_history_budget_tokens": 0})
 check("history budget: small ctx floors at 1024",
       floored == 1024, f" ({floored})")
 
-with mock.patch.object(C, "registry_get", side_effect=RuntimeError("registry down")), \
-     mock.patch.object(C, "_get_num_ctx", return_value=99999):
-    fallback = C._history_budget_tokens({})
+with mock.patch.object(S, "registry_get", side_effect=RuntimeError("registry down")), \
+     mock.patch.object(S, "_get_num_ctx", return_value=99999):
+    fallback = L._history_budget_tokens({})
 check("history budget: registry failure falls back to 16k ctx",
       fallback == int((16384 - 4096) * 0.35), f" ({fallback})")
 
-with mock.patch.object(C, "registry_get", return_value=""), \
-     mock.patch.object(C, "_get_num_ctx", return_value=99999):
-    no_model = C._history_budget_tokens({})
+with mock.patch.object(S, "registry_get", return_value=""), \
+     mock.patch.object(S, "_get_num_ctx", return_value=99999):
+    no_model = L._history_budget_tokens({})
 check("history budget: no model uses the 16k default",
       no_model == fallback, f" ({no_model})")
 

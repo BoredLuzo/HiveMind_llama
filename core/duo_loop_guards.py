@@ -39,6 +39,7 @@ class _DuoLoopGuardsState:
     est_tokens: int = 0
     guard_tokens: int = 0
     loop_detected: bool = False
+    slot_ctx_floor_stop: bool = False
     action: str = "proceed"   # "break" ends the tool-round loop
 
 
@@ -59,6 +60,7 @@ async def _duo_loop_guards(ctx, ps: _DuoLoopGuardsState):
     _est_tokens = ps.est_tokens
     _guard_tokens = ps.guard_tokens
     _loop_detected = ps.loop_detected
+    _slot_ctx_floor_stop = ps.slot_ctx_floor_stop
     try:
         if _total_tool_rounds > 0 and _total_tool_rounds % 10 == 0:
             _hc_ok = False
@@ -86,7 +88,6 @@ async def _duo_loop_guards(ctx, ps: _DuoLoopGuardsState):
                         "content": f"⛔ Server dead after health check (port {_dport}) — run aborted."})
                     ps.action = "break"
                     return
-        # (tool-result messages) — now the central repaired function.
         # REPO-MAP-PIN (2026-09-06): static repo-map into the pinned
         # system message once per built list (marker makes later
         # rounds a no-op). Extends the cache-stable prefix beyond the
@@ -169,3 +170,4 @@ async def _duo_loop_guards(ctx, ps: _DuoLoopGuardsState):
         ps.est_tokens = _est_tokens
         ps.guard_tokens = _guard_tokens
         ps.loop_detected = _loop_detected
+        ps.slot_ctx_floor_stop = _slot_ctx_floor_stop

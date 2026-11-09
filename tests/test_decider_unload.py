@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import routing.decider as D
-from routing.decider import EncoderBackend, Decision
+from routing.decider import EncoderBackend
 
 from tests._harness import Harness  # noqa: E402
 

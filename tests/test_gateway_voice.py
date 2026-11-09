@@ -15,7 +15,6 @@ voice-in path without a live bot:
 
 Run: python tests/test_gateway_voice.py
 """
-import asyncio
 import sys
 from pathlib import Path
 
@@ -42,7 +41,6 @@ def read(rel: str) -> str:
 
 
 from hivemind_gateway import auth as gw_auth  # noqa: E402
-from hivemind_gateway.config import GatewayConfig  # noqa: E402
 
 # ── (a) parsing ────────────────────────────────────────────────────────────
 def _voice_update(file_id="file-1", duration=12, mime="audio/ogg", key="voice"):
@@ -100,7 +98,6 @@ seg = main.split("async def handle_voice_note", 1)[1].split("async def start_own
 # ── (d2) download_file level fix (2026-10-22, live): _call returns the
 # INNER result (the file object) — the old code looked for a nested
 # "result" inside it and every voice download failed before fetching. ──────
-import httpx as _httpx
 from hivemind_gateway.telegram_api import TelegramApi as _RealApi, TelegramApiError
 import asyncio as _aio
 

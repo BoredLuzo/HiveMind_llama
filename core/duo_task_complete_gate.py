@@ -6,10 +6,15 @@ loop (the former inline `break`); all other fields sync in `finally`.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import json
 import logging
 import os
+import py_compile
 import re
+import shutil
+import subprocess
 import time
 
 from hive_functions.test_runner import (
@@ -35,8 +40,45 @@ def _claim_abs_path(fp: str, workspace: str) -> str:
     return _p if os.path.isabs(_p) else os.path.join(workspace, _p)
 
 
-# VERIFY-GATE PROMPT: shared by the veto fallback and the auto-verify
-# no-tests branch - one wording, two call sites.
+def _deterministic_syntax_verify(workspace: str, written_files: list | set | None) -> str:
+    """SYNC helper (run via asyncio.to_thread): check syntax of written files.
+
+    Returns an empty string when all checkable files pass, or the error text.
+    """
+    errs: list[str] = []
+    node_bin = shutil.which("node")
+    tsc_bin = shutil.which("tsc")
+    tsc_ran = False
+    for raw_fp in sorted(written_files or []):
+        fp = _claim_abs_path(str(raw_fp), workspace)
+        if not os.path.isfile(fp):
+            continue
+        low = fp.lower()
+        try:
+            if low.endswith(".py"):
+                py_compile.compile(fp, doraise=True)
+            elif low.endswith(".json"):
+                with open(fp, "r", encoding="utf-8") as fh:
+                    json.load(fh)
+            elif low.endswith((".js", ".mjs", ".cjs")) and node_bin:
+                r = subprocess.run([node_bin, "--check", fp],
+                                   capture_output=True, text=True, timeout=15)
+                if r.returncode != 0:
+                    errs.append(f"{raw_fp}: {(r.stderr or r.stdout).strip()[:300]}")
+            elif low.endswith((".ts", ".tsx")) and tsc_bin and not tsc_ran:
+                if os.path.isfile(os.path.join(workspace, "tsconfig.json")):
+                    tsc_ran = True
+                    r = subprocess.run([tsc_bin, "--noEmit"], cwd=workspace,
+                                       capture_output=True, text=True, timeout=30)
+                    if r.returncode != 0:
+                        errs.append(f"tsc --noEmit: {(r.stderr or r.stdout).strip()[:300]}")
+        except (OSError, ValueError, py_compile.PyCompileError, subprocess.SubprocessError) as exc:
+            errs.append(f"{raw_fp}: {exc}")
+    return "\n".join(errs)
+
+
+# VERIFY-GATE PROMPT: shared by the veto fallback when the harness cannot run
+# the suite at all.
 _VERIFY_REQUIRED_PROMPT = (
     "[VERIFY REQUIRED] You called task_complete but the last file write "
     "has not been followed by a successful test run.\n"
@@ -53,7 +95,6 @@ _VERIFY_REQUIRED_PROMPT = (
 @dataclasses.dataclass
 class _DuoTaskCompleteGateState:
     """In/out locals of the verify gate."""
-    ctx: object = None
     exec_result: ToolExecResult = dataclasses.field(default_factory=ToolExecResult)
     written_files: list = dataclasses.field(default_factory=list)
     dtool_msgs: list = dataclasses.field(default_factory=list)
@@ -198,13 +239,40 @@ async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
                     # AUDIT FIX (F2): "nothing ran" is broader than
                     # command=="" — a workspace WITH a manifest but
                     # zero tests also answers exit 5 / "no tests ran"
-                    # with a non-empty command. That is a nudge, not
-                    # a red suite.
+                    # with a non-empty command. Run deterministic syntax check
+                    # instead of forcing an extra LLM round.
                     logger.info(
-                        "[VERIFY-GATE] auto-verify: no tests ran in workspace — smoke-test nudge")
-                    _dtool_msgs.append({"role": "user", "content": (
-                        _VERIFY_REQUIRED_PROMPT
-                    )})
+                        "[VERIFY-GATE] auto-verify: no tests ran in workspace — running deterministic syntax check")
+                    _syn_err = await asyncio.to_thread(
+                        _deterministic_syntax_verify, _ws_str, _written_files)
+                    if not _syn_err:
+                        _verify_last_ok_serial = _verify_mutation_serial
+                        _verify_gate_blocks = 0
+                        _verify_warned = False
+                        _exec_result.task_complete_called = True
+                        state["verify_status"] = "syntax_verified"
+                        _dtool_msgs.append({"role": "user", "content": (
+                            "[AUTO-VERIFY] No test suite found in workspace; deterministic syntax check "
+                            "passed (status=syntax_verified). Ad-hoc smoke check is optional; completion accepted."
+                        )})
+                        try:
+                            yield await ctx.emit({"type": "status", "content": (
+                                "✅ Auto-Verify: syntax_verified (no test suite in workspace)"
+                            )})
+                        except (OSError, RuntimeError, TypeError, ValueError) as _av_emit_err:
+                            logger.debug("[VERIFY-GATE] syntax-verify green emit failed: %s", _av_emit_err)
+                    else:
+                        _dtool_msgs.append({"role": "user", "content": (
+                            "[VERIFY REQUIRED] Deterministic syntax check failed on your written files:\n"
+                            + _syn_err[:900]
+                            + "\nFix the syntax error above and call task_complete again."
+                        )})
+                        try:
+                            yield await ctx.emit({"type": "status", "content": (
+                                "❌ Auto-Verify: syntax error in written files — completion blocked"
+                            )})
+                        except (OSError, RuntimeError, TypeError, ValueError) as _av_emit_err:
+                            logger.debug("[VERIFY-GATE] syntax-verify red emit failed: %s", _av_emit_err)
                 elif _av_res is not None:
                     _av_note = (f"{_av_res.failure_count} test failure(s)"
                                 if _av_res.failure_count
@@ -258,7 +326,7 @@ async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
                 # make the unverified completion visible instead of
                 # letting it read like a verified one
                 try:
-                    await ctx.emit({"type": "status", "content": (
+                    yield await ctx.emit({"type": "status", "content": (
                         "⚠ Completed without a green test run after the "
                         "last write — treat this result as unverified."
                     )})

@@ -14,7 +14,6 @@ Pins the behaviors fixed after the lens-4/lens-5 audits:
      clone path tagged "cloned", repo_valid surfaced.
 """
 import asyncio
-import json
 import os
 import subprocess
 import sys

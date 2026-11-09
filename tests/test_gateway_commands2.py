@@ -532,7 +532,6 @@ def t_stop_verb():
 # ask mode restart-deny contract: persisted open approvals are denied
 # on the engine when the gateway restarts (recover_orphan_run)
 async def t_recover_deny():
-    import time as _t
     gw, st, api = _gw("gwcmd_rcdeny_")
     gw.hive.journal_body = {"active": False}
     st.data["open_approvals"] = {

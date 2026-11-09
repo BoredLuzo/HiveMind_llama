@@ -3,10 +3,12 @@
 Runs right after the final test bridge and before the finalize tail: loop
 auto-summary, chat-context persistence, D4 read-stats, run counter, soul
 trigger, combined output, peer ratings, file summary and the optional
-pipeline synthesis. Pure emit order, no loop control. Sets `ps.session_out`
-— the runner uses it as the single session-write point.
+pipeline synthesis. Pure emit order, no loop control. The assistant turn is
+persisted here; the runner has no session state to sync.
 """
 from __future__ import annotations
+
+import dataclasses
 
 import hashlib
 import logging
@@ -24,21 +26,11 @@ async def _duo_session_epilogue(ctx, ps):
     from backend.llama_client import LlamaError  # plain-Exception base; retry exhaustion re-raises it
     coder_out = ps.coder_out
     _written_files = ps._written_files
-    _duo_hard_stop = ps._duo_hard_stop
     _duo_timed_out = ps._duo_timed_out
     _loop_detected = ps._loop_detected
-    _lifetime_tool_rounds = ps._lifetime_tool_rounds
-    _explore_only_rounds = ps._explore_only_rounds
-    _cs = ps._cs
-    _est_tokens = ps._est_tokens or 0
     _parts = ps._parts or []
     _plan_result = ps.carry.get("_plan_result")
     _inloop_plan_text = ps.carry.get("_inloop_plan_text") or ""
-    _last_plan = ps.carry.get("_last_plan") or ""
-    _read_final = ps.carry.get("_read_final")
-    _touched_paths = ps.carry.get("_touched_paths")
-    _total_tool_errors_ref = ps.carry.get("_total_tool_errors_ref")
-    _last_run_bash_failure = ps.carry.get("_last_run_bash_failure")
     if _loop_detected:
         _written_list = sorted(ps._written_files or [])
         _auto_summary = (
@@ -63,11 +55,7 @@ async def _duo_session_epilogue(ctx, ps):
             _drop_diag_names,
         )
         yield await ctx.emit({"type": "token", "content": "\n\n" + _auto_summary})
-        try:
-            _auto_parts = _parts
-        except (NameError, UnboundLocalError):
-            _auto_parts = []
-        _auto_parts.append(_auto_summary)
+        _parts.append(_auto_summary)
 
     ctx.memory.add_to_session("user", ctx.user_input)
     # Persist files_read + touched_paths from this run into .context.json
@@ -232,4 +220,19 @@ async def _duo_session_epilogue(ctx, ps):
         except (ImportError, OSError, ValueError, TypeError) as _se:
             logger.debug("[CTX] session sidecar update failed: %s", _se)
 
-    ps.session_out = _duo_session_out
+
+@dataclasses.dataclass
+class _DuoSessionEpilogueState:
+    """Epilogue state (split 2.2, 2026-11-05): fields the session epilogue
+    reads/writes; `carry` for the runner-local bindings it consumes."""
+    coder_out: str = ""
+    _cs: object = None
+    _written_files: list = dataclasses.field(default_factory=list)
+    _duo_hard_stop: bool = False
+    _duo_timed_out: bool = False
+    _loop_detected: bool = False
+    _lifetime_tool_rounds: int = 0
+    _explore_only_rounds: int = 0
+    _est_tokens: int = 0
+    _parts: list = dataclasses.field(default_factory=list)
+    carry: dict = dataclasses.field(default_factory=dict)

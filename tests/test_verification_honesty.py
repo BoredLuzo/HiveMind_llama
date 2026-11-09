@@ -154,10 +154,13 @@ check("4c file tools still enter the focus ring",
 
 # ── 5. Structural pins ───────────────────────────────────────────────────
 _dr = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
-check("5a protect_paths wired at all 3 eviction sites, no duplicates",
-      _dr.count("protect_paths=_recent_focus_paths,") == 3)
+_cm = (ROOT / "core" / "duo_ctx_meter.py").read_text(encoding="utf-8", errors="replace")
+check("5a protect_paths wired at both eviction sites (emergency loop + mask)",
+      _cm.count("protect_paths=recent_focus_paths,") == 2)
+_pr = (ROOT / "core" / "duo_plan_round.py").read_text(encoding="utf-8", errors="replace")
 check("5b plan advance carries touched paths",
-      "touched_paths=list((_file_changes or {}).keys())" in _dr)
+      "_touched = list((file_changes or {}).keys())" in _pr
+      and "touched_paths=_touched" in _pr)
 
 _te = (ROOT / "core" / "tool_executor.py").read_text(encoding="utf-8", errors="replace")
 check("5c run_bash verify requires the genuine [exit code: 0] marker",

@@ -185,7 +185,7 @@ class _MoeSlot:
     _moe_cache_used = False
 
 
-def _run_moe(moe_cache: bool):
+def _run_moe(moe_cache: bool, cmd: list | None = None):
     slot = _MoeSlot()
     with mock.patch.object(_P, "_strip_alias", return_value="m"), \
          mock.patch.object(_P, "_MOE_EXPERT_COUNTS", {"m": 8}), \
@@ -197,8 +197,8 @@ def _run_moe(moe_cache: bool):
          mock.patch("backend.llama_vram_table.moe_cfg_for", return_value={}), \
          mock.patch("backend.manager_load._help_supports",
                     new=mock.AsyncMock(return_value=True)):
-        phase = asyncio.run(_P._phase_moe(_MoeMgr(), slot, [], "m:1b",
-                                          4096, moe_cache, 8))
+        phase = asyncio.run(_P._phase_moe(_MoeMgr(), slot, list(cmd or []),
+                                          "m:1b", 4096, moe_cache, 16, 8))
     return phase, slot
 
 
@@ -218,6 +218,16 @@ check("j4 cache off -> zero MiB, no --moe-cache-mib, slot flag stays false",
       and "--moe-cache-mib" not in _ph_nocache.cmd
       and _slot_nocache._moe_cache_used is False,
       f" ({_ph_nocache.moe_cache_used}/{_ph_nocache.cmd})")
+_ph_threads, _ = _run_moe(False, ["--threads", "16", "--threads-batch", "8"])
+_ti = _ph_threads.cmd.index("--threads") + 1 if "--threads" in _ph_threads.cmd else -1
+_tbi = (_ph_threads.cmd.index("--threads-batch") + 1
+        if "--threads-batch" in _ph_threads.cmd else -1)
+check("j5 MoE decode threads use half the logical CPUs",
+      _ti >= 0 and _ph_threads.cmd[_ti] == "8",
+      f" ({_ph_threads.cmd})")
+check("j6 MoE prefill batch keeps the full thread count",
+      _tbi >= 0 and _ph_threads.cmd[_tbi] == "16",
+      f" ({_ph_threads.cmd})")
 
 # ── l-o. follow-ups found in the re-review (2026-11-07) ────────────────────
 check("l the finalize carry passes ctx.this_file (skills dir)",
@@ -242,6 +252,10 @@ _PY_TARGETS = [
     "core/duo_inloop_planner.py", "core/duo_coder_load.py",
     "core/duo_compress_cycle.py", "core/duo_coder_preloop.py",
     "core/duo_task_complete_gate.py", "core/duo_loop_guards.py",
+    "core/duo_policies.py", "core/duo_round_gate.py",
+    "core/duo_finish_round.py", "core/duo_plan_round.py",
+    "core/truncated_write_salvage.py", "core/duo_ctx_meter.py",
+    "core/duo_explore_gate.py",
     "core/chat_shortcuts.py",
     "core/chat_vision_pre.py", "core/chat_history_seed.py",
     "core/chat_route.py", "core/chat_route_decision.py",

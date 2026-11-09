@@ -1,0 +1,77 @@
+{
+ "source": "Aider-AI/polyglot-benchmark",
+ "source_path": "C:\\Users\\NtheP\\AppData\\Local\\Temp\\polyglot-benchmark\\python\\exercises\\practice",
+ "license_note": "Exercism exercise content; see the source repository.",
+ "tasks": [
+  {
+   "id": "polyglot_affine_cipher",
+   "source": "affine-cipher",
+   "tests": [
+    "affine_cipher_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_beer_song",
+   "source": "beer-song",
+   "tests": [
+    "beer_song_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_bowling",
+   "source": "bowling",
+   "tests": [
+    "bowling_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_grade_school",
+   "source": "grade-school",
+   "tests": [
+    "grade_school_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_list_ops",
+   "source": "list-ops",
+   "tests": [
+    "list_ops_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_phone_number",
+   "source": "phone-number",
+   "tests": [
+    "phone_number_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_robot_name",
+   "source": "robot-name",
+   "tests": [
+    "robot_name_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_simple_linked_list",
+   "source": "simple-linked-list",
+   "tests": [
+    "simple_linked_list_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_tree_building",
+   "source": "tree-building",
+   "tests": [
+    "tree_building_test.py"
+   ]
+  },
+  {
+   "id": "polyglot_wordy",
+   "source": "wordy",
+   "tests": [
+    "wordy_test.py"
+   ]
+  }
+ ]
+}

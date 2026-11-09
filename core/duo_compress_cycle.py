@@ -11,12 +11,19 @@ exits set `ps.stop = True` and return; the runner does the `break`.
 """
 from __future__ import annotations
 
+import dataclasses
+from typing import TYPE_CHECKING
+
 import asyncio
 import logging
 import os
 import re
 
 import httpx
+
+if TYPE_CHECKING:
+    from core.plan_tracker import PlanTracker
+    from hive_functions.planner import PlannerResult
 
 from context.compression import _compress_rule_based, _compress_tool_context
 from context.ctx_guard import (
@@ -572,7 +579,7 @@ async def _duo_compress_cycle(ctx, ps):
                 aggressive_retry=True,
             )
             try:
-                _msgs_full, _files_full, _usage_full = await _compress_tool_context(**_kw_full)
+                _msgs_full, _, _ = await _compress_tool_context(**_kw_full)
                 _est_full = _estimate_ctx_tokens(_msgs_full)
                 if _est_full < _est_tokens_after_compress:
                     _dtool_msgs = _msgs_full
@@ -663,6 +670,7 @@ async def _duo_compress_cycle(ctx, ps):
         _dtool_msgs = _strip_stale_ctx_notices(_dtool_msgs)
         logger.warning("[COMPRESS-CLEANUP] call_sigs cleared + stale CTX notices removed (msgs=%d)", len(_dtool_msgs))
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _cc_err:
+        # Never break a completed compression over cleanup cosmetics.
         logger.debug("[COMPRESS-CLEANUP] Cleanup failed: %s", _cc_err)
     # PLAN-REINJECT-FIX (2026-08-31): plan pin as its own
     # user message, so the coder keeps plan overview even
@@ -676,6 +684,7 @@ async def _duo_compress_cycle(ctx, ps):
             _dtool_msgs.append({"role": "user", "content": _pin})
             logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (current=%d)", _n_items, _di + 1)
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _pp_err:
+        # Plan-pin is best-effort.
         logger.debug("[COMPRESS-PLAN-PIN] Pin failed: %s", _pp_err)
     # READ-GUARD-FIX: update _files_in_context with paths from the compression summary
     # so the model doesn't re-read files already summarized.
@@ -695,3 +704,60 @@ async def _duo_compress_cycle(ctx, ps):
 
     # ── sync back: everything the runner consumes after this block ──
     _sync_state()
+
+
+@dataclasses.dataclass
+class _DuoCompressCycleState:
+    """Compress-cycle state (split 2.8, 2026-11-05): the tool-round
+    compression inputs and the counters it rebinds; `stop` is the
+    fail-streak round-loop exit signal (runner does the break)."""
+    _call_sigs: list = dataclasses.field(default_factory=list)
+    _coder_est_at_real: list = dataclasses.field(default_factory=list)
+    _coder_real_prompt_tokens: list = dataclasses.field(default_factory=list)
+    _comp_llm_cfg: str = ""
+    _comp_llm_timeout_s: int = 180
+    _compress_local_only: bool = False
+    _compress_threshold: int = 0
+    _di: int = 0
+    _done_tasks: list = dataclasses.field(default_factory=list)
+    _dport: object = None
+    _dtc: object = None
+    _dtool_ctx: int = 0
+    _dtool_sys_eff: str = ""
+    _explore_ctx: str = ""
+    _goal_pin_msg: dict | None = None
+    _guard_decision: object = None
+    _guard_tokens: float = 0.0
+    _last_test_status: object = None
+    _lifetime_tool_rounds: int = 0
+    _max_tool_rounds: int = 0
+    _n_items: int = 1
+    _partial_compression: bool = False
+    _plan_result: "PlannerResult | None" = None
+    _plan_tracker: "PlanTracker | None" = None
+    _read_counts: dict = dataclasses.field(default_factory=dict)
+    _seen_explore_paths: set = dataclasses.field(default_factory=set)
+    _subtasks: list = dataclasses.field(default_factory=list)
+    _tool_ctx_lru: object = None
+    _written_files: list = dataclasses.field(default_factory=list)
+    _ws_str: str = ""
+    _MAX_COMPRESSIONS: int = 0
+    _compress_fail_streak: int = 0
+    _ctx_compressions: int = 0
+    _ctx_critical_warned: bool = False
+    _ctx_full_skips: int = 0
+    _ctx_pressure_warned: bool = False
+    _dtool_msgs: list = dataclasses.field(default_factory=list)
+    _est_tokens: int = 0
+    _explore_only_rounds: int = 0
+    _force_compress_next: bool = False
+    _llm_compress_fails: int = 0
+    _loop_detected: bool = False
+    _no_write_nudged: bool = False
+    _no_write_rounds: int = 0
+    _partial_escalated: bool = False
+    _rule_compress_fails: int = 0
+    _rule_compress_used: bool = False
+    _total_tool_rounds: int = 0
+    stop: bool = False
+    carry: dict = dataclasses.field(default_factory=dict)

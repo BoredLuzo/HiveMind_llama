@@ -39,7 +39,7 @@ check = h.check
 
 from context.compression import (                               # noqa: E402
     _drop_read_guard_paths, _evict_stale_tool_outputs,
-    evict_stale_reads_for_path, _recall_marker)
+    evict_stale_reads_for_path)
 from hive_functions.memory import ToolContextLRU                 # noqa: E402
 import tools.runner as TR                                        # noqa: E402
 

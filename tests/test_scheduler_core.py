@@ -187,7 +187,6 @@ def main() -> int:
         from scheduler.store import MAX_JOBS as _MJ
         small = AutomationStore(Path(td) / "cap.json")
         added = []
-        import itertools
         for i in range(min(_MJ, 8)):
             added.append(small.add({
                 "name": f"j{i}", "prompt": "x",

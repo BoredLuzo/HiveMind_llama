@@ -62,8 +62,8 @@ FL_SRC = (ROOT / "deploy" / "fetch_llamacpp.py").read_text(encoding="utf-8")
 # ── 1. shell syntax gate ────────────────────────────────────────────────────
 _bash = shutil.which("bash")
 if _bash:
-    r = subprocess.run([_bash, "-n", str(ROOT / "deploy" / "install_linux.sh")],
-                       capture_output=True, text=True)
+    r = subprocess.run([_bash, "-n", "deploy/install_linux.sh"],
+                       cwd=str(ROOT), capture_output=True, text=True)
     check("bash -n install_linux.sh", r.returncode == 0, (r.stderr or "").strip()[:120])
 else:
     check("bash -n install_linux.sh (bash unavailable - skipped)", True, "(no bash on PATH)")

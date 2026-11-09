@@ -6,7 +6,6 @@ FAILING tasklist must BLOCK the guard (fail-closed). Current behavior is
 fail-open — these two tests demonstrate that (they FAIL on purpose until
 the rework is approved). NOT registered in run_regressions.py until then.
 """
-import subprocess
 import sys
 from pathlib import Path
 

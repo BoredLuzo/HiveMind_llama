@@ -530,6 +530,80 @@ _BIG_FILE_NOTE = ("\n"
     "start_line/end_line ranges. The file on disk is complete.")
 
 
+def _missing_top_level_py_symbols(p: Path, old_src: str, new_src: str) -> list[str]:
+    if p.suffix.lower() != ".py" or not old_src or not new_src:
+        return []
+    try:
+        import ast as _ast
+
+        def _top_names(src: str) -> set[str]:
+            names: set[str] = set()
+            for node in _ast.parse(src).body:
+                if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                    names.add(node.name)
+                elif isinstance(node, _ast.Assign):
+                    for t in node.targets:
+                        if isinstance(t, _ast.Name):
+                            names.add(t.id)
+                elif isinstance(node, _ast.AnnAssign) and isinstance(node.target, _ast.Name):
+                    names.add(node.target.id)
+                elif isinstance(node, _ast.ImportFrom):
+                    for alias in node.names:
+                        if alias.name != "*":
+                            names.add(alias.asname or alias.name)
+            return {n for n in names if not n.startswith("_")}
+
+        return sorted(_top_names(old_src) - _top_names(new_src))
+    except (SyntaxError, ValueError, TypeError):
+        return []
+
+
+def _symbol_definition_hints(old_src: str, names: list[str], limit: int = 3) -> str:
+    """Return the original source line for up to `limit` dropped symbols.
+
+    A bare name list ("MODE") tells a small model what it lost but not how to
+    restore it. The original assignment/def line is a much stronger hint and
+    prevents the retry loop seen on multi_config. Best-effort only: any parse
+    problem means no hint, never a failed edit.
+    """
+    if not old_src or not names:
+        return ""
+    wanted = set(names[:limit])
+    lines = old_src.splitlines()
+    try:
+        import ast as _ast
+        found: dict[str, str] = {}
+        for node in _ast.parse(old_src).body:
+            _hint = ""
+            _names: set[str] = set()
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                _names.add(node.name)
+                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
+            elif isinstance(node, _ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, _ast.Name):
+                        _names.add(t.id)
+                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
+            elif isinstance(node, _ast.AnnAssign) and isinstance(node.target, _ast.Name):
+                _names.add(node.target.id)
+                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
+            elif isinstance(node, _ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name != "*":
+                        _names.add(alias.asname or alias.name)
+                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
+            for _n in _names & wanted:
+                if _hint:
+                    found[_n] = _hint[:160]
+        if not found:
+            return ""
+        return "\nKeep definition: " + "; ".join(
+            f"{_n}: {found[_n]}" for _n in names[:limit] if _n in found
+        )
+    except (SyntaxError, ValueError, TypeError, IndexError):
+        return ""
+
+
 async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     """Create or overwrite a file with the COMPLETE content.
 
@@ -599,6 +673,20 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
                 "want a tiny file: read_file it first, then resend with "
                 "\"confirm_shrink\": true.",
                 tool="write_file")
+    if (existed and p.suffix.lower() == ".py" and _old_raw
+            and not args.get("allow_overwrite") and not args.get("confirm_shrink")):
+        _dropped_syms = _missing_top_level_py_symbols(p, _old_raw, content)
+        if _dropped_syms:
+            return _tool_error_response(
+                "WOULD_DROP_SYMBOLS",
+                f"write_file on existing '{p.name}' would drop top-level symbol(s): "
+                f"{', '.join(_dropped_syms[:8])}. File was left unchanged. "
+                "Use edit_file to modify existing files while preserving constants, "
+                "classes, functions, and re-exports, or pass \"allow_overwrite\": true "
+                "if removing those symbols is intentional."
+                f"{_symbol_definition_hints(_old_raw, _dropped_syms)}",
+                details={"dropped": _dropped_syms[:8]},
+                tool="write_file")
 
 
     # EOL-PRESERVE (2026-11-03): the payload may already contain CRLF. The
@@ -655,6 +743,10 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     blocks (the models emit these naturally from pre-training). If markers are
     found in old_text, they are parsed as a block and the extracted texts are
     used for the replacement.
+
+    D3 (2026-11-09): an optional `edits` list applies several exact
+    replacements to ONE file sequentially and writes once (atomic). The
+    single old_text/new_text form is unchanged.
     """
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "edit_file"):
@@ -665,6 +757,9 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             f"'{args.get('path')}' does not exist. read_file it first (to create a "
             "new file use write_file).",
             tool="edit_file")
+    if args.get("edits") is not None:
+        return await _inline_tool_edit_file_batch(
+            args, p, workspace, workspace_lock, args.get("edits"))
     old_text = str(args.get("old_text", ""))
     new_text = str(args.get("new_text", ""))
 
@@ -727,10 +822,11 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
         _fuzzy_ok = False
         _stale_note = ""
         try:
-            from tools.runner import _files_read_in_run as _fri, _read_signatures as _rsig, _normalize_tool_path as _ntp
+            from tools.runner import _files_read_in_run as _fri, _files_seen_in_run as _fsi, _read_signatures as _rsig, _normalize_tool_path as _ntp
             _rs = _fri.get(None)
             _ek = _ntp(args.get("path", ""), workspace)
-            _fuzzy_ok = bool(_rs and _ek in _rs)
+            _as = _fsi.get(None)
+            _fuzzy_ok = bool((_rs and _ek in _rs) or (_as and _ek in _as))
             _sig = _rsig.get(_ek)
             if _sig:
                 try:
@@ -755,6 +851,18 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                 _fzr = None
         if _fzr is not None:
             working = _fzr
+            if not args.get("confirm_shrink") and not args.get("allow_overwrite"):
+                _dropped_fz = _missing_top_level_py_symbols(p, content, working)
+                if _dropped_fz:
+                    _dlist_fz = ", ".join(_dropped_fz[:10])
+                    return _tool_error_response(
+                        "WOULD_DROP_SYMBOLS",
+                        f"Edit to '{p.name}' would remove existing top-level symbol(s): "
+                        f"{_dlist_fz}. Keep existing module-level constants, functions, "
+                        "classes, and re-exports (or re-export moved symbols via "
+                        "'from new_module import symbol'). The file on disk was NOT modified."
+                        f"{_symbol_definition_hints(content, _dropped_fz)}",
+                        tool="edit_file")
             final = working.replace("\n", "\r\n") if _has_crlf else working
 
             _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
@@ -848,6 +956,18 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
 
     final = working.replace("\n", "\r\n") if _has_crlf else working
 
+    if not args.get("confirm_shrink") and not args.get("allow_overwrite"):
+        _dropped_ed = _missing_top_level_py_symbols(p, content, working)
+        if _dropped_ed:
+            _dlist_ed = ", ".join(_dropped_ed[:10])
+            return _tool_error_response(
+                "WOULD_DROP_SYMBOLS",
+                f"Edit to '{p.name}' would remove existing top-level symbol(s): "
+                f"{_dlist_ed}. Keep existing module-level constants, functions, "
+                "classes, and re-exports (or re-export moved symbols via "
+                "'from new_module import symbol'). The file on disk was NOT modified."
+                f"{_symbol_definition_hints(content, _dropped_ed)}",
+                tool="edit_file")
     _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
 
     if _chk:
@@ -863,6 +983,145 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
         # 0-LINES-CLARITY: same line count, different content — report the
         # char delta so the UI does not misleadingly show "0 lines".
         _chard = len(new_n) - len(old_n)
+        result += f", {_chard:+d} chars"
+    return result + _lint
+
+
+# MULTI-EDIT (D3, 2026-11-09): several exact replacements in ONE call, ONE
+# atomic write. The cap keeps a malformed batch from being one giant payload
+# (the output-token limit truncates exactly such calls); more changes belong
+# in several edit_file calls.
+_EDIT_BATCH_MAX = 20
+
+
+def _validate_edit_batch(edits) -> list[tuple[str, str]] | str:
+    """Normalize+validate the `edits` list. Returns [(old, new), ...] or an
+    error-message string. old_text/new_text accept the patch_file key
+    spellings as aliases (old_str/old_string/search, new_str/new_string/
+    replace) — small models mix those up under token pressure."""
+    if not isinstance(edits, list):
+        return ("'edits' must be a LIST of {old_text, new_text} objects "
+                f"(got {type(edits).__name__}).")
+    if not edits:
+        return "'edits' is empty — pass at least one {old_text, new_text} pair."
+    if len(edits) > _EDIT_BATCH_MAX:
+        return (f"'edits' carries {len(edits)} entries — the limit is "
+                f"{_EDIT_BATCH_MAX}. Split the change across several "
+                "edit_file calls.")
+    parsed: list[tuple[str, str]] = []
+    for i, e in enumerate(edits):
+        if not isinstance(e, dict):
+            return (f"edits[{i}] is not an object — each entry needs "
+                    "old_text and new_text.")
+        old_e = _first_dict_value(e, ("old_text",) + _JSON_EDIT_KEY_OLD)
+        new_e = _first_dict_value(e, ("new_text",) + _JSON_EDIT_KEY_NEW)
+        if not old_e.strip():
+            return (f"edits[{i}].old_text is empty — copy the exact text "
+                    "to replace from read_file.")
+        if not new_e.strip():
+            return (f"edits[{i}].new_text is empty — replace the passage "
+                    "with the corrected version.")
+        if "<parameter=" in old_e or "<parameter=" in new_e:
+            return (f"edits[{i}] contains <parameter= fragments from a "
+                    "truncated tool call. Resend the batch with complete "
+                    "old_text/new_text pairs.")
+        parsed.append((old_e.replace("\r\n", "\n"), new_e.replace("\r\n", "\n")))
+    return parsed
+
+
+async def _inline_tool_edit_file_batch(args: dict, p: Path, workspace: Path,
+                                       workspace_lock: str | None,
+                                       edits) -> str:
+    """D3 multi-edit: apply edits[] SEQUENTIALLY to one in-memory copy and
+    write ONCE, atomically. Every validation (occurrence counts, empty/
+    malformed entries, shrink, symbol loss) runs BEFORE any byte is written —
+    a rejected batch always leaves the file untouched."""
+    _batch_err = _validate_edit_batch(edits)
+    if isinstance(_batch_err, str):
+        return _tool_error_response(
+            "EDIT_FILE_BAD_EDITS",
+            _batch_err + " The file was NOT modified.",
+            tool="edit_file")
+    parsed = _batch_err
+    get_transaction().capture_before(p)
+    try:
+        content = await asyncio.to_thread(
+            p.read_text, encoding="utf-8", errors="replace", newline="")
+    except OSError as e:
+        return _tool_error_response(
+            "EDIT_FILE_READ_FAILED",
+            f"Failed to read '{p}': {e}",
+            tool="edit_file")
+    _has_crlf = "\r\n" in content
+    working = content.replace("\r\n", "\n")
+
+    for i, (old_n, new_n) in enumerate(parsed):
+        count = working.count(old_n)
+        _first_hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
+        if count == 0:
+            return _tool_error_response(
+                "EDIT_FILE_OLD_TEXT_NOT_FOUND",
+                f"edits[{i}]: old_text not found in '{p}' (exact match). "
+                f"Looking for: {_first_hint!r}. NOTHING was written — "
+                "read_file the file and copy every old_text verbatim.",
+                tool="edit_file")
+        if count > 1:
+            return _tool_error_response(
+                "EDIT_FILE_NOT_UNIQUE",
+                f"edits[{i}]: old_text appears {count} times in '{p}' — it "
+                "must be unique. NOTHING was written; add surrounding lines "
+                "to make each old_text unique.",
+                tool="edit_file")
+        working = working.replace(old_n, new_n, 1)
+
+    if working.strip() == content.replace("\r\n", "\n").strip():
+        return _tool_error_response(
+            "EDIT_FILE_NOOP",
+            f"no change — '{p}' already contains exactly this content.",
+            tool="edit_file")
+
+    # SHRINK-GUARD across the whole batch (same arms as the single edit).
+    _pre_n = len([l for l in content.replace("\r\n", "\n").splitlines() if l.strip()])
+    _after_n = len([l for l in working.splitlines() if l.strip()])
+    if (not args.get("confirm_shrink") and _pre_n >= 30
+            and (_after_n <= 3
+                 or (_pre_n >= 100 and _after_n <= _pre_n // 10)
+                 or _after_n <= _pre_n // 4)):
+        return _tool_error_response(
+            "EDIT_FILE_SUSPICIOUS_SHRINK",
+            f"This batch would shrink '{p}' from {_pre_n} to {_after_n} content "
+            "lines — almost always a malformed edit, not a real refactor. If you "
+            "REALLY want that: read_file first, then resend with "
+            "\"confirm_shrink\": true.",
+            tool="edit_file")
+
+    # SYMBOL-LOSS guard across the batch: compare the ORIGINAL content with
+    # the final result, so a batch cannot smuggle out what two single calls
+    # would each have been blocked from removing.
+    if not args.get("confirm_shrink") and not args.get("allow_overwrite"):
+        _dropped_ed = _missing_top_level_py_symbols(p, content, working)
+        if _dropped_ed:
+            _dlist_ed = ", ".join(_dropped_ed[:10])
+            return _tool_error_response(
+                "WOULD_DROP_SYMBOLS",
+                f"Edit to '{p.name}' would remove existing top-level symbol(s): "
+                f"{_dlist_ed}. Keep existing module-level constants, functions, "
+                "classes, and re-exports (or re-export moved symbols via "
+                "'from new_module import symbol'). The file on disk was NOT modified."
+                f"{_symbol_definition_hints(content, _dropped_ed)}",
+                tool="edit_file")
+
+    final = working.replace("\n", "\r\n") if _has_crlf else working
+    _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
+    if _chk:
+        return _chk  # T6: containment re-check BEFORE any byte is written
+    _lint = await _auto_lint_result(p, workspace)
+    _old_lines_n = content.count("\n") + 1
+    _new_lines_n = final.count("\n") + 1
+    _delta = _new_lines_n - _old_lines_n
+    result = f"[edit_file: '{p}' applied {len(parsed)} edits ({_delta:+d} lines)]"
+    if _delta == 0:
+        _chard = len(final) - len(content)
         result += f", {_chard:+d} chars"
     return result + _lint
 

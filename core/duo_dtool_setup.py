@@ -9,6 +9,8 @@ through `ps`; the runner consumes them for the tool payload.
 """
 from __future__ import annotations
 
+import dataclasses
+
 import hashlib
 import json
 import logging
@@ -20,6 +22,7 @@ from core.duo.preflight import (
 )
 from core.duo_helpers import (
     _resolve_tool_read_timeout_seconds, _should_escalate_pass_files,
+    build_preseed_context as _build_preseed_context,
 )
 from hive_functions.ctx_utils import budget_explore_window
 from hive_functions.tree_scout import TREE_HEADER_PREFIX
@@ -58,7 +61,6 @@ async def _duo_dtool_setup(ctx, ps):
         "Prefix every file path in tool calls with this exact absolute "
         "path, written with forward slashes.\n"
     )
-    # (see _apply_thinking_kwargs when building the tool payload below).
     # TOKEN BUDGET:
     #
     #   Normal:  exec_mdl + critic simultaneously → less room
@@ -70,10 +72,7 @@ async def _duo_dtool_setup(ctx, ps):
     #   Normal: +deepseek(1.3GB) → ctx=10240, max_tokens=6000
     #     KV@10240: ~1.2GB → total 4.2+1.2+1.3=6.7GB < 7.5GB ✓
     #     12288-5000=7288 free → max_tokens=7000 fits ✓
-    if ctx.duo_config.agentic_mode:
-        _dtool_ctx = _coder_ctx_eff
-    else:
-        _dtool_ctx = _coder_ctx_eff
+    _dtool_ctx = _coder_ctx_eff
     if ctx.duo_config.until_finished and _di == 0:
         yield await ctx.emit({
             "type": "status",
@@ -93,7 +92,6 @@ async def _duo_dtool_setup(ctx, ps):
         ("effective_config(learning)" if ctx.use_learned else "agents-setting"),
         str(ctx.settings.get("active_preset", "") or ""),
     )
-    # write_file_append char limits tied to the real output budget).
     try:
         from tools.runner import _set_write_budget as _set_wb
         _set_wb(min(max(int(_duo_coder_tok), 1024), int(_dtool_ctx)),
@@ -207,8 +205,6 @@ async def _duo_dtool_setup(ctx, ps):
             _plan_result.plan_content if (_plan_result and _plan_result.plan_content) else "",
             _bridge_msg,
         )
-        # loop_detected rejected). For important runs (important_task
-        # passthrough mode escalates to "all". Explicit "none"
         _n_explore_files = sum(
             len(c.get("files_read", [])) for c in (_contracts_raw or [])
         ) if _contracts_raw else 0
@@ -269,12 +265,46 @@ async def _duo_dtool_setup(ctx, ps):
                     _touched_block_persisted = _touched_block
                     from tools.runner import _files_in_context; _files_in_context.set(set(_touched_paths))
     else:
-        _dtool_msgs = [{**m,"content":_dtool_sys_eff} if m.get("role")=="system" else m for m in _coder_msgs]
+        _dtool_msgs = [
+            {**m, "content": _dtool_sys_eff} if _mi == 0 and m.get("role") == "system" else m
+            for _mi, m in enumerate(_coder_msgs)
+            if _mi == 0 or m.get("role") != "system"
+        ]
         _inject_plan_into_coder_msgs(
             _dtool_msgs, _plan_result,
             chunking=ctx.duo_config.chunking,
             is_first_outer_round=_is_first_outer_round,
         )
+
+    # PRE-SEED SMALL WORKSPACE (2026-11-09): avoid the extra read_file round
+    # when the task is a tiny top-level file set and no pre-explore already
+    # supplied the contents. Aider-style one-shot context for the cases where
+    # the tool loop is pure overhead; large repos never match the cap.
+    if _is_first_outer_round and not _pre_explore_msgs and not _already_read:
+        _preseed_block, _preseed_names = _build_preseed_context(
+            _ws_str, int(_dtool_ctx or 0),
+            query=str(getattr(ctx, "user_input", "") or ""))
+        if _preseed_block and _preseed_names:
+            _dtool_msgs.append({"role": "user", "content": _preseed_block})
+            try:
+                from tools.runner import _files_read_in_run, _files_in_context
+                _ps_read = _files_read_in_run.get(None)
+                if _ps_read is None:
+                    _ps_read = set()
+                    _files_read_in_run.set(_ps_read)
+                _ps_ctx = _files_in_context.get(None)
+                if _ps_ctx is None:
+                    _ps_ctx = set()
+                    _files_in_context.set(_ps_ctx)
+                for _pn in _preseed_names:
+                    _pw = _normalize_tool_path(_pn, _ws_str)
+                    if _pw:
+                        _ps_read.add(_pw)
+                        _ps_ctx.add(_pw)
+            except (ImportError, TypeError, ValueError):
+                pass
+            logger.info("[PRESEED] %d small file(s) inlined: %s",
+                        len(_preseed_names), ", ".join(_preseed_names))
 
     # Pre-populate Read-Guard with files already read by pre-explore.
     # Without this, edit_file on existing files gets READ_REQUIRED
@@ -285,12 +315,7 @@ async def _duo_dtool_setup(ctx, ps):
         if _read_set is None:
             _read_set = set()
             _files_read_in_run.set(_read_set)
-        if _pass_mode in ("all", "true", "1"):
-            _ctx_set = _files_in_context.get(None)
-            if _ctx_set is None:
-                _ctx_set = set()
-                _files_in_context.set(_ctx_set)
-        elif _pass_mode == "touched":
+        if _pass_mode in ("all", "true", "1") or _pass_mode == "touched":
             _ctx_set = _files_in_context.get(None)
             if _ctx_set is None:
                 _ctx_set = set()
@@ -411,3 +436,29 @@ async def _duo_dtool_setup(ctx, ps):
     ps._goal_pin_msg = _goal_pin_msg
     ps._touched_block_persisted = _touched_block_persisted
     ps.carry["_coder_map_budget"] = _coder_map_budget
+
+
+@dataclasses.dataclass
+class _DuoDtoolSetupState:
+    """Dtool-setup state (split 2.5, 2026-11-05): tool-payload budget,
+    pass-files bridge, read-guard and goal-pin inputs/outputs; `carry`
+    for the coder-load bindings the block consumes."""
+    _di: int = 0
+    _coder_caps: object = None
+    _coder_msgs: list = dataclasses.field(default_factory=list)
+    _explore_ctx: str = ""
+    _pre_explore_msgs: list = dataclasses.field(default_factory=list)
+    _contracts_raw: list = dataclasses.field(default_factory=list)
+    _touched_paths: set = dataclasses.field(default_factory=set)
+    _tree_ctx: str = ""
+    _is_first_outer_round: bool = False
+    _ws_str: str = ""
+    _touched_block_persisted: str = ""
+    _dtool_msgs: list = dataclasses.field(default_factory=list)
+    _dtool_ctx: int = 0
+    _dtool_opts: dict = dataclasses.field(default_factory=dict)
+    _dtool_sys_eff: str = ""
+    _tool_read_timeout_s: float = 0.0
+    _goal_summary: str = ""
+    _goal_pin_msg: dict | None = None
+    carry: dict = dataclasses.field(default_factory=dict)

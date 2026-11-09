@@ -18,7 +18,6 @@ same report. Both installers now say so:
 
 Run: python tests/test_installer_uv_path.py
 """
-import re
 import sys
 from pathlib import Path
 

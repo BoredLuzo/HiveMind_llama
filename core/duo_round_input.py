@@ -9,6 +9,8 @@ skipped, sets `ps.skip_round = True` and returns; the runner does the
 """
 from __future__ import annotations
 
+import dataclasses
+
 import logging
 import time
 
@@ -31,7 +33,6 @@ async def _duo_coder_round_input(ctx, ps):
     coder_out = ps.coder_out
     _explore_ctx = ps._explore_ctx
     _img_plan = ps._img_plan
-    _plan_tracker = ps._plan_tracker
     _coder_caps = ps._coder_caps
     _coder_map_budget = ps.carry["_coder_map_budget"]
     coder_mdl = ps.carry["coder_mdl"]
@@ -42,20 +43,13 @@ async def _duo_coder_round_input(ctx, ps):
     _coder_port = ps._coder_port
     _touched_block_persisted = ps._touched_block_persisted
     _duo_coder_sys = ps.carry["_duo_coder_sys"]
-    _duo_coder_temp = ps.carry["_duo_coder_temp"]
-    _duo_coder_tok = ps.carry["_duo_coder_tok"]
-    _coder_dyn_hints = ps.carry["_coder_dyn_hints"]
-    _matched_skills = ps.carry["_matched_skills"]
     _plan_thinking = ps.carry.get("_plan_thinking") or ""
-    _plan_result = ps.carry.get("_plan_result")
-    _inloop_plan_text = ps.carry.get("_inloop_plan_text") or ""
     _plan_content_txt = ps.carry.get("_plan_content_txt") or ""
 
     from core.duo_helpers import (
         attach_images_to_last_user, build_steer_user_message,
         count_image_parts, is_read_only_request,
     )
-    _build_steer_user_message = build_steer_user_message
     from hive_functions.chunking import build_chunk_context
     from hive_functions.ctx_utils import (
         budget_explore_window, budget_session_msgs, extract_known_files,
@@ -138,7 +132,6 @@ async def _duo_coder_round_input(ctx, ps):
             _MAX_EXPLORE_INJECT = _coder_caps.explore_inject
             _explore_inject = _explore_ctx
             if len(_explore_inject) > _MAX_EXPLORE_INJECT:
-                # MARKER-AWARE (2026-08-17): Static map first (up to
                 _explore_inject = budget_explore_window(
                     _explore_inject, _MAX_EXPLORE_INJECT, _coder_map_budget,
                 )
@@ -256,7 +249,6 @@ async def _duo_coder_round_input(ctx, ps):
                 f"\n\n[YOUR EXECUTION PLAN — IMPLEMENT THIS, DO NOT RE-PLAN]:\n{_brief_txt}"
             )
 
-    _coder_skipped_images = False
     _sess_budgeted: list = []
     if _di == 0:
         # fixed 600/1200-char truncation.
@@ -304,7 +296,6 @@ async def _duo_coder_round_input(ctx, ps):
         if _mm_ok:
             _coder_msgs = attach_images_to_last_user(_coder_msgs, ctx.images)
         else:
-            _coder_skipped_images = True
             _img_plan["coder"] = "none"
             logger.warning("[DUO] coder '%s' has no mmproj/projector — raw image SKIPPED", exec_mdl)
             yield await ctx.emit({"type": "status",
@@ -322,10 +313,9 @@ async def _duo_coder_round_input(ctx, ps):
                 "stays text-only (switch to Raw image mode for image "
                 "steers)."})
             continue
-        _coder_msgs.append(_build_steer_user_message(_st["text"], _st["images"]))
+        _coder_msgs.append(build_steer_user_message(_st["text"], _st["images"]))
         logger.info("[DUO] steer with %d image(s) appended as user parts message",
                     len(_st["images"]))
-        _steer_img_items = []
 
     _prompt_prev = (_coder_input or "")[:500].replace("\n", " ").strip()
     if len(_coder_input or "") > 500:
@@ -353,10 +343,36 @@ async def _duo_coder_round_input(ctx, ps):
     ps._coder_input = _coder_input
     ps._coder_msgs = _coder_msgs
     ps._read_only_task_request = _read_only_task_request
-    ps._coder_skipped_images = _coder_skipped_images
-    ps._coder_imgs_off = _coder_imgs_off
     ps._img_plan = _img_plan
     ps._touched_block_persisted = _touched_block_persisted
     ps._parts = _parts
     ps._t = _t
     ps.carry["_coder_map_budget"] = _coder_map_budget
+
+
+@dataclasses.dataclass
+class _DuoRoundInputState:
+    """Round-input state (split 2.4, 2026-11-05): fields the round-input
+    build reads/writes; `carry` for the runner-local bindings it consumes.
+    `skip_round` is the loop-control signal (empty chunk → runner continue)."""
+    _coder_port: object = None
+    _di: int = 0
+    _n_items: int = 1
+    _subtask: str | None = None
+    _subtasks: list = dataclasses.field(default_factory=list)
+    _done_tasks: list = dataclasses.field(default_factory=list)
+    _cs: object = None
+    _written_files: list = dataclasses.field(default_factory=list)
+    critic_issues: list = dataclasses.field(default_factory=list)
+    coder_out: str = ""
+    _explore_ctx: str = ""
+    _img_plan: dict = dataclasses.field(default_factory=dict)
+    _coder_caps: object = None
+    skip_round: bool = False
+    _touched_block_persisted: str = ""
+    _coder_input: str = ""
+    _coder_msgs: list = dataclasses.field(default_factory=list)
+    _read_only_task_request: bool = False
+    _parts: list = dataclasses.field(default_factory=list)
+    _t: float = 0.0
+    carry: dict = dataclasses.field(default_factory=dict)

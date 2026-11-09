@@ -66,23 +66,6 @@ from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 
 
-def _history_budget_tokens(settings) -> int:
-    """History budget: override wins; 0 derives from the direct model's
-    ctx (35% of n_ctx minus a 4096 reserve for system prompt + output)."""
-    _ov = int(settings.get("session_history_budget_tokens", 0) or 0)
-    if _ov > 0:
-        return _ov
-    try:
-        _ref = registry_get("direct") or registry_get("analyst") or ""
-        _nctx = int(_get_num_ctx(_ref) or 0) if _ref else 0
-    except Exception:
-        _nctx = 0
-    # NOTE: with llama-server parallel slots the per-slot ctx is
-    # n_ctx / n_parallel - divide here if parallel slots ever get enabled
-    # (the current config runs one slot, default n_parallel=1).
-    if _nctx <= 0:
-        _nctx = 16384  # sane default when no ctx override is configured
-    return max(1024, int((_nctx - 4096) * 0.35))
 from tools.websearch import _safe_web_search
 from hive_functions.prompts import VISION_AGENT_PROMPT
 from hive_functions.soul_engine import (
@@ -230,6 +213,14 @@ async def run_stream(
     if model_overrides:
         _run_settings.update(model_overrides)
     logger.warning("[RUN-TRACE] settings-kopie ok (overrides=%s)", sorted(model_overrides or {}))
+    # F10 (2026-11-08): lift the merged run settings into the tool-layer
+    # snapshot ContextVar. Handlers that must not re-read the live dict
+    # mid-run (LSP lsp_auto_* knobs) take their values from this snapshot:
+    # the run keeps what it STARTED with, and a body override (bench:
+    # lsp_auto_diagnostics=false) pins just this run. Propagates into
+    # asyncio.create_task children like the gate overrides below.
+    from tools.runner import _run_settings_snapshot as _run_snap_cv
+    _run_snap_cv.set(_run_settings)
     # G1 (full audit 2026-10-05; FIXED 2026-10-07): the per-run gate force
     # rides ONLY the body/model overrides (gateway phone runs). A True that
     # merely SICKERED IN from the global setting must not pin the run: the
@@ -908,6 +899,7 @@ async def run_stream(
         _effective_task_type=_effective_task_type,
             _judge_verdict=_judge_verdict,
         _pipeline_sess_msgs=_pipeline_sess_msgs,
+        chat_id=chat_id or "",
             )
     async for _ev in _chat_route_decision(_rd_ps):
         yield _ev

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze benchmark result JSONs (Wilson CI + paired McNemar).
+"""Analyze benchmark result JSONs (Wilson CI + paired McNemar + D1 relative).
 
 Usage:
     python bench/analyze.py --results run1.json run2.json
@@ -9,6 +9,10 @@ Cell-level pass rates get a 95% Wilson interval. The paired comparison uses
 one majority verdict per (task, condition): a task counts as passed when
 more than half of its runs passed. Tasks missing in either condition are
 skipped. McNemar's exact test is two-sided over the discordant pairs.
+
+Since D1 (2026-11-09) the summary also carries a `relative` block: pass-rate
+deltas vs the raw/raw_files baselines, per-category deltas, cached/net token
+ratios vs aider and the tool-round counts (bench/relative.py).
 """
 from __future__ import annotations
 
@@ -17,6 +21,13 @@ import json
 import math
 import sys
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from bench.relative import build_relative, category as _rel_category  # noqa: E402
+from bench.relative import print_relative  # noqa: E402
 
 Z = 1.959963984540054
 
@@ -63,11 +74,9 @@ def mcnemar_exact(b: int, c: int) -> float:
 
 
 def _category(task: str) -> str:
-    for prefix, name in (("fix_", "bugfix"), ("feature_", "feature"),
-                         ("refactor_", "refactor"), ("multi_", "multi-file")):
-        if task.startswith(prefix):
-            return name
-    return "other"
+    """Kept for backward compatibility; the shared mapping lives in
+    bench/relative.py (single source for runner and analyzer)."""
+    return _rel_category(task)
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -89,6 +98,9 @@ def summarize(rows: list[dict]) -> dict:
             "passes": passes,
             "pass_rate": passes / len(mine) if mine else 0.0,
             "ci95": [round(lo, 4), round(hi, 4)],
+            "tokens_total": sum(int(r.get("tokens") or 0) for r in mine),
+            "cached_tokens_total": sum(int(r.get("cached_tokens") or 0) for r in mine),
+            "net_tokens_total": sum(int(r.get("net_tokens") or r.get("tokens") or 0) for r in mine),
         }
     verdicts = majority_verdicts(rows)
     paired = {}
@@ -114,7 +126,10 @@ def summarize(rows: list[dict]) -> dict:
         categories[cond] = {
             name: round(sum(vals) / len(vals), 3) for name, vals in sorted(buckets.items())
         }
-    return {"conditions": conditions, "paired": paired, "categories": categories}
+    # D1: compact relative block on the same (deduped) rows - deltas vs the
+    # raw/raw_files baselines, per-category deltas, aider token ratios, rounds.
+    return {"conditions": conditions, "paired": paired, "categories": categories,
+            "relative": build_relative(rows)}
 
 
 def _print(summary: dict) -> None:
@@ -132,6 +147,8 @@ def _print(summary: dict) -> None:
     print()
     for cond, cats in summary["categories"].items():
         print(f"{cond:18} " + "  ".join(f"{k}={v:.2f}" for k, v in cats.items()))
+    if summary.get("relative"):
+        print_relative(summary["relative"])
 
 
 def main() -> int:

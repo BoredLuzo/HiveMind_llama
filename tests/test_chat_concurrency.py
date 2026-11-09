@@ -12,7 +12,6 @@ Run: python tests/test_chat_concurrency.py
 """
 import asyncio
 import json
-import re
 import shutil
 import sys
 import tempfile

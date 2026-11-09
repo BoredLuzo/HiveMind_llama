@@ -13,7 +13,7 @@ from hive_functions.loop_machine import AgentState, StopReason
 import httpx
 from vram.loader import _bk_load
 
-import asyncio, logging, os, time
+import asyncio, logging, os, subprocess, time
 from context.chat import (
     _load_chat_context, _save_chat_context,
 )
@@ -549,6 +549,24 @@ def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think):
     if not coder_tool_think:
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
     return payload
+
+
+async def _auto_push_after_commit(ws_str: str) -> str:
+    """AUTO-PUSH after a successful hivemind commit.
+
+    Delegates to git_tools.push_after_commit (panel toggle + credential gate
+    live there); a failure only debug-logs, never raises into the run.
+    Lives in preflight so core.duo_finalize does not have to back-import the
+    runner module.
+    """
+    try:
+        from hive_functions.git_tools import push_after_commit as _pap
+        return await _pap(ws_str)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+            AttributeError, asyncio.TimeoutError, httpx.HTTPError,
+            subprocess.SubprocessError) as _push_err:
+        logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
+        return ""
 
 
 async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,

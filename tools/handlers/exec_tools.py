@@ -772,6 +772,31 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
         _timeout = 90
     _timeout = max(10, min(300, _timeout))
     _lang = str(args.get("lang_override") or "").strip() or None
+    # SELECTIVE-TESTS (D4, 2026-11-09): run only the tests mapped to the
+    # files this run wrote. An explicit target list wins; otherwise the
+    # testmap maps written source/test paths and the full suite stays the
+    # fallback when nothing maps. Opt out with duo_selective_tests=false.
+    _scoped_paths: list[str] = []
+    try:
+        _raw_targets = args.get("paths") or args.get("targets")
+        if isinstance(_raw_targets, str):
+            _raw_targets = [p for p in re.split(r"[,\s]+", _raw_targets) if p]
+        if isinstance(_raw_targets, list) and _raw_targets:
+            _scoped_paths = [str(p) for p in _raw_targets][:40]
+        else:
+            try:
+                from core.state import settings as _hs_settings
+                _selective = bool(_hs_settings.get("duo_selective_tests", True))
+            except (ImportError, AttributeError, TypeError):
+                _selective = True
+            if _selective and _rt_written:
+                try:
+                    from hive_functions.testmap import map_edits_to_tests
+                    _scoped_paths = map_edits_to_tests(_ws_str, _rt_written)
+                except (ImportError, OSError, ValueError, TypeError):
+                    _scoped_paths = []
+    except (AttributeError, TypeError, ValueError):
+        _scoped_paths = []
     _chat_id = ""
     try:
         from tools.runner import _current_run_id as _crid_run_tests
@@ -784,6 +809,7 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
             timeout=_timeout,
             lang_override=_lang,
             chat_id=_chat_id,
+            paths=(_scoped_paths or None),
         )
     except Exception as e:
         return _tool_error_response(

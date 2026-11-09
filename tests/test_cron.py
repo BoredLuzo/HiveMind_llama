@@ -1,5 +1,4 @@
 """R7 cron: pure helpers + the /cron command flow (gateway-side)."""
-import ast
 import sys
 from pathlib import Path
 
@@ -22,7 +21,7 @@ def fail(name, msg=""):
 
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "hivemind_gateway"))
-from hivemind_gateway.cron import parse_spec, next_fire_ts, CronManager
+from hivemind_gateway.cron import parse_spec, CronManager
 
 
 class FakeState:

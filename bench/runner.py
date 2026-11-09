@@ -10,6 +10,11 @@ Four conditions, same model and same llama-server:
 Metric: pass rate per condition (check command exit 0), median duration and
 tokens. The headline number is the DELTA vs the raw baseline, not an absolute
 score - RExBench/WebGen-Bench show low absolute numbers for every agent.
+Since D1 (2026-11-09) the report also carries delta_vs_raw_files, per-
+category deltas, cached/net token ratios vs aider and tool rounds, both as
+summary fields and in a compact `relative` block (bench/relative.py).
+External harnesses (Claude Code/Codex, D8) live in bench/external/ and do
+not change any condition here.
 
 Usage:
     python bench/runner.py --list
@@ -38,10 +43,15 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from bench.relative import build_relative, print_relative  # noqa: E402
+
 # raw        = one prompt, unified diff (the strict baseline)
 # raw_files  = one prompt, full corrected files (optional, separately reported:
 #              small models often fail on diff syntax, not on the fix itself)
-CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "aider")
+CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_lean", "aider")
 DEFAULT_CONDITIONS = ("raw", "hivemind_direct", "hivemind_duo", "aider")
 
 
@@ -326,7 +336,7 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
 
 
 def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
-                   *, duo_planner: bool = True) -> dict:
+                   *, duo_planner: bool = True, duo_tier: str = "core") -> dict:
     """Request body for the two HiveMind conditions.
 
     MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
@@ -364,7 +374,7 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         # duo_coder_tool_tier=full and test-feedback toggles; pin the core
         # tier and disable the auto-test feedback loops so the condition is
         # reproducible across machines.
-        body["duo_coder_tool_tier"] = "core"
+        body["duo_coder_tool_tier"] = str(duo_tier or "core")
         body["duo_test_feedback"] = False
         body["duo_test_feedback_chunk"] = False
         body["duo_test_feedback_final"] = False
@@ -383,12 +393,13 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
     return body
 
 
-async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
+async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
+                        *, duo_tier: str = "core") -> dict:
     body = _hivemind_body(task, work, duo, cfg.model,
-                          duo_planner=cfg.duo_planner)
+                          duo_planner=cfg.duo_planner, duo_tier=duo_tier)
     done: dict = {}
     error = ""
-    usage_prompt = usage_completion = 0
+    usage_prompt = usage_completion = usage_cached = usage_rounds = 0
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=10.0)) as client:
         async with client.stream("POST",
                                  cfg.hivemind_url.rstrip("/") + "/stream",
@@ -408,13 +419,19 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
                     # per phase; the done event only carries the outer ledger.
                     usage_prompt += int(ev.get("prompt_tokens") or 0)
                     usage_completion += int(ev.get("completion_tokens") or 0)
+                    usage_cached += int(ev.get("cached_tokens") or 0)
+                    usage_rounds += 1
                 elif ev.get("type") == "error":
                     error = str(ev.get("content") or ev)[:500]
     _usage_total = usage_prompt + usage_completion
     tokens = _usage_total or (
         int(done.get("tokens_generated") or 0)
         + int(done.get("prompt_tokens_total") or 0))
-    return {"tokens": tokens, "stop_reason": done.get("stop_reason", ""),
+    _uncached_prompt = max(0, usage_prompt - usage_cached)
+    _net_tokens = (_uncached_prompt + usage_completion) if _usage_total else tokens
+    return {"tokens": tokens, "cached_tokens": usage_cached,
+            "net_tokens": _net_tokens, "rounds": usage_rounds,
+            "stop_reason": done.get("stop_reason", ""),
             "detail": error}
 
 
@@ -449,22 +466,45 @@ def _resolve_aider_bin(cfg: Config) -> str:
     return shutil.which("aider") or ""
 
 
+def _active_llama_url(default_url: str) -> str:
+    for url in (default_url, "http://127.0.0.1:8101", "http://127.0.0.1:8102"):
+        try:
+            if httpx.get(url.rstrip("/") + "/health", timeout=1.5).status_code == 200:
+                return url.rstrip("/")
+        except httpx.HTTPError:
+            continue
+    return default_url.rstrip("/")
+
+
+def _aider_remote_base() -> str:
+    """HIVEMIND_AIDER_API_BASE (e.g. https://openrouter.ai/api/v1) or ''."""
+    return (os.environ.get("HIVEMIND_AIDER_API_BASE") or "").strip().rstrip("/")
+
+
 def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     aider_bin = _resolve_aider_bin(cfg)
     if not aider_bin:
         return {"tokens": 0,
                 "detail": "aider is not installed (set --aider-bin / HIVEMIND_AIDER_BIN)"}
+    # Optional remote OpenAI-compatible endpoint (e.g. a hosted SOTA model for a
+    # separately reported reference run). Default = local llama-server, key
+    # "sk-local". The key is read from the environment only, never logged.
+    remote_base = _aider_remote_base()
+    api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
+    api_key = (os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
     cmd = [
         aider_bin, "--yes-always", "--no-git", "--no-auto-commits",
         "--no-check-update",
+        # Aider otherwise offers/opens its model-warning docs page in the
+        # browser for every unknown local model — one tab per benchmark cell.
+        "--no-show-model-warnings",
         "--model", f"openai/{cfg.model}",
-        "--openai-api-base", cfg.llama_url.rstrip("/") + "/v1",
-        "--openai-api-key", "sk-local",
+        "--openai-api-base", api_base,
         "--message", task.prompt,
         *_aider_files(work),
     ]
-    env = {**os.environ, "OPENAI_API_KEY": "sk-local",
-           "OPENAI_API_BASE": cfg.llama_url.rstrip("/") + "/v1"}
+    env = {**os.environ, "OPENAI_API_KEY": api_key,
+           "OPENAI_API_BASE": api_base}
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
@@ -496,7 +536,9 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         elif cond == "hivemind_direct":
             extra = await _run_hivemind(task, work, cfg, duo=False)
         elif cond == "hivemind_duo":
-            extra = await _run_hivemind(task, work, cfg, duo=True)
+            extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="core")
+        elif cond == "hivemind_duo_lean":
+            extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="lean")
         elif cond == "aider":
             extra = await asyncio.to_thread(_run_aider, task, work, cfg)
         else:
@@ -513,6 +555,9 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         "ok": bool(ok),
         "seconds": seconds,
         "tokens": int(extra.get("tokens") or 0),
+        "cached_tokens": int(extra.get("cached_tokens") or 0),
+        "net_tokens": int(extra.get("net_tokens") or extra.get("tokens") or 0),
+        "rounds": int(extra.get("rounds") or 0),
         "stop_reason": extra.get("stop_reason", ""),
         "detail": extra.get("detail", "") or check_out,
         "check_output": check_out[-2000:],
@@ -521,33 +566,61 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
 
 
 def aggregate(rows: list[dict]) -> dict:
-    """Per-condition pass rate, median duration, tokens, delta vs raw."""
+    """Per-condition pass rate, median duration, tokens, delta vs raw.
+
+    D1 (2026-11-09): also the delta vs the `raw_files` baseline when present,
+    the cached-token share, the tool-round counts and - in the JSON's separate
+    `relative` block - per-category deltas and aider token ratios. All new
+    fields are additive; existing keys keep their meaning and shape.
+    """
     summary: dict[str, dict] = {}
-    for cond in CONDITIONS:
-        mine = [r for r in rows if r["condition"] == cond]
+    conds: list[str] = []
+    for row in rows:
+        cond = str(row.get("condition") or "")
+        # External-harness rows (bench/external, D8) use condition names
+        # outside CONDITIONS; report them instead of dropping them silently.
+        if cond and cond not in conds:
+            conds.append(cond)
+    for cond in conds:
+        mine = [r for r in rows if r.get("condition") == cond]
         if not mine:
             continue
         duration = [r["seconds"] for r in mine]
+        rounds = [int(r.get("rounds") or 0) for r in mine]
+        tokens_total = sum(int(r["tokens"] or 0) for r in mine)
+        cached_total = sum(int(r.get("cached_tokens") or 0) for r in mine)
         summary[cond] = {
             "runs": len(mine),
             "pass_rate": round(sum(1 for r in mine if r["ok"]) / len(mine), 4),
             "median_seconds": round(statistics.median(duration), 1),
-            "tokens_total": sum(int(r["tokens"] or 0) for r in mine),
+            "tokens_total": tokens_total,
+            "cached_tokens_total": cached_total,
+            "net_tokens_total": sum(int(r.get("net_tokens") or r.get("tokens") or 0) for r in mine),
+            "cached_share": round(cached_total / tokens_total, 4) if tokens_total else None,
+            "rounds_total": sum(rounds),
+            "rounds_median": round(statistics.median(rounds), 1) if rounds else 0.0,
         }
     base = summary.get("raw", {}).get("pass_rate")
+    base_files = summary.get("raw_files", {}).get("pass_rate")
     for cond, row in summary.items():
         row["delta_vs_raw"] = None if base is None else round(row["pass_rate"] - base, 4)
+        row["delta_vs_raw_files"] = (None if base_files is None
+                                     else round(row["pass_rate"] - base_files, 4))
     return summary
 
 
-def print_summary(summary: dict) -> None:
+def print_summary(summary: dict, relative: dict | None = None) -> None:
     print()
-    print(f"{'condition':<20} {'pass':>6} {'delta':>8} {'median s':>9} {'tokens':>9}")
+    print(f"{'condition':<20} {'pass':>6} {'delta':>8} {'median s':>9} {'tokens':>9} "
+          f"{'net tok':>9} {'rounds':>6}")
     for cond, row in summary.items():
         delta = row["delta_vs_raw"]
         delta_s = "-" if delta is None else f"{delta:+.2f}"
         print(f"{cond:<20} {row['pass_rate']:>6.2f} {delta_s:>8} "
-              f"{row['median_seconds']:>9.1f} {row['tokens_total']:>9d}")
+              f"{row['median_seconds']:>9.1f} {row['tokens_total']:>9d} "
+              f"{row['net_tokens_total']:>9d} {row['rounds_median']:>6.1f}")
+    if relative:
+        print_relative(relative)
 
 
 def _payload(rows: list[dict], cfg: Config, conditions: list[str],
@@ -558,6 +631,10 @@ def _payload(rows: list[dict], cfg: Config, conditions: list[str],
         "runs": cfg.runs,
         "conditions": conditions,
         "summary": aggregate(rows),
+        # D1: compact relative block (deltas vs raw/raw_files, category
+        # deltas, aider token ratios, rounds). Additive - the older keys are
+        # unchanged, so previous tooling keeps reading the file.
+        "relative": build_relative(rows),
         "results": rows,
     }
 
@@ -574,13 +651,16 @@ def _persist(out: Path, rows: list[dict], cfg: Config,
 
 async def _preflight(cfg: Config, conditions: list[str]) -> str:
     """Fail fast when a required endpoint is dead (empty string = OK)."""
-    need_llama = any(c in ("raw", "raw_files", "aider") for c in conditions)
+    need_llama = (any(c in ("raw", "raw_files", "aider") for c in conditions)
+                  and not (conditions and conditions[0].startswith("hivemind_")))
+    if need_llama and _aider_remote_base() and set(conditions) == {"aider"}:
+        need_llama = False  # aider-only run against a remote endpoint
     need_hive = any(c.startswith("hivemind_") for c in conditions)
     async with httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=3.0)) as client:
         if need_llama:
             try:
-                r = await client.get(cfg.llama_url.rstrip("/") + "/v1/models")
+                r = await client.get(_active_llama_url(cfg.llama_url) + "/v1/models")
                 r.raise_for_status()
             except httpx.HTTPError as exc:
                 return f"llama-server at {cfg.llama_url}: {exc}"
@@ -613,9 +693,13 @@ def main() -> int:
                         help="coder-alone mode: duo runs with planner off")
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--only", default="", help="comma-separated task ids to run")
     args = parser.parse_args()
 
     tasks = load_tasks(Path(args.tasks))
+    if args.only:
+        _only_ids = {t.strip() for t in args.only.split(",") if t.strip()}
+        tasks = [t for t in tasks if t.id in _only_ids]
     if args.list:
         for task in tasks:
             print(f"{task.id:24s} {task.prompt[:70]}")
@@ -685,7 +769,7 @@ def main() -> int:
             shutil.rmtree(tmp, ignore_errors=True)
 
     summary = aggregate(rows)
-    print_summary(summary)
+    print_summary(summary, build_relative(rows))
     print(f"\nwrote {out}")
     return 0
 

@@ -1,5 +1,4 @@
 """Pins for the 2026-10-18 audit fixes: lockfile, debug gate, log metadata."""
-import io
 import subprocess
 import sys
 from pathlib import Path

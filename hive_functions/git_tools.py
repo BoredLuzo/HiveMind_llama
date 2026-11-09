@@ -306,6 +306,63 @@ async def get_last_checkpoint(workspace: str) -> str | None:
     return None
 
 
+async def list_checkpoints(workspace: str, limit: int = 20) -> list[dict]:
+    """Checkpoint commits for the D7 review panel, newest first."""
+    try:
+        n = max(1, min(100, int(limit or 20)))
+    except (TypeError, ValueError):
+        n = 20
+    r = await _git_run(workspace, "git", "log",
+                       "--pretty=%H%x09%at%x09%s", "-n", "200", timeout=30)
+    if r.returncode != 0:
+        return []
+    marker = _checkpoint_marker()
+    out: list[dict] = []
+    for line in r.stdout.splitlines():
+        h, _, rest = line.partition("\t")
+        ts, _, subj = rest.partition("\t")
+        if not h or not subj.strip().lower().startswith(marker.lower()):
+            continue
+        out.append({
+            "hash": h.strip(),
+            "short": h.strip()[:10],
+            "ts": int(ts) if str(ts).isdigit() else 0,
+            "label": subj.strip()[len(marker):].strip()[:120],
+        })
+        if len(out) >= n:
+            break
+    return out
+
+
+async def exec_git_restore_checkpoint(workspace: str, target: str) -> str:
+    """Restore tracked files to a specific checkpoint (D7).
+
+    Only checkpoint commits are accepted. A safety stash snapshot is created
+    first so a restore can never silently destroy uncommitted tracked work;
+    untracked files are left in place (documented limitation).
+    """
+    import re as _re
+    tgt = str(target or "").strip()
+    if not _re.fullmatch(r"[0-9a-fA-F]{7,40}", tgt):
+        return "❌ restore: target must be a 7-40 character git hash"
+    subj = await _git_run(workspace, "git", "show", "-s", "--format=%s", tgt,
+                          timeout=15)
+    if subj.returncode != 0 or not _is_checkpoint_subject(subj.stdout):
+        return "❌ restore: target is not a checkpoint commit"
+    safety = await _git_run(workspace, "git", "stash", "create",
+                            "checkpoint restore safety snapshot", timeout=30)
+    safety_sha = safety.stdout.strip() if safety.returncode == 0 else ""
+    reset = await _git_run(workspace, "git", "reset", "--hard", tgt, timeout=60)
+    if reset.returncode != 0:
+        return f"❌ restore: reset failed: {reset.stderr.strip()[:300]}"
+    h = await _git_run(workspace, "git", "rev-parse", "--short", "HEAD")
+    msg = f"restored to checkpoint [{h.stdout.strip()}]"
+    if safety_sha:
+        msg += (f"; safety snapshot {safety_sha[:10]} "
+                f"(recover with: git stash apply {safety_sha[:10]})")
+    return msg
+
+
 async def _find_fold_base(workspace: str) -> str | None:
     r = await _git_run(workspace, "git", "log", "--pretty=%H %s", "-n", "200")
     if r.returncode != 0:

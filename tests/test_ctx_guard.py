@@ -192,4 +192,12 @@ def _run_partial():
 
 _run_partial()
 
+from context.ctx_guard import min_viable_tool_budget as _mvb  # noqa: E402
+check("MV1: default ctx_tokens=0 keeps 4096 cap",
+      _mvb(8000) == 4000 and _mvb(16000) == 4096)
+check("MV2: 8k ctx scales viable cap to ctx//5 (1638) to avoid CTX-FULL loops",
+      _mvb(8000, ctx_tokens=8192) == 8192 // 5)
+check("MV3: 32k ctx keeps 4096 cap",
+      _mvb(16000, ctx_tokens=32768) == 4096)
+
 sys.exit(h.finish("ctx_guard"))

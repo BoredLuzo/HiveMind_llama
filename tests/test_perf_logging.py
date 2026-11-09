@@ -69,7 +69,6 @@ check("cache-loss row shows cache_n=0 + prompt_n=26989",
       "cache_n=0" in loss and "prompt_n=26989" in loss, loss)
 
 # --- 2. sampler switch --------------------------------------------------
-import os
 src = (Path(__file__).resolve().parent.parent / "core" / "agentic_tool_loop.py").read_text(
     encoding="utf-8")
 check("PERF wired into the main loop", "perf_line" in src and 'kind="main"' in src)

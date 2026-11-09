@@ -26,10 +26,7 @@ suite covers the behavioral fixes (faithful reproductions + source guards):
 Run: python tests/test_tools_audit_fixes.py
 Exit 0 = all pass, Exit 1 = failures.
 """
-import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 # ENC-FIX (2026-10-15): the ok()/fail() labels contain ❌/✅ (outside
@@ -151,7 +148,7 @@ def test_crlf_preserved_by_edit_paths():
 #  signal for cut-off writes is now the stream-level WRITE-TRUNCATION
 #  diagnostic with the finish_reason)
 def test_autosplit_truncation_honest():
-    src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = (ROOT / "core" / "duo_policies.py").read_text(encoding="utf-8")
     if "[WRITE-TRUNCATION]" in src and "finish_reason" in src:
         ok("TRUNCATION: abgeschnittene Writes werden diagnostiziert (finish_reason geloggt)")
     else:

@@ -215,6 +215,49 @@ if __name__ == "__main__":
     test_source_guard_explore_truth()
     test_source_guard_write_guard()
     test_source_guard_settings_default()
+    import asyncio
+    import tempfile
+    from tools.handlers.file_ops import _inline_tool_write_file, _inline_tool_edit_file
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _td:
+        _ws = Path(_td)
+        _orig_cfg = 'MODE = "prod"\ndef mode():\n    return MODE\n'
+        (_ws / "config.py").write_text(_orig_cfg, encoding="utf-8")
+        _res1 = asyncio.run(_inline_tool_write_file(
+            {"path": "config.py", "content": "def get_timeout():\n    return 30\n"},
+            _ws, str(_ws)))
+        if ("WOULD_DROP_SYMBOLS" in _res1 and "edit_file" in _res1
+                and "Keep definition" in _res1 and 'MODE = "prod"' in _res1
+                and (_ws / "config.py").read_text(encoding="utf-8") == _orig_cfg):
+            ok("write_file_rejects_dropped_symbols (WOULD_DROP_SYMBOLS + file unchanged)")
+        else:
+            fail("write_file_rejects_dropped_symbols", _res1)
+        _res_escape = asyncio.run(_inline_tool_write_file(
+            {"path": "config.py", "content": "def get_timeout():\n    return 30\n",
+             "allow_overwrite": True},
+            _ws, str(_ws)))
+        if "[write_file: rewrote" in _res_escape:
+            ok("write_file_allows_drop_with_allow_overwrite")
+        else:
+            fail("write_file_allows_drop_with_allow_overwrite", _res_escape)
+        (_ws / "text_utils.py").write_text("def slugify(s):\n    return s.lower()\n", encoding="utf-8")
+        _res2 = asyncio.run(_inline_tool_write_file(
+            {"path": "text_utils.py", "content": "from slugs import slugify\n"},
+            _ws, str(_ws)))
+        if "[write_file: rewrote" in _res2 and "WOULD_DROP_SYMBOLS" not in _res2:
+            ok("write_file_allows_reexport (from slugs import slugify)")
+        else:
+            fail("write_file_allows_reexport", _res2)
+        (_ws / "config2.py").write_text(_orig_cfg, encoding="utf-8")
+        _res_ed = asyncio.run(_inline_tool_edit_file(
+            {"path": "config2.py", "old_text": _orig_cfg,
+             "new_text": "import os\ndef mode():\n    return os.environ.get('APP_MODE', 'prod')\n"},
+            _ws, str(_ws)))
+        if ("WOULD_DROP_SYMBOLS" in _res_ed and "MODE" in _res_ed
+                and "Keep definition" in _res_ed and 'MODE = "prod"' in _res_ed
+                and (_ws / "config2.py").read_text(encoding="utf-8") == _orig_cfg):
+            ok("edit_file_rejects_dropped_symbols (WOULD_DROP_SYMBOLS on MODE + file unchanged)")
+        else:
+            fail("edit_file_rejects_dropped_symbols", _res_ed)
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
     print("=" * 60)

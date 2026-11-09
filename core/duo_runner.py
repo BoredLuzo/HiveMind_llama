@@ -18,7 +18,7 @@ logger = logging.getLogger("hivemind.duo")
 from learning.peer_ratings import run_peer_ratings
 
 # ── Context ──
-from context.resume import _check_abort_and_maybe_save_resume, _write_resume_block, _load_resume_block  # noqa: F401 -- re-export: core.duo_finalize does `from core.duo_runner import _load_resume_block`
+from context.resume import _check_abort_and_maybe_save_resume, _write_resume_block
 from infra.run_control import (
     is_graceful_stop_requested, clear_graceful_stop,
     is_pause_requested, clear_pause_request,
@@ -32,9 +32,7 @@ from context.pause_state import (
     clear_pause_state as _clear_pause_state,
 )
 from infra.ask_user_governor import cleanup_governor as _cleanup_governor
-from context.compression import _evict_stale_tool_outputs
 from context.ctx_guard import (
-    decide_context_action as _decide_context_action,
     resolve_compress_threshold as _resolve_compress_threshold,
     clamp_request_max_tokens as _clamp_request_max_tokens,
     clamp_coder_ctx_to_slot as _clamp_coder_ctx_to_slot,
@@ -46,12 +44,11 @@ from context.ctx_guard import (
 # ── Tools ──
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode
 from tools.runner import _run_inline_tool, _current_project_state
-from tools.workspace import new_transaction, get_transaction
+from tools.workspace import new_transaction
 
 # ── Utils ──
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
-from utils.token import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
 
 # ── SSE ──
 
@@ -111,12 +108,12 @@ from core.wedge_handoff import (
 from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 
 # ── Imports from extracted helpers ─────────────────────────────────────
-from core.duo_epilogue import _duo_session_epilogue
-from core.duo_finalgate import _duo_final_verify_gate
-from core.duo_round_input import _duo_coder_round_input
-from core.duo_dtool_setup import _duo_dtool_setup
-from core.duo_inloop_planner import _duo_inloop_planner
-from core.duo_compress_cycle import _duo_compress_cycle
+from core.duo_epilogue import _DuoSessionEpilogueState, _duo_session_epilogue
+from core.duo_finalgate import _DuoFinalGateState, _duo_final_verify_gate
+from core.duo_round_input import _DuoRoundInputState, _duo_coder_round_input
+from core.duo_dtool_setup import _DuoDtoolSetupState, _duo_dtool_setup
+from core.duo_inloop_planner import _DuoInloopPlannerState, _duo_inloop_planner
+from core.duo_compress_cycle import _DuoCompressCycleState, _duo_compress_cycle
 from core.duo_coder_preloop import (
     _DuoCoderPreloopState, _duo_coder_preloop,
 )
@@ -131,7 +128,7 @@ from core.duo_coder_load import (
     _DuoSlotCtxState, _duo_query_actual_slot_ctx,
     _DuoToolBudgetsState, _duo_resolve_tool_budgets,
 )
-from core.duo_finalize import _duo_run_finalize
+from core.duo_finalize import _DuoRunFinalizeState, _duo_run_finalize
 from core.duo_helpers import (
     build_image_desc_block, resolve_image_plan,
     effective_image_plan, vision_note_for_coder,
@@ -140,8 +137,7 @@ from core.duo_helpers import (
     _preprocess_think_blocks, _calculate_thinking_tokens, _build_duo_coder_sys,
     should_compress_after_truncated_drop as _should_compress_after_truncated_drop,
     _build_symbol_reference_hints,
-    _explore_size_tolerance, _collect_new_explore_paths,
-    _sum_edit_lines, _build_dropped_tool_retry,
+    _sum_edit_lines, _build_dropped_tool_retry, _log_msgsig_drift,
     resolve_coder_tool_mode, _READONLY_CODER_NOTE,
 )
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
@@ -179,9 +175,6 @@ _DUO_HEARTBEAT_DEFAULT = 10
 # ROUND-LOOP CONSTANTS (2026-11-07 audit): compiled/set once instead of
 # re-creating them on every coder round.
 _RE_JSON_FENCE = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
-_EXPLORE_TOOLS = {"find_files", "search_code", "list_dir", "read_file"}
-_WRITE_TOOLS = {"write_file", "edit_file", "patch_file", "write_file_append",
-                "replace_lines", "undo_last", "run_bash", "run_python"}
 
 
 
@@ -272,19 +265,29 @@ from core.duo.preflight import (
     _resolve_fallback_model,
 )
 
+from core.duo_policies import (
+    _log_tool_call_miss, _log_write_truncation,
+    _plan_dropped_tool_retry, _plan_text_only_round,
+)
 
-async def _auto_push_after_commit(ws_str: str) -> str:
-    """AUTO-PUSH after a successful hivemind commit (2026-11-03: was two
-    identical inline try/import/await blocks in the run finalization - the
-    final auto-commit branch and the checkpoint-consolidation branch).
-    Delegates to git_tools.push_after_commit (panel toggle + credential gate
-    live there); a failure only debug-logs, never raises into the run."""
-    try:
-        from hive_functions.git_tools import push_after_commit as _pap
-        return await _pap(ws_str)
-    except Exception as _push_err:
-        logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
-        return ""
+from core.duo_round_gate import (
+    _grace_round_gate, _max_rounds_gate, _run_auto_test_gate,
+    _tool_budget_gate,
+)
+from core.duo_plan_round import (
+    _DuoPlanRoundState, _duo_plan_tracker_round,
+)
+from core.truncated_write_salvage import salvage_truncated_writes
+from core.duo_ctx_meter import _ctx_meter_round, _ctx_shrink_round
+from core.duo_explore_gate import (
+    _explore_round_gate,
+)
+from core.duo_finish_round import (
+    _finish_round_verification_blocked, _finish_round_critic_rejected,
+    _no_subtask_round_status,
+)
+
+
 
 
 @dataclasses.dataclass
@@ -340,9 +343,7 @@ async def _duo_planner_phase(
     _plan_tracker = ps.plan_tracker
     try:
         _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
-        _planner_is_distilled = False
         _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
-        _chunking_forces_thinking = ctx.duo_config.chunking and not _disable_think_planner
         _use_thinking_planner = bool(
             ctx.duo_config.agentic_thinking
             or (not _disable_think_planner and (
@@ -1145,7 +1146,7 @@ async def _duo_critic_review(
             _c_gen_t0 = 0.0
             try:
                 async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
-                  for _ctr in range(_critic_tc_max):
+                  for _ in range(_critic_tc_max):
                     if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
                         break
                     # Retry transient server errors (up to 3 attempts per tool round)
@@ -1408,7 +1409,6 @@ class _DuoExecRoundState:
     """
     duo_deadline_at: float = 0.0
     exec_result: object = None
-    timed_out: bool = False
     snap_before: object = None
     last_too_large_ref: list | None = None
     cached_port_ref: list | None = None
@@ -1421,7 +1421,7 @@ async def _duo_exec_round_task(
     ctx, state, ps: _DuoExecRoundState, *,
     _dr_tcs, _dtool_msgs, _duo_state, _tool_exec_hooks, _tool_ctx_lru,
     _verify_mutation_serial, _verify_last_ok_serial, _last_run_bash_failure,
-    _changed_since_failure, _last_learned_insight_sig, _last_too_large_path,
+    _changed_since_failure, _last_learned_insight_sig, _last_too_large_ref,
     _attempts_per_file, _wedge_state, _tool_error_retries, _call_sigs,
     _recent_focus_paths, _file_changes, _duo_seen_web_queries,
     _task_complete_blocked, _total_tool_errors_ref, _tc_consecutive,
@@ -1441,7 +1441,9 @@ async def _duo_exec_round_task(
     _snap_before = ps.snap_before
     _last_too_large_ref = ps.last_too_large_ref
     _cached_port_ref = ps.cached_port_ref
-    _timed_out = ps.timed_out
+    if _last_too_large_ref is None:
+        _last_too_large_ref = [""]
+    _timed_out = False
     try:
         # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
         # _contracts_raw exports, normalized against _ws_str.
@@ -1458,7 +1460,6 @@ async def _duo_exec_round_task(
         # has already been sent (immutable prefix); everything
         # from here is this round and may be mutated freely.
         _round_cache_horizon = len(_dtool_msgs)
-        _last_too_large_ref = [_last_too_large_path]
         _cached_port_ref = [_cached_coder_port]
         # READ-BEFORE-EDIT (2026-11-07): run-persistent maps for the freshness
         # nudge; the executor state is rebuilt every round, these dicts are not.
@@ -1566,7 +1567,6 @@ async def _duo_exec_round_task(
     finally:
         ps.duo_deadline_at = _duo_deadline_at
         ps.exec_result = _exec_result
-        ps.timed_out = _timed_out
         ps.snap_before = _snap_before
         ps.last_too_large_ref = _last_too_large_ref
         ps.cached_port_ref = _cached_port_ref
@@ -1722,22 +1722,6 @@ async def _duo_ctx_pressure_check(
 
 
 @dataclasses.dataclass
-
-
-
-
-@dataclasses.dataclass
-
-
-
-
-@dataclasses.dataclass
-
-
-
-
-
-@dataclasses.dataclass
 class _DuoDisconnectParkState:
     """Disconnect-park state (moved verbatim from run_code_duo's abort path).
 
@@ -1776,204 +1760,17 @@ def _duo_disconnect_park(ctx, ps: _DuoDisconnectParkState):
         logger.warning("[DISCONNECT-PARK] Handler error: %s", _park_err)
 
 
-@dataclasses.dataclass
-class _DuoSessionEpilogueState:
-    """Epilogue state (split 2.2, 2026-11-05): fields the session epilogue
-    reads/writes; `carry` for the runner-local bindings it consumes."""
-    _ws_str: str = ""
-    coder_out: str = ""
-    _cs: object = None
-    _written_files: list = dataclasses.field(default_factory=list)
-    _duo_hard_stop: bool = False
-    _duo_timed_out: bool = False
-    _loop_detected: bool = False
-    _lifetime_tool_rounds: int = 0
-    _explore_only_rounds: int = 0
-    _est_tokens: int = 0
-    _parts: list = dataclasses.field(default_factory=list)
-    carry: dict = dataclasses.field(default_factory=dict)
-    session_out: str = ""
-
-@dataclasses.dataclass
-class _DuoRoundInputState:
-    """Round-input state (split 2.4, 2026-11-05): fields the round-input
-    build reads/writes; `carry` for the runner-local bindings it consumes.
-    `skip_round` is the loop-control signal (empty chunk → runner continue)."""
-    _coder_port: object = None
-    _di: int = 0
-    _n_items: int = 1
-    _subtask: str | None = None
-    _subtasks: list = dataclasses.field(default_factory=list)
-    _done_tasks: list = dataclasses.field(default_factory=list)
-    _cs: object = None
-    _written_files: list = dataclasses.field(default_factory=list)
-    critic_issues: list = dataclasses.field(default_factory=list)
-    coder_out: str = ""
-    _explore_ctx: str = ""
-    _img_plan: dict = dataclasses.field(default_factory=dict)
-    _plan_tracker: "PlanTracker | None" = None
-    _coder_caps: object = None
-    skip_round: bool = False
-    _touched_block_persisted: str = ""
-    _coder_input: str = ""
-    _coder_msgs: list = dataclasses.field(default_factory=list)
-    _read_only_task_request: bool = False
-    _coder_skipped_images: bool = False
-    _coder_imgs_off: bool = False
-    _parts: list = dataclasses.field(default_factory=list)
-    _t: float = 0.0
-    carry: dict = dataclasses.field(default_factory=dict)
 
 
-@dataclasses.dataclass
-class _DuoInloopPlannerState:
-    """Inloop-planner state (split 2.6, 2026-11-05): the thinking gate,
-    planner execution and plan-for-coder injection; `carry` for the
-    runner-local bindings the block consumes."""
-    _dtool_msgs: list = dataclasses.field(default_factory=list)
-    _dtool_ctx: int = 0
-    _coder_input: str = ""
-    _explore_ctx: str = ""
-    _plan_tracker: "PlanTracker | None" = None
-    _is_first_outer_round: bool = False
-    _goal_summary: str = ""
-    _duo_timed_out: bool = False
-    _run_thinking_now: bool = False
-    _inloop_plan_text: str = ""
-    carry: dict = dataclasses.field(default_factory=dict)
 
 
-@dataclasses.dataclass
-class _DuoDtoolSetupState:
-    """Dtool-setup state (split 2.5, 2026-11-05): tool-payload budget,
-    pass-files bridge, read-guard and goal-pin inputs/outputs; `carry`
-    for the coder-load bindings the block consumes."""
-    _di: int = 0
-    _coder_caps: object = None
-    _coder_msgs: list = dataclasses.field(default_factory=list)
-    _explore_ctx: str = ""
-    _pre_explore_msgs: list = dataclasses.field(default_factory=list)
-    _contracts_raw: list = dataclasses.field(default_factory=list)
-    _touched_paths: set = dataclasses.field(default_factory=set)
-    _tree_ctx: str = ""
-    _is_first_outer_round: bool = False
-    _ws_str: str = ""
-    _touched_block_persisted: str = ""
-    _dtool_msgs: list = dataclasses.field(default_factory=list)
-    _dtool_ctx: int = 0
-    _dtool_opts: dict = dataclasses.field(default_factory=dict)
-    _dtool_sys_eff: str = ""
-    _tool_read_timeout_s: float = 0.0
-    _goal_summary: str = ""
-    _goal_pin_msg: dict | None = None
-    carry: dict = dataclasses.field(default_factory=dict)
 
 
-@dataclasses.dataclass
-class _DuoCompressCycleState:
-    """Compress-cycle state (split 2.8, 2026-11-05): the tool-round
-    compression inputs and the counters it rebinds; `stop` is the
-    fail-streak round-loop exit signal (runner does the break)."""
-    _call_sigs: list = dataclasses.field(default_factory=list)
-    _coder_est_at_real: list = dataclasses.field(default_factory=list)
-    _coder_real_prompt_tokens: list = dataclasses.field(default_factory=list)
-    _comp_llm_cfg: str = ""
-    _comp_llm_timeout_s: int = 180
-    _compress_local_only: bool = False
-    _compress_threshold: int = 0
-    _di: int = 0
-    _done_tasks: list = dataclasses.field(default_factory=list)
-    _dport: object = None
-    _dtc: object = None
-    _dtool_ctx: int = 0
-    _dtool_sys_eff: str = ""
-    _explore_ctx: str = ""
-    _goal_pin_msg: dict | None = None
-    _guard_decision: object = None
-    _guard_tokens: float = 0.0
-    _last_test_status: object = None
-    _lifetime_tool_rounds: int = 0
-    _max_tool_rounds: int = 0
-    _n_items: int = 1
-    _partial_compression: bool = False
-    _plan_result: "PlannerResult | None" = None
-    _plan_tracker: "PlanTracker | None" = None
-    _read_counts: dict = dataclasses.field(default_factory=dict)
-    _seen_explore_paths: set = dataclasses.field(default_factory=set)
-    _subtasks: list = dataclasses.field(default_factory=list)
-    _tool_ctx_lru: object = None
-    _written_files: list = dataclasses.field(default_factory=list)
-    _ws_str: str = ""
-    _MAX_COMPRESSIONS: int = 0
-    _compress_fail_streak: int = 0
-    _ctx_compressions: int = 0
-    _ctx_critical_warned: bool = False
-    _ctx_full_skips: int = 0
-    _ctx_pressure_warned: bool = False
-    _dtool_msgs: list = dataclasses.field(default_factory=list)
-    _est_tokens: int = 0
-    _explore_only_rounds: int = 0
-    _force_compress_next: bool = False
-    _llm_compress_fails: int = 0
-    _loop_detected: bool = False
-    _no_write_nudged: bool = False
-    _no_write_rounds: int = 0
-    _partial_escalated: bool = False
-    _rule_compress_fails: int = 0
-    _rule_compress_used: bool = False
-    _total_tool_rounds: int = 0
-    stop: bool = False
-    carry: dict = dataclasses.field(default_factory=dict)
 
 
-@dataclasses.dataclass
-class _DuoFinalGateState:
-    """Final-gate state (split 2.3, 2026-11-05): fields the verify-gate tail
-    reads/writes; `critic_issues` is the shared list (appends in place)."""
-    _duo_hard_stop: bool = False
-    final_verdict: str = ""
-    _duo_timed_out: bool = False
-    _written_files: list = dataclasses.field(default_factory=list)
-    _verify_mutation_serial: int = 0
-    _verify_last_ok_serial: int = 0
-    _verify_warned: bool = False
-    _ws_str: str = ""
-    _explore_ctx: str = ""
-    _di: int = 0
-    _n_items: int = 1
-    _loop_items: list = dataclasses.field(default_factory=list)
-    _done_tasks: list = dataclasses.field(default_factory=list)
-    _pending_send_files: list = dataclasses.field(default_factory=list)
-    critic_issues: list = dataclasses.field(default_factory=list)
 
 
-@dataclasses.dataclass
-class _DuoRunFinalizeState:
-    """Finalize-tail state (split 2.1, 2026-11-05): one field per
-    run_code_duo local the finalize tail reads or writes, plus `carry`
-    for the runner-local bindings the tail also consumes (exec_mdl,
-    final_verdict, critic_issues, _recent_focus_paths, _worker_slots,
-    this_file, _warm_workers_fn, _keepalive_vision_fn)."""
-    _duo_hard_stop: bool = False
-    _graceful_stopped: bool = False
-    _duo_timed_out: bool = False
-    _loop_detected: bool = False
-    _wedge_escalated: bool = False
-    _model_load_failed: bool = False
-    _pending_send_files: list = dataclasses.field(default_factory=list)
-    _written_files: list = dataclasses.field(default_factory=list)
-    _done_tasks: list = dataclasses.field(default_factory=list)
-    _cs: object = None
-    _ws_str: str = ""
-    _explore_ctx: str = ""
-    _project_state: "ProjectState | None" = None
-    _project_state_run_counted: bool = False
-    _explore_only_rounds: int = 0
-    _lifetime_tool_rounds: int = 0
-    _di: int = 0
-    _n_items: int = 1
-    _loop_items: list = dataclasses.field(default_factory=list)
-    carry: dict = dataclasses.field(default_factory=dict)
+
 
 
 @dataclasses.dataclass
@@ -2070,6 +1867,196 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
                         _project_state.total_runs, _project_state.last_run_success)
         except Exception as _save_err:
             logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
+    # F14-CONTRACT (2026-11-08): the run-counted flag must cross the seam,
+    # or duo_finalize increments total_runs a second time.
+    ps._project_state_run_counted = _project_state_run_counted
+
+
+@dataclasses.dataclass
+class _DuoCoderPostWaitState:
+    """Result carrier for _duo_coder_post_wait (F13 carve, 2026-11-08).
+
+    All eight fields are outputs the helper packs in its finally:
+
+    - run_ended replaces the moved block's bare `return` (task-death
+      teardown): the runner returns after it has relayed the events,
+    - action carries the block's loop control ("break" = loop_detected,
+      "continue" = force_compress, "proceed" = round continues), the
+      runner owns the final break/continue/return,
+    - dport / cached_port / result (the raw post_with_retry dict) /
+      dr_msg / dr_thinking_parts / dr_tcs are the locals the old block
+      unpacked from the result; the runner syncs them after the
+      async-for exactly where the old assignments stood.
+    """
+    run_ended: bool = False
+    action: str = "proceed"
+    dport: int | None = None
+    cached_port: int | None = None
+    result: dict | None = None
+    dr_msg: dict | None = None
+    dr_thinking_parts: list | None = None
+    dr_tcs: list | None = None
+
+
+async def _duo_coder_post_wait(
+    ctx, ps: _DuoCoderPostWaitState, *,
+    _duo_loop, _tool_payload, _dtool_msgs, _parts,
+    _coder_event_q, exec_mdl, _dport, _hb_interval,
+    _duo_state, _ld_setter,
+):
+    # CODE-MOTION (F13 coder-POST-wait carve, 2026-11-08): the in-use slot
+    # guard, the post_with_retry task + heartbeat/_coder_event_q drain loop,
+    # the task-death teardown, the in-use clear and the result unpack moved
+    # VERBATIM from run_code_duo's coder tool loop. Only the unpack/pack
+    # wrapper and the loop-control translation are new: the block's bare
+    # `return` becomes run_ended + return, its `break` (loop_detected)
+    # becomes action="break" + return, its `continue` (force_compress)
+    # becomes action="continue" + return — the runner owns break/continue/
+    # return. The runner relays every yielded event in order (queue events
+    # raw, heartbeat via ctx.emit). No logic changes.
+    _run_ended = ps.run_ended
+    _action = ps.action
+    _cached_coder_port = ps.cached_port
+    _result = ps.result
+    _dr_msg = ps.dr_msg
+    _dr_thinking_parts = ps.dr_thinking_parts
+    _dr_tcs = ps.dr_tcs
+    try:
+        # IN-USE GUARD (2026-10-17, live): while this round is
+        # running, the coder slot must be un-evictable even
+        # after the run's pin is released - the pre-flight used
+        # to kill exactly this slot for another role's load and
+        # the round died with ConnectError.
+        _inuse_slot = None
+        try:
+            from backend.llama_server_manager import manager as _lsm_inuse
+            # _find_loaded is a coroutine: without await this
+            # was a truthy coroutine object, mark_in_flight
+            # raised AttributeError, the except swallowed it and
+            # the in-use guard was silently OFF (live
+            # 2026-10-27: RuntimeWarning was never awaited).
+            _inuse_slot = await _lsm_inuse._find_loaded(exec_mdl)
+            if _inuse_slot is not None:
+                _inuse_slot.mark_in_flight()
+        except (ImportError, AttributeError, TypeError):
+            _inuse_slot = None
+        _post_task = asyncio.create_task(
+            _duo_loop.post_with_retry(_tool_payload, dtool_msgs=_dtool_msgs, ctx=ctx, _parts=_parts)
+        )
+        _hb_start = time.monotonic()
+        _hb_last = _hb_start
+        while True:
+            _hb_had = False
+            while not _coder_event_q.empty():
+                _hb_had = True
+                try:
+                    yield _coder_event_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            if _hb_had:
+                _hb_last = time.monotonic()
+            if _post_task.done():
+                break
+            # HEARTBEAT (2026-08-21): during long prompt processing
+            if time.monotonic() - _hb_last >= _hb_interval:
+                _hb_total = int(time.monotonic() - _hb_start)
+                _hb_last = time.monotonic()
+                # PREFILL-METER (2026-09-20): attach live llama-server
+                # prefill progress when one is running (post-compress
+                # re-prefill, ctx reload) so the UI shows percent + rate
+                # instead of a blind elapsed counter.
+                _hb_ev = {"type": "heartbeat", "elapsed": _hb_total}
+                # F4 (2026-11-07): meter is async now — discovery +
+                # tail read run via to_thread, off the loop.
+                _hb_pf = await _llama_prefill_progress(_dport)
+                if _hb_pf:
+                    _hb_ev["prefill"] = _hb_pf
+                yield await ctx.emit(_hb_ev)
+            await asyncio.sleep(0.02)
+        # TASK-DEATH FIX (2026-10-10): post_with_retry can die
+        # with an unhandled RuntimeError (in-loop ensure_loaded
+        # after ctx mismatch / evict). .result() re-raises into
+        # the surrounding frame, which swallowed it silently -
+        # six runs ended with no usage, no [CACHE], no error
+        # message (asyncio only logged the orphaned task).
+        # Surface it and end the run with a real reason.
+        try:
+            _result = _post_task.result()
+        except Exception as _pt_exc:
+            logger.warning(
+                "[CODER-ROUND-FAIL] post task died: %s: %s",
+                type(_pt_exc).__name__, str(_pt_exc)[:200],
+            )
+            yield await ctx.emit({"type": "status",
+                "content": f"⛔ Coder round failed ({type(_pt_exc).__name__}): {str(_pt_exc)[:140]}"})
+            ctx.phase_timer.skip("coder_loop")
+            if _inuse_slot is not None:
+                try:
+                    _inuse_slot.clear_in_flight()
+                except (AttributeError, TypeError):
+                    pass
+            clear_graceful_stop(ctx.run_id)
+            _cleanup_pause_state(ctx.run_id)
+            if ctx.chat_id:
+                _clear_pause_state(ctx.chat_id)
+            _cleanup_governor(ctx.chat_id or ctx.run_id)
+            ctx.duo_stop_reason = "runtime_error"
+            yield await ctx.emit(ctx.done_event(
+                round(time.time() - ctx.t_total, 1),
+                ctx.duo_stop_reason,
+                **ctx.collect_done_metrics(),
+            ))
+            # (F13 carve) the old bare `return` from run_code_duo ended the
+            # whole run: surface it as run_ended — the runner returns after
+            # it has relayed the status + done events above.
+            _run_ended = True; return
+        # _duo_state mutated in-place by AgenticToolLoop — no sync needed
+        if _inuse_slot is not None:
+            try:
+                _inuse_slot.clear_in_flight()
+            except (AttributeError, TypeError):
+                pass
+        _dport = _result["dport"]
+        _cached_coder_port = _duo_state.cached_port
+        _dr_msg = _result["dr_msg"]
+        _dr_thinking_parts = _result["dr_thinking_parts"]
+        _dr_stream_ok = _result.get("dr_stream_ok", False)
+        if _result.get("loop_detected"):
+            logger.warning(
+                "[LD-SRC] AgenticToolLoop loop_detected — result keys=%s dr_stream_ok=%s",
+                sorted(k for k in _result.keys() if k != "dr_content_parts"),
+                _result.get("dr_stream_ok"),
+            )
+            # (F13 carve) the old `_ld_setter(3022); _loop_detected = True`
+            # + `break` surfaces as action="break"; the runner re-derives
+            # the flag from the raw result and breaks its own loop.
+            _ld_setter(3022); _action = "break"; return
+        if _result.get("force_compress"):
+            # (F13 carve) the old `_force_compress_next = True; continue`
+            # surfaces as action="continue"; the runner re-derives the flag
+            # and continues its own loop.
+            _action = "continue"; return
+        if not _dr_stream_ok:
+            raise RuntimeError("Tool-POST: stream not received — no error detail")
+        _duo_state.http_404_retries = 0
+        _dr_content = _dr_msg.get("content") or ""
+        if _dr_content and "<think" in _dr_content:
+            _dr_content = _preprocess_think_blocks(_dr_content)
+            _dr_msg = {**_dr_msg, "content": _dr_content}
+        # Strip ```json ... ``` Markdown fences (Qwen3.6 wraps tool calls)
+        if _dr_content and "```" in _dr_content:
+            _dr_content = _RE_JSON_FENCE.sub(lambda m: m.group(1), _dr_content)
+            _dr_msg = {**_dr_msg, "content": _dr_content}
+        _dr_tcs = _dr_msg.get("tool_calls", [])
+    finally:
+        ps.run_ended = _run_ended
+        ps.action = _action
+        ps.dport = _dport
+        ps.cached_port = _cached_coder_port
+        ps.result = _result
+        ps.dr_msg = _dr_msg
+        ps.dr_thinking_parts = _dr_thinking_parts
+        ps.dr_tcs = _dr_tcs
 
 
 async def run_code_duo(ctx) -> AsyncIterator[dict]:
@@ -2100,10 +2087,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         "_ctx_limit_seen": 0,
         "_ctx_pressure_peak": 0.0,
         "_ctx_compressions": 0,
-        "_ctx_evictions": 0,
         "_tool_round_durations": [],
         "_coder_tc": False,
-        "_critic_tc": False,
+        # _pre_explore reads this before the VRAM phase sets it.
         "_exec_tc": False,
         "_critic_tools_enabled": False,
         "_duo_pinned": set(),
@@ -2158,17 +2144,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
     _ctx_limit_seen = state["_ctx_limit_seen"]
     _ctx_pressure_peak = state["_ctx_pressure_peak"]
     _ctx_compressions = state["_ctx_compressions"]
-    _ctx_evictions = state["_ctx_evictions"]
     _tool_round_durations = state["_tool_round_durations"]
     _coder_tc = state["_coder_tc"]
-    _critic_tc = state["_critic_tc"]
-    _exec_tc = state["_exec_tc"]
     _critic_tools_enabled = state["_critic_tools_enabled"]
     _duo_pinned = state["_duo_pinned"]
     _skip_coder_pin = state["_skip_coder_pin"]
     _coder_ctx = state["_coder_ctx"]
-    _exec_ctx = state["_exec_ctx"]
-    _critic_ctx = state["_critic_ctx"]
     _duo_ws = state["_duo_ws"]
     logger.info(
         "[WEBSEARCH-DIAG] coder tools advertised with websearch=%s (setting=%s, server_available=%s)",
@@ -2182,10 +2163,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
     _exec_supports_thinking = state["_exec_supports_thinking"]
     _exec_has_thinking = state["_exec_has_thinking"]
     _coder_tool_think = state["_coder_tool_think"]
-    _avail = state["_avail"]
     _recent_focus_paths = state["_recent_focus_paths"]
-    _MAX_TREE_DEPTH = state["_MAX_TREE_DEPTH"]
-    _MAX_TREE_FILES = state["_MAX_TREE_FILES"]
     _runtime_ctx_target = state["_runtime_ctx_target"]
 
 
@@ -2283,10 +2261,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _duo_critic_cfg = ctx.get_effective_config(ctx.this_file, critic_mdl, "duo_critic", ctx.use_learned) if ctx.use_learned else {}
                         _duo_critic_temp = float(_duo_critic_cfg.get("temperature", ctx.pipeline.agents["duo_critic"].temperature))
                         _duo_critic_tok  = int(_duo_critic_cfg.get("max_tokens",   ctx.pipeline.agents["duo_critic"].max_tokens))
-    else:
-        _duo_critic_cfg = {}
-        _duo_critic_temp = 0.15
-        _duo_critic_tok  = 600
+    # Agentic mode never reaches the critic call below (its chunk branch
+    # continues), so the critic config/prompt defaults are not bound here.
 
     # Prompts: preset-overridable via get_effective_prompt_with_override (from prompts.py)
     _duo_coder_sys  = ctx.get_effective_prompt_with_override("duo_coder", ctx.active_preset, ctx.use_learned)
@@ -2306,10 +2282,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         if getattr(ctx, "image_description", "") and not _duo_critic_sys.startswith("[IMAGE DESCRIPTION]"):
             _duo_critic_sys += "\n\n[IMAGE DESCRIPTION - judge visual requirements against this]:\n" + ctx.image_description
         _critic_profile = get_sampling_profile(critic_mdl, _critic_thinking, ctx.settings)
-    else:
-        _duo_critic_sys = ""
-        _critic_thinking = False
-        _critic_profile = {}
 
     # Phase 3: pre-prompt ctx.memory injection (repo-specific learned insights)
     _coder_dyn_hints = ""  # separate accumulator for dynamic runtime hints
@@ -2433,7 +2405,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         # skipped planner (follow-up/resume/toggle) raised UnboundLocalError
         # and the whole sidecar save (last_run/task_sig/session) was skipped.
         _inloop_plan_text = ""
-        _inloop_plan_thinking = ""
         _planner_used_fallback = False
         _planner_fallback_reason = ""
         _planner_parse_mode = "none"
@@ -2457,7 +2428,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             ctx.phase_timer.skip("soft_planner")
         if (not (ctx.duo_config.chunking or ctx.duo_config.planner)
                 and not ctx.aborted() and not _resume_data
-                and not _planner_skipped and not ctx.step_skipped()):
+                and not ctx.step_skipped()):
             # PLANNER-VISIBILITY (2026-09-08): this state used to fall through
             # silently — planner toggle off + chunking off skipped the whole
             # phase with zero feedback while the UI still showed a planner
@@ -2547,6 +2518,21 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _di = 0
         _n_items = 1
         _loop_items = [{"title": ctx.user_input}]
+
+        # F13 (2026-11-08): the post-chunk advance trio (bump the chunk
+        # index, reset the auto-test retry state, persist the resume
+        # block) is byte-identical at every "chunk_checkpoint" site; a
+        # closure keeps the call sites one-liners without a state bag.
+        # It reads the loop locals through cells, so per-iteration
+        # rebinds stay visible - same semantics as the inline statements
+        # it replaced (order preserved: increment -> reset -> halt).
+        def _advance_chunk() -> None:
+            nonlocal _di
+            _di += 1
+            _cs.reset_test_retries()
+            _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files,
+                     _di, _loop_items, _n_items, "chunk_checkpoint")
+
         _drop_names: list = []
         _dr_dropped_tool_retries = "n/a"
         # SEND-FILE: paths validated by the tool, delivered only after the
@@ -2558,12 +2544,20 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _connect_error_retries: int = 0
         _force_compress_next: bool = False
         _compress_fail_streak: int = 0      # CONSECUTIVE-FAIL-GUARD: limit 400->compress->fail->restore cycles
+        # F5 (2026-11-08): bind the LOOP-DETECT-STOP fields before the tool
+        # round, so the log no longer needs a locals() probe (an exception
+        # before tool-round setup used to leave them unbound).
+        _dtool_msgs: list = []
+        _tool_round_runtime_error = False
+        _dr_think_only_retries = 0
+        _dr_invalid_tool_retries = 0
+        _grace_round_active = False
+        _slot_ctx_floor_stop = False
         _loop_detected = False   # guard against UnboundLocalError on early exit (abort/timeout)
         _model_load_failed = False  # coder/planner GGUF never came up (VRAM/missing)
         _chunk_budget_exhausted = False  # chunk containment: budget spent (incl. grace)
         _explore_only_rounds: int = 0
                                         # late initialization (depends on tool-round setup)
-        _stuck_reason = ""       # guard against UnboundLocalError on early exit
         _ctx_pressure_warned = False  # CTX pressure warn-once guard
         _touched_block_persisted = ""  # Persisted across chunks for pre-explore context
         # P1-3 FIX: Cache coder port across chunk ctx.iterations — coder is pinned,
@@ -2727,7 +2721,10 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             use_parallel=_use_parallel, xexplore_mdl=_xexplore_mdl,
             workers_were_loaded=_workers_were_loaded,
             skip_coder_pin=_skip_coder_pin, img_plan=_img_plan,
-            duo_hard_stop=_duo_hard_stop,
+            # C2-FIX (2026-11-08): the pre-loop appends write-rules/vision
+            # notes to the BUILT prompt. Without this input it started from
+            # "" and overwrote the base/dynamic/image/follow-up prompt below.
+            duo_coder_sys=_duo_coder_sys,
         )
         async for _ev in _duo_coder_preloop(ctx, _pre_ps):
             yield _ev
@@ -2805,7 +2802,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         ctx.exec_ctrl = ExecutionController(max_iterations=_n_items)
         
         _accumulated_replan_bonus: int = 0
-        _di = 0
         _est_tokens = 0
         _guard_tokens: float = 0.0
         _parts: list = []
@@ -2941,9 +2937,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 ]
                 if _chat_abort_ev is not None:
                     _wait_tasks.append(asyncio.create_task(_chat_abort_ev.wait()))
-                _done_wait, _pending_wait = await asyncio.wait(
+                _pending_wait = (await asyncio.wait(
                     _wait_tasks, return_when=asyncio.FIRST_COMPLETED,
-                )
+                ))[1]
                 for _tw in _pending_wait:
                     _tw.cancel()
                 if _pending_wait:
@@ -3047,7 +3043,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 coder_out=coder_out,
                 _explore_ctx=_explore_ctx,
                 _img_plan=_img_plan,
-                _plan_tracker=_plan_tracker,
                 _coder_caps=_coder_caps,
                 _touched_block_persisted=_touched_block_persisted,
                 _coder_port=_coder_port,
@@ -3057,13 +3052,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     "exec_mdl": exec_mdl,
                     "_cached_coder_port": _cached_coder_port,
                     "_duo_coder_sys": _duo_coder_sys,
-                    "_duo_coder_temp": _duo_coder_temp,
-                    "_duo_coder_tok": _duo_coder_tok,
-                    "_coder_dyn_hints": _coder_dyn_hints,
-                    "_matched_skills": _matched_skills,
                     "_plan_thinking": _plan_thinking,
-                    "_plan_result": _plan_result,
-                    "_inloop_plan_text": _inloop_plan_text,
                     "_plan_content_txt": _plan_content_txt,
                     "_explore_has_contents": _explore_has_contents,
                     "_final_verdict": final_verdict,
@@ -3076,10 +3065,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             _coder_input = _ri_ps._coder_input
             _coder_msgs = _ri_ps._coder_msgs
             _read_only_task_request = _ri_ps._read_only_task_request
-            _coder_skipped_images = _ri_ps._coder_skipped_images
-            _coder_imgs_off = _ri_ps._coder_imgs_off
-            _img_plan = _ri_ps._img_plan
-            _touched_block_persisted = _ri_ps._touched_block_persisted
+            _img_plan = _ri_ps._img_plan  # identity read-back, kept for the split contract
+            # _touched_block_persisted is an echo (helper never rebinds it).
             _coder_map_budget = _ri_ps.carry["_coder_map_budget"]
             _parts = _ri_ps._parts
             _t = _ri_ps._t
@@ -3122,12 +3109,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     "content": "\U0001f512 Read-only request detected: using explore context without tool calls.",
                 })
                 # Last user message wins over any system "must call a tool" text.
-                try:
-                    _coder_msgs = _coder_msgs + [
-                        {"role": "user", "content": _READONLY_CODER_NOTE}
-                    ]
-                except Exception:
-                    pass
+                _coder_msgs = _coder_msgs + [
+                    {"role": "user", "content": _READONLY_CODER_NOTE}
+                ]
             _loop_detected = False
             if _is_tool_round:
                 _tm_what = (_subtask[:52] + '…') if _subtask and len(_subtask) > 52 else (_subtask or 'Writing code')
@@ -3194,7 +3178,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 )
                 async for _ev in _duo_inloop_planner(ctx, _ip_ps):
                     yield _ev
-                _dtool_msgs = _ip_ps._dtool_msgs
+                # _dtool_msgs is append-only in the helper; same list object.
                 _run_thinking_now = _ip_ps._run_thinking_now
                 _inloop_plan_text = _ip_ps._inloop_plan_text
                 _duo_timed_out = _ip_ps._duo_timed_out
@@ -3223,7 +3207,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 except Exception:
                     pass
 
-                if _is_tool_round and _di == 0 and not critic_issues:
+                if _di == 0 and not critic_issues:
                     _test_hint = _build_test_hint(_ws_str)
                     _hint_content = (
                         f"IMPORTANT: After writing or patching all files, verify the result.\n"
@@ -3423,7 +3407,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _rule_compress_fails = 0
                     _rule_compress_used = False
                     _call_sigs: list = []  # loop detection: incremental signatures
-                    _last_too_large_path: str = ""
+                    _last_too_large_ref: list[str] = [""]
                     _attempts_per_file: dict = {}
                     # WEDGE-HANDOFF (2026-09-17): per-chunk detection state,
                     # passed as the same object into every ToolRoundState.
@@ -3608,7 +3592,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             cached_coder_port_ctx=_cached_coder_port_ctx,
                             est_tokens=_est_tokens,
                             guard_tokens=_guard_tokens,
-                            loop_detected=_loop_detected,
+                            slot_ctx_floor_stop=_slot_ctx_floor_stop,
                         )
                         async for _ev in _duo_loop_guards(ctx, _lg_ps):
                             yield _ev
@@ -3618,200 +3602,63 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _est_tokens = _lg_ps.est_tokens
                         _guard_tokens = _lg_ps.guard_tokens
                         _loop_detected = _lg_ps.loop_detected
+                        _slot_ctx_floor_stop = _lg_ps.slot_ctx_floor_stop
                         if _lg_ps.action == "break":
                             break
                         _ctx_peak_tokens = max(_ctx_peak_tokens, int(_est_tokens))
                         _ctx_limit_seen = max(_ctx_limit_seen, int(_dtool_ctx))
-                        if _dtool_ctx > 0:
-                            _ctx_pressure_peak = max(_ctx_pressure_peak, float(_est_tokens) / float(_dtool_ctx))
-                            # SWA reprefill warning for sliding-window models (Qwen3.6)
-                            _swa_win = 0
-                            try:
-                                from backend.llama_server_manager import manager as _lsm_swa
-                                for _s in _lsm_swa._slots:
-                                    if _s.port == _dport and _s.swa_window:
-                                        _swa_win = _s.swa_window
-                                        break
-                            except Exception:
-                                pass
-                            _swa_warn = bool(_swa_win and _est_tokens > _swa_win * 0.85)
-                            yield await ctx.emit({
-                                "type": "ctx_meter",
-                                "est_tokens": int(_coder_real_prompt_tokens[0] or _est_tokens),
-                                "real_tokens": int(_coder_real_prompt_tokens[0]),
-                                "ctx_limit": int(_dtool_ctx),
-                                "cached_tokens": int(_coder_real_cached_tokens[0]),
-                                "compressing": False,
-                                "swa_window": _swa_win,
-                                "swa_warning": _swa_warn,
-                            })
-                            if _swa_warn:
-                                yield await ctx.emit({
-                                    "type": "system_warning",
-                                    "code": "swa_reprefill_zone",
-                                    "message": f"Context ({int(_est_tokens)} tok) approaching SWA window ({_swa_win} tok) — reprefill slowdown expected",
-                                })
-                                if not _swa_triggered_compress:
-                                    _swa_triggered_compress = True
-                                    if _ctx_compressions < _MAX_COMPRESSIONS:
-                                        _force_compress_next = True
-                        _ctx_pct = int((_guard_tokens / _dtool_ctx) * 100) if _dtool_ctx > 0 else 0
-                        if _ctx_pct >= 85 and not _ctx_critical_warned:
-                            # to write to messages[0]. Proof: [MSGSIG-CHANGE] round=23
-                            # (system 8619→8758) → [CACHE-MISS] prompt=40302 cached=0 →
-                            # few new tokens (cache reuse survives).
-                            _dtool_msgs.append({
-                                "role": "user",
-                                "content": (
-                                    "[RUNTIME NOTICE] "
-                                    f"[CTX CRITICAL: ~{_ctx_pct}% full] Stop reading new files. "
-                                    "Complete current edits and call task_complete."
-                                ),
-                            })
-                            _ctx_critical_warned = True
-                        elif _ctx_pct >= 60 and not _ctx_pressure_warned:
-                            _dtool_msgs.append({
-                                "role": "user",
-                                "content": (
-                                    "[RUNTIME NOTICE] "
-                                    f"[CTX: ~{_ctx_pct}% full] Avoid large reads. "
-                                    "Prefer targeted read_file(start_line/end_line) "
-                                    "and search_code over full-file reads."
-                                ),
-                            })
-                            _ctx_pressure_warned = True
-                        # CACHE-FRIENDLY (2026-09-04): compression is the
-                        # primary shrink. In-place semantic eviction is ONLY
-                        # the emergency valve when no compression is left
-                        # (cap reached) AND the context is >90% full. Between
-                        # two compressions the history stays append-only ->
-                        # the llama.cpp prefix cache stays alive and rounds
-                        # are fast (tail prefill only).
-                        _can_compress = (_MAX_COMPRESSIONS != -1 or _force_compress_next)
-                        # LEGACY-REMOVAL (2026-09-09): the in-place-eviction A/B branch
-                        # (duo_cache_friendly_ctx=False) is gone; compression-first is the
-                        # only regime.
-                        _guard_decision = _decide_context_action(
-                            guard_tokens=int(_guard_tokens),
-                            ctx_tokens=int(_dtool_ctx),
-                            threshold=int(_compress_threshold),
-                            can_compress=_can_compress,
-                            force_compress=bool(_force_compress_next),
+                        _cm = _ctx_meter_round(
+                            dtool_ctx=_dtool_ctx,
+                            dport=_dport,
+                            est_tokens=_est_tokens,
+                            real_prompt_tokens=_coder_real_prompt_tokens[0],
+                            real_cached_tokens=_coder_real_cached_tokens[0],
+                            guard_tokens=_guard_tokens,
+                            ctx_compressions=_ctx_compressions,
+                            max_compressions=_MAX_COMPRESSIONS,
+                            ctx_pressure_peak=_ctx_pressure_peak,
+                            swa_triggered_compress=_swa_triggered_compress,
+                            force_compress_next=_force_compress_next,
+                            ctx_critical_warned=_ctx_critical_warned,
+                            ctx_pressure_warned=_ctx_pressure_warned,
                         )
-                        _compress_ok = (_guard_decision.action == "compress")
-                        # First-round protection: the initial context
-                        # (explore/static map) may only be compressed via
-                        # threshold after >=1 tool round (emergency >90%
-                        # still OK).
-                        if _compress_ok and _guard_decision.reason == "threshold" and _total_tool_rounds <= 0:
-                            _compress_ok = False
-                        if not _compress_ok and _guard_decision.action == "emergency_evict":
-                            _est_before_evict = int(_est_tokens)
-                            _evicted_n = _evict_stale_tool_outputs(
-                                messages=_dtool_msgs,
-                                lru=_tool_ctx_lru,
-                                target_token_budget=int(_dtool_ctx * 0.70),
-                                hard_floor_tokens=int(_dtool_ctx * 0.62),
-                                protect_paths=_recent_focus_paths,
-                            )
-                            if _evicted_n > 0:
-                                _ctx_evictions += int(_evicted_n)
-                                _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
-                                # METER-FIX (2026-08-25): the real value is now
-                                # STALE (pre-eviction). Reset -> naechster
-                                # ctx_meter nutzt den frischen Schaetzer.
-                                _coder_real_prompt_tokens[0] = 0
-                                _coder_est_at_real[0] = 0
-                                logger.warning(
-                                    "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
-                                    _est_before_evict, _evicted_n, int(_est_tokens), int(_dtool_ctx),
-                                    int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
-                                    _guard_decision.reason,
-                                )
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": (
-                                        f"🧹 Emergency context eviction (no compression left): {_evicted_n} "
-                                        "stale tool output(s) replaced by recall markers."
-                                    ),
-                                })
-                            _guard_decision = _decide_context_action(
-                                guard_tokens=int(_guard_tokens),
-                                ctx_tokens=int(_dtool_ctx),
-                                threshold=int(_compress_threshold),
-                                can_compress=_can_compress,
-                                force_compress=bool(_force_compress_next),
-                            )
-                            _compress_ok = (_guard_decision.action == "compress")
-                            # First-round protection: the initial context
-                            # (explore/static map) may only be compressed via
-                            # threshold after >=1 tool round (emergency >90%
-                            # still OK).
-                            if _compress_ok and _guard_decision.reason == "threshold" and _total_tool_rounds <= 0:
-                                _compress_ok = False
-                            if not _compress_ok and _guard_decision.action == "emergency_evict":
-                                _est_before_evict = int(_est_tokens)
-                                _evicted_n = _evict_stale_tool_outputs(
-                                    messages=_dtool_msgs,
-                                    lru=_tool_ctx_lru,
-                                    target_token_budget=int(_dtool_ctx * 0.70),
-                                    hard_floor_tokens=int(_dtool_ctx * 0.62),
-                                    protect_paths=_recent_focus_paths,
-                                )
-                                if _evicted_n > 0:
-                                    _ctx_evictions += int(_evicted_n)
-                                    _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
-                                    # METER-FIX (2026-08-25): the real value is now
-                                    # STALE (pre-eviction). Reset -> naechster
-                                    # ctx_meter nutzt den frischen Schaetzer.
-                                    _coder_real_prompt_tokens[0] = 0
-                                    _coder_est_at_real[0] = 0
-                                    logger.warning(
-                                        "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
-                                        _est_before_evict, _evicted_n, int(_est_tokens), int(_dtool_ctx),
-                                        int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
-                                        _guard_decision.reason,
-                                    )
-                                    yield await ctx.emit({
-                                        "type": "status",
-                                        "content": (
-                                            f"🧹 Emergency context eviction (no compression left): {_evicted_n} "
-                                            "stale tool output(s) replaced by recall markers."
-                                        ),
-                                    })
-                        # MASK-FIRST (2026-10-14, audit phase 4): the
-                        # deterministic observation masking (stale tool
-                        # outputs -> recall markers, same machinery as the
-                        # emergency valve) runs BEFORE the LLM summary
-                        # decision. No LLM call, no slot evict, bounded to
-                        # the threshold target — and it can CLEAR
-                        # _compress_ok, so the LLM compression below only
-                        # fires when masking alone was not enough.
-                        # Settings toggle: duo_mask_before_compress.
-                        if _compress_ok and ctx.settings.get("duo_mask_before_compress", True):
-                            try:
-                                _mask_n = _evict_stale_tool_outputs(
-                                    messages=_dtool_msgs,
-                                    lru=_tool_ctx_lru,
-                                    target_token_budget=int(_compress_threshold),
-                                    hard_floor_tokens=int(_dtool_ctx * 0.62),
-                                    protect_paths=_recent_focus_paths,
-                                )
-                            except Exception as _mask_err:
-                                logger.warning("[CTX-MASK] failed: %s", _mask_err)
-                                _mask_n = 0
-                            if _mask_n > 0:
-                                _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
-                                _guard_tokens = max(
-                                    int(_coder_real_prompt_tokens[0] or 0), int(_est_tokens))
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"🧹 Masked {_mask_n} stale tool output(s) — no summary needed."})
-                                logger.info(
-                                    "[CTX-MASK] masked=%d est_after=%d threshold=%d (LLM compression skipped)",
-                                    _mask_n, int(_est_tokens), int(_compress_threshold),
-                                )
-                                if _guard_tokens <= int(_compress_threshold):
-                                    _compress_ok = False
+                        _ctx_pressure_peak = _cm.ctx_pressure_peak
+                        _swa_triggered_compress = _cm.swa_triggered_compress
+                        _force_compress_next = _cm.force_compress_next
+                        _ctx_critical_warned = _cm.ctx_critical_warned
+                        _ctx_pressure_warned = _cm.ctx_pressure_warned
+                        _dtool_msgs.extend(_cm.messages)
+                        for _cm_ev in _cm.events:
+                            yield await ctx.emit(_cm_ev)
+                        # OUTSOURCED (F13 split): the shrink decision —
+                        # compress-vs-emergency-evict, the bounded 2-pass
+                        # emergency eviction and the deterministic
+                        # mask-before-compress pass — lives in
+                        # core/duo_ctx_meter._ctx_shrink_round; the runner
+                        # emits the collected status events and keeps the
+                        # LLM compression cycle below.
+                        _can_compress = (_MAX_COMPRESSIONS != -1 or _force_compress_next)
+                        _shr = _ctx_shrink_round(
+                            dtool_ctx=_dtool_ctx,
+                            compress_threshold=_compress_threshold,
+                            est_tokens=_est_tokens,
+                            guard_tokens=_guard_tokens,
+                            can_compress=_can_compress,
+                            force_compress_next=_force_compress_next,
+                            total_tool_rounds=_total_tool_rounds,
+                            dtool_msgs=_dtool_msgs,
+                            tool_ctx_lru=_tool_ctx_lru,
+                            coder_real_prompt_tokens=_coder_real_prompt_tokens,
+                            coder_est_at_real=_coder_est_at_real,
+                            recent_focus_paths=_recent_focus_paths,
+                            mask_enabled=bool(ctx.settings.get("duo_mask_before_compress", True)),
+                        )
+                        _est_tokens = _shr.est_tokens
+                        _guard_tokens = _shr.guard_tokens
+                        _guard_decision = _shr.guard_decision
+                        _compress_ok = _shr.compress_ok
+                        for _shr_ev in _shr.events:
+                            yield await ctx.emit(_shr_ev)
                         if _compress_ok:
                             # OUTSOURCED (split 2.8): the compression cycle → _duo_compress_cycle();
                             # the fail-streak round-loop exit comes back as ps.stop.
@@ -3857,7 +3704,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _explore_only_rounds=_explore_only_rounds,
                                 _force_compress_next=_force_compress_next,
                                 _llm_compress_fails=_llm_compress_fails,
-                                _loop_detected=_loop_detected,
                                 _no_write_nudged=_no_write_nudged,
                                 _no_write_rounds=_no_write_rounds,
                                 _partial_escalated=_partial_escalated,
@@ -3911,40 +3757,10 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _dtool_msgs.remove(_sys)
                                 _dtool_msgs.insert(0, _sys)
                         if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "[ROLE-DUMP] round=%d system_count=%d roles=%s",
-                                _di, sum(1 for m in _dtool_msgs if m.get("role") == "system"),
-                                json.dumps([m.get("role") for m in _dtool_msgs]),
+                            _log_msgsig_drift(
+                                _dtool_msgs, _prev_msg_sig,
+                                round_no=_dr, chunk_no=_di,
                             )
-                        # D3-NOISE-FIX (2026-08-22): pure tail append (new messages
-                        # SCAN-GATE (2026-09-09): pure diagnostics — the per-message signature
-                        # scan only runs with DEBUG logging (was an O(n) scan every round).
-                        if logger.isEnabledFor(logging.DEBUG):
-                            try:
-                                _sig_now = [(m.get("role", ""), len(str(m.get("content", "") or ""))) for m in _dtool_msgs]
-                                _prev_sig = _prev_msg_sig[0] if _prev_msg_sig else None
-                                _changed_early = []
-                                if _prev_sig:
-                                    _cum_chars = 0
-                                    for _mi in range(max(len(_sig_now), len(_prev_sig))):
-                                        if _mi >= len(_prev_sig):
-                                            break
-                                        _s_cur = _sig_now[_mi] if _mi < len(_sig_now) else None
-                                        _s_prev = _prev_sig[_mi]
-                                        if _s_cur != _s_prev:
-                                            if _cum_chars / _CHARS_PER_TOKEN < 10000:
-                                                _changed_early.append((_mi, int(_cum_chars / _CHARS_PER_TOKEN), _s_prev, _s_cur))
-                                            break
-                                        if _s_cur:
-                                            _cum_chars += _s_cur[1]
-                                _prev_msg_sig[0] = _sig_now
-                                if _changed_early:
-                                    logger.warning(
-                                        "[MSGSIG-CHANGE] round=%d change below 10k tokens: %s (msgs=%d)",
-                                        _dr, _changed_early[:5], len(_sig_now),
-                                    )
-                            except Exception as _sig_err:
-                                logger.debug("[MSGSIG-CHANGE] Signature error: %s", _sig_err)
                         # DYNAMIC OUTPUT RESERVE (2026-09-05): max_tokens per
                         # tool round is clamped to the free space (est-based,
                         # worst-case factor 1.35). Full budgets stay as long
@@ -3955,6 +3771,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             est_tokens=int(_est_now),
                             ctx_tokens=int(_dtool_ctx),
                             max_output=int(_dtool_opts.get("num_predict", 1024) or 1024),
+                            factor=(1.05 if _coder_real_prompt_tokens[0] > 0 else 1.35),
                             # CLAMP-RESERVE-FIX (2026-09-09): honor the same
                             # reserve knobs the threshold math uses instead of
                             # the hardwired 768 default.
@@ -3975,63 +3792,32 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # retried with the same budget. Scale the floor with
                         # the round's own request instead.
                         _min_viable_budget = _min_viable_tool_budget(
-                            int(_dtool_opts.get("num_predict", 1024) or 1024))
-                        if int(_max_tokens_round) >= _min_viable_budget:
-                            _ctx_full_skips = 0
-                        else:
-                            _ctx_full_skips += 1
-                            if _ctx_full_skips >= 4:
-                                logger.error(
-                                    "[CTX-FULL] 4 consecutive rounds without enough headroom "
-                                    "(est=%d ctx=%d) - compression cannot shrink enough",
-                                    int(_est_now), int(_dtool_ctx),
-                                )
-                                yield await ctx.emit({"type": "status",
-                                    "content": "⛔ Context cannot be reduced enough for a tool round — run stopped."})
-                                _ld_setter(3726); _loop_detected = True
-                                break
-                            if (_can_compress or _guard_tokens > int(_dtool_ctx * 0.90)) and _total_tool_rounds > 0:
-                                # STORM-GUARD (2026-10-30, live 22.10.: 40 force
-                                # compressions in 56 s because local-only
-                                # compression never got ahead of the tool-output
-                                # inflow): a force compression may fire only
-                                # every MIN_GAP rounds; in between the run
-                                # degrades to the tiny-budget fallback instead
-                                # of looping.
-                                from context.ctx_guard import allow_force_compress as _afc
-                                # EMERGENCY (audit 30.10): at >90% ctx or
-                                # >=2 rounds without a viable budget the brake
-                                # must not block (head <= 0 would fire a
-                                # 512-token request against the wall and
-                                # poison the tool-call history).
-                                _ctx_emergency = (
-                                    _guard_tokens > int(_dtool_ctx * 0.90)
-                                    or _ctx_full_skips >= 2
-                                )
-                                if not _afc(_dr, _last_force_compress_round, 3,
-                                            emergency=_ctx_emergency):
-                                    logger.warning(
-                                        "[CTX-FULL] storm guard: force compression throttled "
-                                        "(last=%d round=%d) - skipping this round instead of "
-                                        "shipping a doomed budget",
-                                        _last_force_compress_round, _dr,
-                                    )
-                                    continue
-                                else:
-                                    logger.warning(
-                                        "[CTX-FULL] insufficient headroom for a safe tool round "
-                                        "(max_tokens=%d est=%d real=%d skip=%d/4) - compressing first",
-                                        int(_max_tokens_round), int(_est_now), int(_guard_tokens),
-                                        _ctx_full_skips,
-                                    )
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⛽ Context too full for a safe tool round — compressing first. ({_ctx_full_skips}/4)"})
-                                    _force_compress_next = True
-                                    _last_force_compress_round = _dr
-                                    continue
-                            # Compression exhausted & not at emergency level: keep
-                            # the old tiny-budget behaviour instead of looping.
-                            _max_tokens_round = max(int(_max_tokens_round), 512)
+                            int(_dtool_opts.get("num_predict", 1024) or 1024),
+                            ctx_tokens=int(_dtool_ctx or 0))
+                        _tbg = _tool_budget_gate(
+                            max_tokens_round=_max_tokens_round,
+                            min_viable_budget=_min_viable_budget,
+                            ctx_full_skips=_ctx_full_skips,
+                            est_now=_est_now,
+                            dtool_ctx=_dtool_ctx,
+                            guard_tokens=_guard_tokens,
+                            can_compress=_can_compress,
+                            total_tool_rounds=_total_tool_rounds,
+                            dr=_dr,
+                            last_force_compress_round=_last_force_compress_round,
+                            ld_setter=_ld_setter,
+                        )
+                        _max_tokens_round = _tbg.max_tokens_round
+                        _ctx_full_skips = _tbg.ctx_full_skips
+                        _force_compress_next = _tbg.force_compress_next
+                        _last_force_compress_round = _tbg.last_force_compress_round
+                        _loop_detected = _tbg.loop_detected
+                        for _tb_ev in _tbg.events:
+                            yield await ctx.emit(_tb_ev)
+                        if _tbg.action == "break":
+                            break
+                        if _tbg.action == "continue":
+                            continue
                         # TOOLCALL-SANITIZE (2026-09-06): never send assistant
                         # tool_calls with malformed JSON args (llama 500 re-parse).
                         try:
@@ -4100,128 +3886,46 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             workspace=_ws_str, run_id=(getattr(ctx, "chat_id", None) or getattr(ctx, "run_id", "") or ""),
                         )
                         _hb_interval = _read_hb_interval(ctx.settings)
-                        # IN-USE GUARD (2026-10-17, live): while this round is
-                        # running, the coder slot must be un-evictable even
-                        # after the run's pin is released - the pre-flight used
-                        # to kill exactly this slot for another role's load and
-                        # the round died with ConnectError.
-                        _inuse_slot = None
-                        try:
-                            from backend.llama_server_manager import manager as _lsm_inuse
-                            # _find_loaded is a coroutine: without await this
-                            # was a truthy coroutine object, mark_in_flight
-                            # raised AttributeError, the except swallowed it and
-                            # the in-use guard was silently OFF (live
-                            # 2026-10-27: RuntimeWarning was never awaited).
-                            _inuse_slot = await _lsm_inuse._find_loaded(exec_mdl)
-                            if _inuse_slot is not None:
-                                _inuse_slot.mark_in_flight()
-                        except (ImportError, AttributeError, TypeError):
-                            _inuse_slot = None
-                        _post_task = asyncio.create_task(
-                            _duo_loop.post_with_retry(_tool_payload, dtool_msgs=_dtool_msgs, ctx=ctx, _parts=_parts)
-                        )
-                        _hb_start = time.monotonic()
-                        _hb_last = _hb_start
-                        while True:
-                            _hb_had = False
-                            while not _coder_event_q.empty():
-                                _hb_had = True
-                                try:
-                                    yield _coder_event_q.get_nowait()
-                                except asyncio.QueueEmpty:
-                                    break
-                            if _hb_had:
-                                _hb_last = time.monotonic()
-                            if _post_task.done():
-                                break
-                            # HEARTBEAT (2026-08-21): during long prompt processing
-                            if time.monotonic() - _hb_last >= _hb_interval:
-                                _hb_total = int(time.monotonic() - _hb_start)
-                                _hb_last = time.monotonic()
-                                # PREFILL-METER (2026-09-20): attach live llama-server
-                                # prefill progress when one is running (post-compress
-                                # re-prefill, ctx reload) so the UI shows percent + rate
-                                # instead of a blind elapsed counter.
-                                _hb_ev = {"type": "heartbeat", "elapsed": _hb_total}
-                                # F4 (2026-11-07): meter is async now — discovery +
-                                # tail read run via to_thread, off the loop.
-                                _hb_pf = await _llama_prefill_progress(_dport)
-                                if _hb_pf:
-                                    _hb_ev["prefill"] = _hb_pf
-                                yield await ctx.emit(_hb_ev)
-                            await asyncio.sleep(0.02)
-                        # TASK-DEATH FIX (2026-10-10): post_with_retry can die
-                        # with an unhandled RuntimeError (in-loop ensure_loaded
-                        # after ctx mismatch / evict). .result() re-raises into
-                        # the surrounding frame, which swallowed it silently -
-                        # six runs ended with no usage, no [CACHE], no error
-                        # message (asyncio only logged the orphaned task).
-                        # Surface it and end the run with a real reason.
-                        try:
-                            _result = _post_task.result()
-                        except Exception as _pt_exc:
-                            logger.warning(
-                                "[CODER-ROUND-FAIL] post task died: %s: %s",
-                                type(_pt_exc).__name__, str(_pt_exc)[:200],
-                            )
-                            yield await ctx.emit({"type": "status",
-                                "content": f"⛔ Coder round failed ({type(_pt_exc).__name__}): {str(_pt_exc)[:140]}"})
-                            ctx.phase_timer.skip("coder_loop")
-                            if _inuse_slot is not None:
-                                try:
-                                    _inuse_slot.clear_in_flight()
-                                except (AttributeError, TypeError):
-                                    pass
-                            clear_graceful_stop(ctx.run_id)
-                            _cleanup_pause_state(ctx.run_id)
-                            if ctx.chat_id:
-                                _clear_pause_state(ctx.chat_id)
-                            _cleanup_governor(ctx.chat_id or ctx.run_id)
-                            ctx.duo_stop_reason = "runtime_error"
-                            yield await ctx.emit(ctx.done_event(
-                                round(time.time() - ctx.t_total, 1),
-                                ctx.duo_stop_reason,
-                                **ctx.collect_done_metrics(),
-                            ))
+                        # F13 CARVE (2026-11-08): the coder POST wait + result
+                        # sync moved VERBATIM into _duo_coder_post_wait (in-use
+                        # slot guard, post task, heartbeat/_coder_event_q drain,
+                        # task-death teardown, in-use clear, result unpack). The
+                        # runner relays the streamed events in order and owns
+                        # the final break / continue / return.
+                        _wait_ps = _DuoCoderPostWaitState()
+                        async for _pw_ev in _duo_coder_post_wait(
+                            ctx, _wait_ps,
+                            _duo_loop=_duo_loop, _tool_payload=_tool_payload,
+                            _dtool_msgs=_dtool_msgs, _parts=_parts,
+                            _coder_event_q=_coder_event_q, exec_mdl=exec_mdl,
+                            _dport=_dport, _hb_interval=_hb_interval,
+                            _duo_state=_duo_state, _ld_setter=_ld_setter,
+                        ):
+                            yield _pw_ev
+                        if _wait_ps.run_ended:
+                            # TASK-DEATH: the helper already emitted the status
+                            # + done events and ran the cleanup ladder.
                             return
-                        # _duo_state mutated in-place by AgenticToolLoop — no sync needed
-                        if _inuse_slot is not None:
-                            try:
-                                _inuse_slot.clear_in_flight()
-                            except (AttributeError, TypeError):
-                                pass
-                        _dport = _result["dport"]
-                        _cached_coder_port = _duo_state.cached_port
-                        _dr_msg = _result["dr_msg"]
-                        _dr_content_parts = _result["dr_content_parts"]
-                        _dr_thinking_parts = _result["dr_thinking_parts"]
-                        _dr_tool_calls_acc = _result["dr_tool_calls_acc"]
-                        _dr_stream_ok = _result.get("dr_stream_ok", False)
-                        if _result.get("loop_detected"):
-                            _logger = logger
-                            logger.warning(
-                                "[LD-SRC] AgenticToolLoop loop_detected — result keys=%s dr_stream_ok=%s",
-                                sorted(k for k in _result.keys() if k != "dr_content_parts"),
-                                _result.get("dr_stream_ok"),
-                            )
-                            _ld_setter(3022); _loop_detected = True
+                        # the carved block assigned these before its break /
+                        # continue points — sync them on every non-return exit.
+                        _dport = _wait_ps.dport
+                        _cached_coder_port = _wait_ps.cached_port
+                        _result = _wait_ps.result
+                        _dr_msg = _wait_ps.dr_msg
+                        _dr_thinking_parts = _wait_ps.dr_thinking_parts
+                        if _wait_ps.action == "break":
+                            # the block's only break source is loop_detected
+                            # (the helper already ran _ld_setter(3022)); mirror
+                            # the old `_loop_detected = True` from the raw result.
+                            _loop_detected = _loop_detected or bool(
+                                (_wait_ps.result or {}).get("loop_detected"))
                             break
-                        if _result.get("force_compress"):
-                            _force_compress_next = True
+                        if _wait_ps.action == "continue":
+                            # the block's only continue source is force_compress.
+                            _force_compress_next = _force_compress_next or bool(
+                                (_wait_ps.result or {}).get("force_compress"))
                             continue
-                        if not _dr_stream_ok:
-                            raise RuntimeError("Tool-POST: stream not received — no error detail")
-                        _duo_state.http_404_retries = 0
-                        _dr_content = _dr_msg.get("content") or ""
-                        if _dr_content and "<think" in _dr_content:
-                            _dr_content = _preprocess_think_blocks(_dr_content)
-                            _dr_msg = {**_dr_msg, "content": _dr_content}
-                        # Strip ```json ... ``` Markdown fences (Qwen3.6 wraps tool calls)
-                        if _dr_content and "```" in _dr_content:
-                            _dr_content = _RE_JSON_FENCE.sub(lambda m: m.group(1), _dr_content)
-                            _dr_msg = {**_dr_msg, "content": _dr_content}
-                        _dr_tcs = _dr_msg.get("tool_calls", [])
+                        _dr_tcs = _wait_ps.dr_tcs
                         _drop_len = (" — finish_reason=length (output token limit reached)"
                                      if _result.get("dr_finish_reason") == "length" else "")
                         # VALIDATE-EXTRACT (2026-09-30): the tool-call repair/
@@ -4243,70 +3947,21 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _drop_names = _vres["dropped_names"]
                         _salvage_notes = _vres["salvage_notes"]
                         if _result.get("dr_finish_reason") in ("length", "drift"):
-                            # countable truncation event for the A/B benchmark,
-                            # with overrun-class discrimination: write-overrun
-                            # (had_tool_calls) vs reasoning-overrun (no call).
-                            # had_ counts pre-validation, has_ post-validation —
-                            # a dropped salvage must not read as reasoning-only.
-                            # reasoning_tokens is n/a when the server does not
-                            # report completion_tokens_details (llama.cpp b11191
-                            # likely doesn't) — 0 would read as "no reasoning"
-                            # although the value is unknown; think_chars (SSE
-                            # reasoning deltas) covers the reasoning size either way
-                            _ru = _result.get("dr_usage_final") or {}
-                            _rtd = (_ru.get("completion_tokens_details") or {}
-                                    if isinstance(_ru, dict) else {})
-                            _rt_raw = _rtd.get("reasoning_tokens") if isinstance(_rtd, dict) else None
-                            _think_chars = sum(len(p) for p in (_result.get("dr_thinking_parts") or []))
-                            logger.warning(
-                                "[WRITE-TRUNCATION] model=%s round=%s finish_reason=%s "
-                                "had_tool_call=%s has_tool_call=%s content_len=%d "
-                                "reasoning_tokens=%s think_chars=%d",
-                                coder_mdl, _dr, _result.get("dr_finish_reason"),
-                                _vres["meta"]["had_tool_calls"],
-                                _vres["meta"]["has_tool_call"],
-                                len(_dr_msg.get("content") or ""),
-                                ("n/a" if _rt_raw is None else _rt_raw), _think_chars)
-                        # TRUNCATED-WRITE-MARKER (2026-10-11, v2): a write_file cut at the output
-                        # limit was first dropped - but the salvage already holds ~90% of the
-                        # content (live: 32638 chars/844 lines) and the model just retried the
-                        # same oversized write three times anyway. Now: the salvaged content IS
-                        # written with an explicit truncation marker appended, and the model
-                        # continues from the marker with edit_file / write_file_append.
+                            _log_write_truncation(
+                                coder_mdl=coder_mdl, round_no=_dr,
+                                finish_reason=_result.get("dr_finish_reason"),
+                                had_tool_calls=_vres["meta"]["had_tool_calls"],
+                                has_tool_call=_vres["meta"]["has_tool_call"],
+                                content_len=len(_dr_msg.get("content") or ""),
+                                usage=_result.get("dr_usage_final"),
+                                thinking_parts=_result.get("dr_thinking_parts") or [],
+                            )
+                        # TRUNCATED-WRITE-MARKER (2026-10-11, v2): keep the
+                        # salvaged content and append the explicit marker.
                         if _result.get("dr_finish_reason") == "length":
-                            _MARK = ("\n\n"
-                                     "<<<TRUNCATION_MARKER: the generator hit the output limit at this "
-                                     "exact point. Everything above was generated and saved; the file "
-                                     "ends here and MAY be incomplete. Continue the implementation with "
-                                     "edit_file or write_file_append.>>>\n")
-                            _salvaged_paths = []
-                            for _wi in reversed(range(len(_validated_tcs))):
-                                _wtc = _validated_tcs[_wi]
-                                if str(((_wtc.get("function") or {}).get("name")) or "") not in ("write_file", "write_file_append"):
-                                    continue
-                                try:
-                                    _wa = _wtc["function"].get("arguments", "")
-                                    _ad = json.loads(_wa) if isinstance(_wa, str) else dict(_wa or {})
-                                    _ad["content"] = (str(_ad.get("content", "")) + _MARK)
-                                    _wtc["function"]["arguments"] = json.dumps(_ad, ensure_ascii=False)
-                                    _salvaged_paths.append(str(_ad.get("path", "") or "?"))
-                                except Exception:
-                                    _validated_tcs.pop(_wi)
-                            if _salvaged_paths:
-                                state["_cut_write_attempts"] = int(state.get("_cut_write_attempts", 0)) + 1
-                                _drop_notices.append(
-                                    "⚠ write_file hit the output limit and was cut - the partial content "
-                                    "WAS written to " + ", ".join(_salvaged_paths) + " with a "
-                                    "<<<TRUNCATION_MARKER>>> at the end. The marker sits in a possibly broken "
-                                    "syntax context: first edit_file it away together with any broken tail, "
-                                    "then continue with edit_file or write_file_append. Do NOT rewrite the "
-                                    "whole file.")
-                            elif not _validated_tcs:
-                                _drop_notices.append(
-                                    "⛔ write_file was cut at the output limit and could not be salvaged - "
-                                    "nothing was written. Re-send in smaller pieces: write_file the first "
-                                    "half, then write_file_append the rest.")
-                        if _drop_notices:
+                            salvage_truncated_writes(_validated_tcs, _drop_notices)
+                            _salvage_notes.clear()
+                        if _drop_notices and not _validated_tcs:  # defer when tools run
                             _dtool_msgs.append({"role": "user",
                                                  "content": "\n".join(_drop_notices)})
                         _dr_tcs = _validated_tcs
@@ -4320,233 +3975,90 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # failing round is the only remaining evidence.
                             # One WARNING per miss - never per token.
                             if _is_tool_round:
-                                try:
-                                    import hashlib as _hl
-                                    _miss_usage = _result.get("dr_usage_final") or {}
-                                    _miss_tools = _tool_payload.get("tools") or []
-                                    _miss_tools_json = json.dumps(
-                                        _miss_tools, sort_keys=True, ensure_ascii=False)
-                                    _miss_content = str(_dr_msg.get("content") or "")
-                                    _miss_reason = "".join(
-                                        _result.get("dr_thinking_parts") or [])
-                                    # RAW (2026-10-31, audit): _dr_msg has
-                                    # already been through <think> preprocessing
-                                    # and fence stripping; the incident needs the
-                                    # untouched SSE accumulation too.
-                                    _miss_raw = "".join(
-                                        _result.get("dr_content_parts") or [])
-                                    logger.warning(
-                                        "[TOOL-CALL-MISS] round=%s model=%s "
-                                        "thinking=%s ctk=%s tools=%d schema_chars=%d "
-                                        "hash=%s tool_choice=%s slot_ctx=%s req_ctx=%s "
-                                        "prompt_tokens=%s cached=%s finish=%s "
-                                        "completion=%s max_tokens=%s "
-                                        "temp=%s presence=%s top_p=%s top_k=%s min_p=%s seed=%s "
-                                        "content[0:500]=%r reasoning[0:500]=%r "
-                                        "raw[0:500]=%r",
-                                        _dr, coder_mdl, _thinking,
-                                        _tool_payload.get("chat_template_kwargs"),
-                                        len(_miss_tools), len(_miss_tools_json),
-                                        _hl.sha256(_miss_tools_json.encode(
-                                            "utf-8")).hexdigest()[:12],
-                                        _tool_payload.get("tool_choice"),
-                                        _dtool_opts.get("num_ctx"),
-                                        _coder_ctx_eff,
-                                        _miss_usage.get("prompt_tokens"),
-                                        _miss_usage.get("cached_tokens"),
-                                        _result.get("dr_finish_reason"),
-                                        _miss_usage.get("completion_tokens"),
-                                        _tool_payload.get("max_tokens"),
-                                        _tool_payload.get("temperature"),
-                                        _tool_payload.get("presence_penalty"),
-                                        _tool_payload.get("top_p"),
-                                        _tool_payload.get("top_k"),
-                                        _tool_payload.get("min_p"),
-                                        _tool_payload.get("seed"),
-                                        _miss_content[:500],
-                                        _miss_reason[:500],
-                                        _miss_raw[:500],
-                                    )
-                                except (TypeError, ValueError,
-                                        AttributeError, KeyError) as _miss_err:
-                                    logger.debug(
-                                        "[TOOL-CALL-MISS] log failed: %s", _miss_err)
+                                _log_tool_call_miss(
+                                    round_no=_dr, coder_mdl=coder_mdl,
+                                    thinking=_thinking, tool_payload=_tool_payload,
+                                    dtool_opts=_dtool_opts,
+                                    coder_ctx_eff=_coder_ctx_eff,
+                                    result=_result, dr_msg=_dr_msg,
+                                )
                             # explored. Now: prompt targeted repair, own
                             # counter against endless loops.
                             if _drop_notices:
-                                _dr_think_only_retries = 0
-                                _dr_dropped_tool_retries += 1
-                                if _dr_dropped_tool_retries >= 3:
-                                    _ld_setter(3089); _loop_detected = True
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⚠ Tool-call args {_dr_dropped_tool_retries}x malformed/truncated — loop aborted."})
+                                _dtr = _plan_dropped_tool_retry(
+                                    result=_result,
+                                    drop_names=_drop_names, drop_len=_drop_len,
+                                    dr=_dr, max_tool_rounds=_max_tool_rounds,
+                                    max_tokens_round=_max_tokens_round,
+                                    messages=_dtool_msgs,
+                                    think_only_retries=_dr_think_only_retries,
+                                    dropped_tool_retries=_dr_dropped_tool_retries,
+                                    force_compress_next=_force_compress_next,
+                                    loop_detected=_loop_detected,
+                                    should_compress=_should_compress_after_truncated_drop,
+                                    build_retry=_build_dropped_tool_retry,
+                                    ld_setter=_ld_setter,
+                                )
+                                _dr_think_only_retries = _dtr.think_only_retries
+                                _dr_dropped_tool_retries = _dtr.dropped_tool_retries
+                                _force_compress_next = _dtr.force_compress_next
+                                _loop_detected = _dtr.loop_detected
+                                for _ev in _dtr.events:
+                                    yield await ctx.emit(_ev)
+                                if _dtr.action == "break":
                                     break
-                                if _should_compress_after_truncated_drop(
-                                        _result.get("dr_finish_reason"),
-                                        _drop_names):
-                                    # A truncated edit_file cannot be applied
-                                    # half-way, so the drop is right - but a
-                                    # retry with the SAME clamped budget
-                                    # truncates again by construction. Give
-                                    # the next round fresh headroom instead.
-                                    _force_compress_next = True
-                                    _dtool_msgs.append({"role": "user", "content": (
-                                        "[OUTPUT LIMIT] The edit_file was cut at "
-                                        f"this round's output budget "
-                                        f"({int(_max_tokens_round)} tokens) and was "
-                                        "NOT applied half-way. Compressing first; "
-                                        "then split the edit into smaller edit_file "
-                                        "calls (or use write_file_append).")})
-                                    logger.warning(
-                                        "[TOOL-TRUNCATION] edit_file dropped at "
-                                        "finish=length (budget=%d) - forcing "
-                                        "compression instead of an identical retry",
-                                        int(_max_tokens_round))
-                                    continue
-                                if _dr < _max_tool_rounds - 1:
-                                    # write_file_append; edit_file → small SEARCH/REPLACE).
-                                    yield await ctx.emit({"type": "status",
-                                        "content": (
-                                            f"⚠ Tool call {_dr_dropped_tool_retries}/3 truncated "
-                                            f"({'/'.join(_drop_names[:3]) or '?'}): JSON args malformed/truncated"
-                                            f"{_drop_len}. Model should write large writes in steps."
-                                        )})
-                                    _dtool_msgs.append({"role": "user",
-                                        "content": _build_dropped_tool_retry(_drop_names)})
+                                if _dtr.action == "continue":
                                     continue
                             _final = _re_think_cleanup.sub(" ", (_dr_msg.get("content") or "")).strip()
-                            if _final:
-                                if not _soft_check_done and _file_changes:
-                                    _sc = _build_soft_check(_file_changes, _ws_str)
-                                    if _sc:
-                                        _dtool_msgs.append({"role": "user", "content": _sc})
-                                        _soft_check_done = True
-                                        _dr_think_only_retries = 0
-                                        continue
-                                _parts.append(_final)
-                                _dr_think_only_retries += 1
-                                _coder_no_think = True
-                                if _dr_think_only_retries > 2:
-                                    # FINAL-SUMMARY-ACCEPT (2026-09-10): when real
-                                    # work exists and the model delivers a substantial
-                                    # text summary, this is the task's conclusion —
-                                    # not a loop. Abort only when nothing was written
-                                    # (live: spark-1.7b finished with a verification
-                                    # summary and got killed as a 'loop').
-                                    # substantial summary counts even without
-                                    # own writes (verification-only follow-up runs)
-                                    # ZERO-ACTIVITY GUARD (2026-09-20): a summary with
-                                    # zero reads AND zero writes is not a conclusion —
-                                    # the model just echoed the briefing (live: Hermes
-                                    # restated "[Plan Briefing - IMPLEMENT THIS]" for 3
-                                    # rounds, the text was accepted as the answer and
-                                    # the run completed without touching a file).
-                                    # Accepting now requires tool activity; a
-                                    # zero-activity summary gets one targeted
-                                    # start-working nudge before the loop abort.
-                                    _any_activity = bool(_file_changes) or bool(_seen_explore_paths)
-                                    if _any_activity and ((_file_changes and len(_final) >= 80) or len(_final) >= 200):
-                                        yield await ctx.emit({"type": "status",
-                                            "content": "✅ Coder concluded with a final summary — accepting it as the answer."})
-                                        break
-                                    if (not _any_activity and not _zero_activity_nudged
-                                            and _dr < _max_tool_rounds - 1):
-                                        _zero_activity_nudged = True
-                                        _dr_think_only_retries = 0
-                                        _dtool_msgs.append({"role": "user", "content": (
-                                            "[ZERO PROGRESS] You replied with text but have not read "
-                                            "or changed any file. Start implementing NOW: read_file the "
-                                            "relevant files, then edit_file the changes. Call "
-                                            "task_complete only once the work is done (or if the task "
-                                            "is genuinely answer-only).")})
-                                        continue
-                                    _ld_setter(3089); _loop_detected = True
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⚠ Coder replies with text only, no tool call ({_dr_think_only_retries}x) — loop aborted."})
-                                    break
-                                if _dr < _max_tool_rounds - 1:
-                                    _nudge = (
-                                        "If the task is complete, call task_complete now with a brief status summary. "
-                                        "Only call edit_file/run_bash if something is still missing."
-                                    ) if _file_changes else (
-                                        "You must call a tool now. Do not explain — use edit_file or run_bash directly.")
-                                    _dtool_msgs.append({"role": "user", "content": _nudge})
-                                    continue
-                            elif not _parts:
-                                # EMPTY-RETRY (2026-09-20): this branch used to
-                                # fall through to the round-loop break, so a
-                                # single empty coder answer ENDED the run as
-                                # "completed" with zero work done (live: Hermes
-                                # emitted reasoning only, no content, no tool
-                                # call). Retry with a nudge, same escalation as
-                                # the non-empty no-tool path.
-                                _dr_think_only_retries += 1
-                                _coder_no_think = True
-                                logger.warning(
-                                    "[CODER-EMPTY-RAW] round=%d finish=%s content=%r think=%r",
-                                    _dr, _result.get("dr_finish_reason"),
-                                    (_dr_msg.get("content") or "")[:300],
-                                    "".join(_dr_thinking_parts or [])[:300],
-                                )
-                                if _dr_think_only_retries > 2:
-                                    _ld_setter(3113); _loop_detected = True
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⚠ Coder returns empty answers ({_dr_think_only_retries}x) — loop aborted."})
-                                    break
-                                if _dr < _max_tool_rounds - 1:
-                                    yield await ctx.emit({"type": "token", "content":
-                                        f"[Tool loop: empty answer from {coder_mdl} — retrying with a nudge]"})
-                                    _dtool_msgs.append({
-                                        "role": "user",
-                                        "content": "You returned an empty response. Call a tool now — edit_file or run_bash.",
-                                    })
-                                    continue
-                                _parts.append(f"[Tool loop: empty answer from {coder_mdl} — check llama-server log]")
-                            else:
-                                _dr_think_only_retries += 1
-                                _coder_no_think = True
-                                logger.warning(
-                                    "[CODER-EMPTY-RAW] round=%d finish=%s content=%r think=%r",
-                                    _dr, _result.get("dr_finish_reason"),
-                                    (_dr_msg.get("content") or "")[:300],
-                                    "".join(_dr_thinking_parts or [])[:300],
-                                )
-                                if _dr_think_only_retries > 2:
-                                    _ld_setter(3113); _loop_detected = True
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⚠ Coder returns empty answers ({_dr_think_only_retries}x) — loop aborted."})
-                                    break
-                                if _dr < _max_tool_rounds - 1:
-                                    _dtool_msgs.append({
-                                        "role": "user",
-                                        "content": "You returned an empty response. Call a tool now — edit_file or run_bash.",
-                                    })
-                                    continue
+                            _txt = _plan_text_only_round(
+                                final=_final, result=_result, dr_msg=_dr_msg,
+                                thinking_parts=_dr_thinking_parts,
+                                file_changes=_file_changes, ws_str=_ws_str,
+                                seen_explore_paths=_seen_explore_paths, dr=_dr,
+                                max_tool_rounds=_max_tool_rounds,
+                                messages=_dtool_msgs, parts=_parts,
+                                think_only_retries=_dr_think_only_retries,
+                                soft_check_done=_soft_check_done,
+                                zero_activity_nudged=_zero_activity_nudged,
+                                coder_no_think=_coder_no_think,
+                                loop_detected=_loop_detected,
+                                coder_mdl=coder_mdl,
+                                build_soft_check=_build_soft_check,
+                                ld_setter=_ld_setter,
+                            )
+                            _dr_think_only_retries = _txt.think_only_retries
+                            _soft_check_done = _txt.soft_check_done
+                            _coder_no_think = _txt.coder_no_think
+                            _zero_activity_nudged = _txt.zero_activity_nudged
+                            _loop_detected = _txt.loop_detected
+                            for _ev in _txt.events:
+                                yield await ctx.emit(_ev)
+                            if _txt.action == "continue":
+                                continue
                             break
                         _dtool_msgs.append(_dr_msg)
                         _dr_think_only_retries = 0
                         _dr_invalid_tool_retries = 0
-                        if _grace_round_active and _dr_tcs:
-                            _non_tc = [tc for tc in _dr_tcs
-                                       if tc.get("function", {}).get("name", "") != "task_complete"]
-                            if _non_tc:
-                                if _grace_round_used:
-                                    _dtool_msgs.append({"role": "user", "content": (
-                                        "[GRACE ROUND EXPIRED] Grace round already used — exiting now. "
-                                        "The run will end."
-                                    )})
-                                    _chunk_budget_exhausted = True
-                                    _ld_setter(3137); _loop_detected = True
-                                    break
-                                _grace_round_used = True
-                                _non_tc_names = [tc.get("function", {}).get("name", "?") for tc in _non_tc]
-                                _dtool_msgs.append({"role": "user", "content": (
-                                    f"[GRACE ROUND] Call ONLY task_complete — no other tools. "
-                                    f"Your last round bundled {len(_non_tc)} other tool(s) "
-                                    f"({', '.join(_non_tc_names[:5])}) which were rejected."
-                                )})
-                                _dr_think_only_retries += 1
-                                continue
+                        # GRACE-ROUND GATE (F13, 2026-11-08): policy moved
+                        # verbatim into core/duo_round_gate.py
+                        # (_grace_round_gate); loop control stays here.
+                        _gr = _grace_round_gate(
+                            grace_round_active=_grace_round_active,
+                            dr_tcs=_dr_tcs,
+                            grace_round_used=_grace_round_used,
+                            ld_setter=_ld_setter,
+                        )
+                        _dtool_msgs.extend(_gr.events)
+                        _grace_round_used = _gr.grace_round_used
+                        if _gr.chunk_budget_exhausted:
+                            _chunk_budget_exhausted = True
+                        if _gr.loop_detected:
+                            _loop_detected = True
+                        if _gr.action == "continue":
+                            _dr_think_only_retries += 1
+                            continue
+                        if _gr.action == "break":
+                            break
                         _exec_ps = _DuoExecRoundState(duo_deadline_at=_duo_deadline_at)
                         try:
                             async for _ev in _duo_exec_round_task(
@@ -4560,7 +4072,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _last_run_bash_failure=_last_run_bash_failure,
                                 _changed_since_failure=_changed_since_failure,
                                 _last_learned_insight_sig=_last_learned_insight_sig,
-                                _last_too_large_path=_last_too_large_path,
+                                _last_too_large_ref=_last_too_large_ref,
                                 _attempts_per_file=_attempts_per_file,
                                 _wedge_state=_wedge_state,
                                 _tool_error_retries=_tool_error_retries,
@@ -4593,7 +4105,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         finally:
                             _duo_deadline_at = _exec_ps.duo_deadline_at
                             _exec_result = _exec_ps.exec_result
-                            _duo_timed_out = _exec_ps.timed_out
                             _snap_before = _exec_ps.snap_before
                             _last_too_large_ref = _exec_ps.last_too_large_ref
                             _cached_port_ref = _exec_ps.cached_port_ref
@@ -4621,7 +4132,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _break_out = _wedge_ps.break_out
                         if _break_out:
                             break
-                        _last_too_large_path = _last_too_large_ref[0]
                         _cached_coder_port = _cached_port_ref[0]
                         # DEADLINE-CANCEL (2026-10-31, audit): a cancelled
                         # round carries no result object, and every field
@@ -4708,6 +4218,10 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                     and any(_tk in str(_msg.get("content", "")) for _tk in ("pytest", "npm test", "cargo test", "go test"))):
                                 _last_test_status = str(_msg["content"])[:200]
                                 break
+                        if _drop_notices and _validated_tcs:
+                            _dtool_msgs.append({"role": "user",
+                                                 "content": "\n".join(_drop_notices)})
+                            _drop_notices.clear()
                         if _salvage_notes:
                             for _snote in _salvage_notes:
                                 _dtool_msgs.append({"role": "user", "content": _snote})
@@ -4720,7 +4234,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # C3 (2026-11-07 maintainability sprint): the
                             # verify gate lives in core/duo_task_complete_gate.
                             _tc_ps = _DuoTaskCompleteGateState(
-                                ctx=ctx, exec_result=_exec_result,
+                                exec_result=_exec_result,
                                 written_files=_written_files,
                                 dtool_msgs=_dtool_msgs, ws_str=_ws_str,
                                 verify_mutation_serial=_verify_mutation_serial,
@@ -4747,49 +4261,29 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _round_tool_names = {
                             tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])
                         }
-                        if _round_tool_names and _round_tool_names.issubset(_EXPLORE_TOOLS):
-                            # read_file alternating, Astro structure backend→frontend→
-                            _new_explore = _collect_new_explore_paths(_dr_tcs, _seen_explore_paths)
-                            if not _new_explore:
-                                _explore_only_rounds += 1
-                            _total_exports = sum(len(c.get("exports", [])) for c in (_contracts_raw or []))
-                            _any_fallback = any(c.get("_fallback") for c in (_contracts_raw or []) if isinstance(c, dict))
-                            _explore_was_partial = not _explore_ctx or _total_exports < 3 or _any_fallback
-                            _partial_bonus = 6 if _explore_was_partial else 4
-                            _READ_ONLY_THRESHOLD = _partial_bonus if _total_exports == 0 else (5 if _any_fallback else _partial_bonus)
-                            _READ_ONLY_THRESHOLD = max(
-                                2, _READ_ONLY_THRESHOLD + _explore_size_tolerance(exec_mdl)
-                            )
-                            if ctx.duo_config.until_finished:
-                                _READ_ONLY_THRESHOLD *= 2
-                            # EXPLORE-METER (2026-09-20): this used to log
-                            # "[LOOP-DETECT] _explore_only_rounds=0 ..." on
-                            # WARNING after EVERY read round — looked like a
-                            # loop alarm during perfectly healthy chunked
-                            # reads. Only report once the streak climbs.
-                            if _explore_only_rounds:
-                                logger.warning("[EXPLORE-METER] explore_only_rounds=%d/%d (exports=%d partial=%s fallback=%s)",
-                                               _explore_only_rounds, _READ_ONLY_THRESHOLD,
-                                               _total_exports, _explore_was_partial, _any_fallback)
-                            if _explore_only_rounds >= _READ_ONLY_THRESHOLD:
-                                await ctx.emit({"type": "status",
-                                    "content": f"⚠ Aborting: {_explore_only_rounds} explore-only rounds without progress."})
-                                await ctx.emit({"type": "token",
-                                    "content": f"\n⚠ [Until-Finished] {_explore_only_rounds} consecutive explore-only rounds — no progress. Stopping."})
-                                _ld_setter(3408); _loop_detected = True
-                                break
-                        elif _round_tool_names & _WRITE_TOOLS:
-                            _bash_changed = None
-                            if _round_tool_names == {"run_bash"} and _snap_before is not None:
-                                _snap_after = await asyncio.to_thread(
-            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
-            _written_files, _contracts_raw)
-                                from hive_functions.chunking import compute_bash_changed
-                                _bash_changed = compute_bash_changed(_snap_before, _snap_after)
-                            from hive_functions.chunking import resolve_explore_reset
-                            _explore_only_rounds = resolve_explore_reset(
-                                _round_tool_names, _bash_changed, _explore_only_rounds
-                            )
+                        _eg = await _explore_round_gate(
+                            ctx,
+                            round_tool_names=_round_tool_names,
+                            dr_tcs=_dr_tcs,
+                            seen_explore_paths=_seen_explore_paths,
+                            explore_only_rounds=_explore_only_rounds,
+                            contracts_raw=_contracts_raw,
+                            explore_ctx=_explore_ctx,
+                            exec_mdl=exec_mdl,
+                            until_finished=ctx.duo_config.until_finished,
+                            snap_before=_snap_before,
+                            ws_str=_ws_str,
+                            pre_explore_msgs=_pre_explore_msgs,
+                            written_files=_written_files,
+                            ld_setter=_ld_setter,
+                            snapshot_fn=_ld_file_snapshot,
+                        )
+                        _explore_only_rounds = _eg.explore_only_rounds
+                        _loop_detected = _eg.loop_detected or _loop_detected
+                        for _eg_ev in _eg.events:
+                            yield _eg_ev
+                        if _eg.action == "break":
+                            break
                         if _round_wrote_file:
                             _no_write_rounds = 0
                             _no_write_nudged = False
@@ -4806,7 +4300,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 "task_complete(status='blocked', reason='...') instead of looping."
                             )
                             _dtool_msgs.append({"role": "user", "content": _nudge})
-                            await ctx.emit({"type": "status",
+                            yield await ctx.emit({"type": "status",
                                 "content": f"⚠ {_no_write_rounds} rounds without file changes — hint injected."})
                         ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
                         if not _limit_warned and not ctx.duo_config.until_finished:
@@ -4822,154 +4316,55 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # PATCH-1: Plan tracker — update progress per tool round
                         # extended with deviation detection: hard/soft rules, streak tracking,
                         if _plan_tracker is not None and not _plan_tracker.is_finished:
-                            if _last_tool_name and _plan_tracker.should_advance(
-                                    _last_tool_name, _last_tool_result,
-                                    touched_paths=list((_file_changes or {}).keys())):
-                                _plan_tracker.advance(_last_tool_name)
-                                logger.info(
-                                    "[PlanTracker] Step advanced after '%s' -> step %d/%d",
-                                    _last_tool_name,
-                                    _plan_tracker._current_step_index() + 1,
-                                    _plan_tracker.total,
-                                )
-                            _touched = list(_file_changes.keys()) if _file_changes else []
-                            _plan_tracker.tick(
-                                tool_name=_last_tool_name,
-                                tool_result=_last_tool_result,
-                                touched_paths=_touched,
-                                file_changes_count=len(_file_changes or {}),
+                            _pt_ps = _DuoPlanRoundState(
+                                replan_count=_replan_count,
+                                replan_bonus_granted=_replan_bonus_granted,
+                                max_tool_rounds=_max_tool_rounds,
+                                accumulated_replan_bonus=_accumulated_replan_bonus,
                             )
-                            if _plan_tracker.needs_replan():
-                                _replan_count += 1
-                                if _replan_count >= 4:
-                                    _plan_tracker._stall_ticks += 1
-                                    if _plan_tracker._stall_ticks >= 6:
-                                        yield await ctx.emit({
-                                            "type": "status",
-                                            "content": (
-                                                "⛔ [CRITICAL STALL] Maximum replans reached, "
-                                                "no progress detected for 6+ rounds. "
-                                                "Call task_complete(status='blocked', reason='max_replans_exhausted')."
-                                            ),
-                                        })
-                                        _dtool_msgs.append({"role": "user", "content": (
-                                            "[CRITICAL STALL] All replans exhausted without progress. "
-                                            "Call task_complete(status='blocked', reason='max_replans_exhausted') "
-                                            "immediately. Do NOT read or write files."
-                                        )})
-                                    else:
-                                        yield await ctx.emit({
-                                            "type": "status",
-                                            "content": (
-                                                f"⛔ Replan cap reached ({_replan_count}/4) — "
-                                                "tracking stalls ({_plan_tracker._stall_ticks}/6). "
-                                                "No further replan directives."
-                                            ),
-                                        })
-                                    _plan_tracker._initial_read_phase = False
-                                    _plan_tracker._plan.deviation.status = "NONE"
-                                    _plan_tracker._plan.deviation.streak = 0
-                                    _plan_tracker._plan.deviation.reasons.clear()
-                                    continue
-                                _replan_msg = _plan_tracker.replan_prompt(
-                                    written_files=_written_files,
+                            try:
+                                async for _pt_ev in _duo_plan_tracker_round(
+                                    ctx, _plan_tracker,
+                                    last_tool_name=_last_tool_name,
+                                    last_tool_result=_last_tool_result,
                                     file_changes=_file_changes,
-                                )
-                                _streak = _plan_tracker._plan.deviation.streak
-                                logger.warning(
-                                    "[PlanTracker] Deviation streak %d -- replan triggered. Last tool: '%s'",
-                                    _streak,
-                                    _last_tool_name,
-                                )
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": (
-                                        f"⚠️ Plan deviation streak {_streak}/3 — "
-                                        "injecting replan directive"
-                                    ),
-                                })
-                                if not _replan_bonus_granted:
-                                    _replan_bonus_granted = True
-                                    _bonus = min(4, _max_tool_rounds_cfg // 4)
-                                    _max_tool_rounds = min(_max_tool_rounds + _bonus, _max_tool_rounds_cfg)
-                                    _accumulated_replan_bonus += _bonus
-                                    logger.info("[REPLAN] Granted %d extra rounds. New budget: %d",
-                                                _bonus, _max_tool_rounds)
-                                if _dtool_msgs and _dtool_msgs[-1].get("role") == "tool":
-                                    from hive_functions.prompts import PROMPTS
-                                    # [RUNTIME NOTICE]-fix above).
-                                    _replan_directive = PROMPTS.get("duo_coder_replan", "")
-                                    if _replan_directive:
-                                        _dtool_msgs.append({
-                                            "role": "user",
-                                            "content": _replan_directive,
-                                        })
-                                    _dtool_msgs.append({
-                                        "role": "user",
-                                        "content": _replan_msg,
-                                    })
-                                # Reset deviation state so tracker doesn't re-trigger
-                                # on the next round. If the model truly is off-plan,
-                                # deviations will re-emerge naturally.
-                                _plan_tracker._plan.deviation.status = "NONE"
-                                _plan_tracker._plan.deviation.streak = 0
-                                _plan_tracker._plan.deviation.reasons.clear()
-                                _plan_tracker._initial_read_phase = True
-                                _plan_tracker._initial_reads = 0
-                                ctx.exec_ctrl.reset_stuck_detection()
-                            else:
-                                _p1_reminder = _plan_tracker.reminder()
-                                if _p1_reminder:
-                                    logger.info(
-                                        "[PlanTracker] Reminder: %s",
-                                        (_p1_reminder[:120] + '...') if len(_p1_reminder) > 120 else _p1_reminder,
-                                    )
-                                if (_p1_reminder
-                                        and _dtool_msgs
-                                        and _dtool_msgs[-1].get("role") == "tool"
-                                        and not _plan_tracker.is_finished):
-                                    _dtool_msgs.append({
-                                        "role": "user",
-                                        "content": _p1_reminder.strip(),
-                                    })
+                                    written_files=_written_files,
+                                    dtool_msgs=_dtool_msgs,
+                                    max_tool_rounds_cfg=_max_tool_rounds_cfg,
+                                    ps=_pt_ps,
+                                ):
+                                    yield _pt_ev
+                            finally:
+                                _replan_count = _pt_ps.replan_count
+                                _replan_bonus_granted = _pt_ps.replan_bonus_granted
+                                _max_tool_rounds = _pt_ps.max_tool_rounds
+                                _accumulated_replan_bonus = _pt_ps.accumulated_replan_bonus
+                            _pt_action = _pt_ps.action
+                            if _pt_action == "continue":
+                                continue
                         if (not _loop_detected and not ctx.aborted()
                                 and _total_tool_rounds >= _max_tool_rounds):
-                            if _verify_mutation_serial > _verify_last_ok_serial and _file_changes:
-                                _uv_files = ", ".join(sorted(_file_changes.keys())[:10])
-                                _uv_count = len(_file_changes)
-                                if _uv_count > 10:
-                                    _uv_files += f" and {_uv_count - 10} more"
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": f"\u26a0\ufe0f Budget exhausted with {_uv_count} unverified file(s): {_uv_files} — changes may be broken.",
-                                })
-                            if not _grace_round_active:
-                                # GRACE-ROUND-FIX: the round loop runs two extra
-                                # slots; this arms the first one. The old code set
-                                # _loop_detected + abort here, so the grace prompt
-                                # was appended but the round never ran.
-                                _grace_round_active = True
-                                _max_tool_rounds += 1
-                                _dtool_msgs.append({"role": "user", "content": (
-                                    "[GRACE ROUND] You have 1 final round. "
-                                    "Call task_complete now with what was completed, "
-                                    "any blockers, and build_status. No other tool calls."
-                                )})
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": f"\u23f8 Tool budget exhausted ({_total_tool_rounds}/{_max_tool_rounds - 1} rounds) \u2014 granting one grace round to wrap up.",
-                                })
-                            else:
-                                # CHUNK-CONTAINMENT: grace round spent without
-                                # task_complete -> end THIS chunk only. No
-                                # exec_ctrl.abort anymore: the run continues with
-                                # the next chunk (gate after the round loop).
+                            # MAX-ROUNDS GATE (F13, 2026-11-08): policy moved
+                            # verbatim into core/duo_round_gate.py
+                            # (_max_rounds_gate); loop control (the guard
+                            # above and this break) stays here.
+                            _mr = _max_rounds_gate(
+                                total_tool_rounds=_total_tool_rounds,
+                                max_tool_rounds=_max_tool_rounds,
+                                grace_round_active=_grace_round_active,
+                                verify_mutation_serial=_verify_mutation_serial,
+                                verify_last_ok_serial=_verify_last_ok_serial,
+                                file_changes=_file_changes,
+                                ld_setter=_ld_setter,
+                            )
+                            _dtool_msgs.extend(_mr.messages)
+                            for _mr_ev in _mr.events:
+                                yield await ctx.emit(_mr_ev)
+                            _grace_round_active = _mr.grace_round_active
+                            _max_tool_rounds = _mr.max_tool_rounds
+                            if _mr.chunk_budget_exhausted:
                                 _chunk_budget_exhausted = True
-                                _ld_setter(3551)
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": f"\u23f9 Tool budget exhausted ({_total_tool_rounds}/{_max_tool_rounds - 1} rounds incl. grace) \u2014 ending this chunk.",
-                                })
+                            if _mr.action == "break":
                                 break
                 except Exception as _dce:
                     if isinstance(_dce, (
@@ -5220,28 +4615,24 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             if _loop_detected:
                 final_verdict = final_verdict or "loop_detected"
                 # multiple setters stamp finished runs as loop_detected (observed live
-                try:
-                    _ld_locals = locals()
-                    logger.warning(
-                        "[LOOP-DETECT-STOP] timed_out=%s think_only=%s compress_streak=%s "
-                        "explore_only=%s runtime_error=%s grace=%s verify_warned=%s invalid_tool=%s "
-                        "force_compress=%s dropped_tool_retries=%s slot_ctx_floor=%s drop_names=%s last_msgs=%s",
-                        _duo_timed_out,
-                        _ld_locals.get("_dr_think_only_retries", "n/a"),
-                        _ld_locals.get("_compress_fail_streak", "n/a"),
-                        _ld_locals.get("_explore_only_rounds", "n/a"),
-                        _ld_locals.get("_tool_round_runtime_error", False),
-                        _ld_locals.get("_grace_round_active", False),
-                        _ld_locals.get("_verify_warned", False),
-                        _ld_locals.get("_dr_invalid_tool_retries", "n/a"),
-                        _ld_locals.get("_force_compress_next", "n/a"),
-                        _ld_locals.get("_dr_dropped_tool_retries", "n/a"),
-                        _ld_locals.get("_slot_ctx_floor_stop", False),
-                        _ld_locals.get("_drop_names", []),
-                        [str(m.get("content", ""))[:80] for m in (_dtool_msgs or [])[-8:]],
-                    )
-                except Exception:
-                    pass
+                logger.warning(
+                    "[LOOP-DETECT-STOP] timed_out=%s think_only=%s compress_streak=%s "
+                    "explore_only=%s runtime_error=%s grace=%s verify_warned=%s invalid_tool=%s "
+                    "force_compress=%s dropped_tool_retries=%s slot_ctx_floor=%s drop_names=%s last_msgs=%s",
+                    _duo_timed_out,
+                    _dr_think_only_retries,
+                    _compress_fail_streak,
+                    _explore_only_rounds,
+                    _tool_round_runtime_error,
+                    _grace_round_active,
+                    _verify_warned,
+                    _dr_invalid_tool_retries,
+                    _force_compress_next,
+                    _dr_dropped_tool_retries,
+                    _slot_ctx_floor_stop,
+                    _drop_names,
+                    [str(m.get("content", ""))[:80] for m in (_dtool_msgs or [])[-8:]],
+                )
                 _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "wedge_escalated" if _wedge_escalated
                                   else ("timeout_guard" if _duo_timed_out else "loop_detected"))
                 break
@@ -5270,9 +4661,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     "content": f"⏭ Critic skipped — chunk {_di+1} auto-approved"})
                 if _is_last:
                     break
-                _di += 1
-                _cs.reset_test_retries()
-                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
+                _advance_chunk()
                 continue
 
             # ── Critic ─────────────────────────────────────────────────────
@@ -5294,50 +4683,26 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
                 elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
                     _ws_path = _eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", ""))
-                    _chunk_test_result, _is_clean = await _cs.run_auto_test(
-                        workspace=_ws_path,
-                        di=_di,
-                        n_items=_n_items,
-                        emit_fn=ctx.emit,
-                        test_timeout=90,
+                    # Auto-test execution/failure policy moved verbatim into
+                    # core/duo_round_gate.py (_run_auto_test_gate; the agentic
+                    # site historically omits chat_id for run_auto_test);
+                    # the re-awaken loop control stays here.
+                    _at = await _run_auto_test_gate(
+                        _cs, workspace=_ws_path, di=_di, n_items=_n_items,
+                        subtask=_subtask, emit_fn=ctx.emit,
+                        chat_id=ctx.chat_id or "",
                     )
-                    if _is_clean:
-                        yield await ctx.emit({"type": "status",
-                            "content": f"\u2705 Tests passed ({_chunk_test_result.language})"})
-                    else:
-                        _action = _cs.handle_auto_test_result(
-                            test_result=_chunk_test_result,
-                            subtask=_subtask,
-                            di=_di,
-                            n_items=_n_items,
-                            emit_fn=ctx.emit,
-                            chat_id=ctx.chat_id or "",
-                        )
-                        if _action == ChunkAction.CONTINUE:
-                            # Check for flaky-test rerun without LLM
-                            if _cs.rerun_without_fix:
-                                _cs.rerun_without_fix = False
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"🔁 Flaky test detected — re-running without LLM ({_cs.test_retries}/2)"})
-                                continue  # re-run auto-test on same chunk, no LLM call
-                            # RE-AWAKEN: Stay on same chunk, fix test failures
-                            yield await ctx.emit({"type": "status",
-                                "content": f"\U0001f501 Chunk {_di+1}: {_chunk_test_result.failure_count} test failures — fix round ({_cs.test_retries}/{_cs.max_test_retries})"})
-                            continue  # DON'T increment _di — re-process same chunk
-                        else:
-                            # Max retries reached or INCREMENT
-                            _cs.rerun_without_fix = False
-                            yield await ctx.emit({"type": "status",
-                                "content": f"\u26a0\ufe0f Chunk {_di+1}: test failures remain after {_cs.max_test_retries+1} attempts — note and continue"})
+                    for _ev in _at.events:
+                        yield await ctx.emit(_ev)
+                    if _at.action == ChunkAction.CONTINUE:
+                        continue  # re-run auto-test / fix round on same chunk, no _di bump
                 _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
                                                    ctx.duo_config.git_autocommit,
                                                    files=list(_cs.written_files[-20:]),
                                                    commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
                 if _ac_out:
                     yield await ctx.emit({"type": "status", "content": _ac_out})
-                _di += 1
-                _cs.reset_test_retries()
-                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
+                _advance_chunk()
                 continue
 
             # HIGH-CONFIDENCE AUTO-APPROVE:
@@ -5369,9 +4734,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _cs.mark_chunk_done(_subtask)
                 if _is_last:
                     break
-                _di += 1
-                _cs.reset_test_retries()
-                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
+                _advance_chunk()
                 continue
             _critic_ps = _DuoCriticReviewState(
                 parts=_parts, verify_last_ok_serial=_verify_last_ok_serial,
@@ -5430,99 +4793,62 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         ctx.clear_step_skip()
                         yield await ctx.emit({"type":"status",
                         "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
-                        _di += 1
-                        _cs.reset_test_retries()
-                        _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
+                        _advance_chunk()
                         if _is_last:
                             break
                     elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
                         _ws_path = _eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", ""))
-                        _chunk_test_result, _is_clean = await _cs.run_auto_test(
-                            workspace=_ws_path,
-                            di=_di,
-                            n_items=_n_items,
-                            emit_fn=ctx.emit,
-                            test_timeout=90,
-                            chat_id=ctx.chat_id or "",
+                        # Auto-test execution/failure policy moved verbatim into
+                        # core/duo_round_gate.py (_run_auto_test_gate: runs
+                        # _cs.run_auto_test, applies the failure policy; this
+                        # site passes chat_id, the max-retries wording reads
+                        # "persist"). mark_chunk_done stays AFTER the verdict.
+                        _at = await _run_auto_test_gate(
+                            _cs, workspace=_ws_path, di=_di, n_items=_n_items,
+                            subtask=_subtask, emit_fn=ctx.emit,
+                            chat_id=ctx.chat_id or "", include_chat_id=True,
+                            fail_final_verb="persist",
                         )
-                        if _is_clean:
-                            yield await ctx.emit({"type": "status",
-                                "content": f"\u2705 Tests passed ({_chunk_test_result.language})"})
+                        for _ev in _at.events:
+                            yield await ctx.emit(_ev)
+                        if _at.is_clean:
                             # CHUNK-DONE TIMING (2026-10-27): the verdict is
                             # clean - NOW the chunk counts as done.
                             if _subtask:
                                 _cs.mark_chunk_done(_subtask)
-                            _di += 1
-                            _cs.reset_test_retries()
-                            _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
+                            _advance_chunk()
                             if _is_last:
                                 break
+                        elif _at.action == ChunkAction.CONTINUE:
+                            continue  # DON'T increment _di
                         else:
-                            _action = _cs.handle_auto_test_result(
-                                test_result=_chunk_test_result,
-                                subtask=_subtask,
-                                di=_di,
-                                n_items=_n_items,
-                                emit_fn=ctx.emit,
-                                chat_id=ctx.chat_id or "",
-                            )
-                            if _action == ChunkAction.CONTINUE:
-                                if _cs.rerun_without_fix:
-                                    _cs.rerun_without_fix = False
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"🔁 Flaky test detected — re-running without LLM ({_cs.test_retries}/2)"})
-                                    continue
-                                # RE-AWAKEN: Stay on same chunk, fix test failures
-                                yield await ctx.emit({"type": "status",
-                                "content": f"\U0001f501 Chunk {_di+1}: {_chunk_test_result.failure_count} test failures — fix round ({_cs.test_retries}/{_cs.max_test_retries})"})
-                                continue  # DON'T increment _di
-                            else:
-                                # Max retries reached — mark as completion note, move on
-                                _cs.rerun_without_fix = False
-                                yield await ctx.emit({"type": "status",
-                                "content": f"\u26a0\ufe0f Chunk {_di+1}: test failures persist after {_cs.max_test_retries+1} attempts — note and continue"})
-                                _di += 1
-                                _cs.reset_test_retries()
-                                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
-                                if _is_last:
-                                    break
+                            _advance_chunk()
+                            if _is_last:
+                                break
                     else:
                         # No auto-test or no files written — normal completion
-                        _di += 1
-                        _cs.reset_test_retries()
-                        _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
+                        _advance_chunk()
                         if _is_last:
                             break
                 else:
-                    _status = f"✓ Critic: code approved — round {_di + 1}" if _approved else f"⚑ Last pass — round {_di + 1} completed"
-                    yield await ctx.emit({"type": "status", "content": _status})
+                    # Round-finish policy (status wording) moved verbatim
+                    # into core/duo_finish_round.py; emit + break stay here.
+                    yield await ctx.emit({"type": "status",
+                        "content": _no_subtask_round_status(di=_di, approved=_approved)})
                     break
             elif _verify_gate_blocked:
-                if get_transaction().has_changes:
-                    ctx.exec_ctrl.transition(AgentState.ROLLBACK)
-                    _restored = get_transaction().rollback()
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": f"\u23ea Rollback: changes discarded ({len(_restored)} file(s)), because verification failed.",
-                    })
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": "\u26d4 Verification required: run_bash must pass after the latest file changes.",
-                })
-                if _subtask:
-                    _cs.set_verification_fix_override(_subtask)
+                # Rollback/override policy moved verbatim into
+                # core/duo_finish_round.py; the runner keeps the emit loop
+                # and the fall-through to the next round (no _di bump).
+                _rf = _finish_round_verification_blocked(ctx, _cs, _subtask)
+                for _ev in _rf.events:
+                    yield await ctx.emit(_ev)
             elif _subtask and not _approved:
-                if get_transaction().has_changes:
-                    ctx.exec_ctrl.transition(AgentState.ROLLBACK)
-                    _restored = get_transaction().rollback()
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": f"\u23ea Rollback: changes discarded ({len(_restored)} file(s)), because critic rejected.",
-                    })
-                yield await ctx.emit({"type":"status",
-                    "content":f"\u21bb {_di+1}/{_n_items}: {_subtask[:50]} — issues found, fix round running…"})
-                _cs.set_critic_fix_override(_subtask, critic_issues)
-                critic_issues = _cs.critic_issues  # cleared by set_critic_fix_override
+                _rf = _finish_round_critic_rejected(
+                    ctx, _cs, _subtask, _di, _n_items, critic_issues)
+                for _ev in _rf.events:
+                    yield await ctx.emit(_ev)
+                critic_issues = _rf.critic_issues  # cleared by set_critic_fix_override
 
         # SPLIT 2.3 (2026-11-05): run-timeout token + final verification hard
         # stop moved to core/duo_finalgate._duo_final_verify_gate (state syncs
@@ -5583,6 +4909,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         try: _cleanup_ps._planner_model = _planner_model
         except (NameError, UnboundLocalError): pass
         await _duo_final_cleanup(ctx, _cleanup_ps)
+        _project_state_run_counted = _cleanup_ps._project_state_run_counted
 
     # ── P3: Final Test after all chunks ──────────────────────────
     async for _ev in _duo_final_test(ctx, state, _cs, _n_items, _eff_run_ws=_eff_run_ws):
@@ -5590,10 +4917,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
 
     # SPLIT 2.2 (2026-11-05): session epilogue (loop auto-summary, chat
     # context, read stats, run counter, soul trigger, ratings, file
-    # summary, pipeline synthesis) moved to core/duo_epilogue. The single
-    # session-write point (`ps.session_out`) stays here.
+    # summary, pipeline synthesis) moved to core/duo_epilogue; it persists
+    # the assistant turn itself.
     _epi_ps = _DuoSessionEpilogueState(
-        _ws_str=_ws_str,
         coder_out=coder_out,
         _cs=_cs,
         _written_files=_written_files,
@@ -5610,6 +4936,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             "_touched_paths": _touched_paths,
             "_total_tool_errors_ref": _total_tool_errors_ref,
             "_last_run_bash_failure": _last_run_bash_failure,
+            "_drop_names": _drop_names,
+            "_dr_dropped_tool_retries": _dr_dropped_tool_retries,
             "coder_mdl": coder_mdl,
             "final_verdict": final_verdict,
             "run_peer_ratings": run_peer_ratings,
@@ -5617,7 +4945,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
     )
     async for _ev in _duo_session_epilogue(ctx, _epi_ps):
         yield _ev
-    _duo_session_out = _epi_ps.session_out
     # SPLIT 2.1 (2026-11-05): the closing sequence (stop-reason ladder,
     # final auto-commit/push, checkpoint consolidation, resume safety net,
     # project save, run audit, send-file delivery, done, cleanup) moved

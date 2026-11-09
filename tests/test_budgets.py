@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core.budgets import (resolve, set_active, update_cpt_ema,
-                          update_prefill_ema, cpt_for)  # noqa: E402
+                          cpt_for)  # noqa: E402
 from tools.limits import SCHEMA_FRAC  # noqa: E402
 
 from tests._harness import Harness  # noqa: E402

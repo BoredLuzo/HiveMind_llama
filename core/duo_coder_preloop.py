@@ -5,8 +5,8 @@ VERBATIM behind an async-generator seam (the established duo_* split
 pattern). Inputs/outputs travel through `ps`; early exits set
 `ps.stop` and the runner returns after draining the generator.
 
-Source block: core/duo_runner.py, former lines 2762-3360. No logic
-changes.
+Source block: core/duo_runner.py at 1.5.5 (b2216b4), lines 2800-3396.
+No logic changes.
 """
 from __future__ import annotations
 
@@ -117,7 +117,10 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 f"characters per call (chunks well below ~{_wb_hint_safe}) and writes the "
                 f"COMPLETE file (create or overwrite). To change parts of an existing "
                 f"file: edit_file with old_text copied VERBATIM from your last read_file "
-                f"(must be unique in the file) and new_text as the replacement. If a write "
+                f"(must be unique in the file) and new_text as the replacement. NEVER drop "
+                f"existing module-level constants, functions, or imports when adding to a "
+                f"file; when moving a symbol to another module for backward compatibility, "
+                f"re-export it directly via `from new_module import symbol` (not a wrapper `def`). If a write "
                 f"call is cut off by the output limit, the server keeps everything up to "
                 f"the last complete line and tells you the line — continue from there with "
                 f"write_file_append, never by rewriting from the start."
@@ -318,16 +321,10 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                             _evicted_workers += 1
                 except Exception:
                     pass
-                # hits a dead port → TCP close → frontend: "Error in input stream".
                 if _evicted_workers > 0:
                     await asyncio.sleep(1.5)
                 if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
                     _coder_load_ok = True
-                    _coder_ctx_post = (
-                        resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                        if ctx.duo_config.agentic_mode
-                        else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-                    )
                     yield await ctx.emit({"type": "status",
                         "content": f"✅ Coder ready ({exec_mdl.split(':')[0]} — Planner=Coder, no reload)"})
                     # FIX (2026-08-31): The fast path did not emit the "agent"
@@ -343,6 +340,9 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                         "role": "Writes code",
                     })
                 else:
+                    # Keep the real resolve here (not the guarded
+                    # `_coder_ctx_need` probe): a resolve failure must fail
+                    # this load path as before, not silently load ctx=0.
                     _coder_ctx_post = (
                         resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
                         if ctx.duo_config.agentic_mode
@@ -560,7 +560,6 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                 if ctx.chat_id:
                                     _clear_pause_state(ctx.chat_id)
                                 _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                # to the in-loop abort) + done_event.
                                 _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
                                 ctx.duo_stop_reason = "aborted"
                                 yield await ctx.emit(ctx.done_event(
@@ -687,7 +686,6 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                     if ctx.chat_id:
                         _clear_pause_state(ctx.chat_id)
                     _cleanup_governor(ctx.chat_id or ctx.run_id)
-                    # AUDIT-FIX 2026-08-04: Evict-Exception + Load-Fail — hard_stop +
                     _duo_hard_stop = True
                     _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                     ctx.duo_stop_reason = "hard_stop"

@@ -30,9 +30,59 @@ Ask-user: the card no longer runs its own 30 s auto-answer timer; the engine
 governor is the single source, so one question can never receive two
 autonomous answers. The card checkbox still persists the global setting.
 
+Frontend: all `localStorage` access goes through `_hmStorageGet`/
+`_hmStorageSet`. Browsers that block cookies/storage (Firefox throws
+`SecurityError: The operation is insecure`) no longer get a frontend-error
+toast on every load; the panel-width and perf-bar preferences simply fall
+back to their defaults.
+
 Benchmark: new `bench/` D1 harness (raw / HiveMind direct / HiveMind duo /
 aider) with a 21-task starter corpus and hidden, tamper-proof tests. It is
-developer-only and export-ignored.
+developer-only and export-ignored. First full core-tier comparison
+(2026-11-09, one run/cell): core coder and Aider both pass 19/21; coder
+54.3 s / 66,089 tokens per cell vs. Aider 22.1 s / 970. The core tier costs
+~39 % fewer tokens than the 2026-11-08 full-tool run (108,378/cell) with the
+same 19-20/21 quality band. Details in
+`docs/benchmarks/RESULTS_2026-11-09.md`. A later three-way run added
+`duo_lean` (10 tools): it tied at 19/21 but was slower (52.7 s vs. 35.8 s
+median) and saved only 3.1 % net tokens, so `duo_core` stays the coder
+baseline. The clean rerun after the GPU/VRAM reload: **HiveMind 20/21
+(95.2 %), Aider 18/21 (85.7 %), median 27.7 s vs. 20.9 s, net 76,652 vs.
+20,350 tokens** (Aider-only 0, HiveMind-only 2, McNemar p=0.5).
+
+External anchors: `bench/tasks_polyglot` imports a fixed 10-task Python
+subset of the Aider/Exercism polyglot benchmark with hidden tests (all
+validated red-before/green-after). `bench/external/deepswe_qwen36.sh` and
+`deepswe_qwen36_colab.ipynb` run a 5-task DeepSWE subset against the
+official Qwen3.6-35B-A3B UD-Q4_K_XL with HiveMind's sharp template; the
+profile now uses that template too.
+
+Live verification: `tests/live_smoke.py` now passes Direct and Duo end to end
+(Duo writes `hello.py`, runs the check, calls `task_complete`; 36.8 s). The
+8k-context guard was fixed (no duplicated system prompt, calibrated 1.05
+factor, context-aware minimum budget); `--ctx 8192` now passes in 29.2 s
+without compression storms. The smoke default remains 16k.
+
+Coder efficiency: tiny top-level workspaces (≤4 text files, context-scaled
+cap) are pre-seeded into the first coder message, so round 0 can edit instead
+of `read_file`; `WOULD_DROP_SYMBOLS` now includes the original definition line
+(`Keep definition: MODE = "prod"`), which targets the `multi_config` retry
+loop. MoE prefill keeps the full `--threads-batch` while decode keeps the
+physical-core `--threads` split. Covered by 368/368 regression suites.
+
+Audit batch: B3/B8 behavior coverage was added for `pipeline_runner`,
+`chat_run`, `llama_start_phases`, `_pre_explore` and `manager_load` (the
+pipeline suite found and fixed an abort-before-round-1 `UnboundLocalError`).
+C4 adds `deploy/bump_version.py` (version.py + server anchor + pyproject,
+`--dry-run`/`--check`); C5 adds an opt-in integration matrix for Telegram,
+STT/TTS, vision, SearXNG, MCP and send_file. D1 adds relative-gain/net-token
+reporting; D2 adds the incremental repo index + query-selected preseed;
+D3 adds batch multi-edit (`edits=[...]`, one atomic write); D4 scopes
+`run_tests` through the testmap (`duo_selective_tests`); D5's Job-Object
+sandbox was already wired; D6 adds chat-scoped outcome hints (status only);
+D7 adds `/git/diff`, checkpoint listing/restore and the panel; D8 adds the
+Claude Code/Codex adapter scaffold. Residual: D2 eval A/B/deep-file retrieval,
+D3 multi-file dependency ordering, hosted C3 cron and real C5 credentials.
 
 Dead code and single sources of truth: `_plan_state` slot transport,
 `_dump_for_test`, 11 unused preflight re-exports, the `core/duo` package
@@ -46,6 +96,70 @@ Structure: `duo_runner` shed the pre-loop model/VRAM/evict block
 (`core/duo_task_complete_gate.py`, -190); `chat_run` replaced 13 nonlocals
 with `RunTokenLedger`/`PrefetchCoordinator` and moved the inline tool route
 to `core/chat_tools_route.py`; the `dir()`/`locals()` probe class is gone.
+A post-split audit (2026-11-08) restored Guard-C telemetry
+(`slot_ctx_floor_stop` now crosses the loop-guard seam) and the AUTO-STOP
+drop diagnostics in the epilogue carry, removed dead round-input carry
+reads, and extended `test_duo_split_integrity` to reject any `ps.carry` key
+a helper reads without its call site passing it. Both deferred back-import
+cycles are gone: `_history_budget_tokens` lives in `core/llm_stream.py`
+and `duo_finalize`/`duo_finalgate` import resume/project-state helpers from
+their canonical modules instead of `duo_runner`. Eleven verified dead
+top-level names and two dead split-state fields were removed. The same
+audit removed AST-verified dead stores from `run_code_duo`, extracted its
+55-line TOOL-CALL-MISS diagnostic into a behavior-tested pure logging
+helper, folded the byte-identical emergency-evict block into one bounded
+two-pass loop, and merged the duplicated empty-answer branches — 3,604 →
+3,492 lines without a new state object. A second pass removed the
+remaining dead local unpacks in the split helpers and replaced the
+0.90/0.70/0.62 eviction magic numbers with named `ctx_guard` constants.
+The malformed/truncated tool-call policy now lives in
+`_plan_dropped_tool_retry` (small result object, 4 behavior checks) instead
+of 50 inline lines in the no-tool-call branch. The text-only/empty-answer
+ladder moved to `_plan_text_only_round` (soft check, summary acceptance,
+zero-activity nudge, empty retry; 6 behavior checks). Both helpers and
+their small result objects now live in `core/duo_policies.py`; `duo_runner`
+shrinks by another ~130 lines while `run_code_duo` keeps only the calls and
+loop control. The grace-round gate and the shared post-chunk auto-test
+policy moved to `core/duo_round_gate.py` (22 behavior checks); the runner
+retains only `_di`/mark/break bookkeeping. The round-finish rollback/override
+status policy moved to `core/duo_finish_round.py` (20 behavior checks), and
+the repeated advance trio is one runner-local closure. The 111-line
+PlanTracker round block moved to `core/duo_plan_round.py` (12 behavior
+checks, including a fixed stall-counter f-string). The CTX-FULL tool-budget
+ladder (4x stop / storm-guarded force compression / tiny-budget fallback)
+moved into the same gate module. Truncated-write salvage moved to
+`core/truncated_write_salvage.py` (6 behavior checks). The ctx-meter/SWA
+round moved to `core/duo_ctx_meter.py` (8 checks). Explore-only detection + write reset
+moved to `core/duo_explore_gate.py` (6 checks). The `[WRITE-TRUNCATION]`
+diagnostic moved into `core/duo_policies.py` (behavior-tested). Seven state
+dataclasses moved next to their helper modules (epilogue, round-input,
+inloop-planner, dtool-setup, compress-cycle, finalgate, finalize). The
+coder-POST wait/result seam moved to `_duo_coder_post_wait`; the evict/mask
+decision moved to `core/duo_ctx_meter.py`; the DEBUG message-signature
+diagnostics moved to `core/duo_helpers.py`. `duo_runner.py` is now 5,001
+lines and `run_code_duo` 2,936 (from 5,934 at 1.5.5).
+
+Runtime hardening: AgenticToolLoop now reuses the F3 5xx policy (500/502/504
+max. 3 attempts, context-overflow bodies never retried; 408/429/503 keep the
+long retry), and `ToolLoop` intersects phase tools with the mode tier when
+`tool_mode` is set (phase-only behavior unchanged). LSP auto-diagnostics and
+warm-on-write now verifiably honor the per-run settings snapshot, with the
+missing-snapshot fallback test fixed. The UI sends `direct_tools_tier`,
+`duo_coder_tool_tier` and `lsp_auto_diagnostics` with the request, so a
+just-changed dropdown cannot race the async settings write.
+
+Live smoke: `tests/live_smoke.py` runs a Direct answer and a Duo tool-layer
+file write against a running engine, with the tool-round/budget pins needed
+for small contexts. Direct passes; Duo is blocked on this box by ComfyUI
+holding ~7 GB VRAM (manager correctly refuses the coder load).
+
+The same audit caught two split regressions: the C2 preloop constructor no
+longer received `duo_coder_sys`, so the helper rebuilt the coder prompt
+from `""` and overwrote the base/dynamic/image/follow-up hints; and the
+final-cleanup seam never synced `_project_state_run_counted`, so
+`ProjectState.total_runs` was incremented twice per duo run. Both are fixed
+and pinned by `test_duo_split_integrity`. Dead `_plan_tracker` and
+`session_out` state fields were removed.
 
 Efficiency: tool-call sanitizer scans only new messages (two reset points),
 the prefill meter reads a 64 KB tail instead of the whole slot log, the

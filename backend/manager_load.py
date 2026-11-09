@@ -1260,7 +1260,8 @@ class LlamaLoadMixin:
                         type(self)._binary_build_number or 0, NO_MMAP_MIN_BUILD)
 
         # OUTSOURCED (split 4.4): MoE expert offload + cache flags → _phase_moe().
-        _moe = await _phase_moe(self, slot, cmd, model, num_ctx, moe_cache, _def_threads)
+        _moe = await _phase_moe(self, slot, cmd, model, num_ctx, moe_cache,
+                                _def_threads, _def_threads_batch)
         cmd = _moe.cmd
         _moe_cache_used = _moe.moe_cache_used
         # OUTSOURCED (split 4.5): MTP/registry-config/reasoning/mmproj/jinja flags →

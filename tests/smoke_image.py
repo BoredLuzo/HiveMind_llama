@@ -27,7 +27,6 @@ import json
 import os
 import struct
 import sys
-import urllib.request
 import zlib
 
 # ── ground truth the grader checks against ─────────────────────────────────

@@ -4,7 +4,7 @@ backend — llama.cpp Backend Package
 
 import os
 import sys
-from pathlib import Path
+
 from typing import Optional
 
 # ── sys.path Bootstrap ────────────────────────────────────────────────────────

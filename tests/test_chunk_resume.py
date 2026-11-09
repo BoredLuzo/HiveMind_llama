@@ -11,7 +11,6 @@
    next chunk (resume never re-runs done chunks).
 4. NUZZLE: the smoke-test nudge demands at least one real assertion.
 """
-import ast
 import json
 import logging
 import shutil
@@ -34,16 +33,27 @@ _src = (Path(__file__).resolve().parent.parent / "core" / "duo_runner.py").read_
     encoding="utf-8")
 _lines = _src.splitlines()
 _inc = [i + 1 for i, l in enumerate(_lines) if l.strip() == "_di += 1"]
+_adv_calls = [i + 1 for i, l in enumerate(_lines) if "_advance_chunk()" in l]
 _pers = [i + 1 for i, l in enumerate(_lines)
          if ("_halt_fn(" in l or "_halt_with_resume(" in l) and "chunk_checkpoint" in l]
-check("chunk-advance sites exist (test not vacuous)", len(_inc) >= 8,
-      f"({len(_inc)} sites)")
-_uncovered = [il for il in _inc if not any(0 < pl - il <= 6 for pl in _pers)]
-check("every chunk advance persists within 6 lines", not _uncovered,
+check("chunk-advance sites exist (test not vacuous)",
+      len(_inc) + len(_adv_calls) >= 8,
+      f"({len(_inc)} inline + {len(_adv_calls)} closure calls)")
+# F13 (2026-11-08): the repeated advance trio lives in one runner-local
+# closure; its own `_di += 1` is covered by the closure-body check below.
+_cstart = next((i + 1 for i, l in enumerate(_lines)
+                if "def _advance_chunk" in l), -1)
+_cseg = "\n".join(_lines[_cstart - 1:_cstart + 8]) if _cstart > 0 else ""
+check("advance closure increments and persists a checkpoint",
+      "_di += 1" in _cseg and "_halt_fn(" in _cseg
+      and "chunk_checkpoint" in _cseg)
+_uncovered = [il for il in _inc
+              if not (_cstart > 0 and _cstart < il < _cstart + 8)
+              and not any(0 < pl - il <= 6 for pl in _pers)]
+check("every inline chunk advance persists within 6 lines", not _uncovered,
       str(_uncovered))
-# and the advance count matches the checkpoint count (no stray persists)
-check("checkpoint calls == advance sites", len(_pers) == len(_inc),
-      f"({len(_pers)} vs {len(_inc)})")
+check("all repeated advances go through the closure", len(_adv_calls) >= 7,
+      f"({len(_adv_calls)} calls)")
 
 print("=== 2. durability: standalone context file + honest logging ===")
 

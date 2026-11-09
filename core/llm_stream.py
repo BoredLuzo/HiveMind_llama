@@ -15,6 +15,32 @@ from core.duo_helpers import count_image_parts
 _logger = logging.getLogger("hivemind.server")
 
 
+def _history_budget_tokens(settings) -> int:
+    """History budget: override wins; 0 derives from the direct model's
+    ctx (35% of n_ctx minus a 4096 reserve for system prompt + output).
+
+    Lives here (not in chat_run) so the chat_* split helpers can import it
+    without a deferred back-import into the runner module.
+    """
+    from core.state import registry_get, _get_num_ctx
+
+    _ov = int(settings.get("session_history_budget_tokens", 0) or 0)
+    if _ov > 0:
+        return _ov
+    try:
+        _ref = registry_get("direct") or registry_get("analyst") or ""
+        _nctx = int(_get_num_ctx(_ref) or 0) if _ref else 0
+    except (OSError, RuntimeError, ValueError, TypeError, LookupError,
+            AttributeError, ImportError):
+        _nctx = 0
+    # NOTE: with llama-server parallel slots the per-slot ctx is
+    # n_ctx / n_parallel - divide here if parallel slots ever get enabled
+    # (the current config runs one slot, default n_parallel=1).
+    if _nctx <= 0:
+        _nctx = 16384  # sane default when no ctx override is configured
+    return max(1024, int((_nctx - 4096) * 0.35))
+
+
 async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: int,
                                 agent_role: str | None = None,
                                 force_ctx: int | None = None,

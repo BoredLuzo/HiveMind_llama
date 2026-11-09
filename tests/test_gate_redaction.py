@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tools.runner import _redact_secret_text as R, _approval_preview  # noqa: E402
+from tools.runner import _redact_secret_text as R  # noqa: E402
 
 from tests._harness import Harness  # noqa: E402
 

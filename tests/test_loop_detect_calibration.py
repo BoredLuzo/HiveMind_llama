@@ -119,7 +119,7 @@ def test_size_tolerance_kaskade():
 
 
 def test_source_structure():
-    src = Path(__file__).parent.parent / "core" / "duo_runner.py"
+    src = Path(__file__).parent.parent / "core" / "duo_explore_gate.py"
     text = src.read_text(encoding="utf-8")
     if "4 if _total_exports == 0 else (5 if _any_fallback" in text:
         fail("S1: old cascade (forced 4 at exports==0) still present")
@@ -129,15 +129,17 @@ def test_source_structure():
         ok("S2: _partial_bonus line present")
     else:
         fail("S2: _partial_bonus line missing")
-    if re.search(r"_READ_ONLY_THRESHOLD = _partial_bonus if _total_exports == 0 else \(5 if _any_fallback else _partial_bonus\)", text):
+    if re.search(r"_threshold = _partial_bonus if _total_exports == 0 else \(5 if _any_fallback else _partial_bonus\)", text):
         ok("S3: new cascade exactly as specified")
     else:
         fail("S3: new cascade deviates")
-    if "_explore_size_tolerance(exec_mdl)" in text and "max(\n                                2, _READ_ONLY_THRESHOLD + _explore_size_tolerance(exec_mdl)\n                            )" in text:
+    if "_explore_size_tolerance(exec_mdl)" in text and "max(2, _threshold + _explore_size_tolerance(exec_mdl))" in text:
         ok("S7: 2.1c bonus after the cascade with max(2, ...) clamp")
     else:
         fail("S7: 2.1c bonus line missing/deviating")
-    seg = text[text.find("LOOP-DETECTED-OUTER-FIX:"):]
+    _runner = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
+        encoding="utf-8")
+    seg = _runner[_runner.find("LOOP-DETECTED-OUTER-FIX:"):]
     # comment block is language-independent (german/english) - until the next code
     seg = seg[:seg.find("if _loop_detected:")]
     if "(1)" in seg and "stuck/read-count" in seg and "STUCK_IN_LOOP" in seg:

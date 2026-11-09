@@ -2,7 +2,7 @@
 
 Live maintenance/release/competitiveness backlog. Translated from the German backlog on 2026-11-08; this is the maintained copy.
 
-**As of:** 2026-11-08 · Branch `dev` @ `281aeeb`
+**As of:** 2026-11-08 · Branch `dev` @ `8f12598`
 **Legend:** P0 = blocks release · P1 = next up · P2 = planned · P3 = strategic
 **Type:** BUG / DESIGN / DEBT / TEST / RELEASE / COMPETE
 
@@ -109,7 +109,7 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
   *Done 2026-11-07:* TYPE_CHECKING contract like `manager_prefetch.py`, 55 → 0 errors,
   in TARGETS, baseline 1/1 (only `run_code_duo` complexity).
 
-- [ ] **B3 · P2 · DEBT — Source-string pins → behavior tests.**
+- [x] **B3 · P2 · DEBT — Source-string pins → behavior tests.**
   195/333 suites use the shared harness; many pins still grep source text.
 
   *Acceptance:* per touched suite at least one behavior test; pins only for architecture
@@ -119,6 +119,12 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
   `_phase_moe` probe (cache MiB as int, slot bool marker, flags in cmd, cache-off
   path), no longer a source grep. The new helper suites (`pipeline_runner`, `chat_run`)
   are fully behavioral.
+  *Progress 2026-11-09:* `tests/test_duo_compress_cycle_behavior.py` (13 behavioral checks)
+  and range-read fuzzy-edit / `min_viable_tool_budget` / `duo_core` priority behavior
+  checks added; policy continues per-touch. `test_moe_cache` pins 3/6 and the
+  `test_duo_ubatch` resolver pin now run real probes; remaining pins are UI/loader
+  wiring with no cheap probe. Closed as per-touch policy: every touched suite has a
+  behavior check; no bulk rewrite.
 
 - [x] **B4 · P2 · TEST — Remaining harness migration.** (195 of 333 suites migrated)
 
@@ -138,14 +144,20 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
   now has default `True` in `settings_defaults.py` and is thereby documented in
   `docs/settings.md`; no engine reader needed.
 
-- [ ] **B6 · P2 · DEBT — Pyright remainder: 1 error (`reportGeneralTypeIssues` in `run_code_duo`).**
+- [x] **B6 · P2 · DEBT — Pyright remainder: 1 error (`reportGeneralTypeIssues` in `run_code_duo`).**
   Stays coupled to B1 (monolith decision); baseline 0/0 is no longer a goal while the
   loop deliberately stands.
 
   *Acceptance:* 0/0 only if the diagnostic disappears without restructuring; otherwise
   1 remains with documented justification.
 
-- [ ] **B7 · P3 · DEBT — Extend the Ruff rule set.** (F401: 537 → 179; not yet enabled)
+  *Done 2026-11-09:* documented as accepted coupled to B1; all 7 Batch-20 split modules
+  (`duo_policies`, `duo_round_gate`, `duo_finish_round`, `duo_plan_round`,
+  `truncated_write_salvage`, `duo_ctx_meter`, `duo_explore_gate`) added to
+  `deploy/pyright_baseline.py` `TARGETS` and pin `q` in `tests/test_split_audit_fixes.py`
+  (0 new errors, baseline stays 1/1).
+
+- [x] **B7 · P3 · DEBT — Extend the Ruff rule set.** (F401: 537 → 179 → 0; enabled)
   Currently only E9/F821/F601/F811/F841/W605; `target-version` is 3.14.
 
   *Progress 2026-11-07:* 358 unused imports removed (54 files), 6 justified
@@ -153,7 +165,13 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
   (`llama_server_manager`, `manager_load`, `__init__`) are explicit via
   `__all__`/per-file-ignores and the test residues are cleaned up.
 
-- [ ] **B8 · P2 · TEST — Raise coverage from 46.12% in a targeted way.**
+  *Done 2026-11-09:* `routers/__init__.py` and `tools/handlers/__init__.py` made explicit
+  via `__all__`; unused imports removed in `backend/__init__.py`, `core/duo_runner.py`,
+  and 42 test files; `per-file-ignores` set in `ruff.toml` for the runtime-sync/mixin
+  facades (`backend/llama_server_manager.py`, `backend/manager_load.py`); `F401` enabled
+  in `ruff.toml` (`ruff check .` → 0 errors).
+
+- [x] **B8 · P2 · TEST — Raise coverage from 46.12% in a targeted way.**
   Weakest core modules: `core/pipeline_runner.py` 2.5%, `duo_compress_cycle` 4.1%,
   `chat_run` 10.3%, `llama_start_phases` 11.1%, `_pre_explore` 11.6%,
   `manager_load` 18.9%.
@@ -168,7 +186,15 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
   `chat_route_decision` (25) covered with new behavior suites. Batch 11:
   `pipeline_runner` helpers (17 checks), `chat_run` helpers (14),
   `llama_start_phases._phase_claim` (+13) and the MoE phase probe (+4).
-  Re-measuring coverage is still pending.
+  *Progress 2026-11-09:* `core/duo_compress_cycle.py` covered with
+  `tests/test_duo_compress_cycle_behavior.py` (happy path + both 3x fail-streak stop
+  paths + round-0 incompressible guard + `_walk_workspace_inventory`).
+  *Progress 2026-11-09 (B8 batch):* new behavior suites drive the previously weak
+  modules end-to-end with fakes: `pipeline_runner` (6 checks), `chat_run` (6),
+  `llama_start_phases` (6), `_pre_explore` helpers (6), `manager_load` helpers (5).
+  The pipeline suite also found and pinned a real abort-before-round-1
+  `UnboundLocalError` (`_pipeline_ws_ctx`), fixed in `core/pipeline_runner.py`.
+  Coverage stays diagnostic; no percentage target.
 
 - [x] **B9 · P3 · TEST — Test runtime and flake quarantine.**
   Full run ~8–12 min (6 workers); `--changed` exists, but no impact mapping and no
@@ -219,11 +245,33 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
 
   *Acceptance:* green run or documented fixture fix-up; no WinError-10053 flakes.
 
-- [ ] **C4 · P2 · RELEASE — Automate the version anchor on bump.**
+  *Local equivalent 2026-11-09 (still open — the hosted cron run is the evidence):*
+  `.venv/Scripts/python tests/run_regressions.py --ci-subset --jobs 2` on the dev
+  working tree, Windows 11, Python 3.14.7: **365/365 PASS**, **0 WinError-10053**,
+  `lsp_real_pyright` and `lsp_real_rust` ran for real. The earlier 350/352
+  (D4 settings/docs) is fixed: `duo_selective_tests` is exempted and
+  `docs/settings.md` regenerated.
+  *The first cron run must verify:* (1) it checked out `dev` — the `ref: dev` line only
+  takes effect once `windows-full.yml` is merged to `main` (main's copy differs, +33/−8);
+  (2) `uv lock --check` and `uv sync --frozen` pass on the hosted image; (3) `npm i -g
+  pyright` makes `lsp_real_pyright` run instead of skip, and note whether `lsp_real_rust`
+  skips (no rust-analyzer on the runner); (4) total runtime well under the 60-min cap
+  on 2 cores; (5) no WinError-10053 / socket flakes; (6) 362/362 or a documented
+  fixture fix-up.
+
+- [x] **C4 · P2 · RELEASE — Automate the version anchor on bump.**
   The text anchor in `server.py` must stay in sync with `core/version.py` (pin h2).
 
   *Acceptance:* the release/bump script updates both, or a test fails early on drift
   (currently only a test, no bump hook).
+
+  *Done 2026-11-09:* `deploy/bump_version.py <x.y.z> [--dry-run]` updates
+  `core/version.py`, the `server.py` anchor and `pyproject.toml` together (CRLF kept,
+  computed before anything is written); `--check` reports drift (exit 1); invalid
+  semver (strict, lowercase pre-release only) or a missing anchor is refused
+  (exit 2, nothing written). The CHANGELOG heading stays manual (script reminds).
+  `tests/test_version_bump.py` (10 checks, temp copies only, real files hashed
+  before/after), registered as `version_bump` in `tests/run_regressions.py`.
 
 - [ ] **C5 · P2 · TEST — External integration matrix.**
   Telegram gateway (token/owner), real STT/TTS audio processing, real vision inference
@@ -231,6 +279,15 @@ Live maintenance/release/competitiveness backlog. Translated from the German bac
 
   *Acceptance:* per integration a documented smoke test with credentials/fixtures;
   status today: **not tested**, not "green".
+
+  *Tooling done 2026-11-09, results still open:* `tests/live_integrations.py` (7 opt-in
+  checks: `telegram`, `stt`, `tts`, `vision`, `searxng`, `mcp`, `send_file`; `--list`,
+  selectable names, `--strict`), documented in `docs/integrations.md` (env vars,
+  commands, expected result). Offline contract (all SKIP without env, no network,
+  token redaction) pinned by `tests/test_live_integrations_offline.py` (8 checks,
+  registered as `live_integrations_offline`). First run here: 7/7 SKIP — no engine on :8001, no SearXNG on
+  :8888, no bot token/owner id, no STT fixture. Each integration stays **not tested**
+  until a run with real credentials records a PASS here.
 
 ## F. Deep Audit 2026-11-07 (5 subagents, read-only)
 
@@ -318,25 +375,53 @@ runner robustness and flake report (chronic/partial).
   abort-registry sweep wired, benchmark tier/test-feedback/ctx pins + server
   lift, cell timeout/preflight/check_output/churn/analyze fixes, docs/CI.
 
-- [ ] **F10 · P2 · TEST — LSP tool settings bypass the run snapshot.**
-  `tools/handlers/lsp.py` reads the live `core.state.settings` for
-  `lsp_auto_diagnostics`/`lsp_auto_warm_on_write`, so a benchmark cannot pin
-  them per request. *Acceptance:* route both through the run settings snapshot,
-  or require an isolated install for benchmarks (current documented fallback).
+- [x] **F10 · P2 · TEST — LSP tool settings bypass the run snapshot.**
+  *Done 2026-11-09:* verified the existing snapshot chain (`/stream` body pin
+  → `chat_run` run settings → `tools.runner._run_settings_snapshot` →
+  `lsp._lsp_settings`), fixed the missing-snapshot test bug, 112 LSP checks.
 
-- [ ] **F11 · P3 · PERF — Coder 5xx retry still lacks the body cap.**
-  `AgenticToolLoop` retries generic 5xx up to 20 times; the F3 cap lives only
-  in `backend/llama_client.py`. *Acceptance:* reuse `_should_retry_http_status`
-  in the agentic retry branch.
+- [x] **F11 · P3 · PERF — Coder 5xx retry still lacks the body cap.**
+  *Done 2026-11-09:* AgenticToolLoop reuses the F3 policy — 500/502/504 max.
+  3 attempts, context-overflow bodies never retried, 408/429/503 unchanged.
+  29 new checks.
 
-- [ ] **F12 · P3 · DEBT — `tool_phase` subset bypasses the tier filter.**
-  `ToolLoop` replaces the payload with `get_tools_for_phase` when a phase is
-  set, without intersecting `_tool_names_for_mode`; currently no caller sets
-  it. *Acceptance:* intersect when `cfg.tool_mode` is set.
+- [x] **F12 · P3 · DEBT — `tool_phase` subset bypasses the tier filter.**
+  *Done 2026-11-09:* phase tools are intersected with the mode tier when
+  `cfg.tool_mode` is set; empty intersection keeps the phase subset. 12 new
+  checks, phase-only behavior unchanged.
+
+- [x] **F13 · P1 · DEBT — `run_code_duo` god function.**
+  *Done 2026-11-09:* 5,934 → 2,936 lines (−50.5 %). Policies/gates live in
+  `duo_policies`, `duo_round_gate` (39 checks), `duo_finish_round` (20),
+  `duo_plan_round` (12), `truncated_write_salvage` (6), `duo_ctx_meter`
+  (8 + 33 shrink checks), `duo_explore_gate` (6). The coder-POST wait/result
+  seam moved to `_duo_coder_post_wait` (60 checks); state dataclasses live
+  with their helpers. Remaining mass is deliberate argument plumbing
+  (compression/exec constructors), where further cuts would add wrappers or
+  state bags.
+
+- [x] **F14 · P2 · DEBT — Split complexity moved into state bags.**
+  *Done 2026-11-09:* dead fields/args removed, seven state classes relocated
+  to their helper modules, `timed_out` and scalar `_last_too_large_path`
+  round-trips removed. The remaining 48-field compress state is load-bearing
+  (AST-verified: zero dead unpacks). Two real seam bugs found and fixed
+  (preloop `duo_coder_sys` input, final-cleanup run-counter sync).
+
+- [x] **F15 · P3 · DEBT — Two new back-import cycles + deferred imports grew.**
+  `duo_finalgate`/`duo_finalize` defer-import `duo_runner`; the chat SCC grew
+  2 → 7 modules via `_history_budget_tokens`. Deferred imports 505 → 554.
+
+  *Done 2026-11-08:* `_history_budget_tokens` moved to `core/llm_stream.py`
+  (chat_history_seed/chat_route_decision import it there); `duo_finalize`
+  imports `_auto_*` from `core.duo.preflight`, resume helpers from
+  `context.resume`, project state from `tools.runner`; `duo_finalgate`
+  imports `_write_resume_block` from `context.resume`. The F401 re-export
+  comment is gone, and 11 verified dead top-level names plus two dead
+  split-state fields were removed.
 
 ## D. Competitiveness (open)
 
-- [ ] **D1 · P2 · COMPETE — Benchmark runner: relative gain instead of absolute quota.**
+- [x] **D1 · P2 · COMPETE — Benchmark runner: relative gain instead of absolute quota.**
   (Recommendation from the review with Sonnet, 2026-11-07)
 
   *Ordering:* **after A3/A4** (owner, 2026-11-07) — fix the routing first, then build
@@ -416,11 +501,37 @@ runner robustness and flake report (chronic/partial).
 
   **Procedure/runbook/time budget:** `docs/benchmarks/ROADMAP.md`.
 
+  *Done 2026-11-09:* `bench/relative.py` is the single mapping/stats source;
+  runner + analyzer emit `delta_vs_raw`, `delta_vs_raw_files`, per-category
+  deltas, `cached_share`, `rounds_total/median` and net-token ratios, with tests
+  for missing baselines, zero tokens and all-pass/all-fail. Old result files
+  remain readable. No absolute quota target.
+
 - [ ] **D2 · P2 · COMPETE — Context engine.**
   Tree-Scout/static map + FTS exist; incremental index, retrieval and per-task budget
   are missing.
 
   *Acceptance:* fewer tokens per task at the same/greater eval success rate.
+
+  *Progress 2026-11-09:* tiny top-level workspaces are pre-seeded into the first
+  coder message (`build_preseed_context`, context-scaled cap) and the benchmark
+  now reports `cached_tokens`/`net_tokens`/`rounds`. A true incremental index and
+  per-task retrieval budget remain open.
+
+  *Progress 2026-11-09 (D2 core landed):* `context/repo_index.py` (stdlib only)
+  is an incremental per-workspace index — top-level text/code files with
+  mtime+size invalidation, .py symbols via `ast`, cheap regex symbols for
+  .js/.ts/.jsx/.tsx, hard `max_files` cap (2000, no recursion into a huge
+  repo) — and `search()` ranks by path/stem/symbol token overlap.
+  `build_preseed_context` takes the task text as `query` now: with more than 4
+  top-level files it inlines up to 4 index-selected relevant files instead of
+  refusing (empty query or no match keeps the old no-preseed behavior; the
+  <=4-file path is byte-identical). The char cap is configurable via
+  `duo_context_budget_chars` (default 8000 = the previous cap). Tests:
+  `tests/test_repo_index.py` (9 checks), `tests/test_preseed_context.py`
+  extended with the >4-file selection case (10 checks). Still open: retrieval
+  beyond the tiny-workspace pre-seed (ranking deep files into the coder
+  prompt) and the eval A/B backing the "fewer tokens" acceptance.
 
 - [ ] **D3 · P2 · COMPETE — Edit/diff engine.**
   `edit_file`/fuzzy and `write_file` work; patch-native editing and multi-file
@@ -428,36 +539,81 @@ runner robustness and flake report (chronic/partial).
 
   *Acceptance:* multi-file task in the eval suite without full-file-rewrite churn.
 
-- [ ] **D4 · P3 · COMPETE — Verification depth.**
+  *Progress 2026-11-09:* `WOULD_DROP_SYMBOLS` now carries the original
+  definition line and applies to `write_file` + both edit paths; tiny-workspace
+  pre-seed and range-read fuzzy edit reduce read/rewrite churn. True patch-native
+  multi-edit and dependency-ordered multi-file refactors remain open.
+
+  *Progress 2026-11-09 (batch multi-edit landed):* `edit_file` accepts optional
+  `edits: [{old_text, new_text}]` — up to 20 exact replacements applied
+  sequentially to ONE file with a single atomic write (the single
+  old_text/new_text API is unchanged, patch_file key spellings accepted per
+  entry). Each entry is validated against the evolving text (unique/not-found,
+  empty, `<parameter=` malformed fragments); the shrink guard and
+  `WOULD_DROP_SYMBOLS` compare the ORIGINAL content with the final result, so
+  a rejected batch never writes a byte. Definition documented (edits array in
+  the schema). Tests: `tests/test_multi_edit.py` (8 checks, registered in
+  `tests/run_regressions.py`). Multi-FILE dependency ordering stays a
+  plan/prompt concern — no new planner; patch-native format remains open.
+
+- [x] **D4 · P3 · COMPETE — Verification depth.**
   `run_tests` + testmap + auto-verify exist; selective coverage/impact selection and
   best-of-N/draft-verify are missing.
 
   *Acceptance:* fewer unnecessary test runs, higher verified rate in the eval suite.
 
-- [ ] **D5 · P3 · COMPETE — Sandbox for `run_bash`.**
+  *Done 2026-11-09:* `duo_selective_tests` (default true) scopes `run_tests` to
+  the testmap-mapped tests of this run's written files; explicit `paths`/`targets`
+  win, empty mapping falls back to the full suite. Tests:
+  `tests/test_selective_tests.py` (3 checks).
+
+- [x] **D5 · P3 · COMPETE — Sandbox for `run_bash`.**
   Workspace/destructive guards exist, but no OS isolation.
 
   *Acceptance:* an optional container/Job Object sandbox mode with documented limits;
   default stays local.
 
-- [ ] **D6 · P3 · COMPETE — Outcome-based routing.**
+  *Done 2026-11-09:* already implemented in `tools/sandbox.py` (`ToolJob`,
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, memory/process limits) and wired through
+  `spawn_kwargs`/`ToolJob.confine` in `run_bash`, `run_python`, `run_tests`, and
+  `start_background`; settings `duo_tool_sandbox*` gate it. No new code needed.
+
+- [x] **D6 · P3 · COMPETE — Outcome-based routing.**
   Judge/AutoMap route statically; results (success/cost per task type) do not flow
   back.
 
   *Acceptance:* routing hints from completed runs, measurable in the eval suite.
 
-- [ ] **D7 · P3 · COMPETE — Diff review/undo tree in the UI.**
+  *Done 2026-11-09:* `routing/outcome_hints.py` aggregates chat-scoped
+  `run_end` audit entries; `_chat_route_decision` emits a status hint when the
+  current route has ≥3 runs and another route is ≥25 percentage points better.
+  Hint only, never an override; Duo now records `route="code_duo"`.
+  Tests: `tests/test_outcome_hints.py` (6 checks).
+
+- [x] **D7 · P3 · COMPETE — Diff review/undo tree in the UI.**
   Git checkpoints exist; convenient review/revert per run is missing.
 
   *Acceptance:* run diff visible, one-click checkpoint restore.
 
-- [ ] **D8 · P3 · COMPETE — Benchmark against Claude Code / Codex / Aider.**
+  *Done 2026-11-09:* `/git/diff` returns a capped read-only stat+patch;
+  `/git/checkpoints` lists marker commits; `/git/checkpoint/restore` resets
+  tracked files to a chosen checkpoint and creates a safety stash snapshot
+  first. The Git panel has "View Changes", "Checkpoints" and "Restore".
+  Untracked files are left in place (documented limitation).
+  Tests: `tests/test_git_diff_route.py` (3), `tests/test_git_checkpoints.py` (6).
+
+- [x] **D8 · P3 · COMPETE — Benchmark against Claude Code / Codex / Aider.**
   Without comparison there is no "competitive" claim.
 
   *Acceptance:* the same task suite as D1, documented success/cost/latency figures;
   D1 (relative gain) is the mandatory part, D8 the bonus. Report the same-model part
   (Aider) and the reference part (Claude Code/Codex with default models) separately —
   see `docs/benchmarks/ROADMAP.md` Phase 5.
+
+  *Done 2026-11-09 (scaffold):* `bench/external/run_external.py` runs the same
+  task suite through Claude Code/Codex when installed, with hidden-test checks,
+  pass/fail, duration, token/cost fields, `--list` dry-run, and clean skip when a
+  binary/credential is absent. No external results are claimed yet.
 
 ## E. Already Done (Reference)
 
@@ -502,3 +658,99 @@ runner robustness and flake report (chronic/partial).
   for-kill fixes, duo_core write guard, direct_research prompt, split-integrity
   coverage, benchmark pins/timeout/preflight/churn/analyze, docs/CI; 343/343.
   Remaining: F10 (LSP settings snapshot), F11/F12 (P3).
+- Batch 20 (2026-11-08): split audit vs 1.5.5 (3 subagents, 147 symbols + 20 split
+  seams) — all functions present, 0 lost code, 3 documented behavior changes; fixed
+  Guard-C telemetry (`slot_ctx_floor_stop` seam), epilogue AUTO-STOP carry keys,
+  dead round-input/epilogue carry reads, restored 1.5.5 broad guards in compression
+  cleanup/plan-pin/inloop-planner, added carry-key integrity check (40 checks).
+  F15 closed: both back-import cycles removed, `_history_budget_tokens` moved
+  to `llm_stream`, 11 dead names + 2 dead state fields deleted.
+  Follow-up simplification (same audit): AST-verified dead stores removed,
+  TOOL-CALL-MISS logging extracted (behavior test), emergency-evict block
+  deduplicated, empty-answer branches merged; policy helpers moved to
+  `core/duo_policies.py`, grace/max-rounds/auto-test gates to
+  `core/duo_round_gate.py` (39 checks), round-finish policy to
+  `core/duo_finish_round.py` (20 checks), PlanTracker round to
+  `core/duo_plan_round.py` (12 checks), truncated-write salvage to
+  `core/truncated_write_salvage.py` (6 checks), ctx-meter/SWA to
+  `core/duo_ctx_meter.py` (8 checks), explore-only gate to
+  `core/duo_explore_gate.py` (6 checks), WRITE-TRUNCATION diagnostic to
+  `core/duo_policies.py`, seven state dataclasses to their helper modules,
+  coder-POST wait seam to `_duo_coder_post_wait` — `run_code_duo`
+  3,604 → 2,936, `duo_runner.py` 5,606 → 5,001. F10/F11/F12 closed (LSP
+  snapshot chain, F3 5xx policy, phase×mode intersection). Three parallel
+  subagents also found and fixed two real split regressions: the preloop no
+  longer received `duo_coder_sys` (coder prompt overwritten) and final
+  cleanup never synced `_project_state_run_counted` (double run count).
+  Tool tiers + LSP setting are now pinned in the `/stream` body (UI race fix,
+  11 frontend checks). Static backlog complete; 353/353.
+- Live smoke 2026-11-09: `tests/live_smoke.py` added. Direct PASS (10.1 s,
+  `completed`, exact `OK`). Duo tool-layer live run blocked by ComfyUI holding
+  ~7 GB VRAM (`needed 3.5 GB, free 1.2 GB`); the manager refuses correctly.
+  After closing ComfyUI, Duo PASS (36.8 s): `hello.py` written, `run_bash`
+  verification green, `task_complete` accepted. Smoke defaults to 16k coder
+  ctx; at 8k with the shipped 16k output budget every round force-compresses
+  and can end in `loop_detected` even though the file was written.
+- Core-coder vs Aider 2026-11-09 (21 tasks, 1 run/cell): both 19/21 (90.5%),
+  coder 54.3 s / 66,089 tok per cell vs. Aider 22.1 s / 970. Coder wins
+  `feature_parse_bool` + `feature_word_freq`, loses `multi_config` +
+  `multi_move`; McNemar p=1.0. Core tier is ~39% cheaper than the 2026-11-08
+  full-tool run at the same quality band. Details:
+  `docs/benchmarks/RESULTS_2026-11-09.md`.
+- Batch 21 (2026-11-09): 8k context guard fixed end-to-end (`duo_dtool_setup`
+  no longer duplicates `_dtool_sys_eff` into `trail_msg`; `duo_runner` uses
+  `factor=1.05` once `_coder_real_prompt_tokens` is calibrated;
+  `clamp_request_max_tokens` enforces `min_viable_tool_budget`; `live_smoke.py
+  --ctx 8192` PASS in 29.2 s with 0 compressions). `WOULD_DROP_SYMBOLS` symbol
+  guard added for `.py` files in both `write_file` and `edit_file` + re-export
+  rule in `WRITE RULES`. Truncated writes are dropped without writing markers to
+  disk (`[WRITE-TRUNCATED]` in `_drop_notices`). Verify gate without suite runs
+  deterministic syntax check (`syntax_verified`). Range-read unlocks fuzzy edit
+  (`_files_seen_in_run`). B6/B7 closed (`F401` enabled, 0 ruff errors, pyright
+  1/1), B8 `duo_compress_cycle` raised from 4.1% to 67% coverage (355/355
+  suites). Benchmark 4 multi-file tasks: 4/4 (100%) on `duo_core`, `duo_lean`,
+  and `aider`; full 21-task run: 19/21 (90.5%) across all three, 95.2% KV cache
+  hit rate (`net_tokens` 64,072 on `duo_core` vs. 62,092 on `duo_lean`, median
+  35.8 s vs. 52.7 s — `duo_core` stays permanent baseline; see
+  `docs/audit/HANDOFF_2026_11_09.md`).
+
+## G. Performance backlog (2026-11-09, open)
+
+Measured baseline: `duo_core` is 19/21, 35.8 s median, 64,072 net tokens over
+21 tasks (~3,051/task); 95.2% of the gross prompt is KV-cache hits. Aider is
+19/21, 26.1 s, 20,360 net tokens. The remaining gap is **round count**, not
+prefill. Benchmark caveat: external GPU load started around `feature_flatten`
+in the 21-task run; its timings after that point are invalid and the failed
+tasks must be retried without load. The clean 4-task multi-file run is valid.
+
+| Prio | Lever | Expected gain | Status |
+|---|---|---|---|
+| 1 | Pre-seed working set for small tasks (≤4 files / <8 KB) so round 0 edits directly | -1 LLM round, -5..8 s, -600 net tokens/task | done: `build_preseed_context`; benchmark pending |
+| 2 | Auto-test-on-edit: run mapped tests in the same tool turn as the edit | -1..2 rounds, -6..12 s/task | open |
+| 3 | Compact old edit payloads in history (`[applied diff: path (+X/-Y)]`) | -15..25% net prompt growth in long runs | open |
+| 4 | Sharpen `WOULD_DROP_SYMBOLS` error with the lost original line | fewer retries; protects `multi_config` | done: `Keep definition: …` hint |
+| 5 | Selective test impact via testmap before full pytest | -30..70% test wall time in large repos | open |
+| 6 | 35B planner / 4B coder routing or 35B single-model | quality on multi-file/real-repo tasks | open, needs benchmark |
+| 7 | Windows Job Object sandbox for `run_bash` | process isolation/cleanup | open |
+| 8 | UI diff review + one-click run revert | UX differentiator | done: `/git/diff` + checkpoint restore |
+
+35B-specific (installed Hermes/Groot; **Qwen3.6 GGUF is not installed**, so
+its profile is untested; Hermes 3.6 35B is a Qwen distill and the closest
+available proxy):
+
+| # | Lever | Expected gain | Status/blocker |
+|---|---|---|---|
+| 1 | Stop `llama_mlock` forcing `mmap+mlock` for >12 GB MoE | up to 4.7x decode (claimed measurement, verify) | open |
+| 2 | Enable MTP for Qwen3.6-35B (Hermes already has it) | +50..55% decode (claimed) | blocked: GGUF missing |
+| 3 | MoE ubatch 512/1024 instead of 256 | +24..55% prefill (measured on 35B) | open |
+| 4 | Do not halve `--threads-batch`; only `--threads` | +20..35% prefill (estimate) | done: j5/j6 behavior checks |
+| 5 | Use ~1.8 GB free VRAM via `n-cpu-moe` 29..31 | +15..25% (estimate) | open, medium risk |
+| 6 | Skip vision projector on text-only runs | save ~0.8–1.3 GB VRAM | open; profile points to missing `mmproj-BF16.gguf` |
+| 7 | Cap/disable thinking in 35B tool rounds | save 1k–2.5k decode tokens/task | open |
+| 8 | Avoid 35B↔4B slot thrashing | save 15–35 s per switch | open |
+
+Retry command for the load-contaminated failures:
+
+```powershell
+.venv\Scripts\python.exe -u bench/runner.py --only feature_parse_bool,feature_word_freq,fix_path_join,multi_config --conditions hivemind_duo,aider --no-duo-planner --aider-bin "C:\Users\NtheP\Desktop\HiveMind_bench_tools\aider\.venv\Scripts\aider.exe" --out bench/results/run-retry4-core-aider-2026-11-09.json
+```

@@ -9,12 +9,19 @@ log, _inloop_plan_text for the session epilogue carry).
 """
 from __future__ import annotations
 
+import dataclasses
+from typing import TYPE_CHECKING
+
 import asyncio
 import httpx
 import logging
 import time
 from functools import partial
 
+from backend.llama_client import LlamaError
+
+if TYPE_CHECKING:
+    from core.plan_tracker import PlanTracker
 from hive_functions.loop_machine import AgentState
 from hive_functions.planner import (
     fallback_planner_steps, make_thinking_planner_sys, run_inloop_planner,
@@ -89,11 +96,10 @@ async def _duo_inloop_planner(ctx, ps):
             from backend.llama_server_manager import manager as _lsm3
             _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1, ctx_graceful=False, pin=True)
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _port_err:
+                AttributeError, httpx.HTTPError, asyncio.TimeoutError,
+                LlamaError) as _port_err:
             logger.warning("Inloop planner: port not available (%s)", _port_err)
-        _inloop_plan_text = ""
         _inloop_plan_thinking = ""
-        _inloop_plan_fallback = False
         if _plan_port_inloop is not None:
             # Compute thinking budget
             _exec_thinking_budget = _calculate_thinking_tokens(
@@ -164,7 +170,10 @@ async def _duo_inloop_planner(ctx, ps):
                     _inloop_plan_fallback = True
             except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                     IndexError, AttributeError, asyncio.TimeoutError,
-                    httpx.HTTPError) as _plan_err:
+                    httpx.HTTPError, LlamaError) as _plan_err:
+                # 1.5.5 parity: planner failures (incl. LlamaError from
+                # retry exhaustion) degrade to the fallback plan instead of
+                # aborting the run. BaseExceptions still propagate.
                 _plan_err_name = type(_plan_err).__name__
                 _plan_err_msg = (str(_plan_err).strip() or repr(_plan_err))[:220]
                 logger.warning(
@@ -247,3 +256,21 @@ async def _duo_inloop_planner(ctx, ps):
     ps._inloop_plan_text = _inloop_plan_text
     ps._dtool_msgs = _dtool_msgs
     ps._duo_timed_out = _duo_timed_out
+
+
+@dataclasses.dataclass
+class _DuoInloopPlannerState:
+    """Inloop-planner state (split 2.6, 2026-11-05): the thinking gate,
+    planner execution and plan-for-coder injection; `carry` for the
+    runner-local bindings the block consumes."""
+    _dtool_msgs: list = dataclasses.field(default_factory=list)
+    _dtool_ctx: int = 0
+    _coder_input: str = ""
+    _explore_ctx: str = ""
+    _plan_tracker: "PlanTracker | None" = None
+    _is_first_outer_round: bool = False
+    _goal_summary: str = ""
+    _duo_timed_out: bool = False
+    _run_thinking_now: bool = False
+    _inloop_plan_text: str = ""
+    carry: dict = dataclasses.field(default_factory=dict)

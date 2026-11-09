@@ -134,8 +134,6 @@ _chat_abort_lock: asyncio.Lock | None = None
 
 # ─── Until-Finished: Budget-Resolver ───────────────────────────────────────────
 
-_TOOL_BUDGET_NORMAL = {"fast": 20, "balanced": 40, "heavy": 60}
-
 from core.duo_helpers import (
     _bucket_stop_reason,
 )
@@ -499,14 +497,6 @@ except (ImportError, ValueError) as e:
         "llava:7b": 5.0, "falcon3:7b": 5.0,
         "ternary-bonsai:8b": 4.8, "qwen-qwen3:14b-iq4-nl": 7.5,
     }
-
-def _ctx_int(value) -> int | None:
-    try:
-        iv = int(value)
-        return iv if iv > 0 else None
-    except Exception:
-        return None
-
 
 # CTX-RESOLVER-ONE (2026-10-28, audit): this used to be a second full
 # resolver (own ctx_overrides reader + hive table lookup) next to
@@ -934,62 +924,6 @@ _COMPLEX_DIRECT_MODELS = {
 # Quality: qwen3.5:9b-ud(5.5) + qwen3.5:2b(1.5) = 7.0 GB ─ Strong Coder + Lightweight Critic
 
 
-def _make_duo_coder_path_add(include_websearch: bool = False) -> str:
-    _ws_block = (
-        "2. RESEARCH ─ when you encounter an unknown API, library, error message, or need current\n"
-        "   docs: web_search('library name usage example') then web_fetch(url) for the full page.\n"
-        "   Use BEFORE guessing at an API signature. One targeted search beats three wrong attempts.\n"
-    ) if include_websearch else ""
-    _ws_step_offset = 1 if include_websearch else 0
-    _impl  = 2 + _ws_step_offset
-    _test  = 3 + _ws_step_offset
-    _fix   = 4 + _ws_step_offset
-    return (
-        "\n\n## Agentic Workflow\n"
-        "Work like an autonomous developer. Explore first, then implement, then test.\n\n"
-        "Workflow:\n"
-        "1. EXPLORE ─ list_dir / find_files / get_signatures / read_file to understand structure and find relevant files\n"
-        + _ws_block +
-        f"{_impl}. IMPLEMENT ─ edit_file for ALL file operations (create new files AND modify existing), edit_ast for node-level Python edits\n"
-        "   edit_file: universal file editor ─ creates new files or patches existing ones\n"
-        "   edit_ast: replace one Python function/class/variable by AST target name\n"
-        f"{_test}. TEST ─ detect project type from files (package.json─npm test, Cargo.toml─cargo test, pom.xml─mvn test, pytest.ini/test_*.py─pytest, docker-compose.yml─docker compose up --build) and run the right command\n"
-        f"{_fix}. FIX ─ if tests fail: read the error, edit_file, test again\n\n"
-        "GET_SIGNATURES ─ use before large file reads to map structure quickly:\n"
-        "  get_signatures(path[, max_items]) returns classes/functions/methods/variables with line numbers.\n"
-        "  Then call read_file only for the specific line ranges you need.\n\n"
-        "EDIT_AST ─ preferred for replacing whole Python nodes:\n"
-        "  edit_ast(path, target_type, target_name, new_code)\n"
-        "  target_type: function | class | variable\n"
-        "  target_name: use qualified names when needed, e.g. ClassName.method\n\n"
-        "EDIT_FILE ─ universal file editor (creates new files AND modifies existing ones):\n"
-        "  edit_file(path, edits) where edits contains one or more blocks:\n"
-        "    <<<<<<< SEARCH\n"
-        "    exact text from the file (copy verbatim, correct indentation)\n"
-        "    =======\n"
-        "    new replacement text\n"
-        "    >>>>>>> REPLACE\n"
-        "  Multiple blocks per call OK ─ batches several changes in one tool call.\n"
-        "  SEARCH must be unique and exact ─ use more context lines if needed.\n"
-        "  For NEW files: pass the full file content in edits (no SEARCH/REPLACE markers needed).\n"
-        "  Max chars per call: 5000 (2b), 7000 (3-6b), 10000 (7-9b), 20000 (14b+).\n"
-        "  If too large: split with edit_file(first chunk) + write_file_append for remaining chunks.\n"
-        "  The output token limit cuts off oversized calls mid-stream and discards them —\n"
-        "  if your content is anywhere near the limit, ALWAYS split into chunks.\n\n"
-        "Tool rules:\n"
-        "  - Modifying existing file ─ read_file first (if not in context), then edit_file\n"
-        "  - edit_file old text must be EXACT ─ copy verbatim from read_file output\n"
-        "  - run_bash for anything shell-related: tests, installs, builds, grep, find\n"
-        "  - find_files('**/*.py') to understand project structure\n"
-        "  - All path formats accepted: C:\\\\..., /..., relative ─ never refuse a path\n"
-        "  - Do not ask for confirmation ─ just act and report the result\n"
-        "  - After edit_file: ALWAYS call run_bash to compile/run and verify output\n"
-        + ("  - web_search / web_fetch available ─ use them for unknown APIs, errors, or missing docs\n"
-           if include_websearch else "")
-    )
-
-_DUO_CODER_PATH_ADD = _make_duo_coder_path_add(include_websearch=False)
-
 # PHASE B4-B6: Adaptive Thinking-Budget ─ delegiert an core.duo_helpers
 
 
@@ -1039,14 +973,6 @@ from context.chat_util import (
 )
 
 
-
-
-_SYMBOL_HINT_STOPWORDS = {
-    "the", "and", "for", "with", "from", "that", "this", "into", "your",
-    "file", "files", "code", "project", "please", "write", "update", "change",
-    "fix", "error", "issue", "test", "tests", "function", "class", "method",
-    "python", "javascript", "typescript", "json", "yaml", "module", "build",
-}
 
 
 # NOTE: _run_inline_tool_legacy removed (~950 lines) ─ all call sites use _run_inline_tool
@@ -1407,6 +1333,18 @@ async def stream(req: Request):
         _dct_tier = str(body.get("duo_coder_tool_tier") or "").strip().lower()
         if _dct_tier in ("core", "full"):
             _model_overrides["duo_coder_tool_tier"] = _dct_tier
+
+    # LSP-RUN-PIN (F10, 2026-11-08): benchmarks/gateways pin the post-write
+    # LSP behavior per request. The keys ride model_overrides into the run
+    # settings snapshot (chat_run lifts it into the tool layer); the LSP
+    # handlers prefer the snapshot for the whole run. Body always wins when
+    # present - explicit False included (same rule as direct_tools_enabled).
+    if "lsp_auto_diagnostics" in body:
+        _model_overrides["lsp_auto_diagnostics"] = _as_bool(
+            body.get("lsp_auto_diagnostics"))
+    if "lsp_auto_warm_on_write" in body:
+        _model_overrides["lsp_auto_warm_on_write"] = _as_bool(
+            body.get("lsp_auto_warm_on_write"))
 
     # G1 (full audit 2026-10-05): the Telegram gateway sends
     # duo_action_approval_enabled=true with its runs so the documented

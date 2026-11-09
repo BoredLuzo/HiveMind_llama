@@ -119,6 +119,43 @@ def test_cache_bust():
         fail("cache_bust", "no ?v= cache-buster on the app.js script tag")
 
 
+def test_storage_guarded():
+    """Blocked cookies/storage in Firefox throws SecurityError on
+    localStorage; every direct access must sit behind the safe helpers."""
+    src = APP.read_text(encoding="utf-8")
+    if "function _hmStorageGet(" not in src or "function _hmStorageSet(" not in src:
+        fail("storage_guard", "safe localStorage helpers missing")
+        return
+    raw_get = src.count("localStorage.getItem")
+    raw_set = src.count("localStorage.setItem")
+    direct = src.count("_hmStorageGet(") + src.count("_hmStorageSet(")
+    if raw_get == 1 and raw_set == 1 and direct >= 6:
+        ok("all localStorage access goes through _hmStorageGet/_hmStorageSet")
+    else:
+        fail("storage_guard",
+             f"raw get/set={raw_get}/{raw_set}, helper calls={direct}")
+
+
+def test_tool_tiers_pinned():
+    """The new tool tiers must ride the request, not only the async
+    settings.json write (a just-changed dropdown would otherwise race)."""
+    src = APP.read_text(encoding="utf-8")
+    html = IDX.read_text(encoding="utf-8")
+    checks = [
+        "direct_tools_tier: S.directToolsTier",
+        "duo_coder_tool_tier: S.duoCoderToolTier",
+        "lsp_auto_diagnostics: typeof S.lspAutoDiag",
+    ]
+    missing = [c for c in checks if c not in src]
+    ui = ('id="dt-tier-research"' in html
+          and 'id="duo-coder-tool-tier"' in html
+          and 'value="research"' in html)
+    if not missing and ui:
+        ok("tool tiers are pinned in /stream and exposed in the UI")
+    else:
+        fail("tool_tiers", f"missing={missing} ui={ui}")
+
+
 if __name__ == "__main__":
     test_js_syntax()
     test_global_net_installed()
@@ -127,6 +164,8 @@ if __name__ == "__main__":
     test_settings_saves_visible()
     test_sse_death_always_visible()
     test_cache_bust()
+    test_storage_guarded()
+    test_tool_tiers_pinned()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
     print("=" * 60)

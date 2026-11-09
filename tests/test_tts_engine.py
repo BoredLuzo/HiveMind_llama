@@ -15,7 +15,6 @@ Pins:
 
 Run: python tests/test_tts_engine.py
 """
-import hashlib
 import io
 import os
 import sys

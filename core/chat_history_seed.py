@@ -31,7 +31,7 @@ class _ChatHistorySeedState:
 
 
 async def _chat_history_seed(ps):
-    from core.chat_run import _history_budget_tokens
+    from core.llm_stream import _history_budget_tokens
     chat_id = ps.chat_id
     mode = ps.mode
     duo_config = ps.duo_config
