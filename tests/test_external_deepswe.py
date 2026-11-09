@@ -40,7 +40,7 @@ rent = (ROOT / "bench" / "external" / "rent_bootstrap.sh").read_text(encoding="u
 check("rental bootstrap clones dev and passes the coder llama port",
       'HM_BRANCH="${HM_BRANCH:-dev}"' in rent and "--llama" in rent)
 check("rental bootstrap keeps A100 MoE experts on the GPU",
-      '"moe_cpu_experts"' in rent and '"qwen3.6:35b-a3b-ud":0' in rent)
+      '"moe_cpu_experts"' in rent and '"qwen3.6:35b-a3b":0' in rent)
 check("Colab notebook is A100/Modal/cloudflared based",
       len(nb.get("cells", [])) >= 8
       and any("A100" in "".join(c["source"]) for c in nb["cells"])
