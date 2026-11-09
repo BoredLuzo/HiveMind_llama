@@ -70,6 +70,19 @@ setup() {
 
   log "llama.cpp (CUDA $HM_LLAMA_CUDA)"
   ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda --cuda-version "$HM_LLAMA_CUDA" )
+  # Linux CUDA builds link the CUDA runtime dynamically; the release ships it
+  # in a separate cudart archive next to the main build.
+  _exe="$(find "$HM_DIR/llama" -name llama-server -type f | head -1)"
+  _bdir="$(dirname "$_exe")"
+  _build="${_bdir##*llama-b}"
+  if [ -n "$_build" ]; then
+    _cudart_url="https://github.com/ggml-org/llama.cpp/releases/download/b${_build}/cudart-llama-b${_build}-bin-ubuntu-cuda-${HM_LLAMA_CUDA}-x64.tar.gz"
+    if ! find "$HM_DIR/llama" -name 'libcudart.so*' | grep -q .; then
+      log "CUDA runtime split: downloading cudart for b${_build}"
+      curl -L --fail --retry 3 -o /tmp/cudart.tar.gz "$_cudart_url" || log "WARN: cudart download failed"
+      [ -s /tmp/cudart.tar.gz ] && tar xzf /tmp/cudart.tar.gz -C "$HM_DIR/llama" || true
+    fi
+  fi
 
   log "model $HM_MODEL -> $MODELS_DIR (~20 GB)"
   mkdir -p "$MODELS_DIR"
@@ -103,6 +116,8 @@ serve() {
     log "engine already up on :$PORT"
   else
     log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
+    _cudart_lib="$(find "$HM_DIR/llama" -name 'libcudart.so*' -print -quit 2>/dev/null || true)"
+    [ -n "$_cudart_lib" ] && export LD_LIBRARY_PATH="$(dirname "$_cudart_lib"):${LD_LIBRARY_PATH:-}"
     ( cd "$HM_DIR" && \
       HIVEMIND_HOST=127.0.0.1 HIVEMIND_PORT="$PORT" HIVEMIND_GPU_BACKEND=cuda \
       HIVEMIND_MODELS_DIR="$MODELS_DIR" PYTHONUNBUFFERED=1 \
@@ -115,12 +130,10 @@ serve() {
   fi
   # A100: keep every MoE expert on the GPU (the shipped profile is tuned for 8 GB).
   curl -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
-    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b-ud":0}}' >/dev/null \
-    || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
+    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0}}' >/dev/null \ || \n         log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
   log "preloading $HM_MODEL (ctx 32768)"
   curl -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \
-    || log "WARN: /vram/load failed; the first HiveMind request will load the model"
+    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \ || \n         log "WARN: /vram/load failed; the first HiveMind request will load the model"
   for _ in $(seq 1 180); do
     if curl -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
     sleep 2
