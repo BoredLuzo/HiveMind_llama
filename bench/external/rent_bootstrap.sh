@@ -39,6 +39,7 @@ AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 PORT="${HIVEMIND_PORT:-8001}"
 HM_LLAMA_URL="${HM_LLAMA_URL:-}"
+HM_LLAMA_CUDA="${HM_LLAMA_CUDA:-12.4}"
 LOG="$HM_DIR/bench_engine.log"
 
 log() { printf '\n[bench] %s\n' "$*"; }
@@ -67,8 +68,8 @@ setup() {
   log "python 3.14 + locked deps"
   ( cd "$HM_DIR" && uv python install 3.14 && uv sync --all-extras --frozen )
 
-  log "llama.cpp (CUDA)"
-  ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda )
+  log "llama.cpp (CUDA $HM_LLAMA_CUDA)"
+  ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda --cuda-version "$HM_LLAMA_CUDA" )
 
   log "model $HM_MODEL -> $MODELS_DIR (~20 GB)"
   mkdir -p "$MODELS_DIR"
