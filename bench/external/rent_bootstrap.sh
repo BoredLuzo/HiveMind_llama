@@ -38,7 +38,7 @@ HM_TASKS="${HM_TASKS:-bench/tasks}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 PORT="${HIVEMIND_PORT:-8001}"
-HM_LLAMA_URL="${HM_LLAMA_URL:-http://127.0.0.1:8101}"
+HM_LLAMA_URL="${HM_LLAMA_URL:-}"
 LOG="$HM_DIR/bench_engine.log"
 
 log() { printf '\n[bench] %s\n' "$*"; }
@@ -86,31 +86,53 @@ setup() {
   log "setup done - next: serve, then smoke"
 }
 
+detect_llama_url() {
+  for _p in 8101 8102 8080; do
+    if curl -fsS "http://127.0.0.1:$_p/health" >/dev/null 2>&1; then
+      HM_LLAMA_URL="http://127.0.0.1:$_p"; return
+    fi
+  done
+  HM_LLAMA_URL="${HM_LLAMA_URL:-http://127.0.0.1:8101}"
+  log "WARN: no llama-server health endpoint found; using $HM_LLAMA_URL"
+}
+
 serve() {
   [ -x "$PY" ] || die "run setup first"
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    log "engine already up on :$PORT"; return
+    log "engine already up on :$PORT"
+  else
+    log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
+    ( cd "$HM_DIR" && \
+      HIVEMIND_HOST=127.0.0.1 HIVEMIND_PORT="$PORT" HIVEMIND_GPU_BACKEND=cuda \
+      HIVEMIND_MODELS_DIR="$MODELS_DIR" PYTHONUNBUFFERED=1 \
+      nohup "$PY" run.py >"$LOG" 2>&1 & echo $! >"$HM_DIR/bench_engine.pid" )
+    for _ in $(seq 1 90); do
+      curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
+      sleep 2
+    done
+    curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
-  log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
-  ( cd "$HM_DIR" && \
-    HIVEMIND_HOST=127.0.0.1 HIVEMIND_PORT="$PORT" HIVEMIND_GPU_BACKEND=cuda \
-    HIVEMIND_MODELS_DIR="$MODELS_DIR" PYTHONUNBUFFERED=1 \
-    nohup "$PY" run.py >"$LOG" 2>&1 & echo $! >"$HM_DIR/bench_engine.pid" )
-  for _ in $(seq 1 90); do
-    curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
-    sleep 2
-  done
-  curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   # A100: keep every MoE expert on the GPU (the shipped profile is tuned for 8 GB).
   curl -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
     -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b-ud":0}}' >/dev/null \
     || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
+  log "preloading $HM_MODEL (ctx 32768)"
+  curl -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \
+    || log "WARN: /vram/load failed; the first HiveMind request will load the model"
+  for _ in $(seq 1 180); do
+    if curl -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  detect_llama_url
+  log "benchmark llama endpoint: $HM_LLAMA_URL"
 }
 
 run_bench() {  # $1 = extra args
   [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
+  [ -n "$HM_LLAMA_URL" ] || detect_llama_url
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
-  ( cd "$HM_DIR" && "$PY" bench/runner.py \
+  ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
       --model "$HM_MODEL" \
       --conditions "$HM_CONDITIONS" \
@@ -154,6 +176,7 @@ status() { tail -n 40 "$HM_DIR/bench_full.log" 2>/dev/null || echo "no run log y
 
 stop() {
   tmux kill-session -t hmbench 2>/dev/null || true
+  curl -fsS -X POST "http://127.0.0.1:$PORT/vram/kill_all" >/dev/null 2>&1 || true
   [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
   log "stopped. Download bench/results/*.json, then DELETE the rental instance."
 }
