@@ -39,7 +39,7 @@ AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 PORT="${HIVEMIND_PORT:-8001}"
 HM_LLAMA_URL="${HM_LLAMA_URL:-}"
-HM_LLAMA_CUDA="${HM_LLAMA_CUDA:-12.4}"
+HM_LLAMA_CUDA="${HM_LLAMA_CUDA:-12.8}"
 LOG="$HM_DIR/bench_engine.log"
 
 log() { printf '\n[bench] %s\n' "$*"; }
