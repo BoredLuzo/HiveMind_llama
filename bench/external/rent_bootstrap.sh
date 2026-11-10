@@ -102,7 +102,7 @@ setup() {
 
 detect_llama_url() {
   for _p in 8101 8102 8080; do
-    if curl -fsS "http://127.0.0.1:$_p/health" >/dev/null 2>&1; then
+    if curl --max-time 2 -fsS "http://127.0.0.1:$_p/health" >/dev/null 2>&1; then
       HM_LLAMA_URL="http://127.0.0.1:$_p"; return
     fi
   done
@@ -112,7 +112,7 @@ detect_llama_url() {
 
 serve() {
   [ -x "$PY" ] || die "run setup first"
-  if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+  if curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     log "engine already up on :$PORT (restart it for fit/ubatch changes)"
   else
     # Benchmark profile for the 80 GB A100: full GPU offload, no CPU experts,
@@ -143,20 +143,20 @@ PY
       setsid "$PY" run.py >"$LOG" 2>&1 < /dev/null & \
       echo $! >"$HM_DIR/bench_engine.pid" )
     for _ in $(seq 1 90); do
-      curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
+      curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
       sleep 2
     done
-    curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
+    curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
-  curl -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
+  curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
     -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0}}' >/dev/null \
     || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
   log "preloading $HM_MODEL (ctx 32768)"
-  curl -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
+  curl --max-time 600 -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
     -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \
     || log "WARN: /vram/load failed; the first HiveMind request will load the model"
   for _ in $(seq 1 180); do
-    if curl -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
+    if curl --max-time 2 -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl --max-time 2 -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
     sleep 2
   done
   detect_llama_url
@@ -211,13 +211,13 @@ status() { tail -n 40 "$HM_DIR/bench_full.log" 2>/dev/null || echo "no run log y
 
 stop() {
   tmux kill-session -t hmbench 2>/dev/null || true
-  curl -fsS -X POST "http://127.0.0.1:$PORT/vram/kill_all" >/dev/null 2>&1 || true
+  curl --max-time 15 -fsS -X POST "http://127.0.0.1:$PORT/vram/kill_all" >/dev/null 2>&1 || true
   # setsid makes the saved PID unreliable; kill the engine by its command line.
   pkill -f "$HM_DIR/.venv/bin/python run.py" 2>/dev/null || true
   pkill -f "HiveMind_llama.*run.py" 2>/dev/null || true
   [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
   for _ in $(seq 1 20); do
-    curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || break
+    curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || break
     sleep 0.5
   done
   log "stopped. Download bench/results/*.json, then DELETE the rental instance."
