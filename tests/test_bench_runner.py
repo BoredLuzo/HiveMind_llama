@@ -248,6 +248,16 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     check("body: duo pins the core tool tier",
           duo_body.get("duo_coder_tool_tier") == "core",
           f" ({duo_body.get('duo_coder_tool_tier')})")
+    duo_full_body = _hivemind_body(Task("t", "p", "c"), work, duo=True,
+                                   model="qwen3.5:4b-mtp", duo_tier="full")
+    check("body: duo supports full tool tier",
+          duo_full_body.get("duo_coder_tool_tier") == "full",
+          f" ({duo_full_body.get('duo_coder_tool_tier')})")
+    duo_lean_body = _hivemind_body(Task("t", "p", "c"), work, duo=True,
+                                   model="qwen3.5:4b-mtp", duo_tier="lean")
+    check("body: duo supports lean tool tier",
+          duo_lean_body.get("duo_coder_tool_tier") == "lean",
+          f" ({duo_lean_body.get('duo_coder_tool_tier')})")
     check("body: duo disables test-feedback loops",
           duo_body.get("duo_test_feedback_final") is False
           and duo_body.get("duo_test_feedback_chunk") is False)

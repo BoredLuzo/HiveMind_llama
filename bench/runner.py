@@ -56,7 +56,7 @@ from bench.relative import build_relative, print_relative  # noqa: E402
 # raw_files  = one prompt, full corrected files (diagnostic only, opt-in:
 #              small models often fail on diff syntax, not on the fix itself)
 # The score-bearing comparison is HiveMind vs aider on the same server.
-CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_lean", "aider", "hermes", "pi")
+CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_full", "hivemind_duo_lean", "aider", "hermes", "pi")
 DEFAULT_CONDITIONS = ("hivemind_direct", "hivemind_duo", "aider")
 
 
@@ -661,6 +661,8 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
             extra = await _run_hivemind(task, work, cfg, duo=False)
         elif cond == "hivemind_duo":
             extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="core")
+        elif cond == "hivemind_duo_full":
+            extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="full")
         elif cond == "hivemind_duo_lean":
             extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="lean")
         elif cond == "aider":
