@@ -19,7 +19,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from bench.runner import (  # noqa: E402
     Config, DEFAULT_CONDITIONS, Task, _aider_files, _extract_patch,
     _hivemind_body, _parse_file_blocks, _parse_token_count, _persist,
-    _resolve_aider_bin, _run_aider, _safe_rel_path, aggregate,
+    _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
+    _resolve_pi_bin, _run_pi, _safe_rel_path, aggregate,
     apply_full_files, apply_patch, diff_stats, load_tasks, prepare_workspace,
     print_summary, run_check,
 )
@@ -190,6 +191,35 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           f" ({files})")
     check("aider: file list is bounded and sorted",
           files == sorted(files) and len(files) <= 40, f" ({len(files)})")
+
+    # ── hermes & pi discovery ──────────────────────────────────────────────
+    _cfg_hermes_bad = Config(tasks_dir=root, out=root / "x.json", model="m",
+                             hermes_bin=str(root / "missing-hermes.exe"))
+    check("hermes: missing explicit path is rejected",
+          _resolve_hermes_bin(_cfg_hermes_bad) == "")
+    _fake_hermes = root / "fake-hermes.exe"
+    _fake_hermes.write_text("", encoding="utf-8")
+    _cfg_hermes_ok = Config(tasks_dir=root, out=root / "x.json", model="m",
+                            hermes_bin=str(_fake_hermes))
+    check("hermes: explicit path is used",
+          _resolve_hermes_bin(_cfg_hermes_ok) == str(_fake_hermes))
+    _hermes_missing = _run_hermes(Task("t", "p", "c"), root, _cfg_hermes_bad)
+    check("hermes: unavailable is reported, not raised",
+          "not installed" in _hermes_missing.get("detail", ""), f" ({_hermes_missing})")
+
+    _cfg_pi_bad = Config(tasks_dir=root, out=root / "x.json", model="m",
+                         pi_bin=str(root / "missing-pi.exe"))
+    check("pi: missing explicit path is rejected",
+          _resolve_pi_bin(_cfg_pi_bad) == "")
+    _fake_pi = root / "fake-pi.exe"
+    _fake_pi.write_text("", encoding="utf-8")
+    _cfg_pi_ok = Config(tasks_dir=root, out=root / "x.json", model="m",
+                        pi_bin=str(_fake_pi))
+    check("pi: explicit path is used",
+          _resolve_pi_bin(_cfg_pi_ok) == str(_fake_pi))
+    _pi_missing = _run_pi(Task("t", "p", "c"), root, _cfg_pi_bad)
+    check("pi: unavailable is reported, not raised",
+          "not installed" in _pi_missing.get("detail", ""), f" ({_pi_missing})")
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,

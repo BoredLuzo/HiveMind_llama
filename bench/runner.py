@@ -56,7 +56,7 @@ from bench.relative import build_relative, print_relative  # noqa: E402
 # raw_files  = one prompt, full corrected files (diagnostic only, opt-in:
 #              small models often fail on diff syntax, not on the fix itself)
 # The score-bearing comparison is HiveMind vs aider on the same server.
-CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_lean", "aider")
+CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_lean", "aider", "hermes", "pi")
 DEFAULT_CONDITIONS = ("hivemind_direct", "hivemind_duo", "aider")
 
 
@@ -87,6 +87,10 @@ class Config:
     keep_work: bool = False
     # Optional path to aider (a separate venv is fine; not on PATH).
     aider_bin: str = ""
+    # Optional path to hermes agent CLI.
+    hermes_bin: str = ""
+    # Optional path to pi coding agent CLI.
+    pi_bin: str = ""
     # Coder-alone mode for the duo condition (planner off, same model).
     duo_planner: bool = True
 
@@ -527,6 +531,104 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     return {"tokens": tokens, "detail": detail}
 
 
+def _resolve_hermes_bin(cfg: Config) -> str:
+    """Explicit path/env wins; otherwise PATH. Empty = not available."""
+    candidate = (cfg.hermes_bin or os.environ.get("HIVEMIND_HERMES_BIN") or "").strip()
+    if candidate:
+        return candidate if Path(candidate).is_file() else ""
+    return shutil.which("hermes") or ""
+
+
+def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
+    hermes_bin = _resolve_hermes_bin(cfg)
+    if not hermes_bin:
+        return {"tokens": 0,
+                "detail": "hermes is not installed (set --hermes-bin / HIVEMIND_HERMES_BIN)"}
+    remote_base = _aider_remote_base()
+    api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
+    api_key = (os.environ.get("HIVEMIND_HERMES_API_KEY") or os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
+    cmd = [
+        hermes_bin, "chat",
+        "--safe-mode",
+        "--provider", "custom",
+        "--base-url", api_base,
+        "--api-key", api_key,
+        "--model", cfg.model,
+        "-q", task.prompt,
+    ]
+    env = {**os.environ, "OPENAI_API_KEY": api_key,
+           "OPENAI_BASE_URL": api_base, "OPENAI_API_BASE": api_base}
+    try:
+        r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"tokens": 0, "detail": f"hermes failed: {exc}"}
+    detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
+    return {"tokens": 0, "detail": detail}
+
+
+def _resolve_pi_bin(cfg: Config) -> str:
+    """Explicit path/env wins; otherwise PATH. Empty = not available."""
+    candidate = (cfg.pi_bin or os.environ.get("HIVEMIND_PI_BIN") or "").strip()
+    if candidate:
+        return candidate if Path(candidate).is_file() else ""
+    return shutil.which("pi") or ""
+
+
+def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
+    pi_bin = _resolve_pi_bin(cfg)
+    if not pi_bin:
+        return {"tokens": 0,
+                "detail": "pi is not installed (set --pi-bin / HIVEMIND_PI_BIN)"}
+    remote_base = _aider_remote_base()
+    api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
+    api_key = (os.environ.get("HIVEMIND_PI_API_KEY") or os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
+    
+    # Configure custom local endpoint via Pi agent config dir
+    pi_conf_dir = work / ".pi_config"
+    pi_conf_dir.mkdir(parents=True, exist_ok=True)
+    models_json = pi_conf_dir / "models.json"
+    models_json.write_text(json.dumps({
+        "providers": {
+            "local": {
+                "baseUrl": api_base,
+                "api": "openai-completions",
+                "apiKey": api_key,
+                "models": [
+                    {
+                        "id": cfg.model,
+                        "name": f"Local {cfg.model}",
+                        "contextWindow": 32768,
+                        "maxTokens": 4096
+                    }
+                ]
+            }
+        }
+    }, indent=2), encoding="utf-8")
+    
+    cmd = [
+        pi_bin,
+        "--provider", "local",
+        "--model", cfg.model,
+        "-p", task.prompt,
+    ]
+    env = {
+        **os.environ,
+        "PI_CODING_AGENT_DIR": str(pi_conf_dir),
+        "OPENAI_API_KEY": api_key,
+        "OPENAI_BASE_URL": api_base,
+    }
+    try:
+        r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"tokens": 0, "detail": f"pi failed: {exc}"}
+    detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
+    return {"tokens": 0, "detail": detail}
+
+
 async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     work = prepare_workspace(task, base)
     started = time.time()
@@ -544,6 +646,10 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
             extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="lean")
         elif cond == "aider":
             extra = await asyncio.to_thread(_run_aider, task, work, cfg)
+        elif cond == "hermes":
+            extra = await asyncio.to_thread(_run_hermes, task, work, cfg)
+        elif cond == "pi":
+            extra = await asyncio.to_thread(_run_pi, task, work, cfg)
         else:
             raise ValueError(f"unknown condition: {cond}")
     except (httpx.HTTPError, OSError, ValueError) as exc:
@@ -655,7 +761,7 @@ def _persist(out: Path, rows: list[dict], cfg: Config,
 
 async def _preflight(cfg: Config, conditions: list[str]) -> str:
     """Fail fast when a required endpoint is dead (empty string = OK)."""
-    need_llama = (any(c in ("raw", "raw_files", "aider") for c in conditions)
+    need_llama = (any(c in ("raw", "raw_files", "aider", "hermes", "pi") for c in conditions)
                   and not (conditions and conditions[0].startswith("hivemind_")))
     if need_llama and _aider_remote_base() and set(conditions) == {"aider"}:
         need_llama = False  # aider-only run against a remote endpoint
@@ -693,6 +799,12 @@ def main() -> int:
     parser.add_argument("--aider-bin", default="",
                         help="path to aider(.exe); default PATH or "
                              "HIVEMIND_AIDER_BIN")
+    parser.add_argument("--hermes-bin", default="",
+                        help="path to hermes(.exe); default PATH or "
+                             "HIVEMIND_HERMES_BIN")
+    parser.add_argument("--pi-bin", default="",
+                        help="path to pi(.exe); default PATH or "
+                             "HIVEMIND_PI_BIN")
     parser.add_argument("--no-duo-planner", action="store_true",
                         help="coder-alone mode: duo runs with planner off")
     parser.add_argument("--keep-work", action="store_true")
@@ -726,6 +838,8 @@ def main() -> int:
         task_timeout_s=args.task_timeout, keep_work=args.keep_work,
         cell_timeout_s=max(1, args.cell_timeout),
         aider_bin=args.aider_bin,
+        hermes_bin=args.hermes_bin,
+        pi_bin=args.pi_bin,
         duo_planner=not args.no_duo_planner,
     )
 

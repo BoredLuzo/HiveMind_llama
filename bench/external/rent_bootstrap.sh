@@ -99,6 +99,13 @@ setup() {
   }
   "$AIDER_VENV/bin/aider" --version
 
+  log "hermes-agent (NousResearch CLI harness)"
+  uv pip install --python "$AIDER_VENV/bin/python" -q hermes-agent 2>/dev/null || log "WARN: hermes-agent install skipped"
+
+  log "pi (earendil-works terminal coding agent harness)"
+  command -v npm >/dev/null || { $SUDO apt-get install -y -qq nodejs npm 2>/dev/null || true; }
+  command -v npm >/dev/null && npm install -g @earendil-works/pi-coding-agent 2>/dev/null || log "WARN: pi install skipped"
+
   log "setup done - next: serve, then smoke"
 }
 
@@ -168,6 +175,9 @@ PY
 run_bench() {  # $1 = extra args
   [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
   [ -n "$HM_LLAMA_URL" ] || detect_llama_url
+  local _extra_args=""
+  [ -x "$AIDER_VENV/bin/hermes" ] && _extra_args="$_extra_args --hermes-bin $AIDER_VENV/bin/hermes"
+  command -v pi >/dev/null && _extra_args="$_extra_args --pi-bin $(command -v pi)"
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
@@ -178,7 +188,7 @@ run_bench() {  # $1 = extra args
       --aider-bin "$AIDER_VENV/bin/aider" \
       --hivemind "http://127.0.0.1:$PORT" \
       --llama "$HM_LLAMA_URL" \
-      $_tf_flag \
+      $_extra_args \
       $1 )
 }
 
