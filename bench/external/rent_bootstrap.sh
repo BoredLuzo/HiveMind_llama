@@ -140,7 +140,8 @@ PY
     ( cd "$HM_DIR" && \
       HIVEMIND_HOST=127.0.0.1 HIVEMIND_PORT="$PORT" HIVEMIND_GPU_BACKEND=cuda \
       HIVEMIND_MODELS_DIR="$MODELS_DIR" PYTHONUNBUFFERED=1 \
-      nohup "$PY" run.py >"$LOG" 2>&1 & echo $! >"$HM_DIR/bench_engine.pid" )
+      setsid "$PY" run.py >"$LOG" 2>&1 < /dev/null & \
+      echo $! >"$HM_DIR/bench_engine.pid" )
     for _ in $(seq 1 90); do
       curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
       sleep 2
