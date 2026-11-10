@@ -78,7 +78,10 @@ def main() -> int:
     src = Path(args.source)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    names = [n.strip() for n in args.names.split(",") if n.strip()]
+    if args.names.strip().lower() in ("all", "*"):
+        names = sorted([d.name for d in src.iterdir() if d.is_dir() and not d.name.startswith(".")])
+    else:
+        names = [n.strip() for n in args.names.split(",") if n.strip()]
     if args.limit and args.limit > 0:
         names = names[:args.limit]
     imported = []

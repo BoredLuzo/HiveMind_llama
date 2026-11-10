@@ -1,0 +1,6 @@
+{
+  "id": "hard_cycle_detect",
+  "prompt": "In graph.py, implement class CycleError(Exception) and function topological_sort(graph: dict[str, list[str]]) -> list[str]. The graph dict maps a node to a list of its dependencies (nodes that must come before it). If the graph is a valid DAG, return a valid topological order where each dependency appears before the node that depends on it. If there is a cycle, raise CycleError(cycle_path) where cycle_path is a list of node names representing the cycle (starting and ending with the same node, e.g. ['A', 'B', 'A']).",
+  "check": "python -m unittest -q test_task",
+  "timeout_s": 300
+}

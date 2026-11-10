@@ -37,6 +37,7 @@ HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
 HM_RUNS="${HM_RUNS:-1}"
 HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
+HM_TEST_FEEDBACK="${HM_TEST_FEEDBACK:-0}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 PORT="${HIVEMIND_PORT:-8001}"
@@ -114,19 +115,16 @@ detect_llama_url() {
 
 serve() {
   [ -x "$PY" ] || die "run setup first"
-  if curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    log "engine already up on :$PORT (restart it for fit/ubatch changes)"
-  else
-    # Benchmark profile for the 80 GB A100: full GPU offload, no CPU experts,
-    # CUDA-friendly prefill chunk. Written before the engine starts because
-    # LLAMA_FIT / LLAMA_UBATCH are read at import time.
-    ( cd "$HM_DIR" && "$PY" - <<'PY'
+  # Benchmark profile for the 80 GB A100: full GPU offload, no CPU experts,
+  # CUDA-friendly prefill chunk. Written before the engine starts because
+  # LLAMA_FIT / LLAMA_UBATCH are read at import time.
+  ( cd "$HM_DIR" && "$PY" - <<'PY'
 import json
 from pathlib import Path
 p = Path("settings.json")
 d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 d.update({
-    "moe_cpu_experts": {"qwen3.6:35b-a3b": 0},
+    "moe_cpu_experts": {"qwen3.6:35b-a3b": 0, "hermes3.6:35b-a3b": 0},
     "vram_budget_gb": 76.0,
     "llama_fit": False,
     "llama_gpu_layers_auto": False,
@@ -135,7 +133,10 @@ d.update({
 })
 p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 PY
-    )
+  )
+  if curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    log "engine already up on :$PORT"
+  else
     log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
     _cudart_lib="$(find "$HM_DIR/llama" -name 'libcudart.so*' -print -quit 2>/dev/null || true)"
     [ -n "$_cudart_lib" ] && export LD_LIBRARY_PATH="$(dirname "$_cudart_lib"):${LD_LIBRARY_PATH:-}"
@@ -151,7 +152,7 @@ PY
     curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
   curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
-    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0}}' >/dev/null \
+    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0,"hermes3.6:35b-a3b":0},"vram_budget_gb":76.0}' >/dev/null \
     || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
   log "preloading $HM_MODEL (ctx 32768)"
   curl --max-time 600 -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
@@ -168,6 +169,8 @@ PY
 run_bench() {  # $1 = extra args
   [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
   [ -n "$HM_LLAMA_URL" ] || detect_llama_url
+  local _tf_flag=""
+  [ "${HM_TEST_FEEDBACK:-0}" = "1" ] && _tf_flag="--test-feedback"
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
@@ -178,6 +181,7 @@ run_bench() {  # $1 = extra args
       --aider-bin "$AIDER_VENV/bin/aider" \
       --hivemind "http://127.0.0.1:$PORT" \
       --llama "$HM_LLAMA_URL" \
+      $_tf_flag \
       $1 )
 }
 
@@ -185,17 +189,22 @@ smoke() {
   serve
   log "smoke: 3 tasks, HiveMind vs aider - note the wall time per condition"
   local t0; t0=$(date +%s)
-  HM_RUNS=1 run_bench "--only fix_add,fix_off_by_one,multi_move"
+  local _only="--only fix_add,fix_off_by_one,multi_move"
+  if [ "$HM_TASKS" = "bench/tasks_polyglot" ]; then
+    _only="--only polyglot_affine_cipher,polyglot_beer_song,polyglot_grade_school"
+  fi
+  HM_RUNS=1 run_bench "$_only"
   log "smoke wall time: $(( $(date +%s) - t0 )) s  (full run ~ this x tasks/3 x runs)"
   log "check: pass/fail per condition, tokens > 0, 'aider is not installed' absent"
 }
 
 polyglot() {
-  # Fixed, seed-free subset of the Aider polyglot (python) exercises.
+  # Subset or full set of the official Aider polyglot (python) exercises.
   local src="$HOME/polyglot-benchmark"
   [ -d "$src/.git" ] || git clone --depth 1 https://github.com/Aider-AI/polyglot-benchmark.git "$src"
   ( cd "$HM_DIR" && "$PY" bench/import_polyglot.py \
-      --source "$src/python/exercises/practice" --out bench/tasks_polyglot )
+      --source "$src/python/exercises/practice" --out bench/tasks_polyglot \
+      --names "${HM_POLYGLOT_NAMES:-all}" ${HM_POLYGLOT_LIMIT:+--limit "$HM_POLYGLOT_LIMIT"} )
   log "now: HM_TASKS=bench/tasks_polyglot bash $0 full"
 }
 
@@ -217,6 +226,7 @@ stop() {
   # setsid makes the saved PID unreliable; kill the engine by its command line.
   pkill -f "$HM_DIR/.venv/bin/python run.py" 2>/dev/null || true
   pkill -f "HiveMind_llama.*run.py" 2>/dev/null || true
+  pkill -f llama-server 2>/dev/null || true
   [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
   for _ in $(seq 1 20); do
     curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || break

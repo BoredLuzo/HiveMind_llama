@@ -221,6 +221,14 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     check("body: duo disables test-feedback loops",
           duo_body.get("duo_test_feedback_final") is False
           and duo_body.get("duo_test_feedback_chunk") is False)
+    duo_tf = _hivemind_body(Task("t", "p", "c"), work, duo=True,
+                            model="qwen3.5:4b-mtp", test_feedback=True)
+    check("body: test-feedback flag enables duo test loops",
+          duo_tf.get("duo_test_feedback_final") is True
+          and duo_tf.get("duo_test_feedback_chunk") is True)
+    work_tf = prepare_workspace(tasks[0], root / "work_tf", install_tests=True)
+    check("workspace: test-feedback installs hidden tests early",
+          (work_tf / "test_task.py").is_file() and (work_tf / "test_task.py").read_text(encoding="utf-8") == "hidden\n")
     check("body: duo pins the coder context",
           duo_body.get("duo_coder_ctx_agentic") == 32768
           and duo_body.get("duo_coder_ctx_normal") == 32768,

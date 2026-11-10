@@ -285,6 +285,8 @@ _logger.info("[VRAM-BUDGET] Startup: settings['vram_budget_gb'] = %s (type=%s)",
 def _sync_backend_runtime_config() -> None:
     """Sync settings → backend runtime globals (llama_server_manager/llama_config)."""
     try:
+        from backend.runtime_sync import sync_loader_settings as _sync_ls
+        _sync_ls(settings)
         import backend.llama_server_manager as _lsm_init
         _raw = settings.get("vram_budget_gb")
         _lsm_init.VRAM_BUDGET_GB = float(_raw) if _raw is not None else DEFAULT_VRAM_BUDGET_GB

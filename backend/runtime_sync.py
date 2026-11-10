@@ -87,7 +87,8 @@ def sync_loader_settings(settings: dict) -> None:
             _lmu.VRAM_BUDGET_GB = _budget
             for _mod_name in ("llama_server_manager", "manager_load",
                               "manager_evict", "manager_health",
-                              "manager_prefetch", "manager_process"):
+                              "manager_prefetch", "manager_process",
+                              "llama_start_phases"):
                 _mod = sys.modules.get(f"backend.{_mod_name}")
                 if _mod is not None and hasattr(_mod, "VRAM_BUDGET_GB"):
                     setattr(_mod, "VRAM_BUDGET_GB", _budget)

@@ -89,6 +89,8 @@ class Config:
     aider_bin: str = ""
     # Coder-alone mode for the duo condition (planner off, same model).
     duo_planner: bool = True
+    # Test-feedback parity: enable auto-test feedback for both agents
+    test_feedback: bool = False
 
 
 def _file_map(root: Path | None) -> dict[str, str]:
@@ -177,13 +179,15 @@ def load_tasks(tasks_dir: Path) -> list[Task]:
     return tasks
 
 
-def prepare_workspace(task: Task, base: Path) -> Path:
+def prepare_workspace(task: Task, base: Path, *, install_tests: bool = False) -> Path:
     """Fresh copy of the task fixture; the source repo is never modified."""
     work = Path(base) / task.id
     if task.repo is not None:
         shutil.copytree(task.repo, work)
     else:
         work.mkdir(parents=True)
+    if install_tests and task.tests is not None:
+        install_hidden_tests(task, work)
     return work
 
 
@@ -341,7 +345,8 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
 
 
 def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
-                   *, duo_planner: bool = True, duo_tier: str = "core") -> dict:
+                   *, duo_planner: bool = True, duo_tier: str = "core",
+                   test_feedback: bool = False) -> dict:
     """Request body for the two HiveMind conditions.
 
     MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
@@ -377,12 +382,11 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         body["duo_tool_rounds"] = 50
         # TIER/VERIFICATION PINS (2026-11-08 audit): the install may carry
         # duo_coder_tool_tier=full and test-feedback toggles; pin the core
-        # tier and disable the auto-test feedback loops so the condition is
-        # reproducible across machines.
+        # tier and configure the auto-test feedback loops symmetrically.
         body["duo_coder_tool_tier"] = str(duo_tier or "core")
-        body["duo_test_feedback"] = False
-        body["duo_test_feedback_chunk"] = False
-        body["duo_test_feedback_final"] = False
+        body["duo_test_feedback"] = bool(test_feedback)
+        body["duo_test_feedback_chunk"] = bool(test_feedback)
+        body["duo_test_feedback_final"] = bool(test_feedback)
         # Context: the 2026-11-08 runs used 32k; pin it instead of inheriting
         # an install-specific override.
         body["duo_coder_ctx_agentic"] = 32768
@@ -401,7 +405,8 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
 async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
                         *, duo_tier: str = "core") -> dict:
     body = _hivemind_body(task, work, duo, cfg.model,
-                          duo_planner=cfg.duo_planner, duo_tier=duo_tier)
+                          duo_planner=cfg.duo_planner, duo_tier=duo_tier,
+                          test_feedback=cfg.test_feedback)
     done: dict = {}
     error = ""
     usage_prompt = usage_completion = usage_cached = usage_rounds = 0
@@ -505,9 +510,10 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
         "--no-show-model-warnings",
         "--model", f"openai/{cfg.model}",
         "--openai-api-base", api_base,
-        "--message", task.prompt,
-        *_aider_files(work),
     ]
+    if cfg.test_feedback and task.check.strip():
+        cmd.extend(["--test-cmd", task.check, "--auto-test"])
+    cmd.extend(["--message", task.prompt, *_aider_files(work)])
     env = {**os.environ, "OPENAI_API_KEY": api_key,
            "OPENAI_API_BASE": api_base}
     try:
@@ -530,7 +536,7 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
 
 
 async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
-    work = prepare_workspace(task, base)
+    work = prepare_workspace(task, base, install_tests=cfg.test_feedback)
     started = time.time()
     extra: dict = {}
     try:
@@ -697,6 +703,8 @@ def main() -> int:
                              "HIVEMIND_AIDER_BIN")
     parser.add_argument("--no-duo-planner", action="store_true",
                         help="coder-alone mode: duo runs with planner off")
+    parser.add_argument("--test-feedback", action="store_true",
+                        help="enable auto-test feedback loop for both HiveMind and Aider")
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--only", default="", help="comma-separated task ids to run")
@@ -729,6 +737,7 @@ def main() -> int:
         cell_timeout_s=max(1, args.cell_timeout),
         aider_bin=args.aider_bin,
         duo_planner=not args.no_duo_planner,
+        test_feedback=args.test_feedback,
     )
 
     _pf = asyncio.run(_preflight(cfg, conditions))

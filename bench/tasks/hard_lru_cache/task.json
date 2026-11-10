@@ -1,0 +1,6 @@
+{
+  "id": "hard_lru_cache",
+  "prompt": "Implement LRUCache in cache.py with capacity: int. Methods: get(key) -> value (or None, marks as most recently used), put(key, value) -> None (inserts or updates; if capacity exceeded, evicts the least recently used key), peek(key) -> value (or None, does NOT mark as recently used). If on_evict callback is provided to __init__(capacity, on_evict=None), call on_evict(key, value) whenever an item is evicted. If capacity <= 0, raise ValueError('capacity must be positive'). Operations must be O(1) average time.",
+  "check": "python -m unittest -q test_task",
+  "timeout_s": 300
+}
