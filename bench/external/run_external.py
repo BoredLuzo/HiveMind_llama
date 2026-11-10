@@ -21,9 +21,8 @@ fails loudly, and a run with zero available harnesses exits 3 without
 writing a result file.
 
 The external harnesses run their OWN default models on their OWN servers -
-record them, but report them separately from the same-model comparison
-(see docs/benchmarks/ROADMAP.md Phase 5). No results are claimed from this
-scaffold alone; a claim needs actual runs.
+record them, but report them separately from the same-model comparison.
+No results are claimed from this scaffold alone; a claim needs actual runs.
 
 Usage:
     python bench/external/run_external.py --list

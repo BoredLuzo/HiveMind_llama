@@ -42,8 +42,8 @@ developer-only and export-ignored. First full core-tier comparison
 (2026-11-09, one run/cell): core coder and Aider both pass 19/21; coder
 54.3 s / 66,089 tokens per cell vs. Aider 22.1 s / 970. The core tier costs
 ~39 % fewer tokens than the 2026-11-08 full-tool run (108,378/cell) with the
-same 19-20/21 quality band. Details in
-`docs/benchmarks/RESULTS_2026-11-09.md`. A later three-way run added
+same 19-20/21 quality band. The detailed run notes stay local, outside the
+repository. A later three-way run added
 `duo_lean` (10 tools): it tied at 19/21 but was slower (52.7 s vs. 35.8 s
 median) and saved only 3.1 % net tokens, so `duo_core` stays the coder
 baseline. The clean rerun after the GPU/VRAM reload: **HiveMind 20/21

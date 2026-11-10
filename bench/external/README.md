@@ -4,7 +4,7 @@ Run the **same task suite** as `bench/runner.py` through Claude Code and
 Codex CLI - when they are installed - and record comparable rows. This is a
 scaffold: **no results are claimed** until actual runs happen, and external
 harness numbers are always reported **separately** from the same-model
-comparison (see `docs/benchmarks/ROADMAP.md` Phase 5).
+comparison.
 
 ## Non-invasive guarantees
 
@@ -86,10 +86,10 @@ To see deltas against the in-house baselines, merge files in one call:
 python bench/analyze.py --results bench\results\run-<stamp>.json bench\results\external\run-<stamp>.json
 ```
 
-The `relative` block then contains `claude_code`/`codex` deltas vs
-`raw`/`raw_files` and token ratios vs `aider`. Interpret with care: the
-external harnesses run different models on different servers, so those
-deltas compare *products*, not *harnesses*.
+The `relative` block then contains token ratios vs `aider` and, if the opt-in
+raw baselines were merged too, their deltas. Interpret with care: the
+external harnesses run different models on different servers, so those rows
+compare *products*, not *harnesses*.
 
 ## Fairness caveats
 
@@ -110,5 +110,5 @@ deltas compare *products*, not *harnesses*.
 
 This scaffold ships **without any recorded external results**. A "better
 than Claude Code/Codex" claim requires: the same task suite, multiple runs,
-the versions/models used, and the numbers published in
-`docs/benchmarks/RESULTS_<date>.md` with the caveats above.
+the versions/models used, and the numbers published with the caveats above.
+Internal benchmark notes stay local and out of this repository.

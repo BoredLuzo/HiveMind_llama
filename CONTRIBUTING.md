@@ -108,6 +108,7 @@ runs and the release zip are untouched: `.coveragerc`, the helper scripts and
 
 ## What does not ship
 
-`tests/`, `scripts/`, `docs/audit/`, `RELEASE_NOTES_*.md`, `CONTRIBUTING.md`,
-`.gitignore` and `.gitattributes` are `export-ignore` - the release zip contains
-the program, the launchers and the user docs only.
+`tests/`, `scripts/`, `RELEASE_NOTES_*.md`, `CONTRIBUTING.md`, `.gitignore`
+and `.gitattributes` are `export-ignore` - the release zip contains the
+program, the launchers and the user docs only. Internal audit/handoff and
+benchmark notes are kept outside the checkout (`../local_docs/`), not tracked.

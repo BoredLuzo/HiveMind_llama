@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """Minimal local coding benchmark runner (D1, 2026-11-07).
 
-Four conditions, same model and same llama-server:
-  raw              one prompt, no tools; the model returns a unified diff
+Default conditions, same model and same llama-server:
   hivemind_direct  HiveMind /stream, mode=chat, direct tools tier=full
   hivemind_duo     HiveMind /stream, mode=code_duo, agentic
   aider            aider CLI against the same OpenAI-compatible endpoint
 
 Metric: pass rate per condition (check command exit 0), median duration and
-tokens. The headline number is the DELTA vs the raw baseline, not an absolute
-score - RExBench/WebGen-Bench show low absolute numbers for every agent.
-Since D1 (2026-11-09) the report also carries delta_vs_raw_files, per-
-category deltas, cached/net token ratios vs aider and tool rounds, both as
-summary fields and in a compact `relative` block (bench/relative.py).
-External harnesses (Claude Code/Codex, D8) live in bench/external/ and do
-not change any condition here.
+tokens. Aider is the same-model reference; token ratios against it are the
+honest cost side of the comparison.
+
+The no-tool conditions (`raw`, `raw_files`) stay available for diagnostics
+but are opt-in. `raw` only sees the instruction and has to guess a diff, so a
+0/3 row says nothing about HiveMind or Aider; do not report it as a result.
+
+Since D1 (2026-11-09) the report also carries per-category deltas,
+cached/net token ratios vs aider and tool rounds, both as summary fields and
+in a compact `relative` block (bench/relative.py). External harnesses
+(Claude Code/Codex, D8) live in bench/external/ and do not change any
+condition here.
 
 Usage:
     python bench/runner.py --list
     python bench/runner.py --model qwen3.5:4b-mtp --runs 3
-    python bench/runner.py --conditions raw,hivemind_direct --runs 1
+    python bench/runner.py --conditions hivemind_duo,aider --runs 1
 """
 from __future__ import annotations
 
@@ -48,11 +52,12 @@ if str(ROOT) not in sys.path:
 
 from bench.relative import build_relative, print_relative  # noqa: E402
 
-# raw        = one prompt, unified diff (the strict baseline)
-# raw_files  = one prompt, full corrected files (optional, separately reported:
+# raw        = one prompt, unified diff (diagnostic only, opt-in)
+# raw_files  = one prompt, full corrected files (diagnostic only, opt-in:
 #              small models often fail on diff syntax, not on the fix itself)
+# The score-bearing comparison is HiveMind vs aider on the same server.
 CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_lean", "aider")
-DEFAULT_CONDITIONS = ("raw", "hivemind_direct", "hivemind_duo", "aider")
+DEFAULT_CONDITIONS = ("hivemind_direct", "hivemind_duo", "aider")
 
 
 @dataclass
@@ -566,12 +571,13 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
 
 
 def aggregate(rows: list[dict]) -> dict:
-    """Per-condition pass rate, median duration, tokens, delta vs raw.
+    """Per-condition pass rate, median duration, tokens and token ratios.
 
-    D1 (2026-11-09): also the delta vs the `raw_files` baseline when present,
-    the cached-token share, the tool-round counts and - in the JSON's separate
-    `relative` block - per-category deltas and aider token ratios. All new
-    fields are additive; existing keys keep their meaning and shape.
+    The `delta_vs_raw`/`delta_vs_raw_files` fields are filled only when the
+    matching diagnostic baseline was explicitly run; they are None otherwise.
+    D1 (2026-11-09): the cached-token share, the tool-round counts and - in the
+    JSON's separate `relative` block - per-category deltas and aider token
+    ratios. All fields are additive; existing keys keep their meaning.
     """
     summary: dict[str, dict] = {}
     conds: list[str] = []
@@ -735,8 +741,12 @@ def main() -> int:
     work_root = (Path(__file__).parent / ".work" / stamp) if cfg.keep_work else None
     if work_root is not None:
         work_root.mkdir(parents=True, exist_ok=True)
-    tmp = None if work_root is not None else tempfile.mkdtemp(prefix="hm_bench_")
-    base = work_root if work_root is not None else Path(tmp)
+    tmp: str | None = None
+    if work_root is not None:
+        base = work_root
+    else:
+        tmp = tempfile.mkdtemp(prefix="hm_bench_")
+        base = Path(tmp)
     try:
         for run_idx in range(cfg.runs):
             for task in tasks:

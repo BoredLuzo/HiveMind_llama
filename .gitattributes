@@ -18,11 +18,8 @@
 /docs/plan_1.4_voice.md export-ignore
 
 # SHIPPING-TRIM (2026-10-18): a user release needs the program, the launchers and
-# the user docs - not the engineering audits, the release-note drafts (they are
-# the GitHub release body, uploaded from the repo) or the dev pre-commit hook.
-/docs/audit/ export-ignore
-# benchmark docs are developer-only, like the harness itself
-/docs/benchmarks/ export-ignore
+# the user docs - not the release-note drafts (they are the GitHub release body,
+# uploaded from the repo) or the dev pre-commit hook.
 /docs/architecture.md export-ignore
 # legacy German workplan; dev-only, not user documentation
 /docs/gateway_realrun_wp2.md export-ignore

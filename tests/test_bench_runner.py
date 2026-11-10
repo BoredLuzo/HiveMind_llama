@@ -142,8 +142,8 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           f" ({detail})")
     check("files: unsafe path did not write outside",
           not (root / "evil.py").exists())
-    check("default conditions keep raw_files opt-in",
-          "raw" in DEFAULT_CONDITIONS and "raw_files" not in DEFAULT_CONDITIONS)
+    check("default conditions do not spend cells on the meaningless raw baselines",
+          "raw" not in DEFAULT_CONDITIONS and "raw_files" not in DEFAULT_CONDITIONS)
 
     # ── code-churn metrics ─────────────────────────────────────────────────
     _base = root / "churn_repo"

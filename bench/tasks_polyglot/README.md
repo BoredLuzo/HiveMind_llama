@@ -49,7 +49,7 @@ python bench/runner.py \
   --llama http://127.0.0.1:8101 \
   --hivemind http://127.0.0.1:8001 \
   --runs 3 \
-  --aider-bin "C:/Users/NtheP/Desktop/HiveMind_bench_tools/aider/.venv/Scripts/aider.exe" \
+  --aider-bin "$HOME/aider-venv/bin/aider" \
   --out bench/results/run-polyglot10-YYYYMMDD.json
 ```
 

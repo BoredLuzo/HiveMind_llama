@@ -170,6 +170,11 @@ gateway.disabled
 gateway.lock
 gateway.pid
 
+# internal audit/handoff and benchmark notes live outside the checkout
+# (../local_docs/); ignore them if they are ever recreated here
+docs/audit/
+docs/benchmarks/
+
 # internal audit docs - never in a release zip
 docs/gateway_audit_glm_full.md
 model_configs/gguf_filename_tags.json

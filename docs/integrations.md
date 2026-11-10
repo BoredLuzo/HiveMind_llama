@@ -68,5 +68,6 @@ fed back as `HIVEMIND_LIVE_STT_AUDIO` for an STT round trip.
 
 ## Status
 
-Recorded in `docs/audit/MAINTENANCE_TODO.md` (C5). Until a check has a recorded
-PASS with real credentials/fixtures, its integration counts as **not tested**.
+Status is tracked in the local maintenance notes (outside the repository).
+Until a check has a recorded PASS with real credentials/fixtures, its
+integration counts as **not tested**.

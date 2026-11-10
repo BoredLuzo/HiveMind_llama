@@ -3,14 +3,16 @@
 # run `smoke` first and read the output before paying for `full`).
 #
 # One machine, one model (Qwen3.6-35B-A3B UD-Q4_K_XL), one llama-server:
-#   hivemind_duo -> raw -> aider  (same task list, same hidden-test check)
-# HiveMind starts and owns the llama-server; raw/aider reuse it (runner.py
+#   hivemind_duo -> aider  (same task list, same hidden-test check)
+# HiveMind starts and owns the llama-server; aider reuses it (runner.py
 # auto-detects it on :8080/:8101/:8102), so the model is the same in every row.
+# `raw` remains an explicit diagnostic (`HM_CONDITIONS=hivemind_duo,raw,aider`);
+# it is not part of the default run because it only guesses a diff.
 #
 # Usage (Ubuntu + NVIDIA driver, >= 40 GB VRAM, >= 100 GB disk, root or sudo):
 #   bash rent_bootstrap.sh setup     # deps, repo, python, llama.cpp, model, aider
 #   bash rent_bootstrap.sh serve     # start the HiveMind engine (background)
-#   bash rent_bootstrap.sh smoke     # 3 tasks x 3 conditions - check cost/time!
+#   bash rent_bootstrap.sh smoke     # 3 tasks x 2 conditions - check cost/time!
 #   bash rent_bootstrap.sh full      # detached tmux run, results in bench/results/
 #   bash rent_bootstrap.sh status    # tail the run
 #   bash rent_bootstrap.sh stop
@@ -23,7 +25,7 @@
 #               extracted over the clone when present. Needed while bench/ is
 #               not pushed to GitHub:  tar czf bench_bundle.tgz bench
 #   HM_MODEL    default qwen3.6:35b-a3b-ud (key from deploy/fetch_models.py)
-#   HM_RUNS     default 1       HM_CONDITIONS default hivemind_duo,raw,aider
+#   HM_RUNS     default 1       HM_CONDITIONS default hivemind_duo,aider
 #   HM_TASKS    default bench/tasks (use bench/tasks_polyglot after `polyglot`)
 set -euo pipefail
 
@@ -33,7 +35,7 @@ HM_DIR="${HM_DIR:-$HOME/HiveMind_llama}"
 BENCH_TGZ="${BENCH_TGZ:-$HOME/bench_bundle.tgz}"
 HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
 HM_RUNS="${HM_RUNS:-1}"
-HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,raw,aider}"
+HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
@@ -181,7 +183,7 @@ run_bench() {  # $1 = extra args
 
 smoke() {
   serve
-  log "smoke: 3 tasks, all conditions - note the wall time per condition"
+  log "smoke: 3 tasks, HiveMind vs aider - note the wall time per condition"
   local t0; t0=$(date +%s)
   HM_RUNS=1 run_bench "--only fix_add,fix_off_by_one,multi_move"
   log "smoke wall time: $(( $(date +%s) - t0 )) s  (full run ~ this x tasks/3 x runs)"
