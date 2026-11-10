@@ -211,13 +211,29 @@ _WIN_DANGEROUS_PATTERNS = [
 async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: str | None) -> str:
     code = args.get("code", "")
     fname = None
+    bench_cmd = None
     try:
-        def _write_temp_python() -> str:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
-                f.write(code)
-                return f.name
+        # BENCH-CONTAINER: run snippets in the task image, like run_bash.
+        # The temp file lives in the bind-mounted workspace so the container
+        # sees the same bytes; no mapping -> normal host Python below.
+        try:
+            from tools.bench_container import bash_argv as _bench_bash_argv
+            if _bench_bash_argv("true", workspace) is not None:
+                _fd, _tmp = tempfile.mkstemp(suffix=".py", dir=workspace)
+                os.close(_fd)
+                fname = Path(_tmp)
+                fname.write_text(code, encoding="utf-8")
+                bench_cmd = _bench_bash_argv(f"python3 {fname.name}", workspace)
+        except (ImportError, OSError, ValueError):
+            bench_cmd = None
 
-        fname = await asyncio.to_thread(_write_temp_python)
+        if fname is None:
+            def _write_temp_python() -> str:
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+                    f.write(code)
+                    return f.name
+
+            fname = await asyncio.to_thread(_write_temp_python)
         # Prefer a workspace venv (same one install_package uses), otherwise
         # the engine venv. A bare "python" does not exist on uv-managed
         # installs (only python3.14.exe on PATH).
@@ -237,17 +253,26 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         # a cosmetic character, not on its logic.
         _env = _tool_env_with_python()
         from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
-        r = await asyncio.create_subprocess_exec(
-            _py_cmd,
-            fname,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(workspace),
-            env=_env,
-            **_spawn_kwargs())
+        if bench_cmd:
+            r = await asyncio.create_subprocess_exec(
+                *bench_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(workspace),
+                env=_env,
+                **_spawn_kwargs())
+        else:
+            r = await asyncio.create_subprocess_exec(
+                _py_cmd,
+                fname,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(workspace),
+                env=_env,
+                **_spawn_kwargs())
         _job = _ToolJob.confine(r)
         try:
-            out, err = await asyncio.wait_for(r.communicate(), 10)
+            out, err = await asyncio.wait_for(r.communicate(), 60 if bench_cmd else 10)
         except asyncio.TimeoutError:
             if _job is not None:
                 _job.terminate()
@@ -259,7 +284,7 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
                 pass
             return _tool_error_response(
                 "RUN_PYTHON_TIMEOUT",
-                "Python execution timed out after 10s.",
+                "Python execution timed out.",
                 tool="run_python" )
 
         stdout = out.decode(errors="replace").replace("\r\n", "\n").replace("\r", "").strip()
