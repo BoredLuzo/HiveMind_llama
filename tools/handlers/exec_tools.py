@@ -557,6 +557,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     if sys.platform == "win32"
                     else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
                 )
+            # BENCH-CONTAINER (2026-11-10): external benchmarks can bind-mount
+            # the workspace into the task image. Commands must then run in that
+            # image (real deps/test runner), while file tools keep editing the
+            # host workspace. No mapping -> unchanged host execution.
+            try:
+                from tools.bench_container import bash_argv as _bench_bash_argv
+                _bench_cmd = _bench_bash_argv(cmd, workspace)
+            except (ImportError, OSError, ValueError):
+                _bench_cmd = None
+            if _bench_cmd:
+                _stream_cmd = _bench_cmd
+                _bash_timeout = max(_bash_timeout, 1800)
             stdout_raw, stderr_raw, returncode, timed_out = await _stream_proc(
                 _stream_cmd, _bash_timeout, str(workspace),
                 _tool_env_with_python(),

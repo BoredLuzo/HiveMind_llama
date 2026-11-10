@@ -33,6 +33,11 @@ repository_url = "https://github.com/example/repo"
 base_commit_hash = "0123456789abcdef"
 [environment]
 docker_image = "public.ecr.aws/example/demo:1"
+[verifier]
+timeout_sec = 1800.0
+[verifier.environment]
+cpus = 2.0
+memory_mb = 8192
 '''
 
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -46,6 +51,10 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     t = load_task(root / "alpha")
     check("task.toml metadata is parsed", t.task_id == "alpha"
           and t.repo_url.endswith("/repo") and t.base_commit == "0123456789abcdef")
+    check("task.toml verifier resources are parsed",
+          t.verifier_timeout_s == 1800 and t.verifier_cpus == 2.0
+          and t.verifier_memory_mb == 8192,
+          f" ({t.verifier_timeout_s}/{t.verifier_cpus}/{t.verifier_memory_mb})")
     check("instruction is read", t.instruction.strip() == "Do the thing.")
     only = select_tasks(root, n_tasks=5, names=["beta"])
     check("named task selection", [x.task_id for x in only] == ["beta"])
@@ -143,26 +152,36 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         def __exit__(self, *exc): return False
         def batch_upload(self): return _FakeBatch(self._rec)
 
-    class _FakeFunction:
-        def __init__(self, rec, fn): self._rec, self._fn = rec, fn
-        def remote(self, *a, **k):
-            self._rec["remote_calls"] = self._rec.get("remote_calls", 0) + 1
-            nxt = self._rec["remote_results"].pop(0)
-            if isinstance(nxt, BaseException):
-                raise nxt
-            return nxt
+    class _FakeProc:
+        def __init__(self, out, code=0):
+            self.stdout = types.SimpleNamespace(read=lambda: out)
+            self._code = code
+
+        def wait(self):
+            return self._code
+
+    class _FakeSandbox:
+        def __init__(self, rec):
+            self._rec = rec
+
+        def exec(self, *args, **kwargs):
+            cmd = " ".join(str(a) for a in args)
+            self._rec.setdefault("exec_cmds", []).append(cmd)
+            if "/tests/test.sh" in cmd:
+                if self._rec.get("exec_error"):
+                    raise self._rec["exec_error"]
+                return _FakeProc(self._rec.get("test_out", ""),
+                                 self._rec.get("test_exit", 0))
+            return _FakeProc(self._rec.get("reward_raw", ""), 0)
+
+        def terminate(self):
+            self._rec["terminated"] = True
 
     class _FakeApp:
         def __init__(self, name, rec):
             self.name = name
             self._rec = rec
             rec["app_name"] = name
-        def function(self, **kw):
-            self._rec["function_kwargs"] = kw
-            return lambda fn: _FakeFunction(self._rec, fn)
-        def run(self):
-            self._rec["app_run"] = True
-            return contextlib.nullcontext()
 
     def _fake_modal_module(rec):
         m = types.ModuleType("modal")
@@ -179,15 +198,33 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             rec["dockerfile"] = str(path)
             rec["context_dir"] = str(context_dir)
             return "fake-image"
+
         m.Image = types.SimpleNamespace(from_dockerfile=_from_dockerfile)
         m.Volume = types.SimpleNamespace(ephemeral=lambda: _FakeVolume(rec))
-        m.App = lambda name: _FakeApp(name, rec)
+
+        def _app_lookup(name, create_if_missing=False):
+            return _FakeApp(name, rec)
+        m.App = types.SimpleNamespace(lookup=_app_lookup)
+
+        def _sandbox_create(**kw):
+            rec["sandbox_kwargs"] = kw
+            if rec.get("sandbox_error"):
+                raise rec["sandbox_error"]
+            return _FakeSandbox(rec)
+        m.Sandbox = types.SimpleNamespace(create=_sandbox_create)
+
+        st = types.ModuleType("modal.stream_type")
+        st.StreamType = types.SimpleNamespace(STDOUT="stdout", DEVNULL="devnull")
+        m.stream_type = st
         return m
 
     @contextlib.contextmanager
     def _fake_modal(rec):
         saved = sys.modules.get("modal")
-        sys.modules["modal"] = _fake_modal_module(rec)
+        saved_st = sys.modules.get("modal.stream_type")
+        fake = _fake_modal_module(rec)
+        sys.modules["modal"] = fake
+        sys.modules["modal.stream_type"] = fake.stream_type
         try:
             yield
         finally:
@@ -195,14 +232,17 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
                 sys.modules.pop("modal", None)
             else:
                 sys.modules["modal"] = saved
+            if saved_st is None:
+                sys.modules.pop("modal.stream_type", None)
+            else:
+                sys.modules["modal.stream_type"] = saved_st
 
     def _modal_run(rec, mlogs):
         with _fake_modal(rec):
             return run_verifier_modal(dtask, mpatch, mlogs)
 
-    rec = {"remote_results": [{"exit_code": 0, "output": "3 passed",
-                               "reward_file": "reward.json",
-                               "reward_raw": '{"reward": 1.0}'}]}
+    rec = {"test_exit": 0, "test_out": "3 passed",
+           "reward_raw": '{"reward": 1.0}'}
     mlogs = root / "modal_logs"
     res = _modal_run(rec, mlogs)
     check("modal: image built from the task's tests/Dockerfile",
@@ -216,11 +256,23 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
           rec["put_file"] == (str(mlogs / "artifacts" / "model.patch"),
                               "/artifacts/model.patch"),
           f" ({rec.get('put_file')})")
-    check("modal: verifier function mounts the volume at /logs",
-          list(rec["function_kwargs"]["volumes"]) == ["/logs"]
-          and rec["function_kwargs"]["image"] == "fake-image"
-          and rec["remote_calls"] == 1 and rec["app_run"] is True,
-          f" ({rec.get('function_kwargs')})")
+    kw = rec["sandbox_kwargs"]
+    check("modal: sandbox mounts /logs and uses the task image",
+          list(kw["volumes"]) == ["/logs"] and kw["image"] == "fake-image",
+          f" ({kw})")
+    check("modal: sandbox gets the task's timeout/cpu/memory",
+          kw["timeout"] == 2100 and kw["cpu"] == 2.0
+          and kw["memory"] == 8192, f" ({kw})")
+    check("modal: sandbox blocks network like the official verifier",
+          kw["block_network"] is True, f" ({kw})")
+    check("modal: test.sh runs in the sandbox",
+          rec["exec_cmds"] and rec["exec_cmds"][0].endswith("/tests/test.sh"),
+          f" ({rec.get('exec_cmds')})")
+    check("modal: reward file is read back through cat",
+          len(rec["exec_cmds"]) > 1 and "reward" in rec["exec_cmds"][1],
+          f" ({rec.get('exec_cmds')})")
+    check("modal: sandbox is terminated after grading",
+          rec.get("terminated") is True)
     check("modal: app tagged as the verifier image name",
           rec["app_name"].startswith("deepswe-verifier-")
           and "delta" in rec["app_name"], f" ({rec.get('app_name')})")
@@ -233,23 +285,19 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
           (mlogs / "verifier" / "reward.json").read_text(encoding="utf-8")
           == '{"reward": 1.0}')
 
-    rec = {"remote_results": [{"exit_code": 1, "output": "2 failed",
-                               "reward_file": "reward.txt",
-                               "reward_raw": "0\n"}]}
+    rec = {"test_exit": 1, "test_out": "2 failed", "reward_raw": "0\n"}
     res = _modal_run(rec, root / "modal_logs2")
     check("modal: reward.txt fallback with failing reward",
           res["ok"] is False and res["reward"] == "0" and res["exit_code"] == 1,
           f" ({res})")
-    rec = {"remote_results": [{"exit_code": 0, "output": "o",
-                               "reward_file": "reward.json",
-                               "reward_raw": "not json"}]}
+    rec = {"test_exit": 0, "test_out": "o", "reward_raw": "not json"}
     res = _modal_run(rec, root / "modal_logs3")
     check("modal: malformed reward.json degrades to raw text",
           res["ok"] is False and res["reward"] == "not json", f" ({res})")
 
-    rec: dict = {"remote_results": [None]}  # replaced after module setup
+    rec = {}
     _fake_modal_module(rec)
-    rec["remote_results"] = [rec["modal_error_cls"]("no auth token")]
+    rec["sandbox_error"] = rec["modal_error_cls"]("no auth token")
     try:
         _modal_run(rec, root / "modal_logs4")
         check("modal: SDK failure surfaces as RuntimeError", False,

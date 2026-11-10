@@ -32,6 +32,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -46,9 +47,13 @@ class DeepTask:
     repo_url: str
     base_commit: str
     image: str
+    # Official verifier resources (task.toml [verifier] / [verifier.environment]).
+    verifier_timeout_s: int = 3600
+    verifier_cpus: float = 2.0
+    verifier_memory_mb: int = 8192
 
 
-def _meta(d: dict, *keys, default=""):
+def _meta(d: dict, *keys, default: Any = "") -> Any:
     cur = d
     for k in keys:
         if not isinstance(cur, dict):
@@ -65,12 +70,17 @@ def load_task(task_dir: str | Path) -> DeepTask:
     base = str(_meta(data, "metadata", "base_commit_hash", default="")).strip()
     image = str(_meta(data, "environment", "docker_image", default="")).strip()
     task_id = str(_meta(data, "metadata", "task_id", default="") or d.name)
+    v_timeout = int(float(_meta(data, "verifier", "timeout_sec", default=3600)))
+    v_cpus = float(_meta(data, "verifier", "environment", "cpus", default=2))
+    v_mem = int(_meta(data, "verifier", "environment", "memory_mb", default=8192))
     missing = [n for n, v in (("repository_url", repo), ("base_commit_hash", base),
                               ("docker_image", image)) if not v]
     if missing:
         raise ValueError(f"{d.name}: missing {', '.join(missing)} in task.toml")
     return DeepTask(task_id=task_id, task_dir=d, instruction=instr,
-                    repo_url=repo, base_commit=base, image=image)
+                    repo_url=repo, base_commit=base, image=image,
+                    verifier_timeout_s=v_timeout, verifier_cpus=v_cpus,
+                    verifier_memory_mb=v_mem)
 
 
 def select_tasks(tasks_root: str | Path, *, n_tasks: int = 5,
@@ -195,8 +205,10 @@ def run_verifier(task: DeepTask, patch: Path, logs: Path) -> dict:
     if b.returncode != 0:
         return {"ok": False, "error": "docker build failed: " + b.stderr[-1200:]}
     r = _run(["docker", "run", "--rm",
+              "--cpus", str(task.verifier_cpus),
+              "--memory", f"{task.verifier_memory_mb}m",
               "-v", f"{logs.resolve()}:/logs",
-              tag, "/tests/test.sh"], timeout=3600)
+              tag, "/tests/test.sh"], timeout=task.verifier_timeout_s)
     reward = None
     for name in ("reward.json", "reward.txt"):
         p = logs / "verifier" / name
@@ -221,10 +233,13 @@ def run_verifier_modal(task: DeepTask, patch: Path, logs: Path) -> dict:
     runs inside that image and `/logs/verifier/reward.{json,txt}` is read back
     (mirrored into the local `logs` directory). HiveMind itself still runs on
     the host via `/stream`; only grading is remote. Requires `pip install
-    modal` and a Modal token; no local Docker. The first image build per task
-    takes minutes and consumes Modal credits.
+    modal` and a Modal token; no local Docker. The verifier's CPU/memory/
+    timeout limits come from the task's `[verifier]` block, so a Go/Rust build
+    does not silently run in Modal's tiny default container. The first image
+    build per task takes minutes and consumes Modal credits.
     """
     import modal  # lazy: only the --verifier modal path needs the SDK
+    from modal.stream_type import StreamType
 
     tests_dir = task.task_dir / "tests"
     logs.mkdir(parents=True, exist_ok=True)
@@ -233,40 +248,61 @@ def run_verifier_modal(task: DeepTask, patch: Path, logs: Path) -> dict:
     shutil.copy2(patch, staged)
     image = modal.Image.from_dockerfile(str(tests_dir / "Dockerfile"),
                                         context_dir=str(tests_dir))
-    app = modal.App(_verifier_tag(task.task_id))
+    app = modal.App.lookup(_verifier_tag(task.task_id), create_if_missing=True)
     res: dict = {}
+    sandbox = None
     try:
         with modal.Volume.ephemeral() as vol:
             with vol.batch_upload() as batch:
                 batch.put_file(str(staged), "/artifacts/model.patch")
 
-            @app.function(image=image, volumes={"/logs": vol}, timeout=3600)
-            def _verify() -> dict:
-                import subprocess
+            # A Sandbox runs the official test.sh directly in the task image.
+            # This avoids @app.function/serialized=True: the host runs Python
+            # 3.14 while the verifier image may ship 3.12, and a serialized
+            # function cannot cross those versions.
+            sandbox = modal.Sandbox.create(
+                app=app,
+                image=image,
+                volumes={"/logs": vol},
+                timeout=task.verifier_timeout_s + 300,
+                cpu=task.verifier_cpus,
+                memory=task.verifier_memory_mb,
+                block_network=True,
+            )
+            proc = sandbox.exec(
+                "/tests/test.sh",
+                stdout=StreamType.STDOUT,
+                stderr=StreamType.DEVNULL,
+                timeout=task.verifier_timeout_s,
+            )
+            out = proc.stdout.read()[-4000:]
+            exit_code = proc.wait()
 
-                from pathlib import Path as _P
-
-                proc = subprocess.run(["/tests/test.sh"], capture_output=True)
-                out = ((proc.stdout or b"") + (proc.stderr or b"")).decode(
-                    "utf-8", errors="replace")[-2000:]
-                reward_file = reward_raw = None
-                for name in ("reward.json", "reward.txt"):
-                    p = _P("/logs/verifier") / name
-                    if p.is_file():
-                        reward_file = name
-                        reward_raw = p.read_text(encoding="utf-8",
-                                                 errors="replace")
-                        break
-                return {"exit_code": proc.returncode, "output": out,
-                        "reward_file": reward_file, "reward_raw": reward_raw}
-
-            with app.run():
-                res = _verify.remote()
+            reward_proc = sandbox.exec(
+                "bash", "-lc",
+                "cat /logs/verifier/reward.json 2>/dev/null "
+                "|| cat /logs/verifier/reward.txt 2>/dev/null || true",
+                stdout=StreamType.STDOUT,
+                stderr=StreamType.DEVNULL,
+                timeout=60,
+            )
+            reward_raw = reward_proc.stdout.read().strip()
+            reward_proc.wait()
+            reward_file = ("reward.json" if reward_raw.startswith("{")
+                           else "reward.txt" if reward_raw else None)
+            res = {"exit_code": exit_code, "output": out,
+                   "reward_file": reward_file, "reward_raw": reward_raw}
     except OSError:
         raise
     except modal.Error as exc:  # auth/build/remote failures -> runner row
         raise RuntimeError(
             f"modal verifier failed: {type(exc).__name__}: {exc}") from exc
+    finally:
+        if sandbox is not None:
+            try:
+                sandbox.terminate()
+            except modal.Error:
+                pass
     reward = None
     if res.get("reward_file") == "reward.json":
         raw = str(res.get("reward_raw") or "")
@@ -321,9 +357,10 @@ def main(argv: list[str] | None = None) -> int:
     ws_root.mkdir(parents=True, exist_ok=True)
     verifier = run_verifier_modal if args.verifier == "modal" else run_verifier
     rows: list[dict] = []
-    for task in tasks:
+    for task_no, task in enumerate(tasks, 1):
         row = {"task": task.task_id, "ok": False, "verifier": args.verifier}
-        print(f"\n=== {task.task_id} ===")
+        task_started = time.monotonic()
+        print(f"\n=== [{task_no}/{len(tasks)}] {task.task_id} ===", flush=True)
         if args.dry_run:
             print("repo:", task.repo_url, "base:", task.base_commit)
             print("image:", task.image)
@@ -345,15 +382,25 @@ def main(argv: list[str] | None = None) -> int:
                 row.update(v)
             else:
                 row["error"] = "empty patch"
-            print("stop:", row.get("stop_reason"), "patch:", detail,
-                  "reward:", row.get("reward"))
         except (RuntimeError, OSError, ValueError, httpx.HTTPError, subprocess.SubprocessError) as exc:
             row["error"] = f"{type(exc).__name__}: {exc}"[:800]
-            print("ERROR:", row["error"])
+            print("ERROR:", row["error"], flush=True)
         rows.append(row)
         (out_dir / "results.json").write_text(
             json.dumps({"tasks": rows}, indent=1), encoding="utf-8")
-    print("\nwrote", out_dir / "results.json")
+        elapsed = time.monotonic() - task_started
+        passed = sum(1 for r in rows if r.get("ok"))
+        print(
+            f"[RESULT] {task.task_id}: {'PASS' if row.get('ok') else 'FAIL'} "
+            f"reward={row.get('reward')} "
+            f"stop={row.get('stop_reason', '')} "
+            f"patch={row.get('patch_detail', '')} "
+            f"elapsed={elapsed:.1f}s "
+            f"net_tokens={row.get('net_tokens', 0)}",
+            flush=True,
+        )
+        print(f"[PROGRESS] {passed}/{len(rows)} tasks passed", flush=True)
+    print("\nwrote", out_dir / "results.json", flush=True)
     return 0 if all(r.get("ok") for r in rows if not r.get("dry_run")) else 1
 
 

@@ -398,6 +398,8 @@ SUITES = [
     ("bench_polyglot",          "tests/test_bench_polyglot.py",              30),
     ("external_deepswe",        "tests/test_external_deepswe.py",           20),
     ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           20),
+    ("bench_container",         "tests/test_bench_container.py",            20),
+    ("swebench_hivemind",       "tests/test_swebench_hivemind.py",          20),
     # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
     ("llama_client_retry",      "tests/test_llama_client_retry.py",          30),
     # F4 sync-I/O off the loop (deep audit 2026-11-07): prefill meter reads
