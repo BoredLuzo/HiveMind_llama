@@ -125,6 +125,7 @@ p = Path("settings.json")
 d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 d.update({
     "moe_cpu_experts": {"qwen3.6:35b-a3b": 0},
+    "vram_budget_gb": 76.0,
     "llama_fit": False,
     "llama_gpu_layers_auto": False,
     "duo_ubatch": 1024,
