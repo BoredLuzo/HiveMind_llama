@@ -20,7 +20,7 @@ check = h.check
 
 check("official image name follows the SWE-bench convention",
       sw.image_for("Astropy__Astropy-12907")
-      == "swebench/sweb.eval.x86_64.astropy__astropy-12907:latest",
+      == "swebench/sweb.eval.x86_64.astropy_1776_astropy-12907:latest",
       f" ({sw.image_for('Astropy__Astropy-12907')})")
 
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:

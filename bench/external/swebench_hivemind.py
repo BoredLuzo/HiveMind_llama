@@ -23,6 +23,7 @@ Verified set).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shutil
@@ -59,7 +60,10 @@ class Instance:
 
 
 def image_for(instance_id: str) -> str:
-    return f"swebench/sweb.eval.x86_64.{instance_id.lower()}:latest"
+    # Current SWE-bench names replace the dataset's double underscore with
+    # "_1776_" because Docker Hub rejects image names with "__".
+    key = instance_id.lower().replace("__", "_1776_")
+    return f"swebench/sweb.eval.x86_64.{key}:latest"
 
 
 def _instance_from_row(row: dict) -> Instance:
@@ -72,8 +76,9 @@ def _instance_from_row(row: dict) -> Instance:
         ("problem_statement", problem)) if not value]
     if missing:
         raise ValueError(f"instance row missing {', '.join(missing)}")
+    image = str(row.get("image") or "").strip() or image_for(iid)
     return Instance(instance_id=iid, repo=repo, base_commit=base,
-                    problem_statement=problem, image=image_for(iid))
+                    problem_statement=problem, image=image)
 
 
 def load_instances(dataset: str, *, n_tasks: int = 5,
@@ -167,33 +172,54 @@ def _write_mapping(data: dict) -> None:
     tmp.replace(path)
 
 
-def register_workspace(workspace: Path, container: str) -> None:
-    path = mapping_path()
+@contextlib.contextmanager
+def _mapping_lock():
+    """Cross-process lock for the shared mapping file (shards)."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
+        import fcntl
+    except ImportError:  # Windows dev/test: single process is enough
+        yield
+        return
+    path = mapping_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_suffix(path.suffix + ".lock")
+    with lock.open("a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def register_workspace(workspace: Path, container: str) -> None:
+    with _mapping_lock():
+        path = mapping_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
             data = {}
-    except (OSError, ValueError):
-        data = {}
-    data[str(workspace.resolve())] = {
-        "container": container,
-        "cwd": "/testbed",
-        "activate": VERIFIER_ACTIVATE,
-    }
-    _write_mapping(data)
+        data[str(workspace.resolve())] = {
+            "container": container,
+            "cwd": "/testbed",
+            "activate": VERIFIER_ACTIVATE,
+        }
+        _write_mapping(data)
 
 
 def unregister_workspace(workspace: Path) -> None:
-    path = mapping_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
+    with _mapping_lock():
+        path = mapping_path()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
             data = {}
-    except (OSError, ValueError):
-        data = {}
-    data.pop(str(workspace.resolve()), None)
-    data.pop(str(workspace), None)
-    _write_mapping(data)
+        data.pop(str(workspace.resolve()), None)
+        data.pop(str(workspace), None)
+        _write_mapping(data)
 
 
 def _prompt(instance: Instance) -> str:
@@ -316,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--run-eval", action="store_true")
     ap.add_argument("--eval-workers", type=int, default=4)
+    ap.add_argument("--eval-dataset", default=DEFAULT_DATASET,
+                    help="official dataset id used by --run-eval")
     ap.add_argument("--run-id", default="")
     ap.add_argument("--swebench-python", default=sys.executable,
                     help="Python that has the official swebench package")
@@ -399,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_eval:
         run_id = args.run_id or f"hivemind-{stamp}"
         cmd = [args.swebench_python, "-m", "swebench.harness.run_evaluation",
-               "--dataset_name", args.dataset, "--predictions_path", str(preds),
+               "--dataset_name", args.eval_dataset, "--predictions_path", str(preds),
                "--run_id", run_id, "--max_workers", str(args.eval_workers)]
         print("[STATUS] official eval: " + " ".join(cmd), flush=True)
         return _run(cmd, timeout=24 * 3600, check=False).returncode

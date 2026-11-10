@@ -769,6 +769,19 @@ def _rollup_note_clean() -> None:
 
 async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: str | None) -> str:
 
+    # BENCH-CONTAINER: run_tests uses the host test runner, which is the wrong
+    # environment for a task-container benchmark. Make the limitation explicit
+    # instead of feeding the coder host-side import errors.
+    try:
+        from tools.bench_container import container_info as _bench_container_info
+        if _bench_container_info(_workspace) is not None:
+            return _tool_error_response(
+                "RUN_TESTS_UNAVAILABLE",
+                "run_tests is unavailable in a benchmark container workspace. "
+                "Use run_bash with the repository's test command.",
+                tool="run_tests")
+    except (ImportError, OSError, ValueError):
+        pass
 
     if _shared._run_test_suite is None:
         return _tool_error_response(

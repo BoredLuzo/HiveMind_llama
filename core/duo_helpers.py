@@ -5,6 +5,7 @@ import asyncio
 import json as _json
 import logging
 import re
+import sys
 from pathlib import Path
 
 from utils.token import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
@@ -608,11 +609,18 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
     # Built ONCE per run here, never mutated mid-run (prefix-cache safe).
     try:
         _ws_root = str(getattr(ctx, "workspace", "") or "").strip()
-        _env_line = ("RUNTIME: This machine is Windows — there is NO Linux "
-                     "container; never look in /workspace or /root. "
-                     + (f"Workspace root: {_ws_root.replace(chr(92), '/')} — "
-                        if _ws_root else "")
-                     + "use relative paths in tool calls.")
+        if sys.platform == "win32":
+            _env_line = ("RUNTIME: This machine is Windows — there is NO Linux "
+                         "container; never look in /workspace or /root. "
+                         + (f"Workspace root: {_ws_root.replace(chr(92), '/')} — "
+                            if _ws_root else "")
+                         + "use relative paths in tool calls.")
+        else:
+            _env_line = ("RUNTIME: This machine is Linux. Commands run in the "
+                         "workspace environment; use relative paths in tool "
+                         "calls. "
+                         + (f"Workspace root: {_ws_root} — " if _ws_root else "")
+                         + "do not assume Windows paths.")
         # SHELL-TOOLS (2026-10-21): models are trained on GNU coreutils and
         # write grep/sed/awk/find. Say plainly whether this box has them.
         try:
