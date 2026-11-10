@@ -212,7 +212,14 @@ status() { tail -n 40 "$HM_DIR/bench_full.log" 2>/dev/null || echo "no run log y
 stop() {
   tmux kill-session -t hmbench 2>/dev/null || true
   curl -fsS -X POST "http://127.0.0.1:$PORT/vram/kill_all" >/dev/null 2>&1 || true
+  # setsid makes the saved PID unreliable; kill the engine by its command line.
+  pkill -f "$HM_DIR/.venv/bin/python run.py" 2>/dev/null || true
+  pkill -f "HiveMind_llama.*run.py" 2>/dev/null || true
   [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
   log "stopped. Download bench/results/*.json, then DELETE the rental instance."
 }
 
