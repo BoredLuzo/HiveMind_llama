@@ -37,6 +37,7 @@ HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
 HM_RUNS="${HM_RUNS:-1}"
 HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
+HM_CTX="${HM_CTX:-32768}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 HERMES_VENV="${HERMES_VENV:-$HOME/hermes-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
@@ -165,9 +166,9 @@ PY
   curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
     -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0,"hermes3.6:35b-a3b":0},"vram_budget_gb":76.0}' >/dev/null \
     || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
-  log "preloading $HM_MODEL (ctx 32768)"
+  log "preloading $HM_MODEL (ctx $HM_CTX)"
   curl --max-time 600 -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \
+    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}" >/dev/null \
     || log "WARN: /vram/load failed; the first HiveMind request will load the model"
   for _ in $(seq 1 180); do
     if curl --max-time 2 -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl --max-time 2 -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
@@ -189,6 +190,7 @@ run_bench() {  # $1 = extra args
       --model "$HM_MODEL" \
       --conditions "$HM_CONDITIONS" \
       --runs "$HM_RUNS" \
+      --num-ctx "$HM_CTX" \
       --cell-timeout "${HM_CELL_TIMEOUT:-900}" \
       --aider-bin "$AIDER_VENV/bin/aider" \
       --hivemind "http://127.0.0.1:$PORT" \
@@ -220,13 +222,19 @@ polyglot() {
   log "now: HM_TASKS=bench/tasks_polyglot bash $0 full"
 }
 
+deepswe() {
+  # Pure-Python repo tasks from datacurve-ai/deep-swe
+  ( cd "$HM_DIR" && "$PY" bench/import_deepswe.py --out bench/tasks_deepswe )
+  log "now: HM_TASKS=bench/tasks_deepswe HM_CTX=131072 bash $0 full"
+}
+
 full() {
   serve
   local name="hmbench"
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' \
+    "cd '$HM_DIR' && HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 
@@ -252,6 +260,7 @@ case "${1:-}" in
   serve) serve ;;
   smoke) smoke ;;
   polyglot) polyglot ;;
+  deepswe) deepswe ;;
   full) full ;;
   _run) run_bench "" ;;
   status) status ;;

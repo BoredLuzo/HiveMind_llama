@@ -93,6 +93,8 @@ class Config:
     pi_bin: str = ""
     # Coder-alone mode for the duo condition (planner off, same model).
     duo_planner: bool = True
+    # Context window tokens (pinned per model/run, default 32768, 131072 for deepswe).
+    ctx_tokens: int = 32768
 
 def _file_map(root: Path | None) -> dict[str, str]:
     """Relative path -> text for a workspace (skip caches/binary-sized files)."""
@@ -344,7 +346,8 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
 
 
 def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
-                   *, duo_planner: bool = True, duo_tier: str = "core") -> dict:
+                   *, duo_planner: bool = True, duo_tier: str = "core",
+                   ctx_tokens: int = 32768) -> dict:
     """Request body for the two HiveMind conditions.
 
     MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
@@ -386,10 +389,9 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         body["duo_test_feedback"] = False
         body["duo_test_feedback_chunk"] = False
         body["duo_test_feedback_final"] = False
-        # Context: the 2026-11-08 runs used 32k; pin it instead of inheriting
-        # an install-specific override.
-        body["duo_coder_ctx_agentic"] = 32768
-        body["duo_coder_ctx_normal"] = 32768
+        # Context: default 32k, configurable via --num-ctx (e.g. 128k for deepswe)
+        body["duo_coder_ctx_agentic"] = int(ctx_tokens)
+        body["duo_coder_ctx_normal"] = int(ctx_tokens)
         # Agentic duo resolves coder/critic/planner from the agent cards; the
         # server patches both the card and the flat key for these overrides.
         body["duo_coder_model"] = model
@@ -404,7 +406,8 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
 async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
                         *, duo_tier: str = "core") -> dict:
     body = _hivemind_body(task, work, duo, cfg.model,
-                          duo_planner=cfg.duo_planner, duo_tier=duo_tier)
+                          duo_planner=cfg.duo_planner, duo_tier=duo_tier,
+                          ctx_tokens=cfg.ctx_tokens)
     done: dict = {}
     error = ""
     usage_prompt = usage_completion = usage_cached = usage_rounds = 0
@@ -613,7 +616,7 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
                     {
                         "id": cfg.model,
                         "name": f"Local {cfg.model}",
-                        "contextWindow": 32768,
+                        "contextWindow": cfg.ctx_tokens,
                         "maxTokens": 4096
                     }
                 ]
@@ -808,6 +811,8 @@ def main() -> int:
     parser.add_argument("--hivemind", default="http://127.0.0.1:8001")
     parser.add_argument("--conditions", default=",".join(DEFAULT_CONDITIONS))
     parser.add_argument("--runs", type=int, default=1)
+    parser.add_argument("--num-ctx", type=int, default=32768,
+                        help="context window token size (default: 32768, deepswe: 131072)")
     parser.add_argument("--task-timeout", type=int, default=None,
                         help="override every task's timeout_s (default: per task)")
     parser.add_argument("--cell-timeout", type=int, default=1800,
@@ -857,6 +862,7 @@ def main() -> int:
         hermes_bin=args.hermes_bin,
         pi_bin=args.pi_bin,
         duo_planner=not args.no_duo_planner,
+        ctx_tokens=max(1024, args.num_ctx),
     )
 
     _pf = asyncio.run(_preflight(cfg, conditions))

@@ -258,6 +258,12 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           duo_body.get("duo_coder_ctx_agentic") == 32768
           and duo_body.get("duo_coder_ctx_normal") == 32768,
           f" ({duo_body.get('duo_coder_ctx_agentic')})")
+    duo_128k = _hivemind_body(Task("t", "p", "c"), work, duo=True,
+                              model="qwen3.5:4b-mtp", ctx_tokens=131072)
+    check("body: duo accepts custom ctx_tokens (e.g. 128k for deepswe)",
+          duo_128k.get("duo_coder_ctx_agentic") == 131072
+          and duo_128k.get("duo_coder_ctx_normal") == 131072,
+          f" ({duo_128k.get('duo_coder_ctx_agentic')})")
     duo_solo = _hivemind_body(Task("t", "p", "c"), work, duo=True,
                               model="qwen3.5:4b-mtp", duo_planner=False)
     check("body: coder-alone mode turns the planner off",
