@@ -185,11 +185,11 @@ class _MoeSlot:
     _moe_cache_used = False
 
 
-def _run_moe(moe_cache: bool, cmd: list | None = None):
+def _run_moe(moe_cache: bool, cmd: list | None = None, moe_map: dict | None = None):
     slot = _MoeSlot()
     with mock.patch.object(_P, "_strip_alias", return_value="m"), \
          mock.patch.object(_P, "_MOE_EXPERT_COUNTS", {"m": 8}), \
-         mock.patch.object(_LC, "MOE_CPU_EXPERTS", {}), \
+         mock.patch.object(_LC, "MOE_CPU_EXPERTS", moe_map or {}), \
          mock.patch.object(_LC, "_try_registry_moe", return_value=0), \
          mock.patch.object(_LC, "MOE_CACHE_MIB", 512), \
          mock.patch.object(_P, "GPU_BACKEND", "vulkan"), \
@@ -228,6 +228,10 @@ check("j5 MoE decode threads use half the logical CPUs",
 check("j6 MoE prefill batch keeps the full thread count",
       _tbi >= 0 and _ph_threads.cmd[_tbi] == "16",
       f" ({_ph_threads.cmd})")
+_ph_zero, _ = _run_moe(False, [], {"m": 0})
+check("j7 explicit MoE override 0 keeps all experts on the GPU",
+      "--n-cpu-moe" not in _ph_zero.cmd,
+      f" ({_ph_zero.cmd})")
 
 # ── l-o. follow-ups found in the re-review (2026-11-07) ────────────────────
 check("l the finalize carry passes ctx.this_file (skills dir)",

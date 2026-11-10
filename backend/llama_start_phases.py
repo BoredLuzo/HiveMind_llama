@@ -495,6 +495,7 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     # the attribute on a settings change - the loader then kept looking at
     # an empty dict and the toggle did nothing.
     _moe_src = "table"
+    _moe_explicit = False
     try:
         from . import llama_config as _lc_live
         _moe_map = getattr(_lc_live, "MOE_CPU_EXPERTS", None)
@@ -502,19 +503,28 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             from . import llama_server_manager as _lsm_live
             _moe_map = getattr(_lsm_live, "MOE_CPU_EXPERTS", {})
         if isinstance(_moe_map, dict):
-            _moe_count = int(_moe_map.get(_moe_model_key, 0) or 0)
-            if _moe_count <= 0:
+            if _moe_model_key in _moe_map:
+                # Explicit 0 means "keep every expert on the GPU". It must not
+                # fall through to the profile/table default (that made an A100
+                # override of 0 silently keep -n-cpu-moe 35).
+                _moe_count = int(_moe_map.get(_moe_model_key) or 0)
+                _moe_src = "override"
+                _moe_explicit = True
+            else:
                 for _ok, _ov in _moe_map.items():
                     if _moe_model_key.startswith(_ok) and int(_ov or 0) > 0:
                         _moe_count = int(_ov)
+                        _moe_src = "override"
+                        _moe_explicit = True
                         break
         else:
             _moe_count = int(_moe_map or 0)
+            _moe_explicit = bool(_moe_map)
         if _moe_count > 0:
             _moe_src = "override"
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
         _moe_count = 0
-    if _moe_count <= 0:
+    if _moe_count <= 0 and not _moe_explicit:
         try:
             from .llama_config import _try_registry_moe as _reg_moe
             _reg_moe_v = _reg_moe(_moe_model_key)
@@ -523,7 +533,7 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                 _moe_src = "profile"
         except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _reg_err:
             logger.debug("[MOE] profile MoE-count probe skipped: %s", _reg_err)
-    if _moe_count <= 0:
+    if _moe_count <= 0 and not _moe_explicit:
         _moe_count = _MOE_EXPERT_COUNTS.get(_moe_model_key, 0)
         if _moe_count == 0 and _moe_model_key:
             # Prefix-Match: GGUF auto-discovery suffixes
@@ -532,7 +542,7 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                     _moe_count = _MOE_EXPERT_COUNTS[_ek]
                     break
     # Modellnamen ableiten (Xb-aYb → X, ab 30B). Kleine MoE bleiben komplett
-    if _moe_count <= 0 and _moe_model_key:
+    if _moe_count <= 0 and not _moe_explicit and _moe_model_key:
         try:
             from .llama_config import detect_moe_count as _moe_autodetect
             _moe_count = _moe_autodetect(_moe_model_key)
@@ -544,6 +554,9 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     if _moe_count > 0:
         logger.info("MoE experts: %s -> %d (-n-cpu-moe, source=%s)",
                     _moe_model_key, _moe_count, _moe_src)
+    elif _moe_explicit:
+        logger.info("MoE experts: %s -> 0 (explicit override; all experts on GPU)",
+                    _moe_model_key)
 
     # ── VRAM calibration guard (soft) ──
     # Prefix-aware (2026-10-21): the table keys carry no tag suffixes, so an
