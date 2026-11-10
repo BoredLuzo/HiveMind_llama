@@ -37,7 +37,6 @@ HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
 HM_RUNS="${HM_RUNS:-1}"
 HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
-HM_TEST_FEEDBACK="${HM_TEST_FEEDBACK:-0}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 PORT="${HIVEMIND_PORT:-8001}"
@@ -169,8 +168,6 @@ PY
 run_bench() {  # $1 = extra args
   [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
   [ -n "$HM_LLAMA_URL" ] || detect_llama_url
-  local _tf_flag=""
-  [ "${HM_TEST_FEEDBACK:-0}" = "1" ] && _tf_flag="--test-feedback"
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
