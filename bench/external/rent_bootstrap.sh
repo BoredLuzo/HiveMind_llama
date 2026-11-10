@@ -38,6 +38,7 @@ HM_RUNS="${HM_RUNS:-1}"
 HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
+HERMES_VENV="${HERMES_VENV:-$HOME/hermes-venv}"
 MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 PORT="${HIVEMIND_PORT:-8001}"
 HM_LLAMA_URL="${HM_LLAMA_URL:-}"
@@ -99,8 +100,12 @@ setup() {
   }
   "$AIDER_VENV/bin/aider" --version
 
-  log "hermes-agent (NousResearch CLI harness)"
-  uv pip install --python "$AIDER_VENV/bin/python" -q hermes-agent 2>/dev/null || log "WARN: hermes-agent install skipped"
+  log "hermes-agent (own venv, python 3.12)"
+  [ -x "$HERMES_VENV/bin/hermes" ] || {
+    uv venv --python 3.12 "$HERMES_VENV"
+    uv pip install --python "$HERMES_VENV/bin/python" -q hermes-agent 2>/dev/null       || log "WARN: hermes-agent install skipped"
+  }
+  [ -x "$HERMES_VENV/bin/hermes" ] && "$HERMES_VENV/bin/hermes" --version 2>/dev/null || true
 
   log "pi (earendil-works terminal coding agent harness)"
   command -v npm >/dev/null || { $SUDO apt-get install -y -qq nodejs npm 2>/dev/null || true; }
@@ -176,7 +181,7 @@ run_bench() {  # $1 = extra args
   [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
   [ -n "$HM_LLAMA_URL" ] || detect_llama_url
   local _extra_args=""
-  [ -x "$AIDER_VENV/bin/hermes" ] && _extra_args="$_extra_args --hermes-bin $AIDER_VENV/bin/hermes"
+  [ -x "$HERMES_VENV/bin/hermes" ] && _extra_args="$_extra_args --hermes-bin $HERMES_VENV/bin/hermes"
   command -v pi >/dev/null && _extra_args="$_extra_args --pi-bin $(command -v pi)"
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \

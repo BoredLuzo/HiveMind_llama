@@ -547,16 +547,27 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
     remote_base = _aider_remote_base()
     api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
     api_key = (os.environ.get("HIVEMIND_HERMES_API_KEY") or os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
+    # Hermes reads its endpoint from {HERMES_HOME}/config.yaml. The CLI has no
+    # --base-url/--api-key flags, and --safe-mode would ignore this config.
+    # Keep the home outside the task workspace so it never pollutes the patch.
+    hermes_home = Path(tempfile.mkdtemp(prefix="hm_hermes_"))
+    (hermes_home / "config.yaml").write_text(
+        "model:\n"
+        "  provider: custom\n"
+        f"  default: {cfg.model}\n"
+        f"  base_url: {api_base}\n"
+        f"  api_key: {api_key}\n",
+        encoding="utf-8",
+    )
     cmd = [
         hermes_bin, "chat",
-        "--safe-mode",
+        "--ignore-rules",
         "--provider", "custom",
-        "--base-url", api_base,
-        "--api-key", api_key,
         "--model", cfg.model,
         "-q", task.prompt,
     ]
-    env = {**os.environ, "OPENAI_API_KEY": api_key,
+    env = {**os.environ, "HERMES_HOME": str(hermes_home),
+           "OPENAI_API_KEY": api_key,
            "OPENAI_BASE_URL": api_base, "OPENAI_API_BASE": api_base}
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
@@ -564,6 +575,8 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
                            timeout=cfg.task_timeout_s or task.timeout_s, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "detail": f"hermes failed: {exc}"}
+    finally:
+        shutil.rmtree(hermes_home, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
     return {"tokens": 0, "detail": detail}
 
@@ -585,9 +598,10 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
     api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
     api_key = (os.environ.get("HIVEMIND_PI_API_KEY") or os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
     
-    # Configure custom local endpoint via Pi agent config dir
-    pi_conf_dir = work / ".pi_config"
-    pi_conf_dir.mkdir(parents=True, exist_ok=True)
+    # Configure custom local endpoint via Pi agent config dir. Keep it
+    # outside the workspace: Pi writes sessions/config there and those files
+    # must not pollute churn metrics or a later patch.
+    pi_conf_dir = Path(tempfile.mkdtemp(prefix="hm_pi_"))
     models_json = pi_conf_dir / "models.json"
     models_json.write_text(json.dumps({
         "providers": {
@@ -625,6 +639,8 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
                            timeout=cfg.task_timeout_s or task.timeout_s, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "detail": f"pi failed: {exc}"}
+    finally:
+        shutil.rmtree(pi_conf_dir, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
     return {"tokens": 0, "detail": detail}
 
