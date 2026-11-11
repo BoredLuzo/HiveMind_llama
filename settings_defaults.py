@@ -339,6 +339,16 @@ DEFAULT_SETTINGS = {
     # pre-seed block (core/duo_helpers.build_preseed_context). The effective
     # cap is min(this, ctx_tokens/4, floor 2000); 8000 keeps the old behavior.
     "duo_context_budget_chars": 8000,
+    # AUTO-TEST-ON-EDIT (G#2 lever, 2026-11-11): after a successful
+    # edit/write/apply_patch, run the testmap-mapped tests of that file in the
+    # SAME tool turn and append an [AUTO-TEST] note to the result. Default OFF
+    # (opt-in): nothing runs unless enabled. Bounds: mapped test files only
+    # (no full-suite fallback), timeout 10..180 s, and at most
+    # duo_auto_test_max_per_run auto-tests per run (unchanged files are never
+    # re-tested) so edit/test loops stay impossible.
+    "duo_auto_test_on_edit":   False,
+    "duo_auto_test_max_per_run": 2,
+    "duo_auto_test_timeout":   60,
     # ERROR ROLLUP (2026-09-06): deterministic dedup of repeating test/compile
     # failures in the fix-loop (core/error_rollup.py). First failure full,
     # repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run.

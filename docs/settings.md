@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**282 settings keys.**
+**285 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -38,6 +38,9 @@ its comment) in either file, then re-run the generator.
 | `duo_action_approval_timeout_s` | int | `0` | yes | Auto-DENY an unanswered approval card after N seconds (0 = off, attended runs wait as before). With N > 0 and nobody at the desk the gated call is DENIED once (fail closed, review: the old auto-approve-once behavior approved unseen actions) - the gate wait ends… |
 | `duo_agentic_mode` | bool | `True` | yes | DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the default; the Critic-Duo is one click away and costs a second model. |
 | `duo_agentic_thinking` | bool | `False` | yes |  |
+| `duo_auto_test_max_per_run` | int | `2` | - |  |
+| `duo_auto_test_on_edit` | bool | `False` | - | AUTO-TEST-ON-EDIT (G#2 lever, ): after a successful edit/write/apply_patch, run the testmap-mapped tests of that file in the SAME tool turn and append an [AUTO-TEST] note to the result. Default OFF (opt-in): nothing runs unless enabled. Bounds: mapped test files only… |
+| `duo_auto_test_timeout` | int | `60` | - |  |
 | `duo_caps` | object | `{}` | - |  |
 | `duo_chunking` | bool | `False` | yes | CHUNKING DEFAULT OFF : stays a working opt-in, but a fresh install runs one coder pass (the planner subtasks are skipped with an honest status) instead of silently chunking. |
 | `duo_coder_after_run` | str | `keep` | yes | CODER LIFETIME : keep = the slot stays warm after the run (idle TTL decides), evict = release it at the run end so the next prompt can load any model/mode without evicting anything. |

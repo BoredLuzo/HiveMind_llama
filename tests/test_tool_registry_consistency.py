@@ -58,7 +58,7 @@ check("the legacy list stays explicit",
 
 # ── 3. write tools must be approval-gated or deliberately not ─────────────
 WRITE_TOOLS = {"write_file", "edit_file", "write_file_append", "patch_file",
-               "replace_lines", "edit_ast"}
+               "replace_lines", "edit_ast", "apply_patch"}
 ungated = sorted(WRITE_TOOLS & OFFERED - APPROVAL)
 check("every offered write tool is approval-gated", not ungated, f" (ungated: {ungated})")
 
@@ -132,9 +132,9 @@ check("the dispatcher enforces the mode allowlist",
 # machine-changing names (the policy _APPROVAL_TOOLS must cover; kept local
 # since _MODE_STRICT_NAMES was removed with its dead consumer)
 STRICT = {"write_file", "write_file_append", "edit_file", "edit_ast",
-          "replace_lines", "patch_file", "run_bash", "run_python",
-          "install_package", "git_commit", "start_background", "undo_last",
-          "stop_background"}
+          "replace_lines", "patch_file", "apply_patch", "run_bash",
+          "run_python", "install_package", "git_commit", "start_background",
+          "undo_last", "stop_background"}
 # undo_last (reverts an approved change) and stop_background (kills a process the
 # model started itself) are deliberately NOT approval-gated - the policy next to
 # _APPROVAL_TOOLS says so.

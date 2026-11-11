@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Behavior checks: core coder tier (17 tools), lean tier (10 tools) + research tier (2026-11-09).
+"""Behavior checks: core coder tier (18 tools), lean tier (10 tools) + research tier (2026-11-09).
 
-- duo_core defaults to 17 tools (plus send_file when include_send_file=True).
+- duo_core defaults to 18 tools (plus send_file when include_send_file=True);
+  2026-11-11 (D3): +apply_patch (patch-native multi-file edits).
 - duo_lean provides the compact 10-tool set without get_datetime/send_file/lsp_*.
 - duo_full opts into git/web/MCP/browser/full-LSP tools.
 - direct_research gets web + read/search (no write/exec).
@@ -28,8 +29,9 @@ def _names(mode: str, **kw) -> set[str]:
 
 _core = _names("duo_core")
 check("coder core: read/edit/run/tests present",
-      {"read_file", "edit_file", "write_file", "run_bash", "run_tests",
-       "task_complete", "ask_user", "get_datetime", "lsp_diagnostics"} <= _core,
+      {"read_file", "edit_file", "write_file", "apply_patch", "run_bash",
+       "run_tests", "task_complete", "ask_user", "get_datetime",
+       "lsp_diagnostics"} <= _core,
       f" ({sorted(_core)})")
 check("coder core: no git/web/mcp/browser/subagent",
       not ({"git_status", "git_commit", "web_search", "web_fetch", "browser",
@@ -38,7 +40,8 @@ check("coder core: no git/web/mcp/browser/subagent",
 check("coder core: send_file stays gated in core",
       "send_file" in _names("duo_core", include_send_file=True)
       and "send_file" not in _names("duo_core", include_send_file=False))
-check("coder core: exact 17-tool set", len(_core) == 17, f" ({len(_core)})")
+check("coder core: exact 18-tool set (D3 +apply_patch)", len(_core) == 18,
+      f" ({len(_core)})")
 check("coder core: every duo_core tool is in _TOOL_PRIORITY",
       _core <= set(_TOOL_PRIORITY), f" (missing={sorted(_core - set(_TOOL_PRIORITY))})")
 

@@ -80,6 +80,10 @@ TARGETS = [
     "backend/manager_load.py",
     "tools/definitions.py",
     "tools/sandbox.py",
+    # D3 patch-native editing + G#2 auto-test (2026-11-11).
+    "tools/patch_diff.py",
+    "tools/handlers/patch_apply.py",
+    "tools/auto_test.py",
     "context/chat.py",
     "context/compression.py",
     "context/resume.py",
