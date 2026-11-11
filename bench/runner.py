@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -589,6 +590,47 @@ def _resolve_hermes_bin(cfg: Config) -> str:
     return shutil.which("hermes") or ""
 
 
+def _read_hermes_state_usage(hermes_home: Path) -> dict:
+    """Extract cumulative token & round metrics from Hermes SQLite state.db."""
+    db_path = hermes_home / "state.db"
+    if not db_path.is_file():
+        return {}
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=2.0)
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            if not cols:
+                return {}
+
+            def _sum_col(name: str) -> str:
+                return f"COALESCE(SUM({name}), 0)" if name in cols else "0"
+
+            sql = (
+                f"SELECT {_sum_col('input_tokens')}, "
+                f"{_sum_col('output_tokens')}, "
+                f"{_sum_col('cache_read_tokens')}, "
+                f"{_sum_col('cache_write_tokens')}, "
+                f"{_sum_col('api_call_count')} "
+                "FROM sessions"
+            )
+            row = conn.execute(sql).fetchone()
+            if not row:
+                return {}
+            inp, out, cache_read, cache_write, api_calls = (int(x or 0) for x in row)
+            gross = inp + out + cache_read + cache_write
+            net = inp + out + cache_write
+            return {
+                "tokens": gross,
+                "cached_tokens": cache_read,
+                "net_tokens": net,
+                "rounds": api_calls,
+            }
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return {}
+
+
 def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
     hermes_bin = _resolve_hermes_bin(cfg)
     if not hermes_bin:
@@ -622,24 +664,120 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
     env = {**os.environ, "HERMES_HOME": str(hermes_home),
            "OPENAI_API_KEY": api_key,
            "OPENAI_BASE_URL": api_base, "OPENAI_API_BASE": api_base}
+    usage: dict = {}
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
                            timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+        usage = _read_hermes_state_usage(hermes_home)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "detail": f"hermes failed: {exc}"}
     finally:
         shutil.rmtree(hermes_home, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
-    return {"tokens": 0, "detail": detail}
+    return {
+        "tokens": int(usage.get("tokens") or 0),
+        "cached_tokens": int(usage.get("cached_tokens") or 0),
+        "net_tokens": int(usage.get("net_tokens") or 0),
+        "rounds": int(usage.get("rounds") or 0),
+        "detail": detail,
+    }
 
 
 def _resolve_pi_bin(cfg: Config) -> str:
-    """Explicit path/env wins; otherwise PATH. Empty = not available."""
+    """Explicit path/env wins; otherwise PATH and standard Pi user bin dirs."""
     candidate = (cfg.pi_bin or os.environ.get("HIVEMIND_PI_BIN") or "").strip()
     if candidate:
         return candidate if Path(candidate).is_file() else ""
-    return shutil.which("pi") or ""
+    which_pi = shutil.which("pi")
+    if which_pi:
+        return which_pi
+    home = Path.home()
+    for p in (
+        home / ".pi" / "agent" / "bin" / "pi",
+        home / ".local" / "node" / "bin" / "pi",
+        home / ".local" / "bin" / "pi",
+        Path("/usr/local/bin/pi"),
+    ):
+        if p.is_file():
+            return str(p)
+    return ""
+
+
+def _parse_pi_json_output(stdout: str) -> dict:
+    """Extract token usage, rounds, and text/error detail from Pi --mode json JSONL."""
+    total_tokens = 0
+    cached_tokens = 0
+    net_tokens = 0
+    rounds = 0
+    last_texts: list[str] = []
+    errors: list[str] = []
+    parsed_any = False
+
+    def _acc_usage(u: dict) -> None:
+        nonlocal total_tokens, cached_tokens, net_tokens, rounds
+        inp = int(u.get("input") or 0)
+        out = int(u.get("output") or 0)
+        c_read = int(u.get("cacheRead") or 0)
+        c_write = int(u.get("cacheWrite") or 0)
+        tot = int(u.get("totalTokens") or 0)
+        gross_turn = tot if tot > 0 else (inp + out + c_read + c_write)
+        net_turn = max(0, gross_turn - c_read)
+        total_tokens += gross_turn
+        cached_tokens += c_read
+        net_tokens += net_turn
+        if gross_turn > 0 or out > 0:
+            rounds += 1
+
+    def _collect_msg(msg: dict) -> None:
+        usage = msg.get("usage")
+        if isinstance(usage, dict):
+            _acc_usage(usage)
+        err = msg.get("errorMessage")
+        if err:
+            errors.append(str(err))
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    last_texts.append(str(block["text"]))
+        elif isinstance(content, str) and content:
+            last_texts.append(content)
+
+    for raw in (stdout or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        parsed_any = True
+        etype = ev.get("type")
+        if etype == "message_end":
+            msg = ev.get("message") or {}
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                _collect_msg(msg)
+        elif etype == "agent_end" and rounds == 0:
+            for msg in (ev.get("messages") or []):
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    _collect_msg(msg)
+
+    detail_parts = []
+    if errors:
+        detail_parts.append("ERROR: " + "; ".join(errors))
+    if last_texts:
+        detail_parts.append("\n".join(last_texts[-2:]))
+    return {
+        "parsed": parsed_any,
+        "tokens": total_tokens,
+        "cached_tokens": cached_tokens,
+        "net_tokens": net_tokens,
+        "rounds": rounds,
+        "detail": "\n".join(detail_parts).strip()[-1000:],
+    }
 
 
 def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
@@ -650,7 +788,7 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
     remote_base = _aider_remote_base()
     api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
     api_key = (os.environ.get("HIVEMIND_PI_API_KEY") or os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
-    
+
     # Configure custom local endpoint via Pi agent config dir. Keep it
     # outside the workspace: Pi writes sessions/config there and those files
     # must not pollute churn metrics or a later patch.
@@ -661,32 +799,52 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
                 "baseUrl": api_base,
                 "api": "openai-completions",
                 "apiKey": api_key,
+                "compat": {
+                    "supportsDeveloperRole": False,
+                    "supportsReasoningEffort": False,
+                },
                 "models": [
                     {
                         "id": cfg.model,
                         "name": f"Local {cfg.model}",
                         "reasoning": False,
                         "input": ["text"],
+                        "cost": {
+                            "input": 0,
+                            "output": 0,
+                            "cacheRead": 0,
+                            "cacheWrite": 0,
+                        },
                         "contextWindow": cfg.ctx_tokens,
-                        "maxTokens": 4096
+                        "maxTokens": 4096,
                     }
-                ]
+                ],
             }
         }
     }, indent=2)
     (pi_conf_dir / "models.json").write_text(models_spec, encoding="utf-8")
     (pi_conf_dir / "agent").mkdir(parents=True, exist_ok=True)
     (pi_conf_dir / "agent" / "models.json").write_text(models_spec, encoding="utf-8")
-    
-    cmd = [
+
+    base_cmd = [
         pi_bin,
         "--no-session",
         "--provider", "local",
         "--model", cfg.model,
-        "-p", task.prompt,
     ]
+    cmd = [*base_cmd, "--mode", "json", "-p", task.prompt]
+    home = Path.home()
+    extra_path = os.pathsep.join(
+        str(p) for p in (
+            home / ".local" / "node" / "bin",
+            home / ".pi" / "agent" / "bin",
+            home / ".local" / "bin",
+        ) if p.is_dir()
+    )
+    cur_path = os.environ.get("PATH", "")
     env = {
         **os.environ,
+        "PATH": f"{extra_path}{os.pathsep}{cur_path}" if extra_path else cur_path,
         "PI_CODING_AGENT_DIR": str(pi_conf_dir),
         "OPENAI_API_KEY": api_key,
         "OPENAI_BASE_URL": api_base,
@@ -695,12 +853,27 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
                            timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+        if r.returncode != 0 and "mode" in (r.stderr or "").lower():
+            r = subprocess.run([*base_cmd, "-p", task.prompt],
+                               cwd=str(work), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace",
+                               timeout=cfg.task_timeout_s or task.timeout_s, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "detail": f"pi failed: {exc}"}
     finally:
         shutil.rmtree(pi_conf_dir, ignore_errors=True)
-    detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
-    return {"tokens": 0, "detail": detail}
+    parsed = _parse_pi_json_output(r.stdout or "")
+    raw_detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
+    detail = parsed["detail"] or raw_detail
+    if r.returncode != 0 and (r.stderr or "").strip():
+        detail = (detail + "\nstderr: " + (r.stderr or "").strip())[-1000:]
+    return {
+        "tokens": int(parsed.get("tokens") or 0),
+        "cached_tokens": int(parsed.get("cached_tokens") or 0),
+        "net_tokens": int(parsed.get("net_tokens") or 0),
+        "rounds": int(parsed.get("rounds") or 0),
+        "detail": detail,
+    }
 
 
 async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:

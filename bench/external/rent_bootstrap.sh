@@ -43,6 +43,23 @@ HERMES_VENV="${HERMES_VENV:-$HOME/hermes-venv}"
 HM_LLAMA_URL="${HM_LLAMA_URL:-}"
 HM_LLAMA_CUDA="${HM_LLAMA_CUDA:-12.8}"
 LOG="$HM_DIR/bench_engine.log"
+export PATH="$HOME/.local/node/bin:$HOME/.pi/agent/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+find_pi_bin() {
+  for _p in \
+    "${HIVEMIND_PI_BIN:-}" \
+    "$HOME/.pi/agent/bin/pi" \
+    "$HOME/.local/node/bin/pi" \
+    "$HOME/.local/bin/pi" \
+    "/usr/local/bin/pi" \
+    "$(command -v pi 2>/dev/null || true)"; do
+    if [ -n "$_p" ] && [ -x "$_p" ] && "$_p" --version >/dev/null 2>&1; then
+      echo "$_p"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # Resolve active model: env > .active_model > running engine > GPU VRAM auto-detection
 if [ -z "${HM_MODEL:-}" ] && [ -f "$HM_DIR/.active_model" ]; then
@@ -164,15 +181,37 @@ setup() {
   fi
   [ -x "$HERMES_VENV/bin/hermes" ] && "$HERMES_VENV/bin/hermes" --version 2>/dev/null || command -v hermes >/dev/null && hermes --version 2>/dev/null || true
 
-  if ! command -v pi >/dev/null; then
+  if ! find_pi_bin >/dev/null 2>&1; then
     log "Installing Pi coding agent CLI..."
-    curl -fsSL https://pi.dev/install.sh 2>/dev/null | sh 2>/dev/null || true
+    curl -fsSL https://pi.dev/install.sh | sh 2>&1 || true
   fi
-  if ! command -v pi >/dev/null; then
-    command -v npm >/dev/null || { $SUDO apt-get install -y -qq nodejs npm 2>/dev/null || true; }
-    command -v npm >/dev/null && npm install -g --ignore-scripts @earendil-works/pi-coding-agent 2>/dev/null || log "WARN: pi install skipped"
+  if ! find_pi_bin >/dev/null 2>&1; then
+    _node_major=0
+    if command -v node >/dev/null 2>&1; then
+      _node_major="$(node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/' || echo 0)"
+    fi
+    if [ "${_node_major:-0}" -lt 22 ]; then
+      log "Installing Node.js 22 LTS into $HOME/.local/node for Pi coding agent..."
+      mkdir -p "$HOME/.local/node"
+      _node_tar="$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | awk '/linux-x64\.tar\.xz$/ {print $2; exit}' || true)"
+      if [ -n "$_node_tar" ]; then
+        curl -fsSL "https://nodejs.org/dist/latest-v22.x/$_node_tar" | tar -xJ --strip-components=1 -C "$HOME/.local/node" || true
+        export PATH="$HOME/.local/node/bin:$PATH"
+        ln -sf "$HOME/.local/node/bin/node" /usr/local/bin/node 2>/dev/null || $SUDO ln -sf "$HOME/.local/node/bin/node" /usr/local/bin/node 2>/dev/null || true
+        ln -sf "$HOME/.local/node/bin/npm" /usr/local/bin/npm 2>/dev/null || $SUDO ln -sf "$HOME/.local/node/bin/npm" /usr/local/bin/npm 2>/dev/null || true
+      fi
+    fi
+    if command -v npm >/dev/null 2>&1; then
+      npm install -g --ignore-scripts @earendil-works/pi-coding-agent 2>&1 || log "WARN: pi npm install failed"
+    fi
   fi
-  command -v pi >/dev/null && pi --version 2>/dev/null || log "WARN: pi install skipped"
+  _pi_found="$(find_pi_bin 2>/dev/null || true)"
+  if [ -n "$_pi_found" ]; then
+    ln -sf "$_pi_found" /usr/local/bin/pi 2>/dev/null || $SUDO ln -sf "$_pi_found" /usr/local/bin/pi 2>/dev/null || true
+    log "Pi installed: $_pi_found ($("$_pi_found" --version 2>/dev/null || echo ok))"
+  else
+    log "WARN: pi install skipped/failed (Node >= 22 required)"
+  fi
 
   log "ALL SETUP STEPS FINISHED SUCCESSFULLY! Next: choose model (Zelle 4a oder 4b) and serve."
 }
@@ -373,7 +412,12 @@ run_bench() {  # $1 = extra args
   elif command -v hermes >/dev/null; then
     _extra_args="$_extra_args --hermes-bin $(command -v hermes)"
   fi
-  command -v pi >/dev/null && _extra_args="$_extra_args --pi-bin $(command -v pi)"
+  _pi_exe="$(find_pi_bin 2>/dev/null || true)"
+  if [ -n "$_pi_exe" ]; then
+    _extra_args="$_extra_args --pi-bin $_pi_exe"
+  elif command -v pi >/dev/null; then
+    _extra_args="$_extra_args --pi-bin $(command -v pi)"
+  fi
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \

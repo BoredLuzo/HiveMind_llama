@@ -7,6 +7,7 @@ diff extraction/application and the aggregation math are covered.
 import io
 import json
 import shutil
+import sqlite3
 import sys
 import tempfile
 from contextlib import redirect_stdout
@@ -18,7 +19,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
     Config, DEFAULT_CONDITIONS, Task, _aider_files, _extract_patch,
-    _hivemind_body, _parse_file_blocks, _parse_token_count, _persist,
+    _hivemind_body, _parse_file_blocks, _parse_pi_json_output,
+    _parse_token_count, _persist, _read_hermes_state_usage,
     _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
     _resolve_pi_bin, _run_pi, _safe_rel_path, aggregate,
     apply_full_files, apply_patch, diff_stats, load_tasks, prepare_workspace,
@@ -220,6 +222,51 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     _pi_missing = _run_pi(Task("t", "p", "c"), root, _cfg_pi_bad)
     check("pi: unavailable is reported, not raised",
           "not installed" in _pi_missing.get("detail", ""), f" ({_pi_missing})")
+
+    # hermes state.db usage extraction
+    _hhome = root / "hermes_home"
+    _hhome.mkdir(parents=True)
+    check("hermes: missing state.db returns empty dict",
+          _read_hermes_state_usage(_hhome) == {})
+    _hconn = sqlite3.connect(str(_hhome / "state.db"))
+    _hconn.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, input_tokens INTEGER, "
+        "output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, "
+        "api_call_count INTEGER)"
+    )
+    _hconn.execute("INSERT INTO sessions VALUES ('s1', 400, 100, 1500, 0, 3)")
+    _hconn.commit()
+    _hconn.close()
+    _husage = _read_hermes_state_usage(_hhome)
+    check("hermes: state.db tokens, cached, net, rounds extracted",
+          _husage == {"tokens": 2000, "cached_tokens": 1500, "net_tokens": 500, "rounds": 3},
+          f" ({_husage})")
+
+    # pi --mode json JSONL extraction
+    _pi_jsonl = "\n".join([
+        json.dumps({"type": "agent_start"}),
+        json.dumps({"type": "message_end", "message": {
+            "role": "user", "content": "hi"}}),
+        json.dumps({"type": "message_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "reading file"}],
+            "usage": {"input": 500, "output": 50, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 550},
+        }}),
+        json.dumps({"type": "message_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "fixed bug"}],
+            "usage": {"input": 100, "output": 40, "cacheRead": 500, "cacheWrite": 0, "totalTokens": 640},
+        }}),
+    ])
+    _pusage = _parse_pi_json_output(_pi_jsonl)
+    check("pi: --mode json tokens, cached, net, rounds extracted",
+          _pusage["parsed"] is True
+          and _pusage["tokens"] == 1190
+          and _pusage["cached_tokens"] == 500
+          and _pusage["net_tokens"] == 690
+          and _pusage["rounds"] == 2
+          and "fixed bug" in _pusage["detail"],
+          f" ({_pusage})")
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,
