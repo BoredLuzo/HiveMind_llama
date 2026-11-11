@@ -154,6 +154,8 @@ def _print(summary: dict) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", nargs="+", required=True)
+    parser.add_argument("--by-model", action="store_true",
+                        help="differentiate conditions by model tag (e.g. hivemind_duo@35b-a3b-ud)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
     rows: list[dict] = []
@@ -164,7 +166,15 @@ def main() -> int:
         except (OSError, ValueError) as exc:
             print(f"cannot read {path}: {exc}", file=sys.stderr)
             return 2
-        rows.extend(data.get("results") or [])
+        file_model = data.get("model") or ""
+        file_rows = data.get("results") or []
+        for r in file_rows:
+            if not r.get("model") and file_model:
+                r["model"] = file_model
+            if args.by_model and r.get("model"):
+                m_short = r["model"].split(":")[-1] if ":" in r["model"] else r["model"]
+                r["condition"] = f"{r.get('condition')}@{m_short}"
+        rows.extend(file_rows)
     if not rows:
         print("no result rows", file=sys.stderr)
         return 2

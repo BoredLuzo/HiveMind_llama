@@ -626,6 +626,7 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
     
     cmd = [
         pi_bin,
+        "--no-session",
         "--provider", "local",
         "--model", cfg.model,
         "-p", task.prompt,
@@ -682,6 +683,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     return {
         "task": task.id,
         "condition": cond,
+        "model": cfg.model,
         "ok": bool(ok),
         "seconds": seconds,
         "tokens": int(extra.get("tokens") or 0),

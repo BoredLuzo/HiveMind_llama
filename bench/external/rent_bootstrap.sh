@@ -102,15 +102,22 @@ setup() {
   "$AIDER_VENV/bin/aider" --version
 
   log "hermes-agent (own venv, python 3.12)"
-  [ -x "$HERMES_VENV/bin/hermes" ] || {
-    uv venv --python 3.12 "$HERMES_VENV"
-    uv pip install --python "$HERMES_VENV/bin/python" -q hermes-agent 2>/dev/null       || log "WARN: hermes-agent install skipped"
-  }
-  [ -x "$HERMES_VENV/bin/hermes" ] && "$HERMES_VENV/bin/hermes" --version 2>/dev/null || true
+  if [ ! -x "$HERMES_VENV/bin/hermes" ] && ! command -v hermes >/dev/null; then
+    uv venv --python 3.12 "$HERMES_VENV" 2>/dev/null || true
+    uv pip install --python "$HERMES_VENV/bin/python" -q hermes-agent 2>/dev/null \
+      || curl -fsSL https://hermes-agent.nousresearch.com/install.sh 2>/dev/null | bash 2>/dev/null || log "WARN: hermes-agent install skipped"
+  fi
+  [ -x "$HERMES_VENV/bin/hermes" ] && "$HERMES_VENV/bin/hermes" --version 2>/dev/null || command -v hermes >/dev/null && hermes --version 2>/dev/null || true
 
   log "pi (earendil-works terminal coding agent harness)"
-  command -v npm >/dev/null || { $SUDO apt-get install -y -qq nodejs npm 2>/dev/null || true; }
-  command -v npm >/dev/null && npm install -g @earendil-works/pi-coding-agent 2>/dev/null || log "WARN: pi install skipped"
+  if ! command -v pi >/dev/null; then
+    curl -fsSL https://pi.dev/install.sh 2>/dev/null | sh 2>/dev/null || true
+  fi
+  if ! command -v pi >/dev/null; then
+    command -v npm >/dev/null || { $SUDO apt-get install -y -qq nodejs npm 2>/dev/null || true; }
+    command -v npm >/dev/null && npm install -g --ignore-scripts @earendil-works/pi-coding-agent 2>/dev/null || log "WARN: pi install skipped"
+  fi
+  command -v pi >/dev/null && pi --version 2>/dev/null || log "WARN: pi install skipped"
 
   log "setup done - next: serve, then smoke"
 }
@@ -182,7 +189,11 @@ run_bench() {  # $1 = extra args
   [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
   [ -n "$HM_LLAMA_URL" ] || detect_llama_url
   local _extra_args=""
-  [ -x "$HERMES_VENV/bin/hermes" ] && _extra_args="$_extra_args --hermes-bin $HERMES_VENV/bin/hermes"
+  if [ -x "$HERMES_VENV/bin/hermes" ]; then
+    _extra_args="$_extra_args --hermes-bin $HERMES_VENV/bin/hermes"
+  elif command -v hermes >/dev/null; then
+    _extra_args="$_extra_args --hermes-bin $(command -v hermes)"
+  fi
   command -v pi >/dev/null && _extra_args="$_extra_args --pi-bin $(command -v pi)"
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
