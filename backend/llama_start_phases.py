@@ -22,7 +22,7 @@ from .llama_config import (
     BINARY_MIN_BUILD, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
     DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE, GPU_BACKEND, KV_CACHE_TYPE,
     LLAMA_BIN, LLAMA_UBATCH, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
-    MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VRAM_PREFLIGHT_GATE, VULKAN_DEVICE,
+    MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VULKAN_DEVICE,
     _GPU_LAYERS_TABLE, _MTP_MODELS, _MOE_EXPERT_COUNTS,
     dense_kv_cache_type, llama_gpu_layers_auto, moe_kv_cache_types,
     resolve_gpu_layers, ubatch_extra_mib,
@@ -1249,7 +1249,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                     AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_exc:
                 logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
-            if not _fit.ok and not VRAM_PREFLIGHT_GATE:
+            if not _fit.ok and not _llama_cfg.VRAM_PREFLIGHT_GATE:
                 # GATE-DISABLED (2026-10-11, settings vram_preflight_gate):
                 # the estimate can be wrong for foreign models - attempt the
                 # load anyway; real OOM crashes fall into the generic retry
@@ -1258,7 +1258,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     "[PRE-FLIGHT] gate disabled - attempting load of %s @ctx=%d "
                     "although the estimate says it does not fit (needed=%dMiB, free=%dMiB)",
                     model, num_ctx, int(_fit.needed_mib), int(_fit.free_mib))
-            if not _fit.ok and VRAM_PREFLIGHT_GATE:
+            if not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE:
                 logger.warning(
                     "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
                     "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (source: %s)",

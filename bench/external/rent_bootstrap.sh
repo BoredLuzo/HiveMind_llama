@@ -161,6 +161,16 @@ detect_llama_url() {
 
 serve() {
   [ -x "$PY" ] || die "run setup first"
+  mkdir -p "$MODELS_DIR"
+
+  # 1. Model existence check: auto-download if not present locally
+  local _model_resolved
+  _model_resolved=$( ( cd "$HM_DIR" && HIVEMIND_MODELS_DIR="$MODELS_DIR" "$PY" -c "from backend.llama_models import resolve_model_path; print(resolve_model_path('$HM_MODEL') or '')" 2>/dev/null ) || true )
+  if [ -z "$_model_resolved" ] || [ ! -f "$_model_resolved" ]; then
+    log "Model '$HM_MODEL' not found in $MODELS_DIR — auto-downloading..."
+    download "" "$HM_MODEL"
+  fi
+
   # Dynamic GPU profile: auto-detects VRAM (A100, L4, T4) or uses HM_VRAM_BUDGET.
   # On 24 GB cards (L4), offloads 2 MoE experts to RAM; on >=35 GB (A100) all in VRAM.
   ( cd "$HM_DIR" && "$PY" - <<'PY'
@@ -191,6 +201,8 @@ d.update({
     "vram_budget_gb": budget_gb,
     "llama_fit": False,
     "llama_gpu_layers_auto": False,
+    "vram_preflight_gate": False,
+    "startup_preload_enabled": False,
     "duo_ubatch": 1024,
     "llama_ubatch_size": 1024,
 })
@@ -224,18 +236,48 @@ PY
   ( cd "$HM_DIR" && curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" \
       -H "Content-Type: application/json" -d @settings.json >/dev/null 2>&1 || true )
   log "preloading $HM_MODEL (ctx $HM_CTX)"
-  curl --max-time 600 -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}" >/dev/null \
-    || log "WARN: /vram/load failed; the first HiveMind request will load the model"
+  local _vram_resp
+  local _vram_code
+  local _vram_body
+  _vram_resp=$(curl --max-time 600 -s -w "\n%{http_code}" -X POST "http://127.0.0.1:$PORT/vram/load" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}") || true
+  _vram_code=$(echo "$_vram_resp" | tail -n1)
+  _vram_body=$(echo "$_vram_resp" | sed '$d')
+
+  if [ "$_vram_code" != "200" ]; then
+    printf '\n'
+    log "ERROR: /vram/load failed with HTTP $_vram_code:"
+    echo "$_vram_body" >&2
+    log "Recent engine logs ($LOG):"
+    tail -30 "$LOG" >&2 || true
+    die "Engine could not load $HM_MODEL into VRAM"
+  fi
+
   printf '[bench] waiting for llama-server to load into VRAM'
+  local _llama_up=0
   for _ in $(seq 1 180); do
     if curl --max-time 2 -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl --max-time 2 -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then
       printf ' OK\n'
+      _llama_up=1
       break
+    fi
+    if ! curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      printf ' FAILED\n'
+      log "ERROR: HiveMind engine crashed during model load!"
+      tail -40 "$LOG" >&2 || true
+      die "HiveMind engine process died"
     fi
     printf '.'
     sleep 2
   done
+  if [ "$_llama_up" -ne 1 ]; then
+    printf ' FAILED\n'
+    log "ERROR: llama-server did not become healthy within 360 seconds."
+    tail -40 "$LOG" >&2 || true
+    die "llama-server startup timed out"
+  fi
+
   detect_llama_url
   log "benchmark llama endpoint: $HM_LLAMA_URL"
   echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true

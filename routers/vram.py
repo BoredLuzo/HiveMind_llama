@@ -394,6 +394,7 @@ async def ollama_load(req: Request):
         return {"ok": True, "model": model, "keep_alive": keep_alive,
                 "num_ctx": _load_ctx, "ctx_source": _ctx_src}
     except Exception as e:
+        logger.exception("[VRAM-LOAD-ERROR] Failed to load %s (ctx=%s): %s", model, _load_ctx, e)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 

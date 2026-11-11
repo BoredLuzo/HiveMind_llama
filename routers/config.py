@@ -309,6 +309,11 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
             _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
             _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            try:
+                import backend.llama_start_phases as _lsp_pf
+                _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            except Exception:
+                pass
     # PRESET-STALE-TAB (2026-10-28): bump the settings revision like
     # post_settings does, or a second tab holding an older snapshot could
     # overwrite freshly loaded preset values through POST /settings.
@@ -726,6 +731,11 @@ async def post_settings(req: Request):
             _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
             _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
             _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            try:
+                import backend.llama_start_phases as _lsp_pf
+                _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            except Exception:
+                pass
         except Exception:
             pass
     _xa = settings.get("exploration_agent")
