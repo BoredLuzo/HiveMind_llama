@@ -69,19 +69,19 @@ setup() {
   # In Colab/cloud images git, curl, build-essential are already installed.
   # Only install missing utilities (tmux, rsync) without hanging on dead apt mirrors.
   if ! command -v tmux >/dev/null || ! command -v rsync >/dev/null; then
-    log "system packages: installing tmux / rsync"
+    log "[Step 0/5] Installing tmux / rsync..."
     $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || true
   fi
 
-  log "uv package manager"
+  log "[Step 1/5] Installing uv package manager..."
   if ! command -v uv >/dev/null; then
-    python3 -m pip install -q uv 2>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh 2>/dev/null || true
+    python3 -m pip install uv 2>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh 2>/dev/null || true
   fi
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
   command -v uv >/dev/null || die "failed to install uv"
   uv --version
 
-  log "checking repository ($HM_DIR)"
+  log "[Step 2/5] Checking repository ($HM_DIR)..."
   [ -d "$HM_DIR/.git" ] || git clone --branch "$HM_BRANCH" "$HM_REPO" "$HM_DIR"
   if [ -f "$BENCH_TGZ" ]; then
     log "overlay bench/ from $BENCH_TGZ"
@@ -90,13 +90,11 @@ setup() {
   [ -f "$HM_DIR/bench/runner.py" ] || die "bench/runner.py missing: push it or provide BENCH_TGZ"
   git -C "$HM_DIR" log -1 --format='[bench] engine commit: %h %s'
 
-  log "python 3.14 (standalone via uv)"
-  ( cd "$HM_DIR" && uv python install 3.14 )
+  log "[Step 3/5] Setting up Python 3.14 & locked dependencies via uv..."
+  ( cd "$HM_DIR" && uv python install 3.14 && uv sync --all-extras --frozen )
+  log "Python 3.14 environment and all dependencies installed successfully."
 
-  log "installing locked dependencies (uv sync)"
-  ( cd "$HM_DIR" && uv sync --all-extras --frozen )
-
-  log "llama.cpp (CUDA $HM_LLAMA_CUDA)"
+  log "[Step 4/5] Downloading llama.cpp with CUDA $HM_LLAMA_CUDA support..."
   ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda --cuda-version "$HM_LLAMA_CUDA" )
   # Linux CUDA builds link the CUDA runtime dynamically; the release ships it
   # in a separate cudart archive next to the main build.
@@ -106,8 +104,8 @@ setup() {
   if [ -n "$_build" ]; then
     _cudart_url="https://github.com/ggml-org/llama.cpp/releases/download/b${_build}/cudart-llama-b${_build}-bin-ubuntu-cuda-${HM_LLAMA_CUDA}-x64.tar.gz"
     if ! find "$HM_DIR/llama" -name 'libcudart.so*' | grep -q .; then
-      log "CUDA runtime split: downloading cudart for b${_build}"
-      curl -L --fail --retry 3 -o /tmp/cudart.tar.gz "$_cudart_url" || log "WARN: cudart download failed"
+      log "CUDA runtime split: downloading cudart for b${_build}..."
+      curl -L --progress-bar --fail --retry 3 -o /tmp/cudart.tar.gz "$_cudart_url" || log "WARN: cudart download failed"
       [ -s /tmp/cudart.tar.gz ] && tar xzf /tmp/cudart.tar.gz -C "$HM_DIR/llama" || true
     fi
   fi
@@ -119,26 +117,27 @@ setup() {
         --only-keys "$HM_MODEL" --yes )
     ls -lh "$MODELS_DIR" | head
   else
-    log "model download skipped via HM_MODEL=$HM_MODEL"
+    log "Model download skipped in setup (select download cell 3a or 3b)."
   fi
 
-  log "aider (own venv, python 3.12)"
+  log "[Step 5/5] Installing external harnesses: Aider, Hermes & Pi..."
   [ -x "$AIDER_VENV/bin/aider" ] || {
+    log "Installing Aider CLI into $AIDER_VENV..."
     uv venv --python 3.12 "$AIDER_VENV"
-    uv pip install --python "$AIDER_VENV/bin/python" -q aider-chat
+    uv pip install --python "$AIDER_VENV/bin/python" aider-chat
   }
   "$AIDER_VENV/bin/aider" --version
 
-  log "hermes-agent (own venv, python 3.12)"
   if [ ! -x "$HERMES_VENV/bin/hermes" ] && ! command -v hermes >/dev/null; then
+    log "Installing Hermes-agent CLI..."
     uv venv --python 3.12 "$HERMES_VENV" 2>/dev/null || true
-    uv pip install --python "$HERMES_VENV/bin/python" -q hermes-agent 2>/dev/null \
+    uv pip install --python "$HERMES_VENV/bin/python" hermes-agent 2>/dev/null \
       || curl -fsSL https://hermes-agent.nousresearch.com/install.sh 2>/dev/null | bash 2>/dev/null || log "WARN: hermes-agent install skipped"
   fi
   [ -x "$HERMES_VENV/bin/hermes" ] && "$HERMES_VENV/bin/hermes" --version 2>/dev/null || command -v hermes >/dev/null && hermes --version 2>/dev/null || true
 
-  log "pi (earendil-works terminal coding agent harness)"
   if ! command -v pi >/dev/null; then
+    log "Installing Pi coding agent CLI..."
     curl -fsSL https://pi.dev/install.sh 2>/dev/null | sh 2>/dev/null || true
   fi
   if ! command -v pi >/dev/null; then
@@ -147,7 +146,7 @@ setup() {
   fi
   command -v pi >/dev/null && pi --version 2>/dev/null || log "WARN: pi install skipped"
 
-  log "setup done - next: serve, then smoke"
+  log "ALL SETUP STEPS FINISHED SUCCESSFULLY! Next: choose model (Zelle 4a oder 4b) and serve."
 }
 
 detect_llama_url() {
@@ -210,11 +209,17 @@ PY
       HIVEMIND_MODELS_DIR="$MODELS_DIR" PYTHONUNBUFFERED=1 \
       setsid "$PY" run.py >"$LOG" 2>&1 < /dev/null & \
       echo $! >"$HM_DIR/bench_engine.pid" )
+    printf '[bench] waiting for engine startup'
     for _ in $(seq 1 90); do
-      curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { log "engine healthy"; break; }
+      if curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+        printf ' OK\n'
+        log "engine healthy on port $PORT"
+        break
+      fi
+      printf '.'
       sleep 2
     done
-    curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
+    curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { printf ' FAILED\n'; tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
   ( cd "$HM_DIR" && curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" \
       -H "Content-Type: application/json" -d @settings.json >/dev/null 2>&1 || true )
@@ -222,8 +227,13 @@ PY
   curl --max-time 600 -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
     -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}" >/dev/null \
     || log "WARN: /vram/load failed; the first HiveMind request will load the model"
+  printf '[bench] waiting for llama-server to load into VRAM'
   for _ in $(seq 1 180); do
-    if curl --max-time 2 -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl --max-time 2 -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
+    if curl --max-time 2 -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl --max-time 2 -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then
+      printf ' OK\n'
+      break
+    fi
+    printf '.'
     sleep 2
   done
   detect_llama_url
