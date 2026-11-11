@@ -60,9 +60,11 @@ PY="$HM_DIR/.venv/bin/python"
 setup() {
   command -v nvidia-smi >/dev/null || die "no NVIDIA driver (nvidia-smi missing) - wrong instance?"
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-  log "system packages"
+  export DEBIAN_FRONTEND=noninteractive
+  log "system packages (apt-get update & install: git, tmux, rsync, build-essential)"
   $SUDO apt-get update -qq
   $SUDO apt-get install -y -qq git curl ca-certificates tmux rsync build-essential
+  log "uv package manager"
   command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
   export PATH="$HOME/.local/bin:$PATH"
 
@@ -75,7 +77,7 @@ setup() {
   [ -f "$HM_DIR/bench/runner.py" ] || die "bench/runner.py missing: push it or provide BENCH_TGZ"
   git -C "$HM_DIR" log -1 --format='[bench] engine commit: %h %s'
 
-  log "python 3.14 + locked deps"
+  log "python 3.14 + dependencies (uv sync takes ~1-2 min, please wait)..."
   ( cd "$HM_DIR" && uv python install 3.14 && uv sync --all-extras --frozen )
 
   log "llama.cpp (CUDA $HM_LLAMA_CUDA)"
