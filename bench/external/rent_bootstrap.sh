@@ -33,24 +33,52 @@ HM_REPO="${HM_REPO:-https://github.com/BoredLuzo/HiveMind_llama.git}"
 HM_BRANCH="${HM_BRANCH:-dev}"
 HM_DIR="${HM_DIR:-$HOME/HiveMind_llama}"
 BENCH_TGZ="${BENCH_TGZ:-$HOME/bench_bundle.tgz}"
-if [ -z "${HM_MODEL:-}" ] && [ -f "$HM_DIR/.active_model" ]; then
-  HM_MODEL="$(cat "$HM_DIR/.active_model" 2>/dev/null || true)"
-fi
-HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
+PORT="${HIVEMIND_PORT:-8001}"
+MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
 HM_RUNS="${HM_RUNS:-1}"
 HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
-if [ -z "${HM_CTX:-}" ] && [ -f "$HM_DIR/.active_ctx" ]; then
-  HM_CTX="$(cat "$HM_DIR/.active_ctx" 2>/dev/null || true)"
-fi
-HM_CTX="${HM_CTX:-32768}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 HERMES_VENV="${HERMES_VENV:-$HOME/hermes-venv}"
-MODELS_DIR="${HIVEMIND_MODELS_DIR:-$HM_DIR/models}"
-PORT="${HIVEMIND_PORT:-8001}"
 HM_LLAMA_URL="${HM_LLAMA_URL:-}"
 HM_LLAMA_CUDA="${HM_LLAMA_CUDA:-12.8}"
 LOG="$HM_DIR/bench_engine.log"
+
+# Resolve active model: env > .active_model > running engine > GPU VRAM auto-detection
+if [ -z "${HM_MODEL:-}" ] && [ -f "$HM_DIR/.active_model" ]; then
+  _saved_m="$(cat "$HM_DIR/.active_model" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ -n "$_saved_m" ] && HM_MODEL="$_saved_m"
+fi
+if [ -z "${HM_MODEL:-}" ]; then
+  # Check if engine is running and has a model loaded
+  _live_m=$(curl --max-time 2 -fsS "http://127.0.0.1:$PORT/vram/ps" 2>/dev/null | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  [ -n "$_live_m" ] && HM_MODEL="$_live_m"
+fi
+if [ -z "${HM_MODEL:-}" ]; then
+  _vram_mb=0
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    _vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | cut -d. -f1 || echo 0)
+  fi
+  if [ "${_vram_mb:-0}" -gt 0 ] && [ "$_vram_mb" -lt 20000 ]; then
+    # Smaller GPUs (e.g. Tesla T4 16GB) default to 4B MTP
+    HM_MODEL="qwen3.5:4b-mtp"
+  else
+    # Larger GPUs (L4 24GB, A100 40/80GB) default to 35B MoE
+    HM_MODEL="qwen3.6:35b-a3b-ud"
+  fi
+fi
+
+if [ -z "${HM_CTX:-}" ] && [ -f "$HM_DIR/.active_ctx" ]; then
+  _saved_ctx="$(cat "$HM_DIR/.active_ctx" 2>/dev/null | tr -d '[:space:]' || true)"
+  [ -n "$_saved_ctx" ] && HM_CTX="$_saved_ctx"
+fi
+if [ -z "${HM_CTX:-}" ]; then
+  if [ "$HM_MODEL" = "qwen3.5:4b-mtp" ]; then
+    HM_CTX="131072"
+  else
+    HM_CTX="32768"
+  fi
+fi
 
 log() { printf '\n[bench] %s\n' "$*"; }
 die() { printf '\n[bench][ERROR] %s\n' "$*" >&2; exit 1; }
@@ -162,6 +190,27 @@ detect_llama_url() {
 serve() {
   [ -x "$PY" ] || die "run setup first"
   mkdir -p "$MODELS_DIR"
+
+  # Persist active model & ctx immediately so any subsequent script/smoke call knows what was selected
+  echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
+  echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
+
+  # Check if engine AND llama-server are already up with this exact model
+  detect_llama_url
+  local _already_loaded=0
+  if curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && \
+     [ -n "$HM_LLAMA_URL" ] && curl --max-time 2 -fsS "$HM_LLAMA_URL/health" >/dev/null 2>&1; then
+    local _ps_out
+    _ps_out=$(curl --max-time 2 -fsS "http://127.0.0.1:$PORT/vram/ps" 2>/dev/null || true)
+    if echo "$_ps_out" | grep -q "\"name\":\"$HM_MODEL\""; then
+      _already_loaded=1
+    fi
+  fi
+
+  if [ "$_already_loaded" -eq 1 ]; then
+    log "Model '$HM_MODEL' is ALREADY loaded in VRAM and healthy ($HM_LLAMA_URL) — skipping reload."
+    return 0
+  fi
 
   # 1. Model existence check: auto-download if not present locally
   local _model_found=0
