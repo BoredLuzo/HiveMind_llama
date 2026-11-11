@@ -270,7 +270,44 @@ full() {
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 
-status() { tail -n 40 "$HM_DIR/bench_full.log" 2>/dev/null || echo "no run log yet"; ls -1t "$HM_DIR"/bench/results/*.json 2>/dev/null | head -3; }
+status() {
+  printf '\n=======================================================\n'
+  printf '             HIVEMIND BENCHMARK STATUS                 \n'
+  printf '=======================================================\n'
+  if tmux has-session -t hmbench 2>/dev/null; then
+    printf '[-] Benchmark Runner : RUNNING (tmux session "hmbench" active)\n'
+  else
+    printf '[-] Benchmark Runner : IDLE / STOPPED (no active tmux run)\n'
+  fi
+
+  if curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    printf '[-] HiveMind Engine  : UP & HEALTHY (http://127.0.0.1:%s)\n' "$PORT"
+  else
+    printf '[-] HiveMind Engine  : DOWN / STOPPED\n'
+  fi
+
+  detect_llama_url
+  if curl --max-time 2 -fsS "$HM_LLAMA_URL/health" >/dev/null 2>&1; then
+    printf '[-] Llama-Server     : UP & READY (%s)\n' "$HM_LLAMA_URL"
+  else
+    printf '[-] Llama-Server     : DOWN / NOT LOADED\n'
+  fi
+
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    printf '[-] GPU Memory       : %s\n' "$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo 'n/a')"
+  fi
+
+  printf '\n--- Letzte Log-Zeilen (bench_full.log) ---\n'
+  if [ -f "$HM_DIR/bench_full.log" ]; then
+    tail -n 25 "$HM_DIR/bench_full.log"
+  else
+    printf 'Kein bench_full.log gefunden.\n'
+  fi
+
+  printf '\n--- Neueste Ergebnis-Dateien (bench/results/*.json) ---\n'
+  ls -lh "$HM_DIR"/bench/results/*.json 2>/dev/null | tail -5 || printf 'Noch keine Ergebnisse vorhanden.\n'
+  printf '=======================================================\n\n'
+}
 
 stop() {
   tmux kill-session -t hmbench 2>/dev/null || true
