@@ -153,11 +153,18 @@ def _print(summary: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", nargs="+", required=True)
+    parser.add_argument("--results", nargs="*", default=[])
     parser.add_argument("--by-model", action="store_true",
                         help="differentiate conditions by model tag (e.g. hivemind_duo@35b-a3b-ud)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
+    if not args.results:
+        default_files = sorted((_ROOT / "bench" / "results").glob("*.json"))
+        if default_files:
+            args.results = [str(f) for f in default_files]
+        else:
+            print("Keine Ergebnis-Dateien in bench/results/ gefunden. Starte zuerst einen Benchmark (Zelle 5, 6a oder 7b)!")
+            return 0
     rows: list[dict] = []
     offsets_per_group: dict[tuple[str, str], int] = {}
     gpus: set[str] = set()
