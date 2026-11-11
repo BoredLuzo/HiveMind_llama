@@ -33,10 +33,16 @@ HM_REPO="${HM_REPO:-https://github.com/BoredLuzo/HiveMind_llama.git}"
 HM_BRANCH="${HM_BRANCH:-dev}"
 HM_DIR="${HM_DIR:-$HOME/HiveMind_llama}"
 BENCH_TGZ="${BENCH_TGZ:-$HOME/bench_bundle.tgz}"
+if [ -z "${HM_MODEL:-}" ] && [ -f "$HM_DIR/.active_model" ]; then
+  HM_MODEL="$(cat "$HM_DIR/.active_model" 2>/dev/null || true)"
+fi
 HM_MODEL="${HM_MODEL:-qwen3.6:35b-a3b-ud}"
 HM_RUNS="${HM_RUNS:-1}"
 HM_CONDITIONS="${HM_CONDITIONS:-hivemind_duo,aider}"
 HM_TASKS="${HM_TASKS:-bench/tasks}"
+if [ -z "${HM_CTX:-}" ] && [ -f "$HM_DIR/.active_ctx" ]; then
+  HM_CTX="$(cat "$HM_DIR/.active_ctx" 2>/dev/null || true)"
+fi
 HM_CTX="${HM_CTX:-32768}"
 AIDER_VENV="${AIDER_VENV:-$HOME/aider-venv}"
 HERMES_VENV="${HERMES_VENV:-$HOME/hermes-venv}"
@@ -88,11 +94,15 @@ setup() {
     fi
   fi
 
-  log "model $HM_MODEL -> $MODELS_DIR (~20 GB)"
-  mkdir -p "$MODELS_DIR"
-  ( cd "$HM_DIR" && "$PY" deploy/fetch_models.py --models-dir "$MODELS_DIR" \
-      --only-keys "$HM_MODEL" --yes )
-  ls -lh "$MODELS_DIR" | head
+  if [ "${HM_MODEL:-}" != "none" ] && [ "${HM_MODEL:-}" != "skip" ]; then
+    log "model $HM_MODEL -> $MODELS_DIR (~20 GB)"
+    mkdir -p "$MODELS_DIR"
+    ( cd "$HM_DIR" && "$PY" deploy/fetch_models.py --models-dir "$MODELS_DIR" \
+        --only-keys "$HM_MODEL" --yes )
+    ls -lh "$MODELS_DIR" | head
+  else
+    log "model download skipped via HM_MODEL=$HM_MODEL"
+  fi
 
   log "aider (own venv, python 3.12)"
   [ -x "$AIDER_VENV/bin/aider" ] || {
@@ -200,6 +210,8 @@ PY
   done
   detect_llama_url
   log "benchmark llama endpoint: $HM_LLAMA_URL"
+  echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
+  echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
 }
 
 run_bench() {  # $1 = extra args
@@ -325,8 +337,19 @@ stop() {
   log "stopped. Download bench/results/*.json, then DELETE the rental instance."
 }
 
+download() {
+  [ -x "$PY" ] || die "run setup first"
+  local target="${2:-${HM_MODEL:-qwen3.6:35b-a3b-ud}}"
+  log "downloading model: $target -> $MODELS_DIR"
+  mkdir -p "$MODELS_DIR"
+  ( cd "$HM_DIR" && "$PY" deploy/fetch_models.py --models-dir "$MODELS_DIR" \
+      --only-keys "$target" --yes )
+  ls -lh "$MODELS_DIR" | grep -iE 'gguf|bin' || true
+}
+
 case "${1:-}" in
   setup) setup ;;
+  download) download "$@" ;;
   serve) serve ;;
   smoke) smoke ;;
   polyglot) polyglot ;;
