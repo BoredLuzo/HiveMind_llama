@@ -23,7 +23,7 @@ DEFAULT_TASKS = [
         "repo_url": "https://github.com/python-poetry/tomlkit.git",
         "base_commit": "dd05eebc8ed9e30fc6c223088a5a450cb54c1cab",
         "check": "python -m pytest -q tests/test_convert.py",
-        "timeout_s": 600,
+        "timeout_s": 1800,
         "test_files": ["tests/test_convert.py"],
     },
     {
@@ -32,7 +32,7 @@ DEFAULT_TASKS = [
         "repo_url": "https://github.com/encode/httpx.git",
         "base_commit": "b5addb64f0161ff6bfe94c124ef76f6a1fba5254",
         "check": "python -m pytest -q tests/models/test_cookie_store.py",
-        "timeout_s": 600,
+        "timeout_s": 1800,
         "test_files": ["tests/models/test_cookie_store.py"],
     },
     {
@@ -41,7 +41,7 @@ DEFAULT_TASKS = [
         "repo_url": "https://github.com/python-attrs/cattrs.git",
         "base_commit": "6bc4708fb9b2ac52d9a18997e923da6a58916102",
         "check": "python -m pytest -q tests/test_partial_structure.py",
-        "timeout_s": 600,
+        "timeout_s": 1800,
         "test_files": ["tests/test_partial_structure.py"],
     },
 ]

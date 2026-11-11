@@ -225,7 +225,11 @@ polyglot() {
 deepswe() {
   # Pure-Python repo tasks from datacurve-ai/deep-swe
   ( cd "$HM_DIR" && "$PY" bench/import_deepswe.py --out bench/tasks_deepswe )
-  log "now: HM_TASKS=bench/tasks_deepswe HM_CTX=131072 bash $0 full"
+  log "installing deepswe test dependencies (hypothesis, trio, pytest)"
+  python3 -m pip install -q hypothesis trio attrs pytest pytest-asyncio anyio 2>/dev/null || true
+  "$PY" -m pip install -q hypothesis trio attrs pytest pytest-asyncio anyio 2>/dev/null || true
+  command -v uv >/dev/null && uv pip install --python "$PY" -q hypothesis trio attrs pytest pytest-asyncio anyio 2>/dev/null || true
+  log "now: HM_TASKS=bench/tasks_deepswe HM_CTX=131072 HM_CELL_TIMEOUT=1800 bash $0 full"
 }
 
 full() {
