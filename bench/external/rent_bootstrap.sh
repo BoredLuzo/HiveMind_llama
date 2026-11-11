@@ -230,24 +230,27 @@ serve() {
   [ -x "$PY" ] || die "run setup first"
   mkdir -p "$MODELS_DIR"
 
+  # Check if engine AND llama-server are already up with this exact model and context
+  local _prev_ctx=""
+  _prev_ctx="$(cat "$HM_DIR/.active_ctx" 2>/dev/null | tr -d '[:space:]' || true)"
+
   # Persist active model & ctx immediately so any subsequent script/smoke call knows what was selected
   echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
   echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
 
-  # Check if engine AND llama-server are already up with this exact model
   detect_llama_url
   local _already_loaded=0
   if curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && \
      [ -n "$HM_LLAMA_URL" ] && curl --max-time 2 -fsS "$HM_LLAMA_URL/health" >/dev/null 2>&1; then
     local _ps_out
     _ps_out=$(curl --max-time 2 -fsS "http://127.0.0.1:$PORT/vram/ps" 2>/dev/null || true)
-    if echo "$_ps_out" | grep -q "\"name\":\"$HM_MODEL\""; then
+    if echo "$_ps_out" | grep -q "\"name\":\"$HM_MODEL\"" && [ "$_prev_ctx" = "$HM_CTX" ]; then
       _already_loaded=1
     fi
   fi
 
   if [ "$_already_loaded" -eq 1 ]; then
-    log "Model '$HM_MODEL' is ALREADY loaded in VRAM and healthy ($HM_LLAMA_URL) — skipping reload."
+    log "Model '$HM_MODEL' (ctx $HM_CTX) is ALREADY loaded in VRAM and healthy ($HM_LLAMA_URL) — skipping reload."
     return 0
   fi
 
@@ -273,10 +276,10 @@ PY
     log "Model '$HM_MODEL' verified present in $MODELS_DIR"
   fi
 
-  # Dynamic GPU profile: auto-detects VRAM (A100, L4, T4) or uses HM_VRAM_BUDGET.
-  # On 24 GB cards (L4), offloads 2 MoE experts to RAM; on >=35 GB (A100) all in VRAM.
-  ( cd "$HM_DIR" && "$PY" - <<'PY'
-import json, os, subprocess
+  # Dynamic GPU/RAM profile: sizes MoE CPU offload for 35B from real GPU VRAM & HM_CTX.
+  # A100 (>=35GB): 0 CPU experts | L4 (24GB): 4-7 | T4 (16GB): 21-25 (fits VRAM safely).
+  ( cd "$HM_DIR" && HM_CTX="$HM_CTX" HM_MODEL="$HM_MODEL" "$PY" - <<'PY'
+import json, math, os, subprocess
 from pathlib import Path
 p = Path("settings.json")
 d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
@@ -297,23 +300,56 @@ if env_budget:
     except ValueError:
         pass
 
-cpu_experts = 0 if budget_gb >= 35.0 else 2
-d.update({
-    "moe_cpu_experts": {"qwen3.6:35b-a3b": cpu_experts, "hermes3.6:35b-a3b": cpu_experts},
+ram_gb = 0.0
+try:
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+        if line.startswith("MemTotal:"):
+            ram_gb = round(int(line.split()[1]) / (1024 * 1024), 1)
+            break
+except Exception:
+    pass
+
+try:
+    ctx_tokens = int(os.environ.get("HM_CTX") or 32768)
+except ValueError:
+    ctx_tokens = 32768
+
+if budget_gb >= 35.0:
+    cpu_experts = 0
+else:
+    # qwen3.6:35b-a3b-ud: ~20.2 GB base weights @0 offload (~19.3 GB @2),
+    # 4.66 GB @35 (~0.44 GB freed per MoE layer) + KV/compute reserve.
+    reserve_gb = (2.4 if budget_gb < 20.0 else 2.0) + (ctx_tokens / 131072.0) * 1.5
+    target_model_gb = max(4.66, budget_gb - reserve_gb)
+    cpu_experts = min(35, max(2, math.ceil((20.2 - target_model_gb) / 0.44)))
+
+ubatch = 512 if budget_gb < 20.0 else 1024
+gpu_patch = {
+    "moe_cpu_experts": {
+        "qwen3.6:35b-a3b": cpu_experts,
+        "qwen3.6:35b-a3b-ud": cpu_experts,
+        "hermes3.6:35b-a3b": cpu_experts,
+    },
     "vram_budget_gb": budget_gb,
+    "llama_mlock": False,
     "llama_fit": False,
     "llama_gpu_layers_auto": False,
     "vram_preflight_gate": False,
     "startup_preload_enabled": False,
-    "duo_ubatch": 1024,
-    "llama_ubatch_size": 1024,
-})
+    "duo_ubatch": ubatch,
+    "llama_ubatch_size": ubatch,
+}
+d.update(gpu_patch)
 p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
-print(f"[bench] GPU budget: {budget_gb} GB VRAM, MoE CPU experts: {cpu_experts}")
+Path("bench_gpu_settings.json").write_text(json.dumps(gpu_patch) + "\n", encoding="utf-8")
+print(f"[bench] GPU budget: {budget_gb} GB VRAM, RAM: {ram_gb} GB, MoE CPU experts: {cpu_experts}, ctx: {ctx_tokens}")
+if "35b" in os.environ.get("HM_MODEL", "").lower() and cpu_experts >= 15 and 0 < ram_gb < 22.0:
+    print(f"[bench] WARN: low System RAM ({ram_gb} GB) with {cpu_experts} CPU MoE experts; using mmap (slower decode on free T4). L4/A100 or High-RAM recommended for 35B.")
 PY
   )
   if curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    log "engine already up on :$PORT"
+    log "engine already up on :$PORT — clearing previous VRAM slots before reload"
+    curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/vram/kill_all" >/dev/null 2>&1 || true
   else
     log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
     _cudart_lib="$(find "$HM_DIR/llama" -name 'libcudart.so*' -print -quit 2>/dev/null || true)"
@@ -336,7 +372,7 @@ PY
     curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { printf ' FAILED\n'; tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
   ( cd "$HM_DIR" && curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" \
-      -H "Content-Type: application/json" -d @settings.json >/dev/null 2>&1 || true )
+      -H "Content-Type: application/json" -d @bench_gpu_settings.json >/dev/null 2>&1 || true )
   log "preloading $HM_MODEL into VRAM (ctx $HM_CTX)..."
   local _tmp_resp
   _tmp_resp=$(mktemp)
