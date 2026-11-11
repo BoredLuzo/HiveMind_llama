@@ -38,7 +38,9 @@ from hive_functions.hivemind_feature.ast_tools import (
 IS_WINDOWS = sys.platform == "win32"
 
 if IS_WINDOWS:
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    _proactor_policy = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+    if _proactor_policy is not None:
+        asyncio.set_event_loop_policy(_proactor_policy())
 
 def _default_hivemind_url() -> str:
     """Folgt settings.json server_port (install-gesetzt), sonst 8001."""

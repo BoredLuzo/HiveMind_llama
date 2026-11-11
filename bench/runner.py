@@ -85,7 +85,7 @@ def detect_gpu_info() -> dict:
                 info["vram_total"] = parts[1]
             if len(parts) > 2:
                 info["driver"] = parts[2]
-    except Exception:
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
         pass
     return info
 

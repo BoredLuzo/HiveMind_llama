@@ -357,6 +357,7 @@ class LlamaLoadMixin:
         _slots: list[ModelSlot]
         _lock: asyncio.Lock
         _pending_prefetch: list[tuple[str, int]]
+        _memlock_warned: bool
 
         # ModelSlot infers `model` / `_entry_load_seq` as None-only (their
         # assignments in llama_slots.py are unannotated), but the load path

@@ -6,7 +6,6 @@ Can be run in terminal or inside Google Colab:
 """
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -30,7 +29,7 @@ def get_gpu_status() -> str:
             total = parts[2] if len(parts) > 2 else ""
             temp = f"{parts[3]}°C" if len(parts) > 3 else ""
             return f"{name} | {used} / {total} | {temp}"
-    except Exception:
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
         pass
     return "GPU: n/a"
 
@@ -40,7 +39,7 @@ def is_benchmark_running() -> bool:
         r = subprocess.run(["tmux", "has-session", "-t", "hmbench"],
                            capture_output=True, timeout=2)
         return r.returncode == 0
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -63,7 +62,7 @@ def render_dashboard() -> None:
         try:
             from IPython.display import clear_output
             clear_output(wait=True)
-        except Exception:
+        except (ImportError, NameError):
             pass
     else:
         # ANSI clear terminal
@@ -114,7 +113,7 @@ def render_dashboard() -> None:
                 cached = s.get("cached_share", 0.0) or 0.0
                 c_str = f"| KV-Cache: {cached*100:.0f}%" if cached else ""
                 print(f"  * {cond:<18}: {pr:>5.1f}% pass | med: {med_s:>5.1f}s | tok/s: {tps:>5.1f} {c_str}")
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     print("\n" + "=" * 76)

@@ -847,7 +847,8 @@ def _broadcast_flow():
         live, dead = _Conn(), _Conn()
         dead.dead = True
         mgr._conns = {"python": live, "rust": dead}
-        n = mgr.broadcast_watched_change(["f.py", r"sub\g.rs", r"..\outside.py"])
+        n = mgr.broadcast_watched_change([
+            "f.py", str(Path("sub") / "g.rs"), str(Path("..") / "outside.py")])
         await asyncio.sleep(0.05)
         return live, n
     return asyncio.run(_go())

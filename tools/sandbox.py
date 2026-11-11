@@ -214,7 +214,8 @@ async def kill_tree_and_reap(proc, taskkill_timeout: int = 5) -> None:
 
 
 def _k32():
-    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    _win_dll = getattr(ctypes, "WinDLL")
+    k = _win_dll("kernel32", use_last_error=True)
     k.CreateJobObjectW.restype = _wt.HANDLE
     k.CreateJobObjectW.argtypes = [_wt.LPCVOID, _wt.LPCWSTR]
     k.AssignProcessToJobObject.restype = _wt.BOOL
