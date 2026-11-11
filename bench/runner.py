@@ -342,6 +342,28 @@ def apply_full_files(text: str, work: Path) -> tuple[bool, str]:
     return True, "wrote " + ", ".join(written)
 
 
+def _agent_timeout_s(task: Task, cfg: Config) -> float:
+    """Single source of truth for per-harness agent execution timeout."""
+    base = float(cfg.task_timeout_s or task.timeout_s or 300)
+    if cfg.cell_timeout_s:
+        return min(base, float(cfg.cell_timeout_s))
+    return base
+
+
+async def _abort_hivemind(base_url: str, chat_id: str) -> None:
+    """Best-effort abort so a timed-out HiveMind run stops using llama-server."""
+    if not chat_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
+            await client.post(
+                base_url.rstrip("/") + "/abort",
+                params={"chat_id": chat_id, "silent": "true"},
+            )
+    except (httpx.HTTPError, OSError):
+        pass
+
+
 # ── conditions ─────────────────────────────────────────────────────────────
 async def _run_raw(task: Task, work: Path, cfg: Config, *,
                    full_files: bool = False) -> dict:
@@ -356,8 +378,8 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
         "max_tokens": 4096,
         "stream": False,
     }
-    _client_timeout = float(max(cfg.cell_timeout_s, task.timeout_s, 60))
-    async with httpx.AsyncClient(timeout=httpx.Timeout(_client_timeout, connect=10.0)) as client:
+    _agent_to = _agent_timeout_s(task, cfg)
+    async with httpx.AsyncClient(timeout=httpx.Timeout(_agent_to, connect=10.0)) as client:
         r = await client.post(cfg.llama_url.rstrip("/") + "/v1/chat/completions",
                               json=payload)
         r.raise_for_status()
@@ -439,30 +461,43 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
     done: dict = {}
     error = ""
     usage_prompt = usage_completion = usage_cached = usage_rounds = 0
-    _client_timeout = float(max(cfg.cell_timeout_s, task.timeout_s, 60))
-    async with httpx.AsyncClient(timeout=httpx.Timeout(_client_timeout, connect=10.0)) as client:
-        async with client.stream("POST",
-                                 cfg.hivemind_url.rstrip("/") + "/stream",
-                                 json=body) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                try:
-                    ev = json.loads(line[6:])
-                except ValueError:
-                    continue
-                if ev.get("type") == "done":
-                    done = ev
-                elif ev.get("type") == "usage_meta":
-                    # TOKEN-METRIC (2026-11-08): tool loops report their usage
-                    # per phase; the done event only carries the outer ledger.
-                    usage_prompt += int(ev.get("prompt_tokens") or 0)
-                    usage_completion += int(ev.get("completion_tokens") or 0)
-                    usage_cached += int(ev.get("cached_tokens") or 0)
-                    usage_rounds += 1
-                elif ev.get("type") == "error":
-                    error = str(ev.get("content") or ev)[:500]
+    _agent_to = _agent_timeout_s(task, cfg)
+    _chat_id = str(body.get("chat_id") or "")
+
+    async def _stream_run() -> None:
+        nonlocal done, error, usage_prompt, usage_completion, usage_cached, usage_rounds
+        async with httpx.AsyncClient(
+                timeout=httpx.Timeout(_agent_to + 15.0, connect=10.0)) as client:
+            async with client.stream("POST",
+                                     cfg.hivemind_url.rstrip("/") + "/stream",
+                                     json=body) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        ev = json.loads(line[6:])
+                    except ValueError:
+                        continue
+                    if ev.get("type") == "done":
+                        done = ev
+                    elif ev.get("type") == "usage_meta":
+                        # TOKEN-METRIC (2026-11-08): tool loops report their usage
+                        # per phase; the done event only carries the outer ledger.
+                        usage_prompt += int(ev.get("prompt_tokens") or 0)
+                        usage_completion += int(ev.get("completion_tokens") or 0)
+                        usage_cached += int(ev.get("cached_tokens") or 0)
+                        usage_rounds += 1
+                    elif ev.get("type") == "error":
+                        error = str(ev.get("content") or ev)[:500]
+
+    try:
+        await asyncio.wait_for(_stream_run(), timeout=_agent_to)
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        await _abort_hivemind(cfg.hivemind_url, _chat_id)
+        done = {"stop_reason": "timeout"}
+        error = f"hivemind timed out after {int(_agent_to)}s"
+
     _usage_total = usage_prompt + usage_completion
     tokens = _usage_total or (
         int(done.get("tokens_generated") or 0)
@@ -564,9 +599,9 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
-                           timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+                           timeout=_agent_timeout_s(task, cfg), env=env)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"tokens": 0, "detail": f"aider failed: {exc}"}
+        return {"tokens": 0, "stop_reason": "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "", "detail": f"aider failed: {exc}"}
     finally:
         shutil.rmtree(_meta_dir, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
@@ -665,13 +700,22 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
            "OPENAI_API_KEY": api_key,
            "OPENAI_BASE_URL": api_base, "OPENAI_API_BASE": api_base}
     usage: dict = {}
+    _agent_to = _agent_timeout_s(task, cfg)
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
-                           timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+                           timeout=_agent_to, env=env)
         usage = _read_hermes_state_usage(hermes_home)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"tokens": 0, "detail": f"hermes failed: {exc}"}
+        usage = _read_hermes_state_usage(hermes_home)
+        return {
+            "tokens": int(usage.get("tokens") or 0),
+            "cached_tokens": int(usage.get("cached_tokens") or 0),
+            "net_tokens": int(usage.get("net_tokens") or 0),
+            "rounds": int(usage.get("rounds") or 0),
+            "stop_reason": "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "",
+            "detail": f"hermes failed: {exc}",
+        }
     finally:
         shutil.rmtree(hermes_home, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
@@ -849,17 +893,29 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
         "OPENAI_API_KEY": api_key,
         "OPENAI_BASE_URL": api_base,
     }
+    _agent_to = _agent_timeout_s(task, cfg)
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
-                           timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+                           timeout=_agent_to, env=env)
         if r.returncode != 0 and "mode" in (r.stderr or "").lower():
             r = subprocess.run([*base_cmd, "-p", task.prompt],
                                cwd=str(work), capture_output=True, text=True,
                                encoding="utf-8", errors="replace",
-                               timeout=cfg.task_timeout_s or task.timeout_s, env=env)
+                               timeout=_agent_to, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"tokens": 0, "detail": f"pi failed: {exc}"}
+        raw_out = getattr(exc, "stdout", None) or ""
+        if isinstance(raw_out, bytes):
+            raw_out = raw_out.decode("utf-8", errors="replace")
+        partial = _parse_pi_json_output(raw_out)
+        return {
+            "tokens": int(partial.get("tokens") or 0),
+            "cached_tokens": int(partial.get("cached_tokens") or 0),
+            "net_tokens": int(partial.get("net_tokens") or 0),
+            "rounds": int(partial.get("rounds") or 0),
+            "stop_reason": "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "",
+            "detail": f"pi failed: {exc}",
+        }
     finally:
         shutil.rmtree(pi_conf_dir, ignore_errors=True)
     parsed = _parse_pi_json_output(r.stdout or "")
@@ -1143,20 +1199,21 @@ def main() -> int:
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
                     cell = base / f"run{actual_run}" / cond
+                    _cell_cap = max(float(cfg.cell_timeout_s), _agent_timeout_s(task, cfg) + 60.0)
                     try:
                         row = asyncio.run(asyncio.wait_for(
                             _one_run(cond, task, cfg, cell),
-                            timeout=cfg.cell_timeout_s))
+                            timeout=_cell_cap))
                     except asyncio.TimeoutError:
                         row = {
                             "task": task.id, "condition": cond, "model": cfg.model,
                             "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
                             "ok": False,
-                            "seconds": float(cfg.cell_timeout_s), "tokens": 0,
+                            "seconds": round(_cell_cap, 1), "tokens": 0,
                             "cached_tokens": 0, "net_tokens": 0, "tok_per_sec": 0.0,
                             "rounds": 0,
                             "stop_reason": "cell_timeout",
-                            "detail": f"cell timeout after {cfg.cell_timeout_s}s",
+                            "detail": f"cell timeout after {int(_cell_cap)}s",
                             "check_output": "",
                             **diff_stats(task.repo, cell / task.id),
                         }

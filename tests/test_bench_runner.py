@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
-    Config, DEFAULT_CONDITIONS, Task, _aider_files, _extract_patch,
+    Config, DEFAULT_CONDITIONS, Task, _agent_timeout_s, _aider_files, _extract_patch,
     _hivemind_body, _parse_file_blocks, _parse_pi_json_output,
     _parse_token_count, _persist, _read_hermes_state_usage,
     _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
@@ -267,6 +267,15 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           and _pusage["rounds"] == 2
           and "fixed bug" in _pusage["detail"],
           f" ({_pusage})")
+
+    # shared per-agent timeout parity
+    _to_task = Task("t", "p", "c", timeout_s=300)
+    check("timeout: parity uses task timeout (300) even when cell_timeout is 900",
+          _agent_timeout_s(_to_task, Config(tasks_dir=root, out=root / "x.json", model="m", cell_timeout_s=900)) == 300.0)
+    check("timeout: explicit task_timeout overrides task default",
+          _agent_timeout_s(_to_task, Config(tasks_dir=root, out=root / "x.json", model="m", task_timeout_s=600, cell_timeout_s=900)) == 600.0)
+    check("timeout: cell_timeout caps tighter than task timeout",
+          _agent_timeout_s(_to_task, Config(tasks_dir=root, out=root / "x.json", model="m", cell_timeout_s=120)) == 120.0)
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,
