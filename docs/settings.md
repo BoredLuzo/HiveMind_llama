@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**282 settings keys.**
+**287 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -64,6 +64,9 @@ its comment) in either file, then re-run the generator.
 | `duo_critic_ctx` | null | `None` | yes |  |
 | `duo_critic_model` | str | `` | - |  |
 | `duo_critic_tools` | bool | `False` | yes |  |
+| `duo_deep_retrieval` | bool | `True` | - | DEEP RETRIEVAL (D2, ): when the tiny-workspace pre-seed produces nothing, the repo index (context/repo_index.py, BOUNDED walk: hidden/heavy dirs pruned, depth + file caps) ranks nested repo files against the task text and the coder's first message gets a compact hint… |
+| `duo_deep_retrieval_max_chars` | int | `3000` | - | Upper char cap for the hint block; ranked hints that do not fit are dropped (never truncated mid-line). |
+| `duo_deep_retrieval_max_files` | int | `5` | - | How many ranked files may appear in the hint block (clamped 1..32). |
 | `duo_error_rollup` | bool | `True` | yes | ERROR ROLLUP : deterministic dedup of repeating test/compile failures in the fix-loop (core/error_rollup.py). First failure full, repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run. |
 | `duo_evict_on_pause` | bool | `False` | - | EVICT-ON-PAUSE : while a run waits for an ask_user answer the coder sits in VRAM untouched. On a small card that blocks every other model load; this releases it until the run resumes. Off by default - the reload costs a few seconds. Approval cards keep the model… |
 | `duo_evict_planner_on_coder` | bool | `True` | - | SERIAL-SLOTS : unload the planner when the coder phase starts and the models differ (frees VRAM for coder ctx; costs one reload when switching back). |
@@ -72,6 +75,8 @@ its comment) in either file, then re-run the generator.
 | `duo_image_mode` | null | `None` | yes | Duo image plan : how the agentic duo run handles attached images. None = derived (active vision_model.json -> "preprocess", else "direct"); explicit "direct"/"preprocess" wins. duo_image_to_planner/_coder are the per-role switches for… |
 | `duo_image_to_coder` | bool | `False` | yes |  |
 | `duo_image_to_planner` | bool | `False` | yes |  |
+| `duo_index_max_depth` | int | `6` | - | max directory levels below the root |
+| `duo_index_max_files` | int | `2000` | - | hard file cap for the index walk |
 | `duo_install_max_calls` | int | `3` | - |  |
 | `duo_llm_slow_timeout_s` | int | `300` | - |  |
 | `duo_mask_before_compress` | bool | `True` | - | MASK-FIRST : deterministic observation masking (stale tool outputs -> recall markers) runs before the LLM summary and can resolve the threshold crossing without it — no LLM call, no slot evict. |

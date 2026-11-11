@@ -112,4 +112,17 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
           len(capped.entries) == 3 and capped.truncated,
           f"({len(capped.entries)} entries, truncated={capped.truncated})")
 
+# TOP-LEVEL DEFAULT (D2 deep retrieval, 2026-11-11): RepoIndex()/get_index()
+# keep the pre-deep-retrieval behavior — no recursion — so the tiny-workspace
+# pre-seed path stays byte-identical; nested=True opts into the bounded walk.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    (ws / "top.py").write_text("TOP = 1\n", encoding="utf-8")
+    (ws / "sub").mkdir()
+    (ws / "sub" / "nested.py").write_text("NESTED = 1\n", encoding="utf-8")
+    top_only = RepoIndex(ws)
+    top_only.refresh()
+    check("default mode still indexes top-level only",
+          set(top_only.entries) == {"top.py"}, f"({sorted(top_only.entries)})")
+
 sys.exit(h.finish("repo_index"))

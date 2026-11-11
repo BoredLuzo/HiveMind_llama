@@ -339,6 +339,23 @@ DEFAULT_SETTINGS = {
     # pre-seed block (core/duo_helpers.build_preseed_context). The effective
     # cap is min(this, ctx_tokens/4, floor 2000); 8000 keeps the old behavior.
     "duo_context_budget_chars": 8000,
+    # DEEP RETRIEVAL (D2, 2026-11-11): when the tiny-workspace pre-seed
+    # produces nothing, the repo index (context/repo_index.py, BOUNDED walk:
+    # hidden/heavy dirs pruned, depth + file caps) ranks nested repo files
+    # against the task text and the coder's first message gets a compact
+    # hint block (path + size + top symbols), never full file contents.
+    # Empty/no-match queries emit nothing; false restores the old prompt.
+    "duo_deep_retrieval": True,
+    # How many ranked files may appear in the hint block (clamped 1..32).
+    "duo_deep_retrieval_max_files": 5,
+    # Upper char cap for the hint block; ranked hints that do not fit are
+    # dropped (never truncated mid-line).
+    "duo_deep_retrieval_max_chars": 3000,
+    # INDEX SCAN CAPS for the deep walk: the index stops at max_files
+    # entries (a bigger repo is truncated, never scanned unbounded) and
+    # descends at most max_depth directory levels below the workspace root.
+    "duo_index_max_files": 2000,  # hard file cap for the index walk
+    "duo_index_max_depth": 6,     # max directory levels below the root
     # ERROR ROLLUP (2026-09-06): deterministic dedup of repeating test/compile
     # failures in the fix-loop (core/error_rollup.py). First failure full,
     # repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run.
