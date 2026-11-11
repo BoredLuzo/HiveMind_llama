@@ -62,14 +62,15 @@ setup() {
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
   export DEBIAN_FRONTEND=noninteractive
 
+  # Clean any stale apt processes or locks from previously aborted runs
+  pkill -9 -f "apt-get|dpkg" 2>/dev/null || true
+  rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock* 2>/dev/null || true
+
   # In Colab/cloud images git, curl, build-essential are already installed.
   # Only install missing utilities (tmux, rsync) without hanging on dead apt mirrors.
   if ! command -v tmux >/dev/null || ! command -v rsync >/dev/null; then
     log "system packages: installing tmux / rsync"
-    $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || {
-      timeout 30 $SUDO apt-get update -o Acquire::http::Timeout="10" -qq 2>/dev/null || true
-      $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || true
-    }
+    $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || true
   fi
 
   log "uv package manager"
