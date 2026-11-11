@@ -30,6 +30,18 @@ Ask-user: the card no longer runs its own 30 s auto-answer timer; the engine
 governor is the single source, so one question can never receive two
 autonomous answers. The card checkbox still persists the global setting.
 
+Direct run control: `/pause` now works on plain direct streams (A1) — the
+runner gates at every safe boundary (before a model round, at token chunks,
+where the suspended upstream backpressures llama-server), `/pause-state/
+{chat_id}` becomes active and `/resume` continues; an abort during the pause
+ends the run as `aborted`. Mid-run steering also reaches pure direct runs
+(A2): a steer queued before the answer rides into the prompt, one queued
+during the answer gets a bounded continuation round (assistant answer +
+`[OWNER STEER]` message, max 2 continuations) so the model sees and answers
+it; steers arriving after the last boundary still deliver after the run.
+The UI shows plain "Run paused/resumed" dividers for direct runs (no chunk
+counts).
+
 Frontend: all `localStorage` access goes through `_hmStorageGet`/
 `_hmStorageSet`. Browsers that block cookies/storage (Firefox throws
 `SecurityError: The operation is insecure`) no longer get a frontend-error
