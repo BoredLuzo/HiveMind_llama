@@ -2,12 +2,16 @@
 
 [![release](https://img.shields.io/github/v/release/BoredLuzo/HiveMind_llama?label=release&color=2ea44f)](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
 [![downloads](https://img.shields.io/github/downloads/BoredLuzo/HiveMind_llama/total?label=downloads)](https://github.com/BoredLuzo/HiveMind_llama/releases)
-[![license](https://img.shields.io/badge/license-see%20LICENSE-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.14-3776ab)](pyproject.toml)
 
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
 hardware: no cloud LLM, no API keys, your prompts, code and answers are
 processed locally.
+
+**License:** source-available under **Business Source License 1.1** - private,
+non-commercial production use is allowed; no resale or hosted service. It
+becomes MIT on 2030-09-01. See [LICENSE](LICENSE).
 
 Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
 
@@ -19,13 +23,12 @@ either opt-in per action or has an off switch:
 | Hugging Face (`huggingface.co`) | you download a model or voice (installer menu, model manager); one-time `hf auth login` for gated models | model/voice name, HF token for gated downloads | download nothing and point the model folder at files you already have |
 | PyPI (`pypi.org`) | first use of text to speech: `uv` installs `pocket-tts` + PyTorch | package names, Python/platform | leave TTS off |
 | `github.com` release assets | install/update fetches llama.cpp and whisper.cpp binaries | file names | use the release ZIP and place the binaries yourself |
-| `api.github.com` | only when you publish a repo with the Git tool | repo name, commit, your GitHub token | do not publish; remove the token |
+| `api.github.com` | Git publish (only when you use the Git tool) or the startup update check (no personal data) | repo name, commit and token when publishing; current version for the update check | do not publish / remove the token; `HIVEMIND_NO_UPDATE_CHECK=1` |
 | your SearXNG → DuckDuckGo/Mojeek | a web search the agent (or you) runs | the search terms | keep SearXNG down; use a tool profile without web search |
 | Docker Hub (`searxng/searxng`) | `searxng.bat` pulls the image once | image name | pull it yourself / do not start the container |
 | arbitrary URLs | `web_fetch` / `browser` tool calls | the URL and the request | tool profile without web/browser |
 | Playwright CDN | browser optional setup/update (`playwright install chromium`) | platform + Chromium version | skip the browser optional |
 | Telegram | gateway on: every message, answer, photo, voice note and file | the conversation and its attachments | gateway off (and revoke the bot token) |
-| `api.github.com` | startup update check (no personal data) | current version | `HIVEMIND_NO_UPDATE_CHECK=1` |
 | external MCP servers | a tool call on a server you configured | tool name + arguments | remove the server |
 
 **Model downloads and tokens.** HiveMind never creates a Hugging Face token.
@@ -633,7 +636,7 @@ started until you switch it on.
 | `base` | 141 MB | speech to text | 9.9 % - light default for small machines |
 | `small` | 465 MB | speech to text | 7.3 % - slower, small gain |
 | `tiny` | 74 MB | speech to text | 12.4 % - weak CPUs |
-| Pocket TTS | ~200 MB + PyTorch in uv's cache | text to speech | voice `cosette`, speed `1.08x` |
+| Pocket TTS | ~200 MB + PyTorch in uv's cache | text to speech | voice `anna` (default), speed `1.08x` |
 | whisper.cpp / parakeet.cpp | 21 MB | the STT binaries | `whisper-cli`, `whisper-server`, `parakeet-cli` |
 
 Voices: `anna` (default), `alba`, `cosette`, `eve`, `jane`, `vera`, `bill_boerst`.
