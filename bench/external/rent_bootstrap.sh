@@ -355,9 +355,19 @@ PY
 }
 
 run_bench() {  # $1 = extra args
-  [ -x "$AIDER_VENV/bin/aider" ] || die "aider missing (run setup)"
-  [ -n "$HM_LLAMA_URL" ] || detect_llama_url
   local _extra_args=""
+  if echo "$HM_CONDITIONS" | grep -q "aider"; then
+    if [ -x "$AIDER_VENV/bin/aider" ]; then
+      _extra_args="$_extra_args --aider-bin $AIDER_VENV/bin/aider"
+    elif command -v aider >/dev/null; then
+      _extra_args="$_extra_args --aider-bin $(command -v aider)"
+    else
+      die "aider missing (run setup or omit aider from HM_CONDITIONS)"
+    fi
+  elif [ -x "$AIDER_VENV/bin/aider" ]; then
+    _extra_args="$_extra_args --aider-bin $AIDER_VENV/bin/aider"
+  fi
+  [ -n "$HM_LLAMA_URL" ] || detect_llama_url
   if [ -x "$HERMES_VENV/bin/hermes" ]; then
     _extra_args="$_extra_args --hermes-bin $HERMES_VENV/bin/hermes"
   elif command -v hermes >/dev/null; then
@@ -373,7 +383,6 @@ run_bench() {  # $1 = extra args
       --num-ctx "$HM_CTX" \
       --run-offset "${HM_RUN_OFFSET:-0}" \
       --cell-timeout "${HM_CELL_TIMEOUT:-900}" \
-      --aider-bin "$AIDER_VENV/bin/aider" \
       --hivemind "http://127.0.0.1:$PORT" \
       --llama "$HM_LLAMA_URL" \
       $_extra_args \
@@ -419,7 +428,7 @@ full() {
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' \
+    "cd '$HM_DIR' && HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 
@@ -446,6 +455,9 @@ status() {
     printf '[-] Llama-Server     : DOWN / NOT LOADED\n'
   fi
 
+  printf '[-] Active Model     : %s\n' "$(cat "$HM_DIR/.active_model" 2>/dev/null || echo 'not set')"
+  printf '[-] Active Context   : %s tokens\n' "$(cat "$HM_DIR/.active_ctx" 2>/dev/null || echo 'not set')"
+
   if command -v nvidia-smi >/dev/null 2>&1; then
     printf '[-] GPU Memory       : %s\n' "$(nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || echo 'n/a')"
   fi
@@ -469,6 +481,9 @@ stop() {
   pkill -f "$HM_DIR/.venv/bin/python run.py" 2>/dev/null || true
   pkill -f "HiveMind_llama.*run.py" 2>/dev/null || true
   pkill -f llama-server 2>/dev/null || true
+  sleep 1
+  pkill -9 -f llama-server 2>/dev/null || true
+  pkill -9 -f "HiveMind_llama.*run.py" 2>/dev/null || true
   [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
   for _ in $(seq 1 20); do
     curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || break

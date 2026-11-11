@@ -249,11 +249,15 @@ def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[boo
     if not task.check.strip():
         return False, "task.json has no check command"
     timeout = timeout_s or task.timeout_s
+    env = dict(os.environ)
+    py_bin_dir = str(Path(sys.executable).parent)
+    env["PATH"] = f"{py_bin_dir}:{env.get('PATH', '')}"
+    env["PYTHONPATH"] = f"{work}:{env.get('PYTHONPATH', '')}"
     try:
         r = subprocess.run(
             task.check, shell=True, cwd=str(work), capture_output=True,
             text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
+            timeout=timeout, env=env,
         )
     except subprocess.TimeoutExpired:
         return False, f"check timed out after {timeout}s"
@@ -351,7 +355,8 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
         "max_tokens": 4096,
         "stream": False,
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0)) as client:
+    _client_timeout = float(max(cfg.cell_timeout_s, task.timeout_s, 60))
+    async with httpx.AsyncClient(timeout=httpx.Timeout(_client_timeout, connect=10.0)) as client:
         r = await client.post(cfg.llama_url.rstrip("/") + "/v1/chat/completions",
                               json=payload)
         r.raise_for_status()
@@ -433,7 +438,8 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
     done: dict = {}
     error = ""
     usage_prompt = usage_completion = usage_cached = usage_rounds = 0
-    async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=10.0)) as client:
+    _client_timeout = float(max(cfg.cell_timeout_s, task.timeout_s, 60))
+    async with httpx.AsyncClient(timeout=httpx.Timeout(_client_timeout, connect=10.0)) as client:
         async with client.stream("POST",
                                  cfg.hivemind_url.rstrip("/") + "/stream",
                                  json=body) as resp:
