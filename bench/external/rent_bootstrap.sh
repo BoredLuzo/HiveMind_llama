@@ -61,14 +61,26 @@ setup() {
   command -v nvidia-smi >/dev/null || die "no NVIDIA driver (nvidia-smi missing) - wrong instance?"
   nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
   export DEBIAN_FRONTEND=noninteractive
-  log "system packages (apt-get update & install: git, tmux, rsync, build-essential)"
-  $SUDO apt-get update -qq
-  $SUDO apt-get install -y -qq git curl ca-certificates tmux rsync build-essential
-  log "uv package manager"
-  command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; }
-  export PATH="$HOME/.local/bin:$PATH"
 
-  log "clone $HM_REPO ($HM_BRANCH)"
+  # In Colab/cloud images git, curl, build-essential are already installed.
+  # Only install missing utilities (tmux, rsync) without hanging on dead apt mirrors.
+  if ! command -v tmux >/dev/null || ! command -v rsync >/dev/null; then
+    log "system packages: installing tmux / rsync"
+    $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || {
+      timeout 30 $SUDO apt-get update -o Acquire::http::Timeout="10" -qq 2>/dev/null || true
+      $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || true
+    }
+  fi
+
+  log "uv package manager"
+  if ! command -v uv >/dev/null; then
+    python3 -m pip install -q uv 2>/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh 2>/dev/null || true
+  fi
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  command -v uv >/dev/null || die "failed to install uv"
+  uv --version
+
+  log "checking repository ($HM_DIR)"
   [ -d "$HM_DIR/.git" ] || git clone --branch "$HM_BRANCH" "$HM_REPO" "$HM_DIR"
   if [ -f "$BENCH_TGZ" ]; then
     log "overlay bench/ from $BENCH_TGZ"
@@ -77,8 +89,11 @@ setup() {
   [ -f "$HM_DIR/bench/runner.py" ] || die "bench/runner.py missing: push it or provide BENCH_TGZ"
   git -C "$HM_DIR" log -1 --format='[bench] engine commit: %h %s'
 
-  log "python 3.14 + dependencies (uv sync takes ~1-2 min, please wait)..."
-  ( cd "$HM_DIR" && uv python install 3.14 && uv sync --all-extras --frozen )
+  log "python 3.14 (standalone via uv)"
+  ( cd "$HM_DIR" && uv python install 3.14 )
+
+  log "installing locked dependencies (uv sync)"
+  ( cd "$HM_DIR" && uv sync --all-extras --frozen )
 
   log "llama.cpp (CUDA $HM_LLAMA_CUDA)"
   ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda --cuda-version "$HM_LLAMA_CUDA" )
