@@ -70,6 +70,26 @@ class Task:
     tests: Path | None = None
 
 
+def detect_gpu_info() -> dict:
+    info = {"name": "Unknown", "vram_total": "", "driver": ""}
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+        lines = [line.strip() for line in r.stdout.strip().splitlines() if line.strip()]
+        if lines:
+            parts = [p.strip() for p in lines[0].split(",")]
+            info["name"] = parts[0]
+            if len(parts) > 1:
+                info["vram_total"] = parts[1]
+            if len(parts) > 2:
+                info["driver"] = parts[2]
+    except Exception:
+        pass
+    return info
+
+
 @dataclass
 class Config:
     tasks_dir: Path
@@ -79,6 +99,8 @@ class Config:
     hivemind_url: str = "http://127.0.0.1:8001"
     conditions: list[str] = field(default_factory=lambda: list(DEFAULT_CONDITIONS))
     runs: int = 1
+    run_offset: int = 0
+    gpu_info: dict = field(default_factory=dict)
     # None = use each task's timeout_s; a CLI value overrides the corpus.
     task_timeout_s: int | None = None
     # Hard wall-clock cap per cell (agent phase). A heartbeating but wedged
@@ -680,15 +702,19 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     # CHURN before hidden tests are installed (agent output only).
     _churn = diff_stats(task.repo, work)
     ok, check_out = run_check(task, work, cfg.task_timeout_s)
+    tok_total = int(extra.get("tokens") or 0)
+    tok_sec = round(tok_total / seconds, 1) if seconds > 0 and tok_total > 0 else 0.0
     return {
         "task": task.id,
         "condition": cond,
         "model": cfg.model,
+        "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
         "ok": bool(ok),
         "seconds": seconds,
-        "tokens": int(extra.get("tokens") or 0),
+        "tokens": tok_total,
         "cached_tokens": int(extra.get("cached_tokens") or 0),
-        "net_tokens": int(extra.get("net_tokens") or extra.get("tokens") or 0),
+        "net_tokens": int(extra.get("net_tokens") or tok_total),
+        "tok_per_sec": tok_sec,
         "rounds": int(extra.get("rounds") or 0),
         "stop_reason": extra.get("stop_reason", ""),
         "detail": extra.get("detail", "") or check_out,
@@ -720,12 +746,14 @@ def aggregate(rows: list[dict]) -> dict:
             continue
         duration = [r["seconds"] for r in mine]
         rounds = [int(r.get("rounds") or 0) for r in mine]
+        tok_sec_list = [r["tok_per_sec"] for r in mine if r.get("tok_per_sec")]
         tokens_total = sum(int(r["tokens"] or 0) for r in mine)
         cached_total = sum(int(r.get("cached_tokens") or 0) for r in mine)
         summary[cond] = {
             "runs": len(mine),
             "pass_rate": round(sum(1 for r in mine if r["ok"]) / len(mine), 4),
             "median_seconds": round(statistics.median(duration), 1),
+            "median_tok_per_sec": round(statistics.median(tok_sec_list), 1) if tok_sec_list else 0.0,
             "tokens_total": tokens_total,
             "cached_tokens_total": cached_total,
             "net_tokens_total": sum(int(r.get("net_tokens") or r.get("tokens") or 0) for r in mine),
@@ -744,13 +772,14 @@ def aggregate(rows: list[dict]) -> dict:
 
 def print_summary(summary: dict, relative: dict | None = None) -> None:
     print()
-    print(f"{'condition':<20} {'pass':>6} {'delta':>8} {'median s':>9} {'tokens':>9} "
+    print(f"{'condition':<20} {'pass':>6} {'delta':>8} {'median s':>9} {'tok/s':>7} {'tokens':>9} "
           f"{'net tok':>9} {'rounds':>6}")
     for cond, row in summary.items():
         delta = row["delta_vs_raw"]
         delta_s = "-" if delta is None else f"{delta:+.2f}"
+        tps = row.get("median_tok_per_sec", 0.0)
         print(f"{cond:<20} {row['pass_rate']:>6.2f} {delta_s:>8} "
-              f"{row['median_seconds']:>9.1f} {row['tokens_total']:>9d} "
+              f"{row['median_seconds']:>9.1f} {tps:>7.1f} {row['tokens_total']:>9d} "
               f"{row['net_tokens_total']:>9d} {row['rounds_median']:>6.1f}")
     if relative:
         print_relative(relative)
@@ -758,10 +787,14 @@ def print_summary(summary: dict, relative: dict | None = None) -> None:
 
 def _payload(rows: list[dict], cfg: Config, conditions: list[str],
              started_at: str) -> dict:
+    now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
     return {
         "started_at": started_at,
+        "updated_at": now_iso,
         "model": cfg.model,
         "runs": cfg.runs,
+        "run_offset": getattr(cfg, "run_offset", 0),
+        "gpu": getattr(cfg, "gpu_info", {}),
         "conditions": conditions,
         "summary": aggregate(rows),
         # D1: compact relative block (deltas vs raw/raw_files, category
@@ -832,6 +865,9 @@ def main() -> int:
                              "HIVEMIND_PI_BIN")
     parser.add_argument("--no-duo-planner", action="store_true",
                         help="coder-alone mode: duo runs with planner off")
+    parser.add_argument("--run-offset", type=int,
+                        default=int(os.environ.get("HM_RUN_OFFSET", 0)),
+                        help="offset added to the run index (e.g. 1 if this is run 2, default: 0)")
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--only", default="", help="comma-separated task ids to run")
@@ -854,12 +890,15 @@ def main() -> int:
         print(f"unknown condition(s): {unknown}", file=sys.stderr)
         return 2
 
+    gpu_info = detect_gpu_info()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(args.out or Path(__file__).parent / "results" / f"run-{stamp}.json")
     cfg = Config(
         tasks_dir=Path(args.tasks), out=out, model=args.model,
         llama_url=args.llama, hivemind_url=args.hivemind,
         conditions=conditions, runs=max(1, args.runs),
+        run_offset=max(0, args.run_offset),
+        gpu_info=gpu_info,
         task_timeout_s=args.task_timeout, keep_work=args.keep_work,
         cell_timeout_s=max(1, args.cell_timeout),
         aider_bin=args.aider_bin,
@@ -868,6 +907,11 @@ def main() -> int:
         duo_planner=not args.no_duo_planner,
         ctx_tokens=max(1024, args.num_ctx),
     )
+
+    gpu_s = f"{gpu_info.get('name', 'CPU')} ({gpu_info.get('vram_total', '')})"
+    print(f"\n[bench] starting benchmark: {len(tasks)} tasks, {cfg.runs} run(s), run_offset={cfg.run_offset}")
+    print(f"[bench] model: {cfg.model} (ctx {cfg.ctx_tokens}) | GPU: {gpu_s}")
+    print(f"[bench] conditions: {', '.join(conditions)}\n")
 
     _pf = asyncio.run(_preflight(cfg, conditions))
     if _pf:
@@ -886,30 +930,39 @@ def main() -> int:
         tmp = tempfile.mkdtemp(prefix="hm_bench_")
         base = Path(tmp)
     try:
+        total_runs = cfg.runs + cfg.run_offset
         for run_idx in range(cfg.runs):
+            actual_run = run_idx + 1 + cfg.run_offset
             for task in tasks:
                 for cond in conditions:
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
-                    cell = base / f"run{run_idx + 1}" / cond
+                    cell = base / f"run{actual_run}" / cond
                     try:
                         row = asyncio.run(asyncio.wait_for(
                             _one_run(cond, task, cfg, cell),
                             timeout=cfg.cell_timeout_s))
                     except asyncio.TimeoutError:
                         row = {
-                            "task": task.id, "condition": cond, "ok": False,
+                            "task": task.id, "condition": cond, "model": cfg.model,
+                            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "ok": False,
                             "seconds": float(cfg.cell_timeout_s), "tokens": 0,
+                            "cached_tokens": 0, "net_tokens": 0, "tok_per_sec": 0.0,
+                            "rounds": 0,
                             "stop_reason": "cell_timeout",
                             "detail": f"cell timeout after {cfg.cell_timeout_s}s",
                             "check_output": "",
                             **diff_stats(task.repo, cell / task.id),
                         }
-                    row["run"] = run_idx + 1
+                    row["run"] = actual_run
                     rows.append(row)
                     _persist(out, rows, cfg, conditions, started_at)
-                    print(f"[run {run_idx + 1}/{cfg.runs}] {task.id:<20} {cond:<16} "
-                          f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s")
+                    now_str = datetime.now().strftime("%H:%M:%S")
+                    tps = row.get("tok_per_sec", 0.0)
+                    tps_str = f"({tps:>5.1f} tok/s)" if tps > 0 else " " * 13
+                    print(f"[{now_str}] [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} "
+                          f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s {tps_str}")
     finally:
         if tmp is not None:
             # Windows: aider/servers can still hold a handle for a moment;

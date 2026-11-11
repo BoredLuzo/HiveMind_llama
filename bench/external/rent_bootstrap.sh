@@ -219,6 +219,7 @@ run_bench() {  # $1 = extra args
       --conditions "$HM_CONDITIONS" \
       --runs "$HM_RUNS" \
       --num-ctx "$HM_CTX" \
+      --run-offset "${HM_RUN_OFFSET:-0}" \
       --cell-timeout "${HM_CELL_TIMEOUT:-900}" \
       --aider-bin "$AIDER_VENV/bin/aider" \
       --hivemind "http://127.0.0.1:$PORT" \
@@ -266,7 +267,7 @@ full() {
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' \
+    "cd '$HM_DIR' && HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 

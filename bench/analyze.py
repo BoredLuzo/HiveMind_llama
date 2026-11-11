@@ -159,6 +159,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
     rows: list[dict] = []
+    offsets_per_group: dict[tuple[str, str], int] = {}
     for name in args.results:
         path = Path(name)
         try:
@@ -168,13 +169,24 @@ def main() -> int:
             return 2
         file_model = data.get("model") or ""
         file_rows = data.get("results") or []
+        cur_file_max_runs: dict[tuple[str, str], int] = {}
         for r in file_rows:
             if not r.get("model") and file_model:
                 r["model"] = file_model
+            c = r.get("condition") or "unknown"
             if args.by_model and r.get("model"):
                 m_short = r["model"].split(":")[-1] if ":" in r["model"] else r["model"]
-                r["condition"] = f"{r.get('condition')}@{m_short}"
-        rows.extend(file_rows)
+                c = f"{c}@{m_short}"
+                r["condition"] = c
+            t = r.get("task") or ""
+            grp_key = (c, t)
+            orig_run = int(r.get("run") or 1)
+            off = offsets_per_group.get(grp_key, 0)
+            r["run"] = orig_run + off
+            cur_file_max_runs[grp_key] = max(cur_file_max_runs.get(grp_key, 0), orig_run)
+            rows.append(r)
+        for k, max_run in cur_file_max_runs.items():
+            offsets_per_group[k] = offsets_per_group.get(k, 0) + max_run
     if not rows:
         print("no result rows", file=sys.stderr)
         return 2
