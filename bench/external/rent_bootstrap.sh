@@ -134,23 +134,41 @@ detect_llama_url() {
 
 serve() {
   [ -x "$PY" ] || die "run setup first"
-  # Benchmark profile for the 80 GB A100: full GPU offload, no CPU experts,
-  # CUDA-friendly prefill chunk. Written before the engine starts because
-  # LLAMA_FIT / LLAMA_UBATCH are read at import time.
+  # Dynamic GPU profile: auto-detects VRAM (A100, L4, T4) or uses HM_VRAM_BUDGET.
+  # On 24 GB cards (L4), offloads 2 MoE experts to RAM; on >=35 GB (A100) all in VRAM.
   ( cd "$HM_DIR" && "$PY" - <<'PY'
-import json
+import json, os, subprocess
 from pathlib import Path
 p = Path("settings.json")
 d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+
+budget_gb = 76.0
+try:
+    r = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                       capture_output=True, text=True, check=True)
+    total_mib = float(r.stdout.strip().splitlines()[0])
+    budget_gb = round(total_mib * 0.92 / 1024, 1)
+except Exception:
+    pass
+
+env_budget = os.environ.get("HM_VRAM_BUDGET")
+if env_budget:
+    try:
+        budget_gb = float(env_budget)
+    except ValueError:
+        pass
+
+cpu_experts = 0 if budget_gb >= 35.0 else 2
 d.update({
-    "moe_cpu_experts": {"qwen3.6:35b-a3b": 0, "hermes3.6:35b-a3b": 0},
-    "vram_budget_gb": 76.0,
+    "moe_cpu_experts": {"qwen3.6:35b-a3b": cpu_experts, "hermes3.6:35b-a3b": cpu_experts},
+    "vram_budget_gb": budget_gb,
     "llama_fit": False,
     "llama_gpu_layers_auto": False,
     "duo_ubatch": 1024,
     "llama_ubatch_size": 1024,
 })
 p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+print(f"[bench] GPU budget: {budget_gb} GB VRAM, MoE CPU experts: {cpu_experts}")
 PY
   )
   if curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
@@ -170,9 +188,8 @@ PY
     done
     curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
-  curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
-    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0,"hermes3.6:35b-a3b":0},"vram_budget_gb":76.0}' >/dev/null \
-    || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
+  ( cd "$HM_DIR" && curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" \
+      -H "Content-Type: application/json" -d @settings.json >/dev/null 2>&1 || true )
   log "preloading $HM_MODEL (ctx $HM_CTX)"
   curl --max-time 600 -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
     -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}" >/dev/null \
