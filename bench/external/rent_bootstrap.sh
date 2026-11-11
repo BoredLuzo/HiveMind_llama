@@ -30,7 +30,7 @@
 set -euo pipefail
 
 HM_REPO="${HM_REPO:-https://github.com/BoredLuzo/HiveMind_llama.git}"
-HM_BRANCH="${HM_BRANCH:-dev}"
+HM_BRANCH="${HM_BRANCH:-bench-stable}"
 HM_DIR="${HM_DIR:-$HOME/HiveMind_llama}"
 BENCH_TGZ="${BENCH_TGZ:-$HOME/bench_bundle.tgz}"
 PORT="${HIVEMIND_PORT:-8001}"
@@ -178,13 +178,13 @@ setup() {
 }
 
 detect_llama_url() {
-  for _p in 8101 8102 8080; do
+  local _base_port=$(( PORT + 100 ))
+  for _p in "$_base_port" $(( _base_port + 1 )) 8101 8102 8080; do
     if curl --max-time 2 -fsS "http://127.0.0.1:$_p/health" >/dev/null 2>&1; then
       HM_LLAMA_URL="http://127.0.0.1:$_p"; return
     fi
   done
-  HM_LLAMA_URL="${HM_LLAMA_URL:-http://127.0.0.1:8101}"
-  log "WARN: no llama-server health endpoint found; using $HM_LLAMA_URL"
+  HM_LLAMA_URL="${HM_LLAMA_URL:-http://127.0.0.1:$_base_port}"
 }
 
 serve() {
