@@ -160,6 +160,8 @@ def main() -> int:
     args = parser.parse_args()
     rows: list[dict] = []
     offsets_per_group: dict[tuple[str, str], int] = {}
+    gpus: set[str] = set()
+    models: set[str] = set()
     for name in args.results:
         path = Path(name)
         try:
@@ -168,6 +170,11 @@ def main() -> int:
             print(f"cannot read {path}: {exc}", file=sys.stderr)
             return 2
         file_model = data.get("model") or ""
+        if file_model:
+            models.add(file_model)
+        file_gpu = data.get("gpu") or {}
+        if isinstance(file_gpu, dict) and file_gpu.get("name") and file_gpu["name"] != "Unknown":
+            gpus.add(f"{file_gpu['name']} ({file_gpu.get('vram_total', '').strip()})".strip())
         file_rows = data.get("results") or []
         cur_file_max_runs: dict[tuple[str, str], int] = {}
         for r in file_rows:
@@ -194,6 +201,12 @@ def main() -> int:
     if args.json:
         print(json.dumps(summary, indent=1))
     else:
+        if gpus:
+            print(f"[Hardware] GPU: {', '.join(sorted(gpus))}")
+        if models:
+            print(f"[Evaluation] Model(s): {', '.join(sorted(models))}")
+        max_run = max((r.get("run", 1) for r in rows), default=1)
+        print(f"[Tracking] Total pooled runs: {max_run} run(s) across {len(args.results)} file(s)\n")
         _print(summary)
     return 0
 

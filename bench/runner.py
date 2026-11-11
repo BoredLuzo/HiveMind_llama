@@ -531,6 +531,7 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
         # Aider otherwise offers/opens its model-warning docs page in the
         # browser for every unknown local model — one tab per benchmark cell.
         "--no-show-model-warnings",
+        "--edit-format", "diff",
         "--model", f"openai/{cfg.model}",
         "--openai-api-base", api_base,
     ]
@@ -581,11 +582,13 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
         "  provider: custom\n"
         f"  default: {cfg.model}\n"
         f"  base_url: {api_base}\n"
+        "  api_mode: chat_completions\n"
         f"  api_key: {api_key}\n",
         encoding="utf-8",
     )
     cmd = [
         hermes_bin, "chat",
+        "-Q", "--yolo",
         "--ignore-rules",
         "--provider", "custom",
         "--model", cfg.model,
@@ -627,8 +630,7 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
     # outside the workspace: Pi writes sessions/config there and those files
     # must not pollute churn metrics or a later patch.
     pi_conf_dir = Path(tempfile.mkdtemp(prefix="hm_pi_"))
-    models_json = pi_conf_dir / "models.json"
-    models_json.write_text(json.dumps({
+    models_spec = json.dumps({
         "providers": {
             "local": {
                 "baseUrl": api_base,
@@ -638,13 +640,18 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
                     {
                         "id": cfg.model,
                         "name": f"Local {cfg.model}",
+                        "reasoning": False,
+                        "input": ["text"],
                         "contextWindow": cfg.ctx_tokens,
                         "maxTokens": 4096
                     }
                 ]
             }
         }
-    }, indent=2), encoding="utf-8")
+    }, indent=2)
+    (pi_conf_dir / "models.json").write_text(models_spec, encoding="utf-8")
+    (pi_conf_dir / "agent").mkdir(parents=True, exist_ok=True)
+    (pi_conf_dir / "agent" / "models.json").write_text(models_spec, encoding="utf-8")
     
     cmd = [
         pi_bin,
