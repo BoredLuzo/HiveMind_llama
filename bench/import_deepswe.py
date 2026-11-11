@@ -79,20 +79,33 @@ def import_task(deep_swe_dir: Path, out_dir: Path, spec: dict) -> dict:
                        cwd=str(temp_repo), check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Copy extracted test files into target_dir / "tests"
+        # Copy EVERY file the official test patch added or changed, not just
+        # the main test file. Several tasks also patch tests/conftest.py (or
+        # fixtures); dropping those makes the hidden suite fail for reasons
+        # unrelated to the model. test.sh is the official harness wrapper and
+        # is not needed by the local check.
+        changed = subprocess.check_output(
+            ["git", "-C", str(temp_repo), "diff", "--name-only"],
+            text=True).splitlines()
+        changed = [p for p in changed if p.strip() and p.strip() != "test.sh"]
+        if not changed:
+            raise RuntimeError(f"No test files produced by patch for {spec['name']}")
+
         tests_dst = target_dir / "tests"
         if tests_dst.is_dir():
             shutil.rmtree(tests_dst)
         tests_dst.mkdir(parents=True, exist_ok=True)
 
-        for tf in spec["test_files"]:
+        for tf in changed:
             src_f = temp_repo / tf
             dst_f = tests_dst / tf
             dst_f.parent.mkdir(parents=True, exist_ok=True)
             if src_f.is_file():
                 shutil.copy2(src_f, dst_f)
             else:
-                raise FileNotFoundError(f"Expected test file not produced by patch: {tf}")
+                raise FileNotFoundError(
+                    f"Expected test file not produced by patch: {tf}")
+        spec = {**spec, "copied_test_files": changed}
 
     # Remove .git from repo_dst to keep task workspaces lightweight and pure
     shutil.rmtree(repo_dst / ".git", ignore_errors=True)

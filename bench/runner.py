@@ -525,6 +525,20 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     remote_base = _aider_remote_base()
     api_base = remote_base or (_active_llama_url(cfg.llama_url) + "/v1")
     api_key = (os.environ.get("HIVEMIND_AIDER_API_KEY") or "").strip() or "sk-local"
+    # Aider has no --max-chat-tokens; unknown local models need an explicit
+    # context window through its metadata file, and chat summarization is
+    # controlled by --max-chat-history-tokens.
+    _meta_dir = Path(tempfile.mkdtemp(prefix="hm_aider_meta_"))
+    _meta_file = _meta_dir / "model.metadata.json"
+    _meta_file.write_text(json.dumps({
+        f"openai/{cfg.model}": {
+            "max_input_tokens": int(cfg.ctx_tokens),
+            "max_tokens": int(cfg.ctx_tokens),
+            "max_output_tokens": 8192,
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        }
+    }, indent=2), encoding="utf-8")
     cmd = [
         aider_bin, "--yes-always", "--no-git", "--no-auto-commits",
         "--no-check-update",
@@ -534,6 +548,8 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
         "--edit-format", "diff",
         "--model", f"openai/{cfg.model}",
         "--openai-api-base", api_base,
+        "--model-metadata-file", str(_meta_file),
+        "--max-chat-history-tokens", str(cfg.ctx_tokens),
     ]
     cmd.extend(["--message", task.prompt, *_aider_files(work)])
     env = {**os.environ, "OPENAI_API_KEY": api_key,
@@ -544,6 +560,8 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
                            timeout=cfg.task_timeout_s or task.timeout_s, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "detail": f"aider failed: {exc}"}
+    finally:
+        shutil.rmtree(_meta_dir, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
     # "Tokens: 1.2k sent, 345 received" (k/m suffixes are common).
     match = re.search(
@@ -583,7 +601,8 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
         f"  default: {cfg.model}\n"
         f"  base_url: {api_base}\n"
         "  api_mode: chat_completions\n"
-        f"  api_key: {api_key}\n",
+        f"  api_key: {api_key}\n"
+        f"  context_length: {cfg.ctx_tokens}\n",
         encoding="utf-8",
     )
     cmd = [
