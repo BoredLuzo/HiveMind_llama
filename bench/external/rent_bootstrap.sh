@@ -164,11 +164,25 @@ serve() {
   mkdir -p "$MODELS_DIR"
 
   # 1. Model existence check: auto-download if not present locally
-  local _model_resolved
-  _model_resolved=$( ( cd "$HM_DIR" && HIVEMIND_MODELS_DIR="$MODELS_DIR" "$PY" -c "from backend.llama_models import resolve_model_path; print(resolve_model_path('$HM_MODEL') or '')" 2>/dev/null ) || true )
-  if [ -z "$_model_resolved" ] || [ ! -f "$_model_resolved" ]; then
-    log "Model '$HM_MODEL' not found in $MODELS_DIR — auto-downloading..."
+  local _model_found=0
+  ( cd "$HM_DIR" && HIVEMIND_MODELS_DIR="$MODELS_DIR" "$PY" - <<PY
+import sys, os
+from backend.llama_models import resolve_model_path
+try:
+    p = resolve_model_path('$HM_MODEL')
+    if p and os.path.isfile(p):
+        sys.exit(0)
+    sys.exit(1)
+except Exception:
+    sys.exit(1)
+PY
+  ) >/dev/null 2>&1 && _model_found=1 || _model_found=0
+
+  if [ "$_model_found" -ne 1 ]; then
+    log "Model '$HM_MODEL' not found in $MODELS_DIR — auto-downloading now..."
     download "" "$HM_MODEL"
+  else
+    log "Model '$HM_MODEL' verified present in $MODELS_DIR"
   fi
 
   # Dynamic GPU profile: auto-detects VRAM (A100, L4, T4) or uses HM_VRAM_BUDGET.
@@ -235,53 +249,60 @@ PY
   fi
   ( cd "$HM_DIR" && curl --max-time 10 -fsS -X POST "http://127.0.0.1:$PORT/settings" \
       -H "Content-Type: application/json" -d @settings.json >/dev/null 2>&1 || true )
-  log "preloading $HM_MODEL (ctx $HM_CTX)"
+  log "preloading $HM_MODEL into VRAM (ctx $HM_CTX)..."
+  local _tmp_resp
+  _tmp_resp=$(mktemp)
+  curl --max-time 600 -s -w "\n%{http_code}" -X POST "http://127.0.0.1:$PORT/vram/load" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}" > "$_tmp_resp" 2>&1 &
+  local _curl_pid=$!
+
+  printf '[bench] allocating KV cache & loading CUDA weights'
+  while kill -0 "$_curl_pid" 2>/dev/null; do
+    printf '.'
+    sleep 2
+    if ! curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+      printf ' FAILED\n'
+      log "ERROR: HiveMind engine died during model load!"
+      kill "$_curl_pid" 2>/dev/null || true
+      tail -40 "$LOG" >&2 || true
+      rm -f "$_tmp_resp"
+      die "HiveMind engine process terminated unexpectedly"
+    fi
+  done
+  wait "$_curl_pid" 2>/dev/null || true
+
   local _vram_resp
   local _vram_code
   local _vram_body
-  _vram_resp=$(curl --max-time 600 -s -w "\n%{http_code}" -X POST "http://127.0.0.1:$PORT/vram/load" \
-      -H "Content-Type: application/json" \
-      -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":$HM_CTX,\"keep_alive\":\"-1\"}") || true
+  _vram_resp=$(cat "$_tmp_resp" 2>/dev/null || echo "")
+  rm -f "$_tmp_resp"
   _vram_code=$(echo "$_vram_resp" | tail -n1)
   _vram_body=$(echo "$_vram_resp" | sed '$d')
 
   if [ "$_vram_code" != "200" ]; then
-    printf '\n'
+    printf ' FAILED\n'
     log "ERROR: /vram/load failed with HTTP $_vram_code:"
     echo "$_vram_body" >&2
     log "Recent engine logs ($LOG):"
     tail -30 "$LOG" >&2 || true
     die "Engine could not load $HM_MODEL into VRAM"
   fi
-
-  printf '[bench] waiting for llama-server to load into VRAM'
-  local _llama_up=0
-  for _ in $(seq 1 180); do
-    if curl --max-time 2 -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl --max-time 2 -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then
-      printf ' OK\n'
-      _llama_up=1
-      break
-    fi
-    if ! curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-      printf ' FAILED\n'
-      log "ERROR: HiveMind engine crashed during model load!"
-      tail -40 "$LOG" >&2 || true
-      die "HiveMind engine process died"
-    fi
-    printf '.'
-    sleep 2
-  done
-  if [ "$_llama_up" -ne 1 ]; then
-    printf ' FAILED\n'
-    log "ERROR: llama-server did not become healthy within 360 seconds."
-    tail -40 "$LOG" >&2 || true
-    die "llama-server startup timed out"
-  fi
+  printf ' OK\n'
 
   detect_llama_url
+  if ! curl --max-time 3 -fsS "$HM_LLAMA_URL/health" >/dev/null 2>&1; then
+    printf '[bench] waiting for llama-server endpoint'
+    for _ in $(seq 1 30); do
+      curl --max-time 2 -fsS "$HM_LLAMA_URL/health" >/dev/null 2>&1 && { printf ' OK\n'; break; }
+      printf '.'
+      sleep 1
+    done
+  fi
   log "benchmark llama endpoint: $HM_LLAMA_URL"
   echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
   echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
+  log "Engine and model ($HM_MODEL @ ctx $HM_CTX) fully ready for benchmarks!"
 }
 
 run_bench() {  # $1 = extra args
