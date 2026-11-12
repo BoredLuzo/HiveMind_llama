@@ -8091,7 +8091,11 @@ function handleEvent(d) {
     var _pauseDiv = document.createElement('div');
     _pauseDiv.className = 'msg divider';
     _pauseDiv.style.cssText = 'color:#f0ad4e;border-color:rgba(240,173,78,.35);font-size:11px;font-weight:600';
-    _pauseDiv.textContent = '\u23F8 Run paused after chunk ' + d.chunks_done + '. ' + d.chunks_remaining + ' chunks remaining. Click Resume to continue.';
+    // DIRECT PAUSE (A1, 2026-11-11): direct runs have no chunks — the event
+    // carries phase:"direct" and gets a plain suspended/continued wording.
+    _pauseDiv.textContent = (d.phase === 'direct')
+      ? '\u23F8 Run paused. Click Resume to continue.'
+      : '\u23F8 Run paused after chunk ' + d.chunks_done + '. ' + d.chunks_remaining + ' chunks remaining. Click Resume to continue.';
     document.getElementById('chat').appendChild(_pauseDiv);
     scrollBtmIfNearBottom(120);
   }
@@ -8100,7 +8104,9 @@ function handleEvent(d) {
     var _resDiv = document.createElement('div');
     _resDiv.className = 'msg divider';
     _resDiv.style.cssText = 'color:#20b0a0;border-color:rgba(32,176,160,.35);font-size:11px;font-weight:600';
-    _resDiv.textContent = '\u25B6 Run resumed \u2014 chunk ' + (d.chunks_done + 1) + ' starting.';
+    _resDiv.textContent = (d.phase === 'direct')
+      ? '\u25B6 Run resumed.'
+      : '\u25B6 Run resumed \u2014 chunk ' + (d.chunks_done + 1) + ' starting.';
     document.getElementById('chat').appendChild(_resDiv);
     scrollBtmIfNearBottom(120);
   }
