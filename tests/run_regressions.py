@@ -422,6 +422,7 @@ SUITES = [
     ("git_checkpoints",          "tests/test_git_checkpoints.py",            30),
     # D2 context engine + D3 multi-edit (2026-11-09)
     ("repo_index",               "tests/test_repo_index.py",                 30),
+    ("deep_retrieval",           "tests/test_deep_retrieval.py",             30),
     ("multi_edit",               "tests/test_multi_edit.py",                 30),
 
 ]

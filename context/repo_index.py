@@ -1,20 +1,29 @@
 # -*- coding: utf-8 -*-
 """Incremental per-workspace repo index (D2 context engine, 2026-11-09).
 
-stdlib only. One small index per workspace: top-level text/code files with
-their mtime+size signature and top-level symbols. `refresh()` is incremental
+stdlib only. One small index per workspace: text/code files with their
+mtime+size signature and top-level symbols. `refresh()` is incremental
 — a file whose mtime_ns+size is unchanged keeps its extracted symbols (the
 only expensive step: content read + ast parse), vanished files are dropped,
-new/changed files are re-extracted. The walk never recurses (Tree-Scout and
-the static repomap already cover deep repos) and never indexes more than
-`max_files` entries, so a huge repo cannot make this scan itself expensive.
+new/changed files are re-extracted. Two walk modes:
+
+- top-level (default, `nested=False`): exactly the 2026-11-09 behavior —
+  `root.iterdir()`, no recursion. The tiny-workspace pre-seed uses this so
+  its selection behavior and cost stay unchanged.
+- nested (`nested=True`, D2 deep retrieval 2026-11-11): a BOUNDED
+  `os.walk` — hidden and heavy directories (node_modules, __pycache__,
+  venvs, build output, VCS metadata …) are pruned before descent, symlinked
+  directories are never followed (`followlinks=False`), descent stops at
+  `max_depth` levels below the root and the index stops at `max_files`
+  entries (`truncated=True`). A huge repo can therefore never make this
+  scan itself expensive.
 
 `search(query, limit)` ranks entries by token overlap between the task query
 and three per-file token sets: file stem (weight 4), extracted symbols
 (weight 2) and the full relative path (weight 1). Only positive scores are
 returned — a query that matches nothing yields an empty list, and callers
-(duo_helpers.build_preseed_context) then skip the pre-seed instead of
-inlining four arbitrary files.
+(duo_helpers.build_preseed_context, duo_helpers.build_deep_retrieval_context)
+then emit no block instead of inlining arbitrary files.
 """
 from __future__ import annotations
 
@@ -38,7 +47,22 @@ _JS_SYMBOL_RES = (
 
 _MAX_SYMBOLS_PER_FILE = 64
 _DEFAULT_MAX_FILES = 2000
+_DEFAULT_MAX_DEPTH = 6
 _MAX_CACHED_INDEXES = 8
+_MAX_HINTS = 32          # hard ceiling for deep_context_block's hint count
+_MAX_HINT_SYMBOLS = 5    # symbols rendered per hint line
+_MIN_HINT_BUDGET = 300   # chars — below this the block cannot fit one line
+
+# Deep walk (nested=True): directories that are never descended into. Pure
+# scan protection — none of these are primary source locations in normal
+# repos; dotted entries are already covered by the "." prefix rule.
+_HEAVY_DIRS = frozenset({
+    "node_modules", "bower_components", "__pycache__", "venv", "env",
+    "virtualenv", "dist", "build", "target", "out", "coverage", "htmlcov",
+    "site-packages", "__macosx", ".git", ".hg", ".svn", ".tox", ".nox",
+    ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea",
+    ".vscode", ".next", ".nuxt", ".gradle", ".cache", ".eggs",
+})
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{1,}")
 _STOP_TOKENS = frozenset({
@@ -129,24 +153,52 @@ class _Entry:
 
 
 class RepoIndex:
-    """Bounded, incremental index of ONE workspace's top-level text files."""
+    """Bounded, incremental index of ONE workspace's text/code files.
 
-    def __init__(self, root, *, max_files: int = _DEFAULT_MAX_FILES):
+    `nested=False` (default) walks top-level only — the original D2 core
+    behavior. `nested=True` adds the bounded deep walk (see module doc).
+    """
+
+    def __init__(self, root, *, max_files: int = _DEFAULT_MAX_FILES,
+                 nested: bool = False,
+                 max_depth: int = _DEFAULT_MAX_DEPTH):
         self.root = Path(str(root or ""))
         self.max_files = max(1, int(max_files))
+        self.nested = bool(nested)
+        self.max_depth = max(1, int(max_depth))
         self.entries: dict[str, _Entry] = {}      # rel posix name -> entry
         self.extractions = 0                       # cache-miss counter (tests)
         self.truncated = False                     # walk hit the file cap
 
     def refresh(self) -> None:
         """Stat every candidate file; re-extract only changed/new ones."""
-        root = self.root
         self.truncated = False
+        try:
+            if self.nested:
+                seen = self._walk_nested()
+            else:
+                seen = self._walk_top_level()
+        except OSError:
+            self.entries.clear()
+            return
+        # Drop vanished files first, then update the survivors incrementally.
+        for rel in [r for r in self.entries if r not in seen]:
+            del self.entries[rel]
+        for rel, (mtime_ns, size) in seen.items():
+            old = self.entries.get(rel)
+            if old is not None and old.mtime_ns == mtime_ns and old.size == size:
+                continue  # cache hit: signature unchanged, symbols stay
+            self.entries[rel] = self._extract(rel, mtime_ns, size)
+
+    def _walk_top_level(self) -> dict[str, tuple[int, int]]:
+        """Top-level candidates only (pre-deep-retrieval behavior, kept
+        verbatim so the tiny-workspace pre-seed path stays identical)."""
+        root = self.root
         try:
             candidates = sorted(root.iterdir(), key=lambda x: x.name.lower())
         except OSError:
             self.entries.clear()
-            return
+            return {}
         seen: dict[str, tuple[int, int]] = {}
         count = 0
         for p in candidates:
@@ -163,14 +215,53 @@ class RepoIndex:
                 continue
             seen[p.name] = (st.st_mtime_ns, st.st_size)
             count += 1
-        # Drop vanished files first, then update the survivors incrementally.
-        for rel in [r for r in self.entries if r not in seen]:
-            del self.entries[rel]
-        for rel, (mtime_ns, size) in seen.items():
-            old = self.entries.get(rel)
-            if old is not None and old.mtime_ns == mtime_ns and old.size == size:
-                continue  # cache hit: signature unchanged, symbols stay
-            self.entries[rel] = self._extract(rel, mtime_ns, size)
+        return seen
+
+    def _walk_nested(self) -> dict[str, tuple[int, int]]:
+        """Bounded deep walk: posix rel names for nested candidates.
+
+        Safety rails (module doc): heavy/hidden directories pruned before
+        descent, symlinks not followed, stop at max_depth directory levels,
+        hard stop at max_files entries (truncated=True). Deterministic:
+        dirnames/filenames are walked in case-insensitive name order.
+        """
+        base = str(self.root)
+        seen: dict[str, tuple[int, int]] = {}
+        count = 0
+        stop = False
+        for dirpath, dirnames, filenames in os.walk(
+                base, topdown=True, followlinks=False):
+            if stop:
+                break
+            rel_dir = os.path.relpath(dirpath, base)
+            depth = 0 if rel_dir == os.curdir else rel_dir.count(os.sep) + 1
+            if depth >= self.max_depth:
+                dirnames[:] = []
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".")
+                           and d.lower() not in _HEAVY_DIRS]
+            dirnames.sort(key=str.lower)
+            for name in sorted(filenames, key=str.lower):
+                if count >= self.max_files:
+                    self.truncated = True
+                    stop = True
+                    break
+                if name.startswith("."):
+                    continue
+                if os.path.splitext(name)[1].lower() not in TEXT_SUFFIXES:
+                    continue
+                full = os.path.join(dirpath, name)
+                try:
+                    if not os.path.isfile(full):
+                        continue
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                rel = name if depth == 0 else \
+                    os.path.relpath(full, base).replace(os.sep, "/")
+                seen[rel] = (st.st_mtime_ns, st.st_size)
+                count += 1
+        return seen
 
     def _extract(self, rel: str, mtime_ns: int, size: int) -> _Entry:
         self.extractions += 1
@@ -208,16 +299,28 @@ class RepoIndex:
 _INDEX_CACHE: dict[str, RepoIndex] = {}
 
 
-def get_index(workspace, *, max_files: int = _DEFAULT_MAX_FILES) -> RepoIndex:
-    """Per-workspace index (refreshed on every call — the refresh itself is
-    the incremental step and costs one stat per file)."""
+def _cache_key(workspace, *, max_files: int, nested: bool, max_depth: int) -> str:
     try:
-        key = os.path.normcase(str(Path(str(workspace or "")).resolve()))
+        base = os.path.normcase(str(Path(str(workspace or "")).resolve()))
     except OSError:
-        key = os.path.normcase(str(workspace or ""))
+        base = os.path.normcase(str(workspace or ""))
+    return (f"{base}|mf={max(1, int(max_files))}"
+            f"|n={bool(nested)}|d={max(1, int(max_depth))}")
+
+
+def get_index(workspace, *, max_files: int = _DEFAULT_MAX_FILES,
+              nested: bool = False,
+              max_depth: int = _DEFAULT_MAX_DEPTH) -> RepoIndex:
+    """Per-workspace index (refreshed on every call — the refresh itself is
+    the incremental step and costs one stat per file). Walk modes are cached
+    separately: the tiny-workspace pre-seed uses top-level, deep retrieval
+    uses nested=True, and neither evicts the other's invalidation state."""
+    key = _cache_key(workspace, max_files=max_files, nested=nested,
+                     max_depth=max_depth)
     idx = _INDEX_CACHE.get(key)
-    if idx is None or idx.max_files != max(1, int(max_files)):
-        idx = RepoIndex(workspace, max_files=max_files)
+    if idx is None:
+        idx = RepoIndex(workspace, max_files=max_files, nested=nested,
+                        max_depth=max_depth)
         _INDEX_CACHE[key] = idx
         while len(_INDEX_CACHE) > _MAX_CACHED_INDEXES:
             _INDEX_CACHE.pop(next(iter(_INDEX_CACHE)))
@@ -226,9 +329,88 @@ def get_index(workspace, *, max_files: int = _DEFAULT_MAX_FILES) -> RepoIndex:
 
 
 def search_workspace(workspace, query: str, limit: int = 4) -> list[tuple[str, int]]:
-    """Convenience: refresh + rank. Never raises — a broken workspace or an
-    unreadable file simply scores nothing (callers fall back gracefully)."""
+    """Convenience: refresh + rank (top-level walk, unchanged behavior).
+    Never raises — a broken workspace or an unreadable file simply scores
+    nothing (callers fall back gracefully)."""
     try:
         return get_index(workspace).search(query, limit=limit)
     except OSError:
         return []
+
+
+def deep_search_workspace(workspace, query: str, limit: int = 5, *,
+                          max_files: int = _DEFAULT_MAX_FILES,
+                          max_depth: int = _DEFAULT_MAX_DEPTH
+                          ) -> list[tuple[str, int]]:
+    """Deep-retrieval ranking over the bounded nested walk.
+
+    Same contract as search_workspace: refresh + rank, never raises, only
+    positive scores. Returns posix rel paths (nested files as `src/a/b.py`).
+    """
+    try:
+        idx = get_index(workspace, max_files=max_files, nested=True,
+                        max_depth=max_depth)
+        return idx.search(query, limit=limit)
+    except OSError:
+        return []
+
+
+def _hint_line(rank: int, rel: str, entry) -> str:
+    """One deterministic signature line: rank, posix path, size, symbols."""
+    if entry is None:
+        return f"{rank}. {rel}"
+    size = int(entry.size)
+    size_txt = f"{size / 1024:.1f} KB" if size >= 1024 else f"{size} B"
+    base = f"{rank}. {rel} ({size_txt})"
+    syms = [str(s) for s in (entry.symbols or [])[:_MAX_HINT_SYMBOLS]]
+    if syms:
+        return base + " — " + ", ".join(syms)
+    return base
+
+
+_HINT_HEADER = "[RETRIEVAL HINTS — repo files ranked most relevant to this task]"
+_HINT_FOOTER = ("Read these files with read_file (range reads for large "
+                "files) before editing them; other files matched the task "
+                "less strongly.")
+
+
+def deep_context_block(workspace, query: str, *, max_hints: int = 5,
+                       budget_chars: int = 3000,
+                       max_files: int = _DEFAULT_MAX_FILES,
+                       max_depth: int = _DEFAULT_MAX_DEPTH
+                       ) -> tuple[str, list[str]]:
+    """Compact retrieval block for the coder prompt (D2 deep retrieval).
+
+    Ranks indexed files (nested + top-level, bounded walk) against `query`
+    and renders at most `max_hints` signature lines — path, size and top
+    symbols, NEVER full file contents — under `budget_chars`. Deterministic
+    and bounded: extra ranked hints that do not fit the budget are dropped,
+    not truncated mid-line. Returns ("", []) for an empty query, an
+    unmatched query (no arbitrary picks) or an unusable workspace.
+    """
+    query = str(query or "").strip()
+    if not query:
+        return "", []
+    max_hints = max(1, min(int(max_hints or 1), _MAX_HINTS))
+    budget = max(_MIN_HINT_BUDGET, int(budget_chars or 0))
+    try:
+        idx = get_index(workspace, max_files=max_files, nested=True,
+                        max_depth=max_depth)
+    except OSError:
+        return "", []
+    ranked = idx.search(query, limit=max_hints)
+    if not ranked:
+        return "", []
+    lines: list[str] = []
+    names: list[str] = []
+    used = len(_HINT_HEADER) + len(_HINT_FOOTER) + 2
+    for rank, (rel, _score) in enumerate(ranked, 1):
+        line = _hint_line(rank, rel, idx.entries.get(rel))
+        if used + len(line) + 1 > budget:
+            break
+        lines.append(line)
+        names.append(rel)
+        used += len(line) + 1
+    if not lines:
+        return "", []
+    return _HINT_HEADER + "\n" + "\n".join(lines) + "\n" + _HINT_FOOTER, names
