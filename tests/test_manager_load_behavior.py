@@ -103,10 +103,13 @@ check("probe_all: filename b-number fallback when the binary cannot run",
       probe_fn == (9999, True, True, True, False, False),
       f" ({probe_fn})")
 
-# ── _omit_mmproj_for (vision-gate negative test switch) ────────────────────
-omit_off = ML._omit_mmproj_for("llava:7b", vision=False)
+# ── _omit_mmproj_for (vision-gate negative-test switch) ────────────────────
+# TEXT-ONLY MMPROJ SKIP (2026-11-12): a text-only load of a projector family
+# no longer counts as "needs mmproj" (the projector is omitted anyway), so
+# the switch cases run on vision=True requests.
+omit_off = ML._omit_mmproj_for("llava:7b", vision=True)
 with mock.patch.dict(os.environ, {"HIVEMIND_TEST_OMIT_MMPROJ": "*"}):
-    omit_all = ML._omit_mmproj_for("llava:7b", vision=False)
+    omit_all = ML._omit_mmproj_for("llava:7b", vision=True)
 with mock.patch.dict(os.environ, {"HIVEMIND_TEST_OMIT_MMPROJ": "9b-ud"}):
     omit_hit = ML._omit_mmproj_for("qwen3.5:9b-ud-instruct", vision=True)
     omit_miss = ML._omit_mmproj_for("qwen3.5:2b", vision=True)

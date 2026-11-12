@@ -73,6 +73,18 @@ DEFAULT_SETTINGS = {
     # can crash at load (#30697); the loader retries once without the flag.
     "moe_cache_mib":           0,
     "llama_mlock":             True,
+    # LARGE-MOE MLOCK SKIP: llama_mlock=True forces --load-mode mmap+mlock,
+    # which on large MoE GGUFs (>12 GB, experts streamed from RAM) measures
+    # up to 4.7x slower decode than load-mode none (llama-bench tg128 on the
+    # 35B-A3B: 2.92 t/s mmap+mlock vs 13.77 t/s none) because the locked
+    # expert pages page in from NVMe under RAM pressure. Default True: for
+    # those models the llama_mlock intent is NOT forced into mmap+mlock —
+    # the resolver falls through to the model profile / RAM guard (none or
+    # plain mmap), and a one-time warning names the models affected. A
+    # profile "load_mode" still wins explicitly (e.g. groot ships
+    # mmap+mlock), and small models keep the old mlock behavior. Set false
+    # to restore the old always-mlock behavior.
+    "llama_mlock_skip_large_moe": True,
     # Auto-fit (audit B3): omit --n-gpu-layers so llama.cpp fits the layers
     # to the free VRAM itself — it refuses while the flag pins 99. Default
     # keeps the explicit full-offload behavior.
@@ -95,6 +107,16 @@ DEFAULT_SETTINGS = {
     # 256 is the shipped tight-GPU baseline; 512/1024 is the measured opt-in.
     "duo_ubatch":              256,
     "llama_ubatch_size":       256,
+    # MoE UBATCH RAISE: 0 = the model profile decides ("ubatch" key, MoE
+    # models only — e.g. the 35B-A3B profile ships 512 for the measured
+    # +24..55% prefill); a value > 0 forces this ubatch for every MoE model;
+    # a negative value vetoes any raise and keeps duo_ubatch everywhere.
+    # A raise above duo_ubatch is applied per load ONLY when the VRAM
+    # pre-flight still fits (compute-buffer surcharge ~0.28 MiB per ubatch
+    # unit above 256); otherwise the load silently keeps duo_ubatch. Small
+    # cards are unaffected: models without a profile "ubatch" key keep
+    # duo_ubatch (256 shipped default).
+    "duo_ubatch_moe":          0,
     # HOST-RAM / VRAM TREND (2026-10-27): llama.cpp keeps context checkpoints
     # and a host-side prompt cache per slot, and both grow with how much a slot
     # has processed. A long run got slower the longer it ran. 0 disables.
@@ -310,6 +332,16 @@ DEFAULT_SETTINGS = {
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
     "duo_coder_tool_thinking_auto_mode": "off",
+    # TOOL-THINKING BUDGET CAP: upper bound for the per-round thinking budget
+    # in agentic tool rounds (only has an effect when tool thinking is on via
+    # duo_coder_tool_thinking / the reactive auto mode). 0 = no cap (model
+    # default). On a 35B-A3B at ~14-20 tok/s every <think> block before a
+    # read_file/edit_file call costs ~15-25 s, so a cap of 256-512 saves
+    # 1-2.5k decode tokens per task. TRADE-OFF: too low a cap can degrade
+    # tool-call planning quality on complex steps - this is why the default
+    # is 0 (no silent quality change); set it explicitly after judging your
+    # model's tool-round behavior.
+    "duo_tool_thinking_budget_cap": 0,
     # truncated at the output-token limit (finish_reason=length -> DROPPED -> loop),
     # coupled to the token budget: max_chars ~ budget_tokens * factor - overhead.
     # Step; cap 3.3 (documented measured value).
@@ -549,6 +581,14 @@ DEFAULT_SETTINGS = {
     "vision_agent_enabled":    False,
     "vision_agent_model":      "gemma-4:e4b-it-qat",
     "vision_agent_mode":       "sequential",
+    # MMPROJ ON TEXT-ONLY LOADS (default False = skip): the vision projector
+    # (--mmproj, ~0.8-1.3 GB VRAM) is attached only when the request actually
+    # carries images; a text-only load of a vision-capable model starts
+    # without it, and the first image request pays a one-time upgrade reload
+    # (needs_vision_reload / upgrade_port_to_vision). True = the old
+    # behavior: projector families (llava, minicpm-v, qwen3-vl, ...) always
+    # carry the projector even for pure text/code runs.
+    "vision_mmproj_always":    False,
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
     # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?

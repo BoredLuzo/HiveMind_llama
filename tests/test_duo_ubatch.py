@@ -66,9 +66,11 @@ srv = (root / "server.py").read_text(encoding="utf-8")
 mgr = (root / "backend" / "manager_load.py").read_text(encoding="utf-8")
 check("server syncs duo_ubatch via the resolver",
       "resolve_ubatch_sizes" in srv and "duo_ubatch" in srv)
-check("-b follows the ubatch in the loader CMD",
-      'str(max(1024, int(LLAMA_UBATCH)))' in mgr)
-check("-ubatch-size uses the same value", "str(int(LLAMA_UBATCH))" in mgr)
+check("-b follows the effective ubatch in the loader CMD",
+      'str(max(1024, _ub_eff))' in mgr)
+check("-ubatch-size uses the same value", '"--ubatch-size",  str(_ub_eff)' in mgr)
+check("per-model MoE ubatch raise is resolved",
+      "resolve_model_ubatch(model, _ub_base" in mgr)
 # PRESET-SYNC (2026-10-31): a preset load must not drop an explicit duo_ubatch.
 cfg = (root / "routers" / "config.py").read_text(encoding="utf-8")
 check("preset sync uses the runtime-flag helper",

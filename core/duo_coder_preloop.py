@@ -363,9 +363,15 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                     # coder ctx headroom for a reload-free transition.
                     if bool(ctx.settings.get("duo_evict_planner_on_coder", True)):
                         try:
-                            _planner_base_cmp = _planner_model.rsplit("#", 1)[0]
-                            _exec_base_cmp = exec_mdl.rsplit("#", 1)[0]
-                            if _planner_base_cmp != _exec_base_cmp:
+                            # SLOT-REUSE CANONICALIZATION (35B lever 8): the
+                            # same-model decision must match the manager's
+                            # slot matching (_nm): ':latest'/alias-suffix and
+                            # label-casing differences are NOT different
+                            # models — evicting the resident planner slot on
+                            # such a label difference forced a full 15-35 s
+                            # reload of identical weights.
+                            from backend.llama_manager_utils import _nm as _canon_model
+                            if _canon_model(_planner_model) != _canon_model(exec_mdl):
                                 await _lsm2.evict(_planner_model)
                                 logger.warning(
                                     "[SERIAL-SLOTS] planner %s evicted for coder %s",

@@ -210,6 +210,54 @@ def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:
     return ub, batch
 
 
+# MOE-UBATCH-RAISE (35B lever 3, 2026-11-12): the settings baseline
+# (resolve_ubatch_sizes -> duo_ubatch, shipped 256) stays the global
+# default; the per-model profile key "ubatch" (MoE models only) or the
+# duo_ubatch_moe setting may raise it per load. Pure + unit-tested; the
+# loader applies the raise only when the VRAM pre-flight still fits
+# (ubatch_extra_mib surcharge) and falls back to the baseline otherwise.
+def _align_ubatch(ub: int) -> int:
+    ub = max(LLAMA_UBATCH_MIN, min(LLAMA_UBATCH_MAX, int(ub)))
+    return (ub // 32) * 32 or LLAMA_UBATCH_DEFAULT
+
+
+def resolve_model_ubatch(model: str, base_ubatch: int,
+                         moe_setting: int = 0) -> tuple[int, str]:
+    """Effective --ubatch-size for ONE model load: (value, source).
+
+    base_ubatch is the settings baseline (duo_ubatch). moe_setting is the
+    duo_ubatch_moe setting:
+        > 0  force this ubatch for every MoE model (never below the baseline)
+        < 0  veto: never raise above the baseline, profile ignored
+       == 0  auto: a MoE model's profile "ubatch" key applies when it is
+              above the baseline; everything else keeps the baseline
+    Non-MoE models always keep the baseline (small cards are unaffected).
+    source is one of "base", "veto", "setting", "profile".
+    """
+    base = _align_ubatch(base_ubatch)
+    if not is_moe_model(model):
+        return base, "base"
+    try:
+        _moe_set = int(moe_setting or 0)
+    except (TypeError, ValueError):
+        _moe_set = 0
+    if _moe_set < 0:
+        return base, "veto"
+    if _moe_set > 0:
+        _raised = _align_ubatch(_moe_set)
+        return (_raised, "setting") if _raised > base else (base, "base")
+    try:
+        from model_configs.models_registry import get_ubatch as _gu
+        _prof_ub = _gu(model)
+    except (ImportError, AttributeError, KeyError, TypeError, ValueError):
+        _prof_ub = None
+    if _prof_ub:
+        _raised = _align_ubatch(_prof_ub)
+        if _raised > base:
+            return _raised, "profile"
+    return base, "base"
+
+
 # UBATCH-COMPUTE-BUFFER (2026-10-30, audit): the VRAM table (llama_vram_table)
 # has no ubatch term. Measured on the real server (Groot, ncmoe 28, ctx
 # 32768): dedicated peak 5188 MiB at ub 512 vs 5333 at ub 1024 = +145 MiB

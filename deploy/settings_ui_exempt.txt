@@ -151,3 +151,10 @@ duo_index_max_depth
 duo_auto_test_on_edit
 duo_auto_test_max_per_run
 duo_auto_test_timeout
+
+# 35B/performance levers (2026-11-12): loader/loop internals, tuned via
+# settings.json or POST /settings; each is documented in docs/settings.md.
+llama_mlock_skip_large_moe
+duo_ubatch_moe
+duo_tool_thinking_budget_cap
+vision_mmproj_always
