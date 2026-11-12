@@ -37,12 +37,13 @@ check("simple Colab notebook has the two token placeholders",
       any('MODAL_TOKEN_ID = ""' in "".join(c["source"]) for c in simple_nb["cells"])
       and any('MODAL_TOKEN_SECRET = ""' in "".join(c["source"]) for c in simple_nb["cells"]))
 rent = (ROOT / "bench" / "external" / "rent_bootstrap.sh").read_text(encoding="utf-8", errors="replace")
-check("rental bootstrap clones dev and passes the coder llama port",
-      'HM_BRANCH="${HM_BRANCH:-dev}"' in rent and "--llama" in rent)
-check("rental bootstrap keeps A100 MoE experts on the GPU",
+check("rental bootstrap clones bench-stable and passes the coder llama port",
+      'HM_BRANCH="${HM_BRANCH:-bench-stable}"' in rent and "--llama" in rent)
+check("rental bootstrap keeps large-GPU MoE experts on the GPU",
       '"moe_cpu_experts"' in rent
-      and '"qwen3.6:35b-a3b": cpu_experts' in rent
-      and 'cpu_experts = 0 if budget_gb >= 35.0 else 2' in rent)
+      and 'if budget_gb >= 35.0:' in rent
+      and 'cpu_experts = 0' in rent
+      and 'math.ceil((20.2 - target_model_gb) / 0.44)' in rent)
 check("Colab notebook is A100/Modal/cloudflared based",
       len(nb.get("cells", [])) >= 8
       and any("A100" in "".join(c["source"]) for c in nb["cells"])
