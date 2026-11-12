@@ -312,7 +312,7 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             try:
                 import backend.llama_start_phases as _lsp_pf
                 _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            except Exception:
+            except (ImportError, AttributeError):
                 pass
     # PRESET-STALE-TAB (2026-10-28): bump the settings revision like
     # post_settings does, or a second tab holding an older snapshot could
@@ -734,7 +734,7 @@ async def post_settings(req: Request):
             try:
                 import backend.llama_start_phases as _lsp_pf
                 _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            except Exception:
+            except (ImportError, AttributeError):
                 pass
         except Exception:
             pass

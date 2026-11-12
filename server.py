@@ -373,7 +373,7 @@ def _sync_backend_runtime_config() -> None:
         try:
             import backend.llama_start_phases as _lsp_pf
             _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
-        except Exception:
+        except (ImportError, AttributeError):
             pass
         # UBATCH-SEAM (2026-09-08): same three-module sync as CACHE_REUSE —
         # duo_ubatch overrides --ubatch-size (prefill throughput lever for
