@@ -26,7 +26,9 @@ from hive_functions.loop_machine import AgentState
 from hive_functions.planner import (
     fallback_planner_steps, make_thinking_planner_sys, run_inloop_planner,
 )
-from core.duo.preflight import _distilled_execution_steps, inloop_plan_emit_fn
+from core.duo.preflight import (
+    _distilled_execution_steps, inloop_plan_emit_fn, plan_aborted_fn,
+)
 from core.duo_helpers import (
     _calculate_thinking_tokens, inloop_plan_should_run as _inloop_plan_should_run,
 )
@@ -129,7 +131,7 @@ async def _duo_inloop_planner(ctx, ps):
                         max_output_tokens=min(_dtool_ctx, 4096),
                         websearch_available=ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available,
                         settings=ctx.settings,
-                        aborted_fn=ctx.aborted,
+                        aborted_fn=partial(plan_aborted_fn, ctx),
                         emit_fn=partial(inloop_plan_emit_fn, _inloop_event_q),
                     )
                 )

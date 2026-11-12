@@ -550,7 +550,9 @@ def _resolve_aider_bin(cfg: Config) -> str:
 
 
 def _active_llama_url(default_url: str) -> str:
-    for url in (default_url, "http://127.0.0.1:8101", "http://127.0.0.1:8102"):
+    # MAX_SLOTS=3 (BASE_PORT 8101 -> 8103): the third slot must be probed too.
+    for url in (default_url, "http://127.0.0.1:8101",
+                "http://127.0.0.1:8102", "http://127.0.0.1:8103"):
         try:
             if httpx.get(url.rstrip("/") + "/health", timeout=1.5).status_code == 200:
                 return url.rstrip("/")
@@ -1174,6 +1176,15 @@ def _load_resume_state(
 
 async def _preflight(cfg: Config, conditions: list[str]) -> str:
     """Fail fast when a required endpoint is dead (empty string = OK)."""
+    # Missing CLIs must abort BEFORE the first cell: otherwise every task
+    # writes a real FAIL row into the resume checkpoint instead of naming
+    # the missing binary once.
+    for _cond, _resolve, _label in (
+            ("aider", _resolve_aider_bin, "aider"),
+            ("hermes", _resolve_hermes_bin, "hermes"),
+            ("pi", _resolve_pi_bin, "pi")):
+        if _cond in conditions and not _resolve(cfg):
+            return f"{_label} CLI not found (set --{_label}-bin / HIVEMIND_{_label.upper()}_BIN)"
     # Condition ORDER must not change the preflight: an external harness calls
     # llama-server directly even when a HiveMind condition is also present.
     need_llama = any(c in ("raw", "raw_files", "aider", "hermes", "pi")

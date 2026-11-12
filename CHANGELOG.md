@@ -233,8 +233,11 @@ preserves the vision choice; a non-numeric `duo_tool_thinking_budget_cap`
 is ignored instead of crashing an active run; the MoE ubatch raise is
 decided in the real pre-flight (after eviction/reclaim, gate-aware) with a
 baseline fallback; a benchmark abort reaches direct runs and the planner;
-Pi's no-JSON retry only fires on a rejected `--mode` flag; overlapping
-checkpoints dedupe by cell timestamp; the cell cap reserves real check time;
+Pi's no-JSON retry only fires on a rejected `--mode` flag; a missing
+aider/hermes/pi binary aborts before the first cell instead of writing FAIL
+rows into the resume checkpoint; overlapping checkpoints dedupe by cell
+timestamp; the cell cap reserves real check time; the llama URL probe covers
+slot 8103;
 and the Cyber-Tiel-Coder profile uses the GGUF-visible base key so its MoE
 sizing and flags apply again. `test_bench_external` is registered in the
 gate (380 suites), CONTRIBUTING.md is export-ignored, and the Colab cell no

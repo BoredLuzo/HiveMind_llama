@@ -581,6 +581,7 @@ async def _duo_planner_phase(
                         pin=True,
                         # GRACEFUL-PLANNER: see primary load above.
                         ctx_graceful=True,
+                        vision=(_img_plan.get("planner") == "raw"),
                     ),
                     timeout=30.0,
                 )

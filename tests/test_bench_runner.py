@@ -4,6 +4,7 @@
 No model or server: task loading, workspace isolation, check execution,
 diff extraction/application and the aggregation math are covered.
 """
+import asyncio
 import io
 import json
 import shutil
@@ -20,6 +21,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from bench.runner import (  # noqa: E402
     Config, DEFAULT_CONDITIONS, Task, _agent_timeout_s, _aider_files, _extract_patch,
     _hivemind_body, _load_resume_state, _parse_file_blocks, _parse_pi_json_output,
+    _preflight,
     _parse_token_count, _persist, _read_hermes_state_usage,
     _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
     _resolve_pi_bin, _run_pi, _safe_rel_path, aggregate,
@@ -184,6 +186,8 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
                       aider_bin=str(root / "missing-aider.exe"))
     check("aider: missing explicit path is rejected",
           _resolve_aider_bin(_cfg_bad) == "")
+    check("preflight: missing CLI aborts before writing cells",
+          "aider CLI not found" in asyncio.run(_preflight(_cfg_bad, ["aider"])))
     _fake_aider = root / "fake-aider.exe"
     _fake_aider.write_text("", encoding="utf-8")
     _cfg_ok = Config(tasks_dir=root, out=root / "x.json", model="m",
