@@ -73,6 +73,18 @@ check("summary: duplicate (condition, task, run) is deduped",
       and _dup["conditions"]["raw"]["pass_rate"] == 0.0,
       f" ({_dup['conditions']})")
 
+# A checkpoint copy gets a shifted run number per file; the same cell must
+# still count once (timestamp + measurement fingerprint).
+_dup_shifted = summarize([
+    {"task": "dup2", "condition": "aider", "run": 1, "ok": True,
+     "timestamp": "2026-11-12T10:00:00+00:00", "seconds": 12.3, "tokens": 99},
+    {"task": "dup2", "condition": "aider", "run": 2, "ok": True,
+     "timestamp": "2026-11-12T10:00:00+00:00", "seconds": 12.3, "tokens": 99},
+])
+check("summary: shifted-run checkpoint copy is deduped by timestamp",
+      _dup_shifted["conditions"]["aider"]["cells"] == 1,
+      f" ({_dup_shifted['conditions']})")
+
 # ── D1 relative block (2026-11-09) ────────────────────────────────────────
 # Cells: raw 0/4, raw_files 1/4 (fix_a), hivemind_direct 2/4 (fix_a+fix_c),
 # aider 3/4. Tokens: direct 400/cell with 200 cached, 300 net; aider 50/cell.

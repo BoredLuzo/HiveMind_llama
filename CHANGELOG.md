@@ -10,8 +10,9 @@ the direct-tools prompt rules, uses `direct_tools_max_rounds` (1..300) and
 nudges one identical repeated tool call, so a read-only task ends with an
 answer instead of `max_tool_rounds`.
 
-Tools: the coder now defaults to `duo_core` (17 read/edit/run/test tools +
-LSP diagnostics, ~2.8k schema instead of ~5k); `duo_coder_tool_tier=full`
+Tools: the coder now defaults to `duo_core` (18 advertised tools: 17
+read/edit/run/test tools + LSP diagnostics; the 19th set member `send_file`
+is request-gated; ~2.8k schema instead of ~5k); `duo_coder_tool_tier=full`
 opts into git/web/MCP/browser/LSP extras. Direct gains a `research` tier
 (web + read/search, no write/exec) and defaults to `readonly`. Writes now
 warm the language server in the background (`lsp_auto_warm_on_write`) and
@@ -48,9 +49,10 @@ Frontend: all `localStorage` access goes through `_hmStorageGet`/
 toast on every load; the panel-width and perf-bar preferences simply fall
 back to their defaults.
 
-Benchmark: new `bench/` D1 harness (raw / HiveMind direct / HiveMind duo /
-aider) with a 21-task starter corpus and hidden, tamper-proof tests. It is
-developer-only and export-ignored. First full core-tier comparison
+Benchmark: new `bench/` D1 harness (HiveMind direct/duo, Aider, Hermes, Pi;
+raw/raw_files remain opt-in diagnostics only) with a 21-task starter corpus
+and hidden, tamper-proof tests. It is developer-only and export-ignored.
+First full core-tier comparison
 (2026-11-09, one run/cell): core coder and Aider both pass 19/21; coder
 54.3 s / 66,089 tokens per cell vs. Aider 22.1 s / 970. The core tier costs
 ~39 % fewer tokens than the 2026-11-08 full-tool run (108,378/cell) with the
@@ -85,7 +87,7 @@ symbols, never full contents; empty/no-match queries add nothing and the
 `WOULD_DROP_SYMBOLS` now includes the original definition line
 (`Keep definition: MODE = "prod"`), which targets the `multi_config` retry
 loop. MoE prefill keeps the full `--threads-batch` while decode keeps the
-physical-core `--threads` split. Covered by 379/379 regression suites.
+physical-core `--threads` split. Covered by 380/380 regression suites.
 
 Audit batch: B3/B8 behavior coverage was added for `pipeline_runner`,
 `chat_run`, `llama_start_phases`, `_pre_explore` and `manager_load` (the
@@ -170,8 +172,10 @@ just-changed dropdown cannot race the async settings write.
 
 Live smoke: `tests/live_smoke.py` runs a Direct answer and a Duo tool-layer
 file write against a running engine, with the tool-round/budget pins needed
-for small contexts. Direct passes; Duo is blocked on this box by ComfyUI
-holding ~7 GB VRAM (manager correctly refuses the coder load).
+for small contexts. The earlier run passed both (Duo wrote, checked and
+called `task_complete`); the latest local re-run was blocked because ComfyUI
+held ~7 GB VRAM, so the manager correctly refused the coder load. Re-run on
+a free GPU before quoting a fresh Duo smoke time.
 
 The same audit caught two split regressions: the C2 preloop constructor no
 longer received `duo_coder_sys`, so the helper rebuilt the coder prompt
@@ -220,6 +224,22 @@ autopilot runs 3 core rounds with the 4B model, then the 34-task Aider
 Polyglot suite, with optional 35B and DeepSWE cells, per-cell atomic Drive
 sync, `--resume`, intermediate status lines and a token-accounting caveat
 (HiveMind/Hermes/Pi exact-ish, Aider rounded and cache-blind).
+
+Post-audit fixes (2026-11-12): model profiles now resolve trailing `#N` /
+`:latest` aliases and mixed casing instead of corrupting the key; pin
+clearing uses the same canonical name; image_url parts (direct steers,
+compressed histories) request the projector; every coder health/retry reload
+preserves the vision choice; a non-numeric `duo_tool_thinking_budget_cap`
+is ignored instead of crashing an active run; the MoE ubatch raise is
+decided in the real pre-flight (after eviction/reclaim, gate-aware) with a
+baseline fallback; a benchmark abort reaches direct runs and the planner;
+Pi's no-JSON retry only fires on a rejected `--mode` flag; overlapping
+checkpoints dedupe by cell timestamp; the cell cap reserves real check time;
+and the Cyber-Tiel-Coder profile uses the GGUF-visible base key so its MoE
+sizing and flags apply again. `test_bench_external` is registered in the
+gate (380 suites), CONTRIBUTING.md is export-ignored, and the Colab cell no
+longer mixes `subprocess`/`_subprocess` or writes a Drive log without an
+OSError fallback.
 
 CI and quality: Python 3.14 in both workflows, `windows-full` runs
 `--ci-subset --jobs 2` with an exclusive lane for socket/LSP suites,

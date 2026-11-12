@@ -17,9 +17,10 @@ next to the old install. Settings, models, sessions and the venv are kept.
 
 ## Tools and context
 
-- `duo_core` stays the coder baseline (17 read/edit/run/test tools + LSP
-  diagnostics). `duo_coder_tool_tier=full` opts into git/web/MCP/browser/LSP
-  extras. Direct keeps the `readonly`/`research` tiers.
+- `duo_core` stays the coder baseline (18 tools by default: 17
+  read/edit/run/test tools + LSP diagnostics; `send_file` is request-gated).
+  `duo_coder_tool_tier=full` opts into git/web/MCP/browser/LSP extras. Direct
+  keeps the `readonly`/`research` tiers.
 - Writes warm the language server in the background and attach diagnostics
   autonomously; the pyright/per-language lint block remains the fallback.
 - New `apply_patch` tool applies a unified diff to one or more files in one
@@ -61,7 +62,7 @@ next to the old install. Settings, models, sessions and the venv are kept.
 
 ## Verification
 
-- Full regression gate: 379/379 suites (Windows dev tree).
+- Full regression gate: 380/380 suites (Windows dev tree).
 - Ruff clean; pyright reports 0 errors on the changed backend modules and no
   new errors against the baseline.
 - Docker/Modal SWE-bench and DeepSWE harness checks stay green offline.

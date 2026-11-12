@@ -53,7 +53,7 @@ its comment) in either file, then re-run the generator.
 | `duo_coder_model` | str | `` | yes | Automatic/override keys that DEFAULT_SETTINGS now exposes explicitly (previously only implicit read fallbacks in the consumers). |
 | `duo_coder_tool_thinking` | bool | `False` | yes |  |
 | `duo_coder_tool_thinking_auto_mode` | str | `off` | yes |  |
-| `duo_coder_tool_tier` | str | `core` | yes | CORE CODER TIER : default "core" (17 tools: read/edit/run/ tests + lsp_diagnostics) instead of "full" (33 incl. git/web/MCP/ browser/LSP extras). Full is opt-in when a task really needs them. |
+| `duo_coder_tool_tier` | str | `core` | yes | CORE CODER TIER : default "core" (18 tools: read/edit/run/ tests + lsp_diagnostics + apply_patch) instead of "full" (33 incl. git/web/MCP/browser/LSP extras). Full is opt-in when a task needs them. |
 | `duo_coder_ttl_seconds` | int | `0` | yes | 0 = auto (420s), >0 = Override |
 | `duo_coding_mode` | bool | `True` | yes |  |
 | `duo_compress_auto_floor` | float | `0.7` | - |  |

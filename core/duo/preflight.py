@@ -879,7 +879,13 @@ async def plan_emit_fn(plan_event_q, event: dict) -> None:
 
 
 def plan_aborted_fn(ctx) -> bool:
-    return ctx.aborted()
+    # A timed-out benchmark run is aborted by chat id; the planner must stop
+    # too, or it keeps the model busy while the next harness starts.
+    _chat_aborted = getattr(ctx, "is_aborted_chat", None)
+    return bool(ctx.aborted()
+                or (getattr(ctx, "chat_id", None)
+                    and _chat_aborted is not None
+                    and _chat_aborted(ctx.chat_id)))
 
 
 async def plan_heartbeat_fn(plan_event_q, planner_hb_queue) -> None:

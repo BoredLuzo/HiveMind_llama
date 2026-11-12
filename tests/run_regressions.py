@@ -398,6 +398,7 @@ SUITES = [
     ("bench_runner",            "tests/test_bench_runner.py",                30),
     ("bench_analyze",           "tests/test_bench_analyze.py",               30),
     ("bench_polyglot",          "tests/test_bench_polyglot.py",              30),
+    ("bench_external",          "tests/test_bench_external.py",             60),
     ("external_deepswe",        "tests/test_external_deepswe.py",           20),
     ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           20),
     ("bench_container",         "tests/test_bench_container.py",            20),

@@ -1,5 +1,5 @@
 {
-  "model": "cybertiel:35b-a3b-mtp-iq4xs",
+  "model": "cyber-tiel-coder",
   "capabilities": {
     "thinking": true,
     "vision": true,
@@ -79,5 +79,5 @@
   "kv_bytes_per_token": 12207,
   "mtp_draft_n_max": 1,
   "mtp_draft_p_min": 0.0,
-  "_notes": "Cyber-Tiel-Coder 35B-A3B MTP UD-IQ4_XS (16.9 GB) + mmproj BF16. Config follows the model card: ncmoe 33 = 40 - floor((8-4.3)/0.49) for an 8 GB card, q8_0 KV, ctx 65536, MTP draft-mtp with draft-n-max 1 / draft-p-min 0.0 (the card's peak setting: 94.3 tok/s, 1.21x, 82 % accepted). Sharp chat template is baked into the GGUF - no --chat-template-file. Measured 2026-10-30 (b12001): llama-bench tg128 11.48 +- 0.13 t/s, live server decode 10.43-11.87 t/s, tool call parsed OK on the first start. Slower than Hermes (17.02) and Groot (~31 live) - different quant and q8_0 KV, not a like-for-like comparison."
+  "_notes": "Cyber-Tiel-Coder 35B-A3B MTP UD-IQ4_XS (16.9 GB) + mmproj BF16. Config follows the model card: ncmoe 33 = 40 - floor((8-4.3)/0.49) for an 8 GB card, q8_0 KV, ctx 65536, MTP draft-mtp with draft-n-max 1 / draft-p-min 0.0 (the card's peak setting: 94.3 tok/s, 1.21x, 82 % accepted). Sharp chat template is baked into the GGUF - no --chat-template-file. Measured 2026-10-30 (b12001): llama-bench tg128 11.48 +- 0.13 t/s, live server decode 10.43-11.87 t/s, tool call parsed OK on the first start. Slower than Hermes (17.02) and Groot (~31 live) - different quant and q8_0 KV, not a like-for-like comparison. NAME-FIX (2026-11-07): the 'model' key was 'cybertiel:35b-a3b-mtp-iq4xs' - a name the GGUF index never produces (parsing yields 'cyber-tiel-coder:35b-a3b-mtp-ud' / 'cyber-tiel-coder:35b'), so get_profile missed for the real tags and every alias fell through to the dense 35B heuristic (21.0 GB + ctx delta -> the Ctx-Agentic card showed '21.2 GB (KV: 17.23) over budget'). Base-level key 'cyber-tiel-coder' now resolves for BOTH parsed aliases; MoE sizing (3.5 GB active, 12207 B/tok q8_0 KV) and all launch flags apply again."
 }

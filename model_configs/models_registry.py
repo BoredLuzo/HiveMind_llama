@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -147,17 +148,43 @@ def _merge(base: dict, over: dict) -> dict:
     return result
 
 
+def _registry_key(reg: dict[str, dict], key: str) -> str | None:
+    """Exact first, then a case-insensitive lookup.
+
+    GGUF/model keys have no case-significant distinction, but role configs
+    and UI callers hand over mixed casing ("Qwen3.6:35B..."). Returning the
+    stored key keeps the per-file base/canonical merge intact.
+    """
+    if key in reg:
+        return key
+    low = key.casefold()
+    for stored in reg:
+        if stored.casefold() == low:
+            return stored
+    return None
+
+
 def get_profile(model_name: str) -> dict:
-    """Returns the merged config for a model (canonical → base → {})."""
+    """Returns the merged config for a model (canonical → base → {}).
+
+    ALIAS-KEY-FIX (2026-11-12): strip only a trailing `#N` alias and a
+    trailing `:latest`; the old `model.replace("#", "")` turned
+    "qwen3.6:35b-a3b-ud#2" into "...ud2" and missed every profile. Lookup is
+    case-insensitive (GGUF aliases are), so role configs with different
+    casing still resolve ubatch/moe/load_mode/mmproj settings.
+    """
     model = (model_name or "").strip()
     if not model:
         return {}
-    canonical = model.replace("#", "")
+    canonical = re.sub(r"#\d+$", "", model)
+    canonical = re.sub(r":latest$", "", canonical, flags=re.IGNORECASE)
     base = canonical.split(":")[0] if ":" in canonical else canonical
 
     _reg = _ensure_cache()
-    direct = _reg.get(canonical)
-    fallback = _reg.get(base)
+    _canon_key = _registry_key(_reg, canonical)
+    _base_key = _registry_key(_reg, base)
+    direct = _reg.get(_canon_key) if _canon_key is not None else None
+    fallback = _reg.get(_base_key) if _base_key is not None else None
 
     if direct and fallback is not None and direct is not fallback:
         return _merge(fallback, direct)

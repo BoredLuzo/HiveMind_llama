@@ -151,7 +151,9 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
     _tool_http_timeout = _make_httpx_timeout(read_s=_tool_read_timeout_s)
     try:
         from backend.llama_server_manager import manager as _lsm
-        _tool_port = await _lsm.ensure_loaded(_tool_model, num_ctx=_tool_opts.get("num_ctx", 4096))
+        _tool_port = await _lsm.ensure_loaded(
+            _tool_model, num_ctx=_tool_opts.get("num_ctx", 4096),
+            vision=bool(effective_images))
         async with httpx.AsyncClient(timeout=_tool_http_timeout) as _tc:
             from core.tool_loop import ToolLoop, ToolLoopConfig
             _loop = ToolLoop(

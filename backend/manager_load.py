@@ -1177,22 +1177,15 @@ class LlamaLoadMixin:
         if _ub_eff > _ub_base and GPU_BACKEND != "cpu":
             _ub_extra_delta_mib = (ubatch_extra_mib(_ub_eff)
                                    - ubatch_extra_mib(_ub_base))
-            _fit_ub = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
-                                   extra_needed_mib=_ub_extra_delta_mib)
-            if not _fit_ub.ok:
-                logger.warning(
-                    "[MOE-UBATCH] %s: raising duo_ubatch %d -> %d (%s) does not "
-                    "fit VRAM (needed=%.0fMiB, free=%.0fMiB) — keeping %d",
-                    model, _ub_base, _ub_eff, _ub_src,
-                    _fit_ub.needed_mib, _fit_ub.free_mib, _ub_base,
-                )
-                _ub_eff, _ub_src, _ub_extra_delta_mib = _ub_base, "vram-fallback", 0.0
-            else:
-                logger.info(
-                    "[MOE-UBATCH] %s: ubatch %d -> %d (%s) — VRAM pre-flight fits "
-                    "(+%.0f MiB compute buffer)",
-                    model, _ub_base, _ub_eff, _ub_src, _ub_extra_delta_mib,
-                )
+            # The pre-flight in _phase_preflight_and_spawn owns the decision:
+            # it runs after peer eviction / reclaim waits and honors
+            # vram_preflight_gate. A local can_fit here saw transient pressure
+            # before those steps and fell back to 256 for no reason.
+            logger.info(
+                "[MOE-UBATCH] %s: ubatch %d -> %d (%s), +%.0f MiB compute "
+                "buffer — deferred to pre-flight",
+                model, _ub_base, _ub_eff, _ub_src, _ub_extra_delta_mib,
+            )
         # UBATCH-VRAM-NOTE (audit 2026-10-30): the VRAM pre-flight does NOT
         # model the ubatch compute buffer. Measured on the 35B MoE: ub 512
         # stays at ~5.5 GiB dedicated (no growth vs 256), but ub 1024 spilled
@@ -1391,5 +1384,7 @@ class LlamaLoadMixin:
             self, slot, cmd, model, gguf_path, num_ctx, vision, n_parallel,
             ctx_graceful, _model_base, _load_mode, _mmproj_resolved,
             _fit_extra_mib, _evicted_here,
+            ub_base=_ub_base, ub_eff=_ub_eff, ub_src=_ub_src,
+            ub_delta_mib=_ub_extra_delta_mib,
         )
         num_ctx = _sp.num_ctx

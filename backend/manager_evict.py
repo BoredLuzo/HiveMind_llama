@@ -6,7 +6,7 @@ from .llama_manager_utils import (
     CanFitResult, VRAM_BUDGET_GB,
     _VRAM_PRE_FLIGHT_GRACE_S,
     VRAM_PRE_FLIGHT_MARGIN_MIB,
-    _kill_slot_async,
+    _kill_slot_async, _nm,
 )
 from .llama_slots import ModelSlot
 from .llama_config import DEFAULT_IDLE_TIMEOUT_SECONDS, ubatch_extra_mib
@@ -59,8 +59,9 @@ class LlamaEvictMixin:
         an int and the slot stayed pinned.
         """
         _n = 0
+        _want = _nm(model)
         for slot in self._slots:
-            if slot.model == model and slot.pinned:
+            if _nm(slot.model) == _want and slot.pinned:
                 slot.pinned = False
                 slot.pinned_at = 0.0
                 _n += 1

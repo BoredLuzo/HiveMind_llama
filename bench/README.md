@@ -12,8 +12,11 @@ token cost reported together.
 | Condition | What runs |
 |---|---|
 | `hivemind_direct` | HiveMind `/stream`, `mode=simple`, direct tools tier `full`. |
-| `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`. |
+| `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`, `duo_core` tier (18 tools by default). |
+| `hivemind_duo_full` | Same, `duo_coder_tool_tier=full` (git/web/MCP/browser/LSP extras). |
 | `aider` | Aider CLI against the same OpenAI-compatible llama-server. |
+| `hermes` | Hermes agent CLI against the same endpoint; tokens read from its `state.db`. |
+| `pi` | Pi coding agent CLI with `--mode json`; tokens from the JSON result. |
 | `raw` | Diagnostic only, opt-in. One prompt, no file contents, no tools; the model must guess a unified diff. A 0/N here is expected and is not a result. |
 | `raw_files` | Diagnostic only, opt-in. One prompt with full files, no tools; the model returns full corrected files (`### FILE: path` blocks). |
 
@@ -21,7 +24,10 @@ token cost reported together.
 `duo_coder_model` / `duo_critic_model` / `duo_planner_model` overrides, so the
 comparison does not silently use the install's settings models. Token counts
 are summed from the SSE `usage_meta` events (ToolLoop rounds included); the
-`done` event is only a fallback.
+`done` event is only a fallback. Hermes/Pi report near-exact usage; Aider's
+CLI prints rounded tokens and no cache split, so its token row is not
+cache-aware. All harnesses share `_agent_timeout_s`, so no condition gets a
+longer agent budget than another.
 
 ## Task format
 

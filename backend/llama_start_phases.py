@@ -18,10 +18,11 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import llama_config as _llama_cfg
 from .llama_config import (
     BINARY_MIN_BUILD, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
     DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE, GPU_BACKEND, KV_CACHE_TYPE,
-    LLAMA_BIN, LLAMA_UBATCH, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
+    LLAMA_BIN, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VULKAN_DEVICE, VRAM_PREFLIGHT_GATE,
     _GPU_LAYERS_TABLE, _MTP_MODELS, _MOE_EXPERT_COUNTS,
     dense_kv_cache_type, llama_gpu_layers_auto, moe_kv_cache_types,
@@ -165,7 +166,10 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
             # has no ubatch term — the measured surcharge comes from
             # llama_config.ubatch_extra_mib (shared with can_fit, so the
             # gate and the eviction heuristic cannot drift).
-            _ub_extra_mib = ubatch_extra_mib(int(LLAMA_UBATCH))
+            # Dynamic read: runtime_flags/server update llama_config, not this
+            # module's per-value import, so a preset change must not leave the
+            # eviction heuristic on the old ubatch.
+            _ub_extra_mib = ubatch_extra_mib(int(_llama_cfg.LLAMA_UBATCH))
             _need_mib = (new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
                          + _ub_extra_mib)
 
@@ -1019,10 +1023,16 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                                      _model_base: str, _load_mode: str,
                                      _mmproj_resolved,
                                      _moe_cache_used: float,
-                                     _evicted_here: bool) -> _SpawnPhase:
+                                     _evicted_here: bool, *,
+                                     ub_base: int = 0, ub_eff: int = 0,
+                                     ub_src: str = "",
+                                     ub_delta_mib: float = 0.0) -> _SpawnPhase:
     # `_moe_cache_used` is the pre-flight extra_needed_mib: the MoE expert
     # cache (MiB) PLUS the MoE-UBATCH-RAISE compute-buffer delta (see
     # manager_load._start_process) — both must gate the load together.
+    # If the raised ubatch alone tips the estimate over, retry the ESTIMATE at
+    # the baseline ubatch and downgrade cmd only when that baseline fits.
+    # This runs after peer eviction/reclaim and honors vram_preflight_gate.
     from backend.manager_load import (  # lazy: module cycle
         _archive_old_slot_logs, _pre_flight_evict_candidates,
     )
@@ -1036,6 +1046,27 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         model, num_ctx, _fit.needed_mib, _fit.margin_mib, _fit.free_mib, _fit.source,
         "OK" if _fit.ok else "BLOCK",
     )
+    if (not _fit.ok and ub_delta_mib > 0 and ub_eff > ub_base
+            and _llama_cfg.VRAM_PREFLIGHT_GATE):
+        _fit_base = self.can_fit(
+            model, num_ctx, exclude_slot_id=slot.slot_id,
+            extra_needed_mib=max(0.0, float(_moe_cache_used) - float(ub_delta_mib)),
+        )
+        if _fit_base.ok:
+            try:
+                cmd[cmd.index("--ubatch-size") + 1] = str(int(ub_base))
+                cmd[cmd.index("--batch-size") + 1] = str(max(1024, int(ub_base)))
+            except (ValueError, TypeError):
+                logger.warning("[MOE-UBATCH] could not rewrite --ubatch-size in cmd")
+            _moe_cache_used = max(0.0, float(_moe_cache_used) - float(ub_delta_mib))
+            _fit = _fit_base
+            logger.warning(
+                "[MOE-UBATCH] %s: %d (%s) does not fit (needed=%.0fMiB, "
+                "free=%.0fMiB) — keeping baseline %d",
+                model, ub_eff, ub_src, _fit_base.needed_mib,
+                _fit_base.free_mib, ub_base,
+            )
+            ub_delta_mib = 0.0
     if not _fit.ok and _evicted_here:
         _fit = await self._pre_flight_grace_recheck(
             model, num_ctx, slot,

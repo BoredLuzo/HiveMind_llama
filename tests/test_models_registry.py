@@ -71,6 +71,18 @@ caps = get_capabilities("my-model:7b")
 check("3 canonical capabilities win",
       caps == {"thinking": True, "vision": False, "tool_call": True}, f" ({caps})")
 
+# 3a) alias/case canonicalization (2026-11-12): a trailing #N must not
+#     corrupt the key, :latest is stripped, and lookup folds case.
+check("3a trailing #2 alias resolves the canonical profile",
+      get_num_ctx("my-model:7b#2") == 8192,
+      f" ({get_num_ctx('my-model:7b#2')})")
+check("3b :latest suffix resolves the canonical profile",
+      get_num_ctx("my-model:7b:latest") == 8192,
+      f" ({get_num_ctx('my-model:7b:latest')})")
+check("3c case-insensitive model key resolves the profile",
+      get_num_ctx("MY-MODEL:7B") == 8192,
+      f" ({get_num_ctx('MY-MODEL:7B')})")
+
 # 4) base config applies to other tags of the same base
 caps_base = get_capabilities("my-model:3b")
 check("4 base capabilities fallback",

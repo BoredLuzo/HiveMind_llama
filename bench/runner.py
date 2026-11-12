@@ -906,7 +906,13 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
                            timeout=_agent_to, env=env)
-        if r.returncode != 0 and "mode" in (r.stderr or "").lower():
+        _err = (r.stderr or "").lower()
+        # Only a rejected --mode flag may trigger the no-JSON retry. A plain
+        # "model" error (bad model id, missing model) used to match the old
+        # substring check and reran the whole task without metrics.
+        if r.returncode != 0 and "--mode" in _err and any(
+                marker in _err for marker in
+                ("unknown", "unrecognized", "no such option", "invalid option")):
             r = subprocess.run([*base_cmd, "-p", task.prompt],
                                cwd=str(work), capture_output=True, text=True,
                                encoding="utf-8", errors="replace",
@@ -1330,7 +1336,12 @@ def main() -> int:
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
                     cell = base / f"run{actual_run}" / cond
-                    _cell_cap = max(float(cfg.cell_timeout_s), _agent_timeout_s(task, cfg) + 60.0)
+                    # The check command runs AFTER the agent timeout and needs
+                    # real headroom (DeepSWE verifiers can run for minutes);
+                    # a flat +60 s aborted long checks.
+                    _check_budget = max(120.0, min(float(task.timeout_s or 300), 1800.0))
+                    _cell_cap = max(float(cfg.cell_timeout_s),
+                                    _agent_timeout_s(task, cfg) + _check_budget + 30.0)
                     try:
                         row = asyncio.run(asyncio.wait_for(
                             _one_run(cond, task, cfg, cell),

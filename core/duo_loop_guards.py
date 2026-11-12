@@ -76,7 +76,10 @@ async def _duo_loop_guards(ctx, ps: _DuoLoopGuardsState):
                 try:
                     from backend.llama_server_manager import manager as _lsm_hc
                     await _lsm_hc.evict(exec_mdl)
-                    _dport = await _lsm_hc.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
+                    _dport = await _lsm_hc.ensure_loaded(
+                        exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
+                        n_parallel=1, ctx_graceful=False, pin=True,
+                        vision=bool(_dtool_opts.get("vision", False)))
                     _cached_coder_port = _dport
                     _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)  # CTX-GUARD
                     yield await ctx.emit({"type": "status",

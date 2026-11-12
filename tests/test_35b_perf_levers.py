@@ -177,13 +177,14 @@ def test_moe_ubatch_loader_wiring():
     src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
     check("3m loader resolves the per-model ubatch",
           "resolve_model_ubatch(model, _ub_base" in src)
-    check("3n raise is VRAM-gated with can_fit fallback",
-          "vram-fallback" in src and "_ub_extra_delta_mib" in src)
+    check("3n raise is deferred to the real pre-flight (not an early can_fit)",
+          "deferred to pre-flight" in src and "_ub_extra_delta_mib" in src)
     check("3o pre-flight carries the surcharge delta",
           "_fit_extra_mib" in src)
     phases = (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8")
-    check("3p pre-flight phase documents the extra",
-          "MoE-UBATCH-RAISE compute-buffer delta" in phases)
+    check("3p pre-flight phase documents and applies the fallback",
+          "MoE-UBATCH-RAISE compute-buffer delta" in phases
+          and "keeping baseline" in phases and "ub_delta_mib" in phases)
 
 
 # ══════════════════════════════════════════════════════════════════════════

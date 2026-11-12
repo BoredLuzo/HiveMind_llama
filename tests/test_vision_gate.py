@@ -218,6 +218,9 @@ def test_coder_reload_keeps_same_vision_arg():
     # "keep the projector loaded" toggle - still derived from the image plan,
     # never a literal.
     _allowed_always = '_img_plan.get("coder") == "raw" or _always_vision'
+    # The reload after the coder load reads the flag the load actually used
+    # (dtool_opts["vision"]), so a mid-run health retry cannot drop --mmproj.
+    _allowed_dtool = 'bool(_dtool_opts.get("vision", False'
     _checked = 0
     for i, line in enumerate(lines):
         if "ensure_loaded(" not in line:
@@ -231,7 +234,7 @@ def test_coder_reload_keeps_same_vision_arg():
             _checked += 1
             assert expr in ('_img_plan.get("planner") == "raw"',
                             '_img_plan.get("coder") == "raw"',
-                            _allowed_always), \
+                            _allowed_always, _allowed_dtool), \
                 f"ensure_loaded near line {i+1}: vision arg not from the image plan: {expr!r}"
     assert _checked >= 3, f"expected at least the 3 known vision loads, found {_checked}"
 
@@ -311,6 +314,21 @@ def test_convert_messages_turns_images_key_into_parts():
     assert "images" not in out[0]  # raw key gone - llama-server cannot read it
     # no images -> untouched passthrough
     assert _convert_messages([{"role": "user", "content": "x"}]) == [{"role": "user", "content": "x"}]
+
+
+def test_has_images_detects_image_url_parts():
+    # Direct steers / compressed histories carry OpenAI-style image_url
+    # parts and no raw `images` key; the loader must still request mmproj.
+    from backend.llama_client import LlamaClient
+    msgs = [{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}},
+        {"type": "text", "text": "[OWNER STEER]\nlook"},
+    ]}]
+    assert LlamaClient._has_images(msgs) is True
+    assert LlamaClient._has_images(
+        [{"role": "user", "content": [{"type": "text", "text": "x"}]}]) is False
+    assert LlamaClient._has_images(
+        [{"role": "user", "content": "x", "images": ["QUJD"]}]) is True
 
 
 # ── NOTE-RETRACT ON LOSS (round 9 #4, blocker): when the outgoing window

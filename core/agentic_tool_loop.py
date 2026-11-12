@@ -1049,4 +1049,7 @@ class AgenticToolLoop(ToolLoop):
 
     async def _ensure_loaded(self, model: str) -> int:
         from backend.llama_server_manager import manager as _lsm
-        return await _lsm.ensure_loaded(model, num_ctx=self.round_state.dtool_opts.get("num_ctx", 4096), n_parallel=1)
+        return await _lsm.ensure_loaded(
+            model, num_ctx=self.round_state.dtool_opts.get("num_ctx", 4096),
+            n_parallel=1,
+            vision=bool(self.round_state.dtool_opts.get("vision", False)))

@@ -3147,6 +3147,11 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 _dtool_msgs = _ds_ps._dtool_msgs
                 _dtool_ctx = _ds_ps._dtool_ctx
                 _dtool_opts = _ds_ps._dtool_opts
+                # VISION-PROPAGATION (2026-11-12): the coder slot was loaded
+                # with/without the projector earlier; every later health or
+                # retry reload of the same slot must preserve that choice.
+                _dtool_opts["vision"] = bool(
+                    _img_plan.get("coder") == "raw" or _always_vision)
                 _dtool_sys_eff = _ds_ps._dtool_sys_eff
                 _tool_read_timeout_s = _ds_ps._tool_read_timeout_s
                 _goal_summary = _ds_ps._goal_summary
@@ -3170,6 +3175,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         "coder_mdl": coder_mdl,
                         "_planner_step_cap": _planner_step_cap,
                         "_exec_has_thinking": _exec_has_thinking,
+                        "_coder_vision": bool(
+                            _img_plan.get("coder") == "raw" or _always_vision),
                         "_fup_task_ctx": _fup_task_ctx,
                         "_has_plan": _has_plan,
                         "_duo_deadline_at": _duo_deadline_at,
@@ -3750,7 +3757,19 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # tool call costs ~15-25 s. Opt-in only: the
                             # default keeps the model's own budget so answer
                             # quality never degrades silently.
-                            _think_cap = int(ctx.settings.get("duo_tool_thinking_budget_cap", 0) or 0)
+                            try:
+                                _think_cap = int(ctx.settings.get(
+                                    "duo_tool_thinking_budget_cap", 0) or 0)
+                            except (TypeError, ValueError):
+                                # A hand-edited settings.json / stale POST must
+                                # not crash an active run; 0 keeps the model
+                                # default and logs the ignored value once.
+                                logger.warning(
+                                    "[TOOL-THINK-CAP] ignoring non-numeric "
+                                    "duo_tool_thinking_budget_cap=%r",
+                                    ctx.settings.get("duo_tool_thinking_budget_cap"),
+                                )
+                                _think_cap = 0
                             if _think_cap > 0 and _tool_thinking_budget > _think_cap:
                                 logger.info(
                                     "[TOOL-THINK-CAP] %d -> %d tokens (duo_tool_thinking_budget_cap)",
@@ -4410,8 +4429,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         try:
                             from backend.llama_server_manager import manager as _lsm_retry
                             await _lsm_retry.evict(exec_mdl)
-                            await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
-                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
+                            await _lsm_retry.ensure_loaded(
+                                exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
+                                n_parallel=1, ctx_graceful=False, pin=True,
+                                vision=bool(_dtool_opts.get("vision", False)))
+                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(
+                                exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
+                                n_parallel=1, ctx_graceful=False, pin=True,
+                                vision=bool(_dtool_opts.get("vision", False)))
                             ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
                             continue
                         except Exception as _retry_err:

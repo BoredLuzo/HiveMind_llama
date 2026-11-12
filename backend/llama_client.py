@@ -119,9 +119,20 @@ class LlamaClient:
 
     @staticmethod
     def _has_images(messages: list) -> bool:
-
-
-        return any("images" in m and m.get("images") for m in messages)
+        # RAW `images` key OR OpenAI-style image_url parts. Direct steers and
+        # compressed histories carry image_url parts; checking only the raw
+        # key let a projector-less slot receive them (POST 500).
+        for _m in messages:
+            if not isinstance(_m, dict):
+                continue
+            if _m.get("images"):
+                return True
+            _content = _m.get("content")
+            if isinstance(_content, list) and any(
+                    isinstance(_p, dict) and _p.get("type") == "image_url"
+                    for _p in _content):
+                return True
+        return False
 
     async def _recover_model_port(self, model: str, ctx: int, old_port: int | None = None,
                                   vision: bool = False) -> int:

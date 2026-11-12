@@ -94,7 +94,10 @@ async def _duo_inloop_planner(ctx, ps):
         _plan_port_inloop = None
         try:
             from backend.llama_server_manager import manager as _lsm3
-            _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1, ctx_graceful=False, pin=True)
+            _plan_port_inloop = await _lsm3.ensure_loaded(
+                exec_mdl, num_ctx=_dtool_ctx, n_parallel=1,
+                ctx_graceful=False, pin=True,
+                vision=bool(ps.carry.get("_coder_vision", False)))
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                 AttributeError, httpx.HTTPError, asyncio.TimeoutError,
                 LlamaError) as _port_err:

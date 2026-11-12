@@ -81,11 +81,19 @@ def _category(task: str) -> str:
 
 def summarize(rows: list[dict]) -> dict:
     # DEDUPE (2026-11-08): overlapping result files (resumed run + original)
-    # must not double-vote a task. Keep the last row per (condition, task, run).
+    # must not double-vote a task. The run number is shifted per file, so the
+    # same cell copied into two checkpoints can arrive under two run numbers;
+    # its timestamp + measurement fingerprint identifies the duplicate.
     _unique: dict[tuple, dict] = {}
     for _idx, _row in enumerate(rows):
-        _key = (str(_row.get("condition") or ""), str(_row.get("task") or ""),
-                _row.get("run", _idx))
+        _ts = str(_row.get("timestamp") or "")
+        if _ts:
+            _key = ("cell", str(_row.get("condition") or ""),
+                    str(_row.get("task") or ""), _ts,
+                    _row.get("seconds"), _row.get("tokens"), _row.get("ok"))
+        else:
+            _key = (str(_row.get("condition") or ""), str(_row.get("task") or ""),
+                    _row.get("run", _idx))
         _unique[_key] = _row
     rows = list(_unique.values())
     conditions: dict[str, dict] = {}

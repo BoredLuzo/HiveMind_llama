@@ -9,7 +9,10 @@ from context.pause_state import (
     clear_pause_state as _clear_pause_state,
     persist_pause_state as _persist_pause_state,
 )
-from core.duo_helpers import build_steer_user_message as _build_steer_user_message
+from core.duo_helpers import (
+    build_steer_user_message as _build_steer_user_message,
+    count_image_parts as _count_image_parts,
+)
 from infra.run_control import (
     _get_abort_event,
     cleanup_pause_state as _cleanup_pause_state,
@@ -263,7 +266,9 @@ async def _direct_websearch_tool_round(ctx, model: str, msgs: list, num_ctx: int
         return events, msgs, False
 
     try:
-        _port = await _ws_mgr.ensure_loaded(model, num_ctx=num_ctx)
+        _port = await _ws_mgr.ensure_loaded(
+            model, num_ctx=num_ctx,
+            vision=bool(_count_image_parts(msgs)))
     except Exception as _e:
         _direct_log.warning("[Direct-WS] model load failed: %s", _e)
         return events, msgs, False
@@ -440,6 +445,16 @@ async def _inject_direct_steers(ctx, stream_msgs: list, vision_ok: bool = False)
 
 async def run_direct(ctx):
     """Direct-Mode handler for simple/trivial complexity."""
+    def _aborted() -> bool:
+        # Benchmark / UI abort may target the chat id instead of the run id.
+        # Direct used to check only ctx.aborted(), so a timed-out benchmark
+        # run kept consuming llama-server while Aider/Hermes/Pi already ran.
+        _chat_aborted = getattr(ctx, "is_aborted_chat", None)
+        return bool(ctx.aborted()
+                    or (getattr(ctx, "chat_id", None)
+                        and _chat_aborted is not None
+                        and _chat_aborted(ctx.chat_id)))
+
     if ctx.complexity in ("trivial", "simple"):
         _available = list(ctx.models_cache) if ctx.models_cache else [ctx.pipeline.agents["direct"].model]
         _vision_mdl_name = ctx.vision_cfg.get("model", "") if ctx.prepro_success else ""
@@ -717,7 +732,7 @@ async def run_direct(ctx):
                                 thinking_budget=_direct_budget or None,
                                 split_thinking=True,
                                 usage_out=_usage):
-                            if ctx.aborted(): break
+                            if _aborted(): break
                             # A1 boundary: pause at a token chunk — the gate
                             # waits here, the upstream generator suspends at
                             # its yield and llama-server backpressures.
@@ -747,7 +762,7 @@ async def run_direct(ctx):
                                 think=False,
                                 split_thinking=True,
                                 usage_out=_usage):
-                            if ctx.aborted(): break
+                            if _aborted(): break
                             # A1 boundary: pause at a token chunk (see above).
                             _pg = _PauseGateResult()
                             async for _gev in _direct_manual_pause_gate(ctx, _pg):
@@ -759,7 +774,7 @@ async def run_direct(ctx):
                                 continue
                             parts.append(_tok)
                             yield await ctx.emit({"type": "token", "content": _tok})
-                    if _pause_aborted or ctx.aborted():
+                    if _pause_aborted or _aborted():
                         break
                     # RUN-STATS: accumulate the round's real usage — the emit
                     # below stays ONE usage_meta event even with continuation
@@ -804,7 +819,7 @@ async def run_direct(ctx):
                                 "cached_tokens": _d_ca_sum})
         content = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
         # Content (z.B. max_tokens/thinking_budget durch Reasoning verbraucht),
-        if _direct_think and not content and not ctx.aborted():
+        if _direct_think and not content and not _aborted():
             _hint = ("[Note: The model only thought (🧠) but did not deliver an answer — "
                      "the thinking budget or max_tokens were consumed by reasoning. "
                      "Increase think-budget/max_tokens or disable thinking.]")
@@ -832,7 +847,7 @@ async def run_direct(ctx):
                 )
         # A1: an abort-during-pause signals through the pause gate, not the
         # run abort event — the run still ends as "aborted".
-        _direct_stop_reason = ("aborted" if (ctx.aborted() or _pause_aborted)
+        _direct_stop_reason = ("aborted" if (_aborted() or _pause_aborted)
                                else "completed")
         # SEND-FILE (direct mode): a file the model wrote in this run can be
         # queued with send_file, or auto-picked when exactly one deliverable

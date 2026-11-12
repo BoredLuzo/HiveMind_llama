@@ -134,9 +134,9 @@ DEFAULT_SETTINGS = {
     # be able to write files; 0 silently disabled the whole tool loop and
     # chunking then produced text-only "implementations".
     "duo_tool_rounds":         50,
-    # CORE CODER TIER (2026-11-08): default "core" (17 tools: read/edit/run/
-    # tests + lsp_diagnostics) instead of "full" (33 incl. git/web/MCP/
-    # browser/LSP extras). Full is opt-in when a task really needs them.
+    # CORE CODER TIER (2026-11-08): default "core" (18 tools: read/edit/run/
+    # tests + lsp_diagnostics + apply_patch) instead of "full" (33 incl.
+    # git/web/MCP/browser/LSP extras). Full is opt-in when a task needs them.
     "duo_coder_tool_tier":     "core",
     "duo_use_pipeline":        False,
     "duo_critic_tools":        False,
