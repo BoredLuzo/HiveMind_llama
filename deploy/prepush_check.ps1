@@ -58,7 +58,10 @@ Check "a) git status clean" ([string]::IsNullOrWhiteSpace($dirty)) `
     ($(if ($dirty) { ($dirty -split "`n" | Select-Object -First 3) -join " | " } else { "" }))
 
 # -- b) version consistent across server.py, pyproject, CHANGELOG -------------
-$srv = (Select-String -Path core/version.py -Pattern 'HIVEMIND_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+# Last match: the module docstring carries the "<major.minor.patch>" example,
+# the real assignment is at the end of the file (2026-11-12 audit).
+$srv = (Select-String -Path core/version.py -Pattern 'HIVEMIND_VERSION = "([^"]+)"' |
+        Select-Object -Last 1).Matches[0].Groups[1].Value
 $pyp = (Select-String -Path pyproject.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
 $chal = (Select-String -Path CHANGELOG.md -Pattern '^## \[([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?)\]' |
          Select-Object -First 1).Matches[0].Groups[1].Value
