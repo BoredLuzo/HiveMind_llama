@@ -132,7 +132,11 @@ def _file_map(root: Path | None) -> dict[str, str]:
         if not path.is_file():
             continue
         rel = path.relative_to(root)
-        if path.name == "model.patch":
+        if path.name == "model.patch" or any(
+                part.startswith(".aider") for part in rel.parts):
+            # Aider writes .aider.chat.history.md / .aider.input.history and
+            # .aider.tags.cache.*/ into the workspace; those are harness
+            # artifacts, not code churn.
             continue
         if any(part in ("__pycache__", ".git", ".pytest_cache", ".ruff_cache",
                         ".mypy_cache", ".venv", "node_modules", "htmlcov")
@@ -1164,8 +1168,10 @@ def _load_resume_state(
 
 async def _preflight(cfg: Config, conditions: list[str]) -> str:
     """Fail fast when a required endpoint is dead (empty string = OK)."""
-    need_llama = (any(c in ("raw", "raw_files", "aider", "hermes", "pi") for c in conditions)
-                  and not (conditions and conditions[0].startswith("hivemind_")))
+    # Condition ORDER must not change the preflight: an external harness calls
+    # llama-server directly even when a HiveMind condition is also present.
+    need_llama = any(c in ("raw", "raw_files", "aider", "hermes", "pi")
+                     for c in conditions)
     if need_llama and _aider_remote_base() and set(conditions) == {"aider"}:
         need_llama = False  # aider-only run against a remote endpoint
     need_hive = any(c.startswith("hivemind_") for c in conditions)

@@ -160,6 +160,9 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     (_changed / "model.patch").write_text("ignored\n", encoding="utf-8")
     (_changed / ".ruff_cache").mkdir()
     (_changed / ".ruff_cache" / "x.py").write_text("cache\n", encoding="utf-8")
+    (_changed / ".aider.chat.history.md").write_text("history\n", encoding="utf-8")
+    (_changed / ".aider.tags.cache.v4").mkdir()
+    (_changed / ".aider.tags.cache.v4" / "tags").write_text("tags\n", encoding="utf-8")
     _churn = diff_stats(_base, _changed)
     check("churn: changed files are listed",
           _churn["changed_files"] == ["a.py", "b.py", "new.py"], f" ({_churn})")
@@ -172,6 +175,9 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     check("churn: model.patch is ignored", "model.patch" not in _churn["changed_files"])
     check("churn: tool caches are ignored",
           not any(".ruff_cache" in f for f in _churn["changed_files"] + _churn["new_files"]))
+    check("churn: aider history/tag caches are ignored",
+          not any(".aider" in f for f in _churn["changed_files"] + _churn["new_files"]
+                  + _churn["deleted_files"]), f" ({_churn})")
 
     # ── aider discovery ────────────────────────────────────────────────────
     _cfg_bad = Config(tasks_dir=root, out=root / "x.json", model="m",

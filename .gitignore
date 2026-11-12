@@ -20,6 +20,7 @@ tests/.regression_history.json.tmp
 bench/.work/
 bench/results/
 bench/.external/
+bench/tasks_deepswe/
 bench_bundle.tgz
 
 # Coverage artifacts (tests/coverage_run.py): parallel .coverage.<host>.<pid>
