@@ -19,7 +19,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
     Config, DEFAULT_CONDITIONS, Task, _agent_timeout_s, _aider_files, _extract_patch,
-    _hivemind_body, _parse_file_blocks, _parse_pi_json_output,
+    _hivemind_body, _load_resume_state, _parse_file_blocks, _parse_pi_json_output,
     _parse_token_count, _persist, _read_hermes_state_usage,
     _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
     _resolve_pi_bin, _run_pi, _safe_rel_path, aggregate,
@@ -276,6 +276,30 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           _agent_timeout_s(_to_task, Config(tasks_dir=root, out=root / "x.json", model="m", task_timeout_s=600, cell_timeout_s=900)) == 600.0)
     check("timeout: cell_timeout caps tighter than task timeout",
           _agent_timeout_s(_to_task, Config(tasks_dir=root, out=root / "x.json", model="m", cell_timeout_s=120)) == 120.0)
+
+    # sync_dir mirroring and resume restoration
+    _sync_dir = root / "drive_sync"
+    _local_out = root / "local" / "suite.json"
+    _sync_cfg = Config(tasks_dir=root, out=_local_out, model="m", ctx_tokens=131072, sync_dir=_sync_dir, resume=True)
+    _sync_rows = [
+        {"run": 1, "task": "t1", "condition": "hivemind_duo", "model": "m", "ok": True, "seconds": 10.0, "tokens": 500},
+        {"run": 1, "task": "t1", "condition": "aider", "model": "m", "ok": False, "seconds": 12.0, "tokens": 300},
+    ]
+    _persist(_local_out, _sync_rows, _sync_cfg, ["hivemind_duo", "aider"], "2026-11-12T00:00:00+00:00")
+    _mirrored = _sync_dir / "suite.json"
+    check("sync: persist mirrors result file to sync_dir", _mirrored.is_file())
+    _local_out.unlink()
+    _res_rows, _done_keys, _res_start = _load_resume_state(_local_out, _sync_dir, "m", 131072)
+    check("resume: restores rows from sync_dir when local checkpoint missing",
+          len(_res_rows) == 2 and (1, "t1", "hivemind_duo") in _done_keys and (1, "t1", "aider") in _done_keys
+          and _res_start == "2026-11-12T00:00:00+00:00",
+          f" ({len(_res_rows)}/{_done_keys})")
+    _mismatch_rows, _mismatch_keys, _ = _load_resume_state(_local_out, _sync_dir, "other_model", 131072)
+    check("resume: mismatched model ignores checkpoint",
+          _mismatch_rows == [] and _mismatch_keys == set())
+    _mismatch_ctx, _, _ = _load_resume_state(_local_out, _sync_dir, "m", 32768)
+    check("resume: mismatched ctx_tokens ignores checkpoint",
+          _mismatch_ctx == [])
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,

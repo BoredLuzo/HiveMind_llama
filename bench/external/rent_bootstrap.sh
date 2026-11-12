@@ -455,6 +455,9 @@ run_bench() {  # $1 = extra args
     _extra_args="$_extra_args --pi-bin $(command -v pi)"
   fi
   [ -n "${HM_TASK_TIMEOUT:-}" ] && _extra_args="$_extra_args --task-timeout $HM_TASK_TIMEOUT"
+  [ -n "${HM_OUT:-}" ] && _extra_args="$_extra_args --out $HM_OUT"
+  [ -n "${HM_SYNC_DIR:-}" ] && _extra_args="$_extra_args --sync-dir $HM_SYNC_DIR"
+  [ "${HM_RESUME:-0}" = "1" ] && _extra_args="$_extra_args --resume"
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
@@ -509,7 +512,7 @@ full() {
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' \
+    "cd '$HM_DIR' && HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 
@@ -591,6 +594,7 @@ case "${1:-}" in
   polyglot) polyglot ;;
   deepswe) deepswe ;;
   full) full ;;
+  fg) serve; run_bench "" ;;
   _run) run_bench "" ;;
   status) status ;;
   stop) stop ;;

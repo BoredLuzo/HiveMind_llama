@@ -118,6 +118,10 @@ class Config:
     duo_planner: bool = True
     # Context window tokens (pinned per model/run, default 32768, 131072 for deepswe).
     ctx_tokens: int = 32768
+    # Optional mirror directory (e.g. Google Drive) synced after every cell.
+    sync_dir: Path | None = None
+    # Resume an existing --out / --sync-dir checkpoint instead of rerunning done cells.
+    resume: bool = False
 
 def _file_map(root: Path | None) -> dict[str, str]:
     """Relative path -> text for a workspace (skip caches/binary-sized files)."""
@@ -1053,6 +1057,8 @@ def _payload(rows: list[dict], cfg: Config, conditions: list[str],
         "started_at": started_at,
         "updated_at": now_iso,
         "model": cfg.model,
+        "num_ctx": getattr(cfg, "ctx_tokens", 32768),
+        "tasks_dir": str(cfg.tasks_dir.as_posix()),
         "runs": cfg.runs,
         "run_offset": getattr(cfg, "run_offset", 0),
         "gpu": getattr(cfg, "gpu_info", {}),
@@ -1066,14 +1072,94 @@ def _payload(rows: list[dict], cfg: Config, conditions: list[str],
     }
 
 
+def _sync_to_dir(src: Path, sync_dir: Path | None) -> None:
+    """Best-effort mirror of checkpoint JSON to a persistent dir (e.g. Drive)."""
+    if not sync_dir or not src.is_file():
+        return
+    try:
+        sync_dir.mkdir(parents=True, exist_ok=True)
+        dst = sync_dir / src.name
+        if dst.resolve() == src.resolve():
+            return
+        tmp_dst = sync_dir / f".{src.name}.tmp"
+        shutil.copy2(src, tmp_dst)
+        try:
+            tmp_dst.replace(dst)
+        except OSError:
+            shutil.copy2(src, dst)
+            tmp_dst.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"[sync WARN] could not mirror {src.name} to {sync_dir}: {exc}",
+              file=sys.stderr)
+
+
 def _persist(out: Path, rows: list[dict], cfg: Config,
              conditions: list[str], started_at: str) -> None:
-    """Atomic write after every cell: a crash keeps the completed rows."""
+    """Atomic write after every cell (+ optional mirror sync)."""
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(_payload(rows, cfg, conditions, started_at), indent=1),
                    encoding="utf-8")
     tmp.replace(out)
+    _sync_to_dir(out, getattr(cfg, "sync_dir", None))
+
+
+def _read_checkpoint_rows(path: Path) -> tuple[dict, list[dict]]:
+    if not path.is_file():
+        return {}, []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            return data, list(data["results"])
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}, []
+
+
+def _load_resume_state(
+    out: Path,
+    sync_dir: Path | None,
+    model: str,
+    ctx_tokens: int,
+) -> tuple[list[dict], set[tuple[int, str, str]], str]:
+    """Pull newer/larger checkpoint from sync_dir -> out and return done keys."""
+    local_data, local_rows = _read_checkpoint_rows(out)
+    if sync_dir:
+        remote = sync_dir / out.name
+        remote_data, remote_rows = _read_checkpoint_rows(remote)
+        if remote_rows and len(remote_rows) > len(local_rows):
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(remote, out)
+                local_data, local_rows = remote_data, remote_rows
+                print(f"[sync] restored {len(local_rows)} row(s) from {remote} -> {out}")
+            except OSError as exc:
+                print(f"[sync WARN] could not restore {remote}: {exc}", file=sys.stderr)
+
+    if not local_rows:
+        return [], set(), ""
+    saved_model = str(local_data.get("model") or "")
+    saved_ctx = local_data.get("num_ctx")
+    if saved_model and saved_model != model:
+        return [], set(), ""
+    if saved_ctx is not None and int(saved_ctx) != int(ctx_tokens):
+        return [], set(), ""
+
+    done_keys: set[tuple[int, str, str]] = set()
+    kept_rows: list[dict] = []
+    for r in local_rows:
+        if not isinstance(r, dict):
+            continue
+        if r.get("model") and str(r["model"]) != model:
+            continue
+        kept_rows.append(r)
+        run_no = int(r.get("run") or 1)
+        task_id = str(r.get("task") or "")
+        cond = str(r.get("condition") or "")
+        if task_id and cond:
+            done_keys.add((run_no, task_id, cond))
+    started_at = str(local_data.get("started_at") or "")
+    return kept_rows, done_keys, started_at
 
 
 async def _preflight(cfg: Config, conditions: list[str]) -> str:
@@ -1132,6 +1218,11 @@ def main() -> int:
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--only", default="", help="comma-separated task ids to run")
+    parser.add_argument("--sync-dir", default=os.environ.get("HM_SYNC_DIR", ""),
+                        help="optional directory (e.g. Google Drive) to mirror results after every cell")
+    parser.add_argument("--resume", action="store_true",
+                        default=(os.environ.get("HM_RESUME", "0").strip() == "1"),
+                        help="resume from existing --out / --sync-dir checkpoint, skipping done cells")
     args = parser.parse_args()
 
     tasks = load_tasks(Path(args.tasks))
@@ -1154,6 +1245,7 @@ def main() -> int:
     gpu_info = detect_gpu_info()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out = Path(args.out or Path(__file__).parent / "results" / f"run-{stamp}.json")
+    sync_dir = Path(args.sync_dir) if str(args.sync_dir or "").strip() else None
     cfg = Config(
         tasks_dir=Path(args.tasks), out=out, model=args.model,
         llama_url=args.llama, hivemind_url=args.hivemind,
@@ -1167,20 +1259,51 @@ def main() -> int:
         pi_bin=args.pi_bin,
         duo_planner=not args.no_duo_planner,
         ctx_tokens=max(1024, args.num_ctx),
+        sync_dir=sync_dir,
+        resume=bool(args.resume),
     )
+
+    rows: list[dict] = []
+    done_keys: set[tuple[int, str, str]] = set()
+    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    if cfg.resume:
+        rows, done_keys, saved_start = _load_resume_state(
+            out, sync_dir, cfg.model, cfg.ctx_tokens)
+        if saved_start:
+            started_at = saved_start
+
+    total_runs = cfg.runs + cfg.run_offset
+    planned = [
+        (run_idx + 1 + cfg.run_offset, task, cond)
+        for run_idx in range(cfg.runs)
+        for task in tasks
+        for cond in conditions
+    ]
+    pending = [(r, t, c) for (r, t, c) in planned if (r, t.id, c) not in done_keys]
 
     gpu_s = f"{gpu_info.get('name', 'CPU')} ({gpu_info.get('vram_total', '')})"
     print(f"\n[bench] starting benchmark: {len(tasks)} tasks, {cfg.runs} run(s), run_offset={cfg.run_offset}")
     print(f"[bench] model: {cfg.model} (ctx {cfg.ctx_tokens}) | GPU: {gpu_s}")
-    print(f"[bench] conditions: {', '.join(conditions)}\n")
+    print(f"[bench] conditions: {', '.join(conditions)}")
+    if done_keys:
+        print(f"[bench] resume: {len(planned) - len(pending)}/{len(planned)} cells already completed, {len(pending)} remaining")
+    if sync_dir:
+        print(f"[bench] drive sync: {sync_dir / out.name}")
+    print()
+
+    if not pending:
+        print("[bench] all planned cells already completed in checkpoint — skipping execution.")
+        _persist(out, rows, cfg, conditions, started_at)
+        summary = aggregate(rows)
+        print_summary(summary, build_relative(rows))
+        print(f"\nwrote {out}")
+        return 0
 
     _pf = asyncio.run(_preflight(cfg, conditions))
     if _pf:
         print(f"preflight failed: {_pf}", file=sys.stderr)
         return 3
 
-    rows: list[dict] = []
-    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     work_root = (Path(__file__).parent / ".work" / stamp) if cfg.keep_work else None
     if work_root is not None:
         work_root.mkdir(parents=True, exist_ok=True)
@@ -1191,11 +1314,13 @@ def main() -> int:
         tmp = tempfile.mkdtemp(prefix="hm_bench_")
         base = Path(tmp)
     try:
-        total_runs = cfg.runs + cfg.run_offset
         for run_idx in range(cfg.runs):
             actual_run = run_idx + 1 + cfg.run_offset
             for task in tasks:
                 for cond in conditions:
+                    if (actual_run, task.id, cond) in done_keys:
+                        print(f"[SKIP]   [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} (checkpoint)")
+                        continue
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
                     cell = base / f"run{actual_run}" / cond
@@ -1219,6 +1344,7 @@ def main() -> int:
                         }
                     row["run"] = actual_run
                     rows.append(row)
+                    done_keys.add((actual_run, task.id, cond))
                     _persist(out, rows, cfg, conditions, started_at)
                     now_str = datetime.now().strftime("%H:%M:%S")
                     tps = row.get("tok_per_sec", 0.0)
