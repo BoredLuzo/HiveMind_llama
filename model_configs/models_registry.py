@@ -309,6 +309,31 @@ def get_gpu_layers(model_name: str) -> int | None:
     return None
 
 
+def get_ubatch(model_name: str) -> int | None:
+    """Per-model prompt-processing chunk ("ubatch", llama.cpp --ubatch-size).
+
+    MoE models with CPU expert offload prefill substantially faster at
+    512/1024 than at the shipped 256 baseline (measured on the 35B-A3B:
+    77.6 -> 120.0 t/s pp8192), at the cost of a larger VRAM compute buffer
+    (~0.28 MiB per ubatch unit above 256, see llama_config.ubatch_extra_mib).
+    The profile key is the per-model opt-in; the loader applies it only when
+    the VRAM pre-flight still fits (see llama_config.resolve_model_ubatch).
+    None = no profile value (keep the settings baseline). Clamped to the
+    loader's [64, 4096] band; invalid values are ignored (None), never an
+    abort.
+    """
+    v = get_profile(model_name).get("ubatch")
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    if n < 64 or n > 4096:
+        return None
+    return n
+
+
 def get_mmproj_filename(model_name: str) -> str | None:
     v = get_profile(model_name).get("mmproj_filename")
     return str(v).strip() if v else None

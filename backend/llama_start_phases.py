@@ -681,7 +681,21 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                         LLAMA_BIN.name)
             # MoE-spezifische Optimierungen
             cmd += ["--no-warmup"]
-            if not type(self)._load_mode_supported and _llama_cfg.MLOCK_MODEL:
+            # LARGE-MOE MLOCK SKIP: same rule as the --load-mode path in
+            # manager_load (llama_mlock must not force mmap+mlock for large
+            # MoE GGUFs) — this is the legacy branch for binaries without
+            # --load-mode.
+            _lm_skip_large_moe = False
+            try:
+                from backend.manager_load import (
+                    is_large_moe_gguf as _lm_large,
+                    _mlock_skip_large_moe_enabled as _lm_skip_on,
+                )
+                _lm_skip_large_moe = _lm_large(model) and _lm_skip_on()
+            except (ImportError, AttributeError, TypeError, ValueError, OSError):
+                _lm_skip_large_moe = False
+            if (not type(self)._load_mode_supported and _llama_cfg.MLOCK_MODEL
+                    and not _lm_skip_large_moe):
                 cmd += ["--mlock"]
                 logger.info("--mlock active (model locked in RAM)")
             if type(self)._kv_flag_supported:
@@ -1004,8 +1018,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                                      ctx_graceful: bool,
                                      _model_base: str, _load_mode: str,
                                      _mmproj_resolved,
-                                     _moe_cache_used: int,
+                                     _moe_cache_used: float,
                                      _evicted_here: bool) -> _SpawnPhase:
+    # `_moe_cache_used` is the pre-flight extra_needed_mib: the MoE expert
+    # cache (MiB) PLUS the MoE-UBATCH-RAISE compute-buffer delta (see
+    # manager_load._start_process) — both must gate the load together.
     from backend.manager_load import (  # lazy: module cycle
         _archive_old_slot_logs, _pre_flight_evict_candidates,
     )

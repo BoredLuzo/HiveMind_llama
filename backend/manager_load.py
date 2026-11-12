@@ -15,7 +15,7 @@ from .llama_config import (
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS,
     dense_kv_cache_type,
     moe_kv_cache_types, llama_gpu_layers_auto, resolve_gpu_layers,
-    ubatch_extra_mib,
+    ubatch_extra_mib, resolve_model_ubatch,
     CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN, MTP_DRAFT_P_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
@@ -188,6 +188,55 @@ def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
 
 _LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
 
+# LARGE-MOE MLOCK SKIP (35B lever 1, 2026-11-12): above this GGUF size a MoE
+# model streams its experts from RAM, and a forced --load-mode mmap+mlock
+# measures up to 4.7x slower decode than "none" (llama-bench tg128 on the
+# 35B-A3B: 2.92 t/s mmap+mlock vs 13.77 t/s none) — the locked expert pages
+# page in from NVMe under RAM pressure. Small models keep the mlock intent.
+LARGE_MOE_MLOCK_SKIP_GB = 12.0
+
+
+def _mlock_skip_large_moe_enabled() -> bool:
+    """Setting `llama_mlock_skip_large_moe` (default True). Read live so a
+    settings save applies to the next load without a restart."""
+    try:
+        from settings import load_settings as _ls
+        return bool(_ls().get("llama_mlock_skip_large_moe", True))
+    except Exception:
+        return True
+
+
+def _moe_ubatch_setting() -> int:
+    """Setting `duo_ubatch_moe` (default 0): >0 forces the ubatch for MoE
+    models, <0 vetoes any profile-driven raise, 0 = profile decides. Read
+    live so a settings save applies to the next load."""
+    try:
+        from settings import load_settings as _ls
+        return int(_ls().get("duo_ubatch_moe", 0) or 0)
+    except Exception:
+        return 0
+
+
+def is_large_moe_gguf(model: str, min_gb: float = LARGE_MOE_MLOCK_SKIP_GB) -> bool:
+    """True for MoE models whose GGUF is larger than `min_gb` (pure apart
+    from the size probe; unit-tested).
+
+    FAIL-CLOSED TO THE OLD BEHAVIOR: an unresolvable GGUF size (0.0) or an
+    unreadable registry counts as NOT large — the mlock intent then applies
+    exactly as before instead of silently changing unknown models.
+    """
+    try:
+        from .llama_config import is_moe_model as _is_moe
+        if not _is_moe(model):
+            return False
+    except Exception:
+        return False
+    try:
+        _size = _gguf_size_gb(model)
+    except Exception:
+        return False
+    return _size > float(min_gb) > 0
+
 
 def _free_ram_gb() -> float:
     from backend.llama_preflight import free_ram_gb as _impl
@@ -270,7 +319,8 @@ def _archive_old_slot_logs(log_dir, port: int, keep: int = 10) -> None:
 
 
 def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
-                       profile_lm: str, free_ram_gb: float) -> str:
+                       profile_lm: str, free_ram_gb: float,
+                       large_moe: bool = False) -> str:
     """The one load-mode decision (pure; unit-tested in
     tests/test_load_mode_ram_guard.py).
 
@@ -280,8 +330,14 @@ def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
     below GGUF size + 8 GB headroom - the fallback is plain mmap (NOT
     mlock: locking 18 GB with tight RAM pages and sinks itself; plain mmap
     lets Windows drop the file-backed pages).
+
+    LARGE-MOE SKIP: `large_moe=True` (GGUF > LARGE_MOE_MLOCK_SKIP_GB and
+    MoE per is_moe_model) stops the GLOBAL llama_mlock setting from forcing
+    mmap+mlock — the decision then falls through to the profile / RAM guard
+    (none or plain mmap). The spec guard and an explicit profile load_mode
+    still win, and small models keep the historical mlock behavior.
     """
-    if spec_planned or mlock_now:
+    if spec_planned or (mlock_now and not large_moe):
         return "mmap+mlock"
     profile = profile_lm if profile_lm in _LOAD_MODES else ""
     if profile and not (profile == "none"
@@ -358,6 +414,7 @@ class LlamaLoadMixin:
         _lock: asyncio.Lock
         _pending_prefetch: list[tuple[str, int]]
         _memlock_warned: bool
+        _large_moe_mlock_warned: bool
 
         # ModelSlot infers `model` / `_entry_load_seq` as None-only (their
         # assignments in llama_slots.py are unannotated), but the load path
@@ -1103,24 +1160,53 @@ class LlamaLoadMixin:
         ]
         if _gpu_layers is not None and not _fit_supported:
             cmd += ["--n-gpu-layers", str(_gpu_layers)]
+        # MOE-UBATCH-RAISE (35B lever 3, 2026-11-12): the settings baseline
+        # (duo_ubatch, shipped 256) is raised per model by the profile
+        # "ubatch" key or the duo_ubatch_moe setting — MoE models only, and
+        # only when the VRAM pre-flight still fits the larger compute
+        # buffer (the surcharge rides into can_fit below via
+        # _ub_extra_delta_mib; the pre-flight is the hard gate either way).
+        _ub_base = int(LLAMA_UBATCH)
+        _ub_eff, _ub_src = resolve_model_ubatch(model, _ub_base,
+                                                _moe_ubatch_setting())
+        _ub_extra_delta_mib = 0.0
+        if _ub_eff > _ub_base and GPU_BACKEND != "cpu":
+            _ub_extra_delta_mib = (ubatch_extra_mib(_ub_eff)
+                                   - ubatch_extra_mib(_ub_base))
+            _fit_ub = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                                   extra_needed_mib=_ub_extra_delta_mib)
+            if not _fit_ub.ok:
+                logger.warning(
+                    "[MOE-UBATCH] %s: raising duo_ubatch %d -> %d (%s) does not "
+                    "fit VRAM (needed=%.0fMiB, free=%.0fMiB) — keeping %d",
+                    model, _ub_base, _ub_eff, _ub_src,
+                    _fit_ub.needed_mib, _fit_ub.free_mib, _ub_base,
+                )
+                _ub_eff, _ub_src, _ub_extra_delta_mib = _ub_base, "vram-fallback", 0.0
+            else:
+                logger.info(
+                    "[MOE-UBATCH] %s: ubatch %d -> %d (%s) — VRAM pre-flight fits "
+                    "(+%.0f MiB compute buffer)",
+                    model, _ub_base, _ub_eff, _ub_src, _ub_extra_delta_mib,
+                )
         # UBATCH-VRAM-NOTE (audit 2026-10-30): the VRAM pre-flight does NOT
         # model the ubatch compute buffer. Measured on the 35B MoE: ub 512
         # stays at ~5.5 GiB dedicated (no growth vs 256), but ub 1024 spilled
         # into shared memory (80 -> 340 MiB) and 2048 peaked at 2348 MiB.
         # So values above 512 are allowed but called out once per load.
-        if int(LLAMA_UBATCH) > 1024:
+        if _ub_eff > 1024:
             logger.warning(
-                "[LOAD-DIAG] duo_ubatch=%d > 1024: the compute buffer grows past "
+                "[LOAD-DIAG] effective ubatch=%d > 1024: the compute buffer grows past "
                 "what the measured band covers (+145 MiB dedicated at 1024 vs 512, "
-                "+2348 MiB shared at 2048). The VRAM pre-flight now adds a "
+                "+2348 MiB shared at 2048). The VRAM pre-flight adds a "
                 "0.28 MiB/ubatch surcharge above 256, but 2048 spilled hard.",
-                int(LLAMA_UBATCH),
+                _ub_eff,
             )
         cmd += [
             "--parallel",     str(max(1, n_parallel)),
             "--flash-attn",   "on",
-            "--batch-size",   str(max(1024, int(LLAMA_UBATCH))),
-            "--ubatch-size",  str(int(LLAMA_UBATCH)),
+            "--batch-size",   str(max(1024, _ub_eff)),
+            "--ubatch-size",  str(_ub_eff),
             "--threads",      str(_def_threads),
             "--threads-batch",str(_def_threads_batch),
             "--split-mode",   "none",
@@ -1194,12 +1280,32 @@ class LlamaLoadMixin:
                 _profile_lm = str((_gp_lm(model) or {}).get("load_mode") or "").strip().lower()
             except (ImportError, AttributeError, TypeError, ValueError):
                 _profile_lm = ""
+            # LARGE-MOE MLOCK SKIP (2026-11-12): for a large MoE GGUF the
+            # global llama_mlock setting no longer forces mmap+mlock (the
+            # profile override below still does, explicitly). One-time clear
+            # warning so the behavior change is visible in the log.
+            _large_moe = (is_large_moe_gguf(model)
+                          and _mlock_skip_large_moe_enabled())
+            if _large_moe and _mlock_now and not getattr(type(self), "_large_moe_mlock_warned", False):
+                type(self)._large_moe_mlock_warned = True
+                logger.warning(
+                    "[LARGE-MOE-MLOCK] llama_mlock=true is NOT forced into "
+                    "--load-mode mmap+mlock for '%s' (MoE GGUF > %.0f GB): the "
+                    "locked expert pages page in from NVMe and measure up to "
+                    "4.7x slower decode than load-mode none. Falling through "
+                    "to the model profile / RAM guard (none or plain mmap). "
+                    "Set llama_mlock_skip_large_moe=false in settings.json to "
+                    "restore the old behavior, or set \"load_mode\" in the "
+                    "model profile to pin a mode explicitly.",
+                    model, LARGE_MOE_MLOCK_SKIP_GB,
+                )
             # RESOLVER-ONE (2026-10-28): the full decision (SPEC+NONE guard,
             # mlock intent, profile override, RAM-GUARD) lives in the pure
             # module function - unit-tested, one place for both load paths.
             _load_mode = _resolve_load_mode(
                 model, spec_planned=_spec_planned, mlock_now=_mlock_now,
-                profile_lm=_profile_lm, free_ram_gb=_free_ram_gb())
+                profile_lm=_profile_lm, free_ram_gb=_free_ram_gb(),
+                large_moe=_large_moe)
             if _load_mode == _profile_lm and _profile_lm:
                 # LOAD-MODE-OVERRIDE (2026-10-28, speed bench): mmap costs 4.7x
                 # decode on the 35B (llama-bench tg128: 2.92 t/s with mmap+mlock
@@ -1265,6 +1371,11 @@ class LlamaLoadMixin:
                                 _def_threads, _def_threads_batch)
         cmd = _moe.cmd
         _moe_cache_used = _moe.moe_cache_used
+        # The MoE-UBATCH-RAISE compute-buffer surcharge rides into the same
+        # pre-flight `extra_needed_mib` as the expert cache: can_fit already
+        # adds ubatch_extra_mib(settings baseline), so only the DELTA to the
+        # raised per-model ubatch is extra here.
+        _fit_extra_mib = float(_moe_cache_used) + float(_ub_extra_delta_mib)
         # OUTSOURCED (split 4.5): MTP/registry-config/reasoning/mmproj/jinja flags →
         # _phase_model_flags().
         _mf = await _phase_model_flags(self, cmd, model, _model_base, gguf_path, vision)
@@ -1275,6 +1386,6 @@ class LlamaLoadMixin:
         _sp = await _phase_preflight_and_spawn(
             self, slot, cmd, model, gguf_path, num_ctx, vision, n_parallel,
             ctx_graceful, _model_base, _load_mode, _mmproj_resolved,
-            _moe_cache_used, _evicted_here,
+            _fit_extra_mib, _evicted_here,
         )
         num_ctx = _sp.num_ctx

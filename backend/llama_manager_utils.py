@@ -261,10 +261,28 @@ class VRAMPreFlightError(RuntimeError):
         self.external_usage_est_mib = external_usage_est_mib
         self.fixed_cost_dominant = fixed_cost_dominant
 
+def _mmproj_always_enabled() -> bool:
+    """Setting `vision_mmproj_always` (default False): when True, the
+    projector families below attach --mmproj even for text-only loads (the
+    old behavior). Read live so a settings save applies to the next load."""
+    try:
+        from settings import load_settings as _ls
+        return bool(_ls().get("vision_mmproj_always", False))
+    except Exception:
+        return False
+
+
 def _needs_mmproj(model: str, vision: bool = False) -> bool:
     base = model.split(":")[0].lower()
     if base in _MMPROJ_REQUIRED_BASES:
-        return True
+        # TEXT-ONLY MMPROJ SKIP (35B lever 6, 2026-11-12): the projector
+        # costs ~0.8-1.3 GB VRAM and a pure text/code run never encodes an
+        # image with it. Without `vision` the projector stays off; the first
+        # image request pays the one-time upgrade reload
+        # (needs_vision_reload -> ensure_loaded(vision=True) /
+        # upgrade_port_to_vision). vision_mmproj_always=true restores the
+        # always-attach behavior.
+        return bool(vision) or _mmproj_always_enabled()
     if vision and base in _VISION_CAPABLE_BASES:
         return True
     # REGISTRY-PROJECTOR (2026-11-01): a model the registry declares a
@@ -547,7 +565,14 @@ def _kill_port_sync(port: int):
 
 def _nm(m):
     import re
-    # Strip :latest AND #N aliases — canonical model name for slot matching.
-    # #N is a pre-explore auto-alias decorator that must not prevent reusing
-    # an already-loaded slot for the same base model.
-    return re.sub(r"#\d+$", "", (m or "").replace(":latest", "")).strip()
+    # SLOT-MATCH CANONICALIZATION: strip :latest (any casing) AND #N aliases,
+    # then case-fold. #N is a pre-explore auto-alias decorator that must not
+    # prevent reusing an already-loaded slot for the same base model.
+    # CASE-FOLD (35B lever 8, 2026-11-12): role configs / orphan adoption can
+    # hand over the same model with different label casing ("Qwen3.6:35B...")
+    # — a case-sensitive compare then reloaded a perfectly resident slot on
+    # every role switch (15-35 s thrash). GGUF/model keys have no
+    # case-significant distinction, so matching folds to lower case.
+    s = re.sub(r"#\d+$", "", str(m or "").strip())
+    s = re.sub(r":latest$", "", s, flags=re.IGNORECASE)
+    return s.lower()

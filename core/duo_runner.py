@@ -3743,6 +3743,20 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 available_ctx=_dtool_ctx,
                                 agent_name="duo_coder"
                             )
+                            # TOOL-THINKING BUDGET CAP (35B lever 7): an
+                            # explicit settings cap (0 = off) bounds the
+                            # per-round thinking budget in tool rounds — on a
+                            # 35B at ~14-20 tok/s every <think> block before a
+                            # tool call costs ~15-25 s. Opt-in only: the
+                            # default keeps the model's own budget so answer
+                            # quality never degrades silently.
+                            _think_cap = int(ctx.settings.get("duo_tool_thinking_budget_cap", 0) or 0)
+                            if _think_cap > 0 and _tool_thinking_budget > _think_cap:
+                                logger.info(
+                                    "[TOOL-THINK-CAP] %d -> %d tokens (duo_tool_thinking_budget_cap)",
+                                    _tool_thinking_budget, _think_cap,
+                                )
+                                _tool_thinking_budget = _think_cap
                             # (e.g. context full), thinking per _apply_thinking_kwargs in the
                             if _tool_thinking_budget == 0:
                                 _duo_state.think_runtime = False

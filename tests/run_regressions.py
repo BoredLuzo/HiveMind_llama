@@ -293,6 +293,7 @@ SUITES = [
     ("steer_images",            "tests/test_steer_images.py",                  60),
     ("log_archive",             "tests/test_log_archive.py",                   30),
     ("load_mode_ram_guard",     "tests/test_load_mode_ram_guard.py",           30),
+    ("35b_perf_levers",         "tests/test_35b_perf_levers.py",               60),
     ("load_preflight",          "tests/test_load_preflight.py",                60),
     ("preflight_failclosed",    "tests/test_preflight_failclosed.py",          60),
     ("langrun_guard_failclosed", "tests/test_langrun_guard_failclosed.py",     30),
