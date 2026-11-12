@@ -249,7 +249,7 @@ def resolve_model_ubatch(model: str, base_ubatch: int,
     try:
         from model_configs.models_registry import get_ubatch as _gu
         _prof_ub = _gu(model)
-    except Exception:
+    except (ImportError, AttributeError, KeyError, TypeError, ValueError):
         _prof_ub = None
     if _prof_ub:
         _raised = _align_ubatch(_prof_ub)

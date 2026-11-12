@@ -268,7 +268,7 @@ def _mmproj_always_enabled() -> bool:
     try:
         from settings import load_settings as _ls
         return bool(_ls().get("vision_mmproj_always", False))
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         return False
 
 

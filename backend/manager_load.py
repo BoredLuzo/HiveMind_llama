@@ -202,7 +202,7 @@ def _mlock_skip_large_moe_enabled() -> bool:
     try:
         from settings import load_settings as _ls
         return bool(_ls().get("llama_mlock_skip_large_moe", True))
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         return True
 
 
@@ -213,7 +213,7 @@ def _moe_ubatch_setting() -> int:
     try:
         from settings import load_settings as _ls
         return int(_ls().get("duo_ubatch_moe", 0) or 0)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         return 0
 
 
@@ -226,14 +226,14 @@ def is_large_moe_gguf(model: str, min_gb: float = LARGE_MOE_MLOCK_SKIP_GB) -> bo
     exactly as before instead of silently changing unknown models.
     """
     try:
-        from .llama_config import is_moe_model as _is_moe
-        if not _is_moe(model):
+        from .llama_config import is_moe_model as _moe_probe
+        if not _moe_probe(model):
             return False
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         return False
     try:
         _size = _gguf_size_gb(model)
-    except Exception:
+    except (OSError, ValueError):
         return False
     return _size > float(min_gb) > 0
 
@@ -424,6 +424,10 @@ class LlamaLoadMixin:
             model: str | None
             _entry_load_seq: int | None
 
+        def can_fit(self, model_name: str, num_ctx: int,
+                    safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
+                    exclude_slot_id: Optional[int] = None,
+                    extra_needed_mib: float = 0.0) -> CanFitResult: ...
         def _metric_inc(self, key: str, amount: int = 1) -> None: ...
         def _get_shared_http_client(self) -> httpx.AsyncClient: ...
         def _has_active_prefetch(self, model: str, num_ctx: int) -> bool: ...

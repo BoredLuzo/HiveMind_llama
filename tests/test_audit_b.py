@@ -177,7 +177,7 @@ check("llama_mlock reaches the load path (dynamic read, canonical module)",
       and "_lc_init.MLOCK_MODEL = bool(settings.get" in srv_src)
 check("speculative models keep mmap+mlock even with mlock off (OOM guard)",
       "_resolve_load_mode(" in ml_src
-      and 'if spec_planned or mlock_now:' in ml_src
+      and 'if spec_planned or (mlock_now and not large_moe):' in ml_src
       and 'return "mmap+mlock"' in ml_src)
 
 # behavioral: _speculation_planned
