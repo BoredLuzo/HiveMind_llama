@@ -16,4 +16,4 @@ import re
 VERSION_LINE_RE = re.compile(
     r"HIVEMIND_VERSION\s*=\s*[\"']([0-9][0-9A-Za-z._-]*)[\"']", re.I)
 
-HIVEMIND_VERSION = "1.5.5"
+HIVEMIND_VERSION = "1.5.6"

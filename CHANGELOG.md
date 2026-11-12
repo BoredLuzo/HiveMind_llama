@@ -1,4 +1,4 @@
-## [Unreleased]
+## [1.5.6] - 2026-11-12
 
 Maintainability sprint on top of 1.5.5, plus targeted routing and runtime
 fixes found by live tests and the 2026-11-07 deep audit.
@@ -85,7 +85,7 @@ symbols, never full contents; empty/no-match queries add nothing and the
 `WOULD_DROP_SYMBOLS` now includes the original definition line
 (`Keep definition: MODE = "prod"`), which targets the `multi_config` retry
 loop. MoE prefill keeps the full `--threads-batch` while decode keeps the
-physical-core `--threads` split. Covered by 368/368 regression suites.
+physical-core `--threads` split. Covered by 379/379 regression suites.
 
 Audit batch: B3/B8 behavior coverage was added for `pipeline_runner`,
 `chat_run`, `llama_start_phases`, `_pre_explore` and `manager_load` (the
@@ -186,6 +186,40 @@ the prefill meter reads a 64 KB tail instead of the whole slot log, the
 long-run diagnostics cache the newest slot-log path for 30 s, `/vram/log`
 runs off the event loop, and the critic reads at most 2000 chars per written
 file.
+
+Patch-native editing: `apply_patch` takes a unified diff for one or more
+files in a single tool call. The parser tolerates line drift, enforces
+unique context matches, validates every path (`..`, absolute, drive-letter,
+UNC and symlink escapes rejected) and writes every file atomically in patch
+order; a write failure rolls the already-written files back from captured
+originals. The old `old_text/new_text` and `edits=[...]` APIs are unchanged,
+so the model only sends the diff instead of whole-file rewrites. Optional
+`duo_auto_test_on_edit` runs the mapped tests in the same tool turn (mapped
+tests only, bounded timeout plus per-run cap and signature dedup), and
+`_compact_stale_edit_payloads` replaces old edit payloads in history with
+an `[applied diff: path (+X/-Y)]` stub after the stale mass exceeds 12k
+chars, keeping the last two rounds intact. Covered by `test_apply_patch`,
+`test_auto_test_on_edit` and `test_edit_history_compact`.
+
+35B performance: a large MoE GGUF (>12 GB) no longer inherits a global
+`llama_mlock=true` as `mmap+mlock` (locked expert pages paged in from NVMe
+and measured up to 4.7x slower decode); the profile and RAM guard still
+decide, and `llama_mlock_skip_large_moe=false` restores the old behavior.
+MoE models can raise the ubatch per profile (`"ubatch": 512/1024`) or via
+`duo_ubatch_moe`, but only when the VRAM pre-flight fits the larger compute
+buffer, with a baseline fallback otherwise. Text-only loads skip the vision
+projector (`vision_mmproj_always=true` restores always-attach), and slot
+matching canonicalizes `:latest`/`#N` plus casing so role switches no longer
+reload a resident model.
+
+Benchmark: the core harness now runs HiveMind `duo`/`duo_full`, Aider,
+Hermes and Pi against the same hidden tests, and all adapters share
+`_agent_timeout_s`, so one cell cannot get a longer budget than another.
+Raw/raw_files are no longer default conditions or report rows. The Colab
+autopilot runs 3 core rounds with the 4B model, then the 34-task Aider
+Polyglot suite, with optional 35B and DeepSWE cells, per-cell atomic Drive
+sync, `--resume`, intermediate status lines and a token-accounting caveat
+(HiveMind/Hermes/Pi exact-ish, Aider rounded and cache-blind).
 
 CI and quality: Python 3.14 in both workflows, `windows-full` runs
 `--ci-subset --jobs 2` with an exclusive lane for socket/LSP suites,
