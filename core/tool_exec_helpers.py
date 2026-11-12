@@ -125,7 +125,8 @@ def _track_focus_path(dargs, dname, tool_ctx_lru, recent_focus_paths, max_focus_
 
 def _note_successful_write(dname, dresult, result, round_state, total_tool_errors) -> None:
     """Decrement parse errors on a successful write/patch (U5)."""
-    if dname in ("patch_file", "edit_file", "write_file", "write_file_append") and not _tool_call_failed(dresult, dname):
+    if dname in ("patch_file", "edit_file", "write_file", "write_file_append",
+                 "apply_patch") and not _tool_call_failed(dresult, dname):
         result.verify_mutation_serial += 1
         round_state.parse_errors = max(0, round_state.parse_errors - 1)
         total_tool_errors[0] = 0

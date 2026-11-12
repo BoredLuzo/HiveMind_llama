@@ -298,6 +298,154 @@ def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, da
     return 0
 
 
+# ═══ STALE-EDIT-COMPACT (G#3 lever, 2026-11-11) ══════════════════════════
+# Old edit payloads (edit_file/patch_file old_text/new_text, write_file
+# content, apply_patch diff text) accumulate in the conversation as text
+# blobs even though every later round only needs the FILES on disk. The G
+# backlog measures -15..25% net prompt growth in long runs from compacting
+# them to `[applied diff: path (+X/-Y)]` stubs.
+#
+# Safe trigger (deterministic, no n_ctx dependency): after a SUCCESSFUL
+# write/edit, if >= _STALE_COMPACT_TRIGGER_CHARS of stale payload mass has
+# accumulated, compact it. Short runs never pay the one-time prefix-cache
+# rebuild; long runs reclaim the mass repeatedly. Further bounds:
+#   - the _STALE_COMPACT_KEEP_ASSISTANTS most recent assistant messages with
+#     tool_calls are NEVER touched (the model still works with those diffs);
+#   - payloads below _STALE_COMPACT_MIN_CHARS stay (churn >> gain);
+#   - at most _STALE_COMPACT_MAX_CALLS per pass;
+#   - idempotent: stubbed calls carry _APPLIED_DIFF_MARK and are skipped.
+_APPLIED_DIFF_MARK = "applied diff:"
+_STALE_COMPACT_MIN_CHARS = 1200
+_STALE_COMPACT_TRIGGER_CHARS = 12000
+_STALE_COMPACT_KEEP_ASSISTANTS = 2
+_STALE_COMPACT_MAX_CALLS = 12
+
+_STALE_COMPACT_TRIGGER_NAMES = {
+    "edit_file", "write_file", "patch_file", "write_file_append",
+    "replace_lines", "apply_patch",
+}
+
+
+def _edit_stub_text(dname: str, args: dict) -> str | None:
+    """The `[applied diff: path (+X/-Y lines)]` stub for one old call.
+
+    Line accounting mirrors the tools' own result lines (patch_file
+    convention: a non-empty text counts count('\\\\n')+1 lines). write_file
+    carries no old content, so it reports only the added side. Returns None
+    when the args shape is not recognizable (leave those untouched)."""
+    path = str(args.get("path", "") or "")
+    try:
+        if dname == "edit_file":
+            entries = args.get("edits")
+            if isinstance(entries, list) and entries:
+                added = removed = 0
+                for e in entries:
+                    if not isinstance(e, dict):
+                        return None
+                    o = str(e.get("old_text", "") or "")
+                    nw = str(e.get("new_text", "") or "")
+                    removed += o.count("\n") + 1 if o else 0
+                    added += nw.count("\n") + 1 if nw else 0
+            else:
+                if "old_text" not in args or "new_text" not in args:
+                    return None
+                o = str(args.get("old_text") or "")
+                nw = str(args.get("new_text") or "")
+                removed = o.count("\n") + 1 if o else 0
+                added = nw.count("\n") + 1 if nw else 0
+            return f"[applied diff: {path} (+{added}/-{removed} lines)]"
+        if dname == "patch_file":
+            if "old_str" not in args or "new_str" not in args:
+                return None
+            o = str(args.get("old_str") or "")
+            nw = str(args.get("new_str") or "")
+            removed = o.count("\n") + 1 if o else 0
+            added = nw.count("\n") + 1 if nw else 0
+            return f"[applied diff: {path} (+{added}/-{removed} lines)]"
+        if dname in ("write_file", "write_file_append"):
+            c = str(args.get("content", "") or "")
+            added = c.count("\n") + 1 if c.strip() else 0
+            return f"[applied write: {path} (+{added} lines)]"
+        if dname == "replace_lines":
+            return f"[applied edit: {path}]"
+        if dname == "apply_patch":
+            patch = str(args.get("patch", "") or args.get("diff", "") or "")
+            added = sum(1 for ln in patch.splitlines()
+                        if ln.startswith("+") and not ln.startswith("+++"))
+            removed = sum(1 for ln in patch.splitlines()
+                          if ln.startswith("-") and not ln.startswith("---"))
+            nfiles = patch.count("--- ") or 1
+            return (f"[applied diff: {nfiles} file section(s) "
+                    f"(+{added}/-{removed} lines)]")
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return None
+
+
+def _compact_stale_edit_payloads(messages: list, current_assistant_idx: int) -> int:
+    """Compact OLD write/edit payloads below the keep window to stubs.
+
+    Only assistant messages BEFORE ``current_assistant_idx`` are eligible
+    (the current round's message is _compact_round_write_args' business).
+    Returns the number of chars reclaimed; 0 = trigger not reached."""
+    if not messages or current_assistant_idx <= 0:
+        return 0
+    # collect candidates: (index, tc, name, args, raw_len)
+    candidates: list[dict] = []
+    assistants_seen = 0
+    for idx in range(current_assistant_idx - 1, -1, -1):
+        msg = messages[idx]
+        tcs = msg.get("tool_calls") if isinstance(msg, dict) else None
+        if not tcs:
+            continue
+        assistants_seen += 1
+        if assistants_seen <= _STALE_COMPACT_KEEP_ASSISTANTS:
+            continue  # keep window: the most recent rounds stay intact
+        for tc in tcs:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if not isinstance(fn, dict):
+                continue
+            name = str(fn.get("name", "") or "")
+            if name not in _WRITE_ARG_COMPACT_NAMES and name != "apply_patch":
+                continue
+            raw = fn.get("arguments", {})
+            raw_s = raw if isinstance(raw, str) else json.dumps(
+                raw or {}, ensure_ascii=False)
+            if len(raw_s) < _STALE_COMPACT_MIN_CHARS:
+                continue
+            if _APPLIED_DIFF_MARK in raw_s or _WRITE_STUB_MARK in raw_s.lower():
+                continue  # already compacted
+            args = raw if isinstance(raw, dict) else None
+            if args is None:
+                try:
+                    args = json.loads(raw_s)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(args, dict):
+                    continue
+            stub_text = _edit_stub_text(name, args)
+            if not stub_text:
+                continue
+            candidates.append({
+                "idx": idx, "tc": tc, "fn": fn, "name": name,
+                "path": str(args.get("path", "") or ""),
+                "raw_s": raw_s, "stub_text": stub_text,
+            })
+    total = sum(len(c["raw_s"]) for c in candidates)
+    if total < _STALE_COMPACT_TRIGGER_CHARS:
+        return 0
+    saved = 0
+    for c in candidates[:_STALE_COMPACT_MAX_CALLS]:
+        if c["name"] == "apply_patch":
+            stub = json.dumps({"patch": c["stub_text"]}, ensure_ascii=False)
+        else:
+            stub = json.dumps({"path": c["path"], "content": c["stub_text"]},
+                              ensure_ascii=False)
+        c["fn"]["arguments"] = stub
+        saved += len(c["raw_s"]) - len(stub)
+    return saved
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════════════════
@@ -433,7 +581,9 @@ async def execute_tool_round(
 
         _focus_path = _track_focus_path(_dargs, _dname, trs.tool_ctx_lru, trs.recent_focus_paths, _MAX_FOCUS_PATHS)
 
-        if _dname in _WRITE_ARG_COMPACT_NAMES and _WRITE_STUB_MARK in _raw_s.lower():
+        if _dname in _WRITE_ARG_COMPACT_NAMES and (
+                _WRITE_STUB_MARK in _raw_s.lower()
+                or _APPLIED_DIFF_MARK in _raw_s.lower()):
             _logger.warning("[STUB-ECHO] %s blocked: compaction stub found in write args (path=%s)",
                             _dname, str((_dargs or {}).get("path", "?")) or "?")
             dtool_msgs.append({
@@ -1120,6 +1270,23 @@ async def execute_tool_round(
                     "[ARG-COMPACT] %s args compacted to FAILED-stub "
                     "(focus=%s, saved_chars=%d)",
                     _dname, _focus_path, len(_raw_s))
+        # STALE-EDIT-COMPACT (G#3 lever, 2026-11-11): a successful edit/write
+        # makes OLDER edit payloads in the history stale — the file's current
+        # state is on disk and re-readable, so the old diff text only bloats
+        # every future prompt. When enough stale payload mass has accumulated,
+        # compact it to `[applied diff: path (+X/-Y)]` stubs (the most recent
+        # rounds stay intact). Deterministic trigger, idempotent, bounded.
+        if (_dname in _STALE_COMPACT_TRIGGER_NAMES
+                and not _tool_call_failed(_dresult, _dname)):
+            try:
+                _stale_saved = _compact_stale_edit_payloads(
+                    dtool_msgs, _assistant_idx)
+                if _stale_saved:
+                    _logger.info(
+                        "[EDIT-COMPACT] stale edit payloads compacted "
+                        "(saved_chars=%d)", _stale_saved)
+            except (TypeError, ValueError, AttributeError, KeyError) as _stale_cmp_err:
+                _logger.debug("[EDIT-COMPACT] failed: %s", _stale_cmp_err)
         # ── Context LRU registration ──
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)

@@ -150,6 +150,21 @@ _INLINE_CODING_TOOLS = [
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
+        "name": "apply_patch",
+        "description": (
+            "Apply a unified diff to one or more files. For multi-file "
+            "refactors (move + import update, rename caller + definition). "
+            "All-or-nothing: exact context lines REQUIRED around every "
+            "change; workspace-relative paths; new files use "
+            "'--- /dev/null', deletions '+++ /dev/null'. Nothing is written "
+            "unless EVERY hunk matches; a failed write rolls back. Simple "
+            "single-file edits: prefer edit_file."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "patch": {"type": "string", "description": "Unified diff text"}
+        }, "required": ["patch"]}
+    }},
+    {"type": "function", "function": {
         "name": "write_file",
         "description": (
             "Create a file, or overwrite it completely, with plain content (no "
@@ -563,8 +578,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     "duo_core": {
         "read_file", "get_signatures", "find_references", "list_dir",
         "find_files", "search_code", "edit_file", "write_file",
-        "write_file_append", "undo_last", "run_bash", "run_python",
-        "run_tests", "task_complete", "ask_user",
+        "write_file_append", "apply_patch", "undo_last", "run_bash",
+        "run_python", "run_tests", "task_complete", "ask_user",
         # LSP diagnostics stays in core: post-write auto-diagnostics only
         # fire when a server is warm, and this is the tool that warms it.
         # LSP auto-diagnostics runs automatically on write/edit; explicit lsp_*
@@ -629,6 +644,7 @@ _TOOL_SUBSETS: dict[str, set[str]] = {
     },
     "write": {
         "write_file", "edit_file", "write_file_append", "replace_lines", "edit_ast", "undo_last",
+        "apply_patch",
     },
     "run": {"run_bash", "run_python", "install_package", "start_background",
             "stop_background", "get_background_output"},
@@ -743,6 +759,10 @@ _TOOL_PRIORITY = [
     # were dropped first by the schema fitter (audit 2026-10-31, P2-5).
     "lsp_status", "lsp_diagnostics",
     # tier 2 — everything else (web, git, background, browser, research...)
+    # D3 patch-native multi-file edits (2026-11-11): UPGRADES LAST on tight
+    # schema budgets — the tier-0 descriptions (read_file carries the run's
+    # resolved read cap) must never lose their space to this tool.
+    "apply_patch",
 ]
 
 
@@ -815,7 +835,9 @@ def _apply_budget_texts(tools: list, budgets) -> list:
     """Insert the run's RESOLVED budget numbers into schema-visible texts
     (audit phase 6 redesign: the schema states the truth of THIS run, not a
     module constant). Called before the budget fit — description lengths
-    participate in the fit."""
+    participate in the fit. (2026-11-11, D3: compacted — apply_patch joined
+    the schema pool and the fit is zero-sum at 16k; every fact kept, the
+    read cap must stay visible or the resolved-budget pin breaks.)"""
     _rc = int(getattr(budgets, "read_char_cap", 0) or 0)
     if _rc <= 0:
         return tools
@@ -824,10 +846,10 @@ def _apply_budget_texts(tools: list, budgets) -> list:
         fn = t.get("function", {})
         if fn.get("name") == "read_file":
             out.append({**t, "function": {**fn, "description": (
-                "Read file content. ALWAYS call read_file before edit_file on existing files. "
-                "Returns RAW content (no line-number prefixes) with a header showing the total/selected line range. "
-                f"Files bigger than ~{_rc} chars are REFUSED with a range hint (use get_signatures first); "
-                f"reads are capped at {_rc} chars — use start_line/end_line for sections."
+                "Read file content. ALWAYS read_file before edit_file on "
+                "existing files. Raw content, total-lines header. Over "
+                f"~{_rc} chars REFUSED (get_signatures first); capped at "
+                f"{_rc} chars — use start_line/end_line for sections."
             )}})
         else:
             out.append(t)
