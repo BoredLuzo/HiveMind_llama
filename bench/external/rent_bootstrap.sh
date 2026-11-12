@@ -128,8 +128,11 @@ setup() {
 
   log "[Step 2/5] Checking repository ($HM_DIR)..."
   [ -d "$HM_DIR/.git" ] || git clone --branch "$HM_BRANCH" "$HM_REPO" "$HM_DIR"
-  if [ -f "$BENCH_TGZ" ]; then
-    log "overlay bench/ from $BENCH_TGZ"
+  # Only overlay a local bundle when explicitly requested. An old
+  # $HOME/bench_bundle.tgz otherwise silently overrides the fresh clone
+  # (bench/ is tracked now); use BENCH_TGZ_OVERLAY=1 for the old workflow.
+  if [ -f "$BENCH_TGZ" ] && [ "${BENCH_TGZ_OVERLAY:-0}" = "1" ]; then
+    log "overlay bench/ from $BENCH_TGZ (BENCH_TGZ_OVERLAY=1)"
     tar xzf "$BENCH_TGZ" -C "$HM_DIR"
   fi
   [ -f "$HM_DIR/bench/runner.py" ] || die "bench/runner.py missing: push it or provide BENCH_TGZ"
