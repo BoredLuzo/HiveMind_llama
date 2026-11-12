@@ -1344,6 +1344,12 @@ def main() -> int:
                     if (actual_run, task.id, cond) in done_keys:
                         print(f"[SKIP]   [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} (checkpoint)")
                         continue
+                    # START line before a cell: a slow harness can keep one
+                    # cell busy for minutes, and the completion line alone
+                    # looks like a hang in a streaming Colab cell.
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] "
+                          f"[run {actual_run}/{total_runs}] {task.id:<22} "
+                          f"{cond:<16} ...", flush=True)
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
                     cell = base / f"run{actual_run}" / cond
