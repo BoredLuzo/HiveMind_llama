@@ -5,6 +5,21 @@ import time
 from datetime import datetime
 
 
+from context.pause_state import (
+    clear_pause_state as _clear_pause_state,
+    persist_pause_state as _persist_pause_state,
+)
+from core.duo_helpers import build_steer_user_message as _build_steer_user_message
+from infra.run_control import (
+    _get_abort_event,
+    cleanup_pause_state as _cleanup_pause_state,
+    clear_pause_request as _clear_pause_request,
+    drain_steer_messages as _drain_steer_messages,
+    get_abort_during_pause_signal as _get_abort_during_pause_signal,
+    get_resume_signal as _get_resume_signal,
+    is_pause_requested as _pause_requested,
+    steer_queue_view as _steer_queue_view,
+)
 from learning.peer_ratings import run_peer_ratings
 from vram.loader import _refresh_judge_keepalive
 from routing.model_picker import _pick_direct_model
@@ -12,6 +27,12 @@ from vram.loader import _bk_pin
 from utils.messages import normalize_system_messages
 
 _direct_log = logging.getLogger("hivemind.direct_runner")
+
+# A2 (2026-11-11): a steer that arrives DURING a pure direct answer gets a
+# bounded continuation round (1 initial answer + N continuations = the round
+# cap). Anything queued later delivers after the run (frontend queue) as
+# before — the cap only bounds the loop, it never loses a drained message.
+_DIRECT_STEER_MAX_CONTINUATIONS = 2
 
 _DIRECT_WS_NOTE = (
     "\n\nWEB SEARCH IS AVAILABLE: use the web_search / web_fetch tool calls "
@@ -305,6 +326,118 @@ async def _direct_websearch_tool_round(ctx, model: str, msgs: list, num_ctx: int
     return events, _msgs, _any
 
 
+class _PauseGateResult:
+    """Outcome holder for one _direct_manual_pause_gate call (the generator
+    cannot return a value the async-for would see)."""
+
+    __slots__ = ("continue_run",)
+
+    def __init__(self) -> None:
+        self.continue_run = True
+
+
+async def _direct_manual_pause_gate(ctx, outcome: _PauseGateResult,
+                                    phase: str = "direct"):
+    """A1 (2026-11-11): manual pause for DIRECT runs at a safe boundary.
+
+    `/pause/{run_id}` sets `request_pause_after_chunk`; until now only the
+    Duo chunk loop consumed the flag, so a direct stream ignored it (live
+    matrix 2026-11-07: `/pause` -> `pause_requested`, `/pause-state`
+    `{"active": false}`, `/resume` 409). Direct runs call this gate at every
+    safe boundary:
+      * before a model round starts (websearch done, POST not yet sent)
+      * at token-chunk boundaries of the live stream — the upstream
+        generator suspends at its yield while the gate waits, so httpx
+        stops reading and llama-server generation backpressures to a halt
+        (no tokens are generated into the void while paused)
+
+    Async generator so the `run_paused_manual` divider is yielded BEFORE
+    the wait suspends the run — the UI flips to its Resume state while the
+    gate blocks (the Duo chunk loop yields the same event before its wait).
+    Mirrors the Duo gate otherwise: persist `/pause-state/{chat_id}`, wait
+    resume | abort-during-pause | chat abort, then yield the resumed divider
+    (or the abort status). `outcome.continue_run=False` = aborted during
+    pause; the caller ends the run with stop_reason "aborted".
+    """
+    if not _pause_requested(ctx.run_id):
+        return
+    _clear_pause_request(ctx.run_id)
+    # Direct runs have no chunks — the counters stay 0 (UI shows a plain
+    # "Run paused" divider for the phase=="direct" variant of the event).
+    if ctx.chat_id:
+        _persist_pause_state(chat_id=ctx.chat_id, run_id=ctx.run_id,
+                             chunks_done=0, chunks_remaining=0, written_files=[])
+    yield await ctx.emit({
+        "type": "run_paused_manual", "run_id": ctx.run_id, "phase": phase,
+        "chunks_done": 0, "chunks_remaining": 0,
+    })
+    _resume_sig = _get_resume_signal(ctx.run_id)
+    _abort_sig = _get_abort_during_pause_signal(ctx.run_id)
+    _chat_ev = await _get_abort_event(ctx.chat_id) if ctx.chat_id else None
+    _wait_tasks = [
+        spawn(_resume_sig.wait()),
+        spawn(_abort_sig.wait()),
+    ]
+    if _chat_ev is not None:
+        _wait_tasks.append(asyncio.create_task(_chat_ev.wait()))
+    _pending_wait = (await asyncio.wait(
+        _wait_tasks, return_when=asyncio.FIRST_COMPLETED,
+    ))[1]
+    for _tw in _pending_wait:
+        _tw.cancel()
+    if _pending_wait:
+        await asyncio.gather(*_pending_wait, return_exceptions=True)
+    # Consume the resume signal — a second pause of the same run must not
+    # wake up immediately (same fix as the Duo chunk loop).
+    _resume_sig.clear()
+    if ctx.chat_id:
+        _clear_pause_state(ctx.chat_id)
+    if _abort_sig.is_set() or (_chat_ev is not None and _chat_ev.is_set()):
+        outcome.continue_run = False
+        yield await ctx.emit({"type": "status",
+                              "content": "⏹ Aborted during pause — direct run ended."})
+        return
+    yield await ctx.emit({
+        "type": "run_resumed_manual", "run_id": ctx.run_id, "phase": phase,
+        "chunks_done": 0, "chunks_remaining": 0,
+    })
+
+
+async def _inject_direct_steers(ctx, stream_msgs: list, vision_ok: bool = False):
+    """A2 (2026-11-11): drain the steer queue at a DIRECT-run boundary.
+
+    The queue (`/api/run/{run_id}/steer`) used to stay undrained on a pure
+    direct run without tools — the text only reached the model via the
+    frontend's after-run queue as a NEW message. Direct runs call this at
+    the round boundary (before the next model POST): each queued steer is
+    announced with the shared `steer` card event and appended to
+    `stream_msgs` as an "[OWNER STEER]" user message the next round sees.
+
+    Steer images ride only when the final model is multimodal — the pure
+    direct path has no vision upgrade, so a text-only model would 500 on
+    the raw parts (same conservative drop policy as the coder's raw mode).
+    """
+    _items = _drain_steer_messages(ctx.run_id)
+    if not _items:
+        return
+    for _st in _items:
+        _text = str(_st.get("text") or "")
+        _imgs_all = [str(b).strip() for b in (_st.get("images") or [])
+                     if str(b or "").strip()]
+        _imgs = _imgs_all if vision_ok else []
+        yield await ctx.emit({"type": "steer", "content": _text,
+                              "images": len(_imgs_all)})
+        if len(_imgs) < len(_imgs_all):
+            yield await ctx.emit({
+                "type": "status",
+                "content": (f"⚠ {len(_imgs_all) - len(_imgs)} steer image(s) "
+                            "dropped — the direct model is text-only."),
+            })
+        stream_msgs.append(_build_steer_user_message(_text, _imgs))
+    yield await ctx.emit({"type": "status",
+                          "content": "➡ Steer applied at the model boundary."})
+
+
 async def run_direct(ctx):
     """Direct-Mode handler for simple/trivial complexity."""
     if ctx.complexity in ("trivial", "simple"):
@@ -538,55 +671,122 @@ async def run_direct(ctx):
         _direct_ctx_cap = ctx.get_num_ctx(_direct_model, "direct") or 8192
         _direct_tokens = min(int(_direct_tokens), max(256, int(_direct_ctx_cap)))
         parts, t = [], time.time()
+        _pause_aborted = False   # A1: an abort during the pause gate ends the run
         if _direct_tools_active and _tool_content:
             # ToolLoop already streamed the answer live — reuse it for persistence.
             parts = [_tool_content]
         else:
+            _d_ct_sum = _d_pt_sum = _d_ca_sum = 0
             try:
                 # _pick_direct_model(complex, ...) → qwen3:8b → 131072 default ctx → ~8GB KV-Cache → OVERFLOW
-                _direct_no_cache = ctx.prepro_success or bool(_direct_vision and ctx.images)
                 _stream_msgs = messages
                 _usage: dict = {}   # RUN-STATS: filled by usage_out (llama include_usage)
                 if _direct_tools_active and _tool_final_msgs:
                     # Tool loop ran but produced no text (abort / round cap) —
                     # answer with the tool-augmented context instead.
                     _stream_msgs = _tool_final_msgs
-                if _direct_think:
-                    # Thinking mode: stream content and reasoning separately.
-                    async for _cont, _thk in ctx.pipeline.ollama.chat_stream(
-                            _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
-                            ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
-                            no_cache=ctx.prepro_success,
-                            think=True,
-                            thinking_budget=_direct_budget or None,
-                            split_thinking=True,
-                            usage_out=_usage):
-                        if ctx.aborted(): break
-                        if _thk:
-                            yield await ctx.emit({"type": "thinking_token", "content": _thk})
-                        if _cont:
-                            parts.append(_cont)
-                            yield await ctx.emit({"type": "token", "content": _cont})
-                else:
-                    # LEAK-FIX (2026-11-02): models whose chat template reasons
-                    # BY DEFAULT (LFM3, and any "thinking" model loaded without
-                    # the per-agent switch) shipped their reasoning inside
-                    # `content` - the answer started with "Also note system
-                    # says ...". Ask for the split even here and drop the
-                    # reasoning: with the switch off it is not part of the
-                    # answer.
-                    async for _tok, _thk_off in ctx.pipeline.ollama.chat_stream(
-                            _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
-                            ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
-                            no_cache=ctx.prepro_success,
-                            think=False,
-                            split_thinking=True,
-                            usage_out=_usage):
-                        if ctx.aborted(): break
-                        if not _tok:
-                            continue
-                        parts.append(_tok)
-                        yield await ctx.emit({"type": "token", "content": _tok})
+                # ROUND LOOP (A1/A2, 2026-11-11): each iteration is one model
+                # round of the pure direct stream. At the boundaries between
+                # rounds the runner consumes /pause (suspend + resume) and
+                # drains the steer queue (injection into the next prompt) —
+                # the boundaries Duo/chunk runs always had. A steer that
+                # arrives DURING a round gets a bounded continuation round
+                # (assistant answer + steer user message) instead of only
+                # the after-run frontend queue.
+                _direct_rounds = 0
+                while True:
+                    # A1 boundary: /pause before the next model round
+                    _pg = _PauseGateResult()
+                    async for _gev in _direct_manual_pause_gate(ctx, _pg):
+                        yield _gev
+                    if not _pg.continue_run:
+                        _pause_aborted = True
+                        break
+                    # A2 boundary: steers queued so far ride into this prompt
+                    async for _sev in _inject_direct_steers(ctx, _stream_msgs,
+                                                            vision_ok=_direct_vision):
+                        yield _sev
+                    _round_tok_start = len(parts)
+                    if _direct_think:
+                        # Thinking mode: stream content and reasoning separately.
+                        async for _cont, _thk in ctx.pipeline.ollama.chat_stream(
+                                _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
+                                ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
+                                no_cache=ctx.prepro_success,
+                                think=True,
+                                thinking_budget=_direct_budget or None,
+                                split_thinking=True,
+                                usage_out=_usage):
+                            if ctx.aborted(): break
+                            # A1 boundary: pause at a token chunk — the gate
+                            # waits here, the upstream generator suspends at
+                            # its yield and llama-server backpressures.
+                            _pg = _PauseGateResult()
+                            async for _gev in _direct_manual_pause_gate(ctx, _pg):
+                                yield _gev
+                            if not _pg.continue_run:
+                                _pause_aborted = True
+                                break
+                            if _thk:
+                                yield await ctx.emit({"type": "thinking_token", "content": _thk})
+                            if _cont:
+                                parts.append(_cont)
+                                yield await ctx.emit({"type": "token", "content": _cont})
+                    else:
+                        # LEAK-FIX (2026-11-02): models whose chat template reasons
+                        # BY DEFAULT (LFM3, and any "thinking" model loaded without
+                        # the per-agent switch) shipped their reasoning inside
+                        # `content` - the answer started with "Also note system
+                        # says ...". Ask for the split even here and drop the
+                        # reasoning: with the switch off it is not part of the
+                        # answer.
+                        async for _tok, _thk_off in ctx.pipeline.ollama.chat_stream(
+                                _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
+                                ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
+                                no_cache=ctx.prepro_success,
+                                think=False,
+                                split_thinking=True,
+                                usage_out=_usage):
+                            if ctx.aborted(): break
+                            # A1 boundary: pause at a token chunk (see above).
+                            _pg = _PauseGateResult()
+                            async for _gev in _direct_manual_pause_gate(ctx, _pg):
+                                yield _gev
+                            if not _pg.continue_run:
+                                _pause_aborted = True
+                                break
+                            if not _tok:
+                                continue
+                            parts.append(_tok)
+                            yield await ctx.emit({"type": "token", "content": _tok})
+                    if _pause_aborted or ctx.aborted():
+                        break
+                    # RUN-STATS: accumulate the round's real usage — the emit
+                    # below stays ONE usage_meta event even with continuation
+                    # rounds (the ledger adds per event).
+                    _d_ct = int(_usage.get("completion_tokens") or 0)
+                    if _d_ct > 0:
+                        _d_det = _usage.get("prompt_tokens_details") or {}
+                        _d_tim = _usage.get("timings") or {}
+                        _d_ca = int((_d_det.get("cached_tokens") if isinstance(_d_det, dict) else 0)
+                                    or _usage.get("cached_tokens") or 0
+                                    or (_d_tim.get("cache_n") if isinstance(_d_tim, dict) else 0) or 0)
+                        _d_ct_sum += _d_ct
+                        _d_pt_sum += int(_usage.get("prompt_tokens") or 0)
+                        _d_ca_sum += _d_ca
+                        _usage.clear()
+                    _direct_rounds += 1
+                    # A2 continuation boundary: steers that arrived DURING the
+                    # round get another round (bounded); without a queued steer
+                    # this stays the single-round fast path it always was.
+                    if _direct_rounds > _DIRECT_STEER_MAX_CONTINUATIONS:
+                        break
+                    if not _steer_queue_view(ctx.run_id):
+                        break
+                    _round_text = "".join(parts[_round_tok_start:]).strip()
+                    if _round_text:
+                        # the model must see its own answer before the steer
+                        _stream_msgs.append({"role": "assistant", "content": _round_text})
             except Exception as _direct_err:
                 _err_tok = f"[Direct error: {str(_direct_err)[:120]}]"
                 parts.append(_err_tok)
@@ -595,19 +795,13 @@ async def run_direct(ctx):
             # the same include_usage pattern the pipeline wrapper uses. The model
             # rides run_meta so run records and the done event attribute direct
             # runs instead of showing the registry fallback only.
-            _d_ct = int(_usage.get("completion_tokens") or 0)
-            if _d_ct > 0:
-                _d_det = _usage.get("prompt_tokens_details") or {}
-                _d_tim = _usage.get("timings") or {}
-                _d_ca = int((_d_det.get("cached_tokens") if isinstance(_d_det, dict) else 0)
-                            or _usage.get("cached_tokens") or 0
-                            or (_d_tim.get("cache_n") if isinstance(_d_tim, dict) else 0) or 0)
+            if _d_ct_sum > 0:
                 await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
                 await ctx.emit({"type": "usage_meta", "phase": "direct",
                                 "timer_key": "direct_chat",
-                                "completion_tokens": _d_ct,
-                                "prompt_tokens": int(_usage.get("prompt_tokens") or 0),
-                                "cached_tokens": _d_ca})
+                                "completion_tokens": _d_ct_sum,
+                                "prompt_tokens": _d_pt_sum,
+                                "cached_tokens": _d_ca_sum})
         content = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
         # Content (z.B. max_tokens/thinking_budget durch Reasoning verbraucht),
         if _direct_think and not content and not ctx.aborted():
@@ -636,7 +830,10 @@ async def run_direct(ctx):
                     "[Direct] session persist failed (chat=%s): %s",
                     ctx.chat_id, _persist_exc,
                 )
-        _direct_stop_reason = "aborted" if ctx.aborted() else "completed"
+        # A1: an abort-during-pause signals through the pause gate, not the
+        # run abort event — the run still ends as "aborted".
+        _direct_stop_reason = ("aborted" if (ctx.aborted() or _pause_aborted)
+                               else "completed")
         # SEND-FILE (direct mode): a file the model wrote in this run can be
         # queued with send_file, or auto-picked when exactly one deliverable
         # exists. The gateway uploads it before the done frame.
@@ -668,6 +865,10 @@ async def run_direct(ctx):
                 exc_info=True)
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing
+        # A1 (2026-11-11): drop a leftover pause/resume state — a /pause that
+        # arrived after the last boundary (or on a tool-loop round) used to
+        # keep the flag pending until the 2h registry sweep.
+        _cleanup_pause_state(ctx.run_id)
         spawn(_refresh_judge_keepalive())
         if ctx.settings.get("pin_direct_after_response", False):
             async def _pin_direct_bg():

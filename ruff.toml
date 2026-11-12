@@ -22,3 +22,7 @@ select = [
 [lint.per-file-ignores]
 "backend/llama_server_manager.py" = ["F401"]
 "backend/manager_load.py" = ["F401"]
+# Same pattern as the two above: the module only RECEIVES the gate via the
+# routers/server live-sync writes (routers/config.py, server.py); it reads
+# the gate through _llama_cfg, so the import is unused in-file by design.
+"backend/llama_start_phases.py" = ["F401"]

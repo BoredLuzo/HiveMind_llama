@@ -63,6 +63,7 @@ SUITES = [
     ("ensure_loaded_stale_port",  "tests/test_ensure_loaded_stale_port.py",     60),
     ("vision_load_race",          "tests/test_vision_load_race.py",              60),
     ("direct_vision_flag",        "tests/test_direct_vision_flag.py",            60),
+    ("direct_pause_steer",        "tests/test_direct_pause_steer.py",            60),
     ("loop_detect_calibration",   "tests/test_loop_detect_calibration.py",     120),
     ("loop_detect_chunk_read",    "tests/test_loop_detect_chunk_read.py",      120),
     ("loop_detect_run_bash",      "tests/test_loop_detect_run_bash.py",        120),
@@ -421,7 +422,12 @@ SUITES = [
     ("git_checkpoints",          "tests/test_git_checkpoints.py",            30),
     # D2 context engine + D3 multi-edit (2026-11-09)
     ("repo_index",               "tests/test_repo_index.py",                 30),
+    ("deep_retrieval",           "tests/test_deep_retrieval.py",             30),
     ("multi_edit",               "tests/test_multi_edit.py",                 30),
+    # D3 patch-native editing + G#2/#3 levers (2026-11-11)
+    ("apply_patch",              "tests/test_apply_patch.py",                30),
+    ("auto_test_on_edit",        "tests/test_auto_test_on_edit.py",          30),
+    ("edit_history_compact",     "tests/test_edit_history_compact.py",       30),
 
 ]
 

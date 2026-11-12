@@ -30,6 +30,18 @@ Ask-user: the card no longer runs its own 30 s auto-answer timer; the engine
 governor is the single source, so one question can never receive two
 autonomous answers. The card checkbox still persists the global setting.
 
+Direct run control: `/pause` now works on plain direct streams (A1) — the
+runner gates at every safe boundary (before a model round, at token chunks,
+where the suspended upstream backpressures llama-server), `/pause-state/
+{chat_id}` becomes active and `/resume` continues; an abort during the pause
+ends the run as `aborted`. Mid-run steering also reaches pure direct runs
+(A2): a steer queued before the answer rides into the prompt, one queued
+during the answer gets a bounded continuation round (assistant answer +
+`[OWNER STEER]` message, max 2 continuations) so the model sees and answers
+it; steers arriving after the last boundary still deliver after the run.
+The UI shows plain "Run paused/resumed" dividers for direct runs (no chunk
+counts).
+
 Frontend: all `localStorage` access goes through `_hmStorageGet`/
 `_hmStorageSet`. Browsers that block cookies/storage (Firefox throws
 `SecurityError: The operation is insecure`) no longer get a frontend-error
@@ -65,7 +77,12 @@ without compression storms. The smoke default remains 16k.
 
 Coder efficiency: tiny top-level workspaces (≤4 text files, context-scaled
 cap) are pre-seeded into the first coder message, so round 0 can edit instead
-of `read_file`; `WOULD_DROP_SYMBOLS` now includes the original definition line
+of `read_file`. When the pre-seed produces nothing (deep/multi-file repos),
+a bounded repo-index walk ranks nested files against the task text and the
+first coder message gains a compact signature-hint block (path + size + top
+symbols, never full contents; empty/no-match queries add nothing and the
+≤4-file pre-seed bytes are unchanged) — `duo_deep_retrieval` disables it;
+`WOULD_DROP_SYMBOLS` now includes the original definition line
 (`Keep definition: MODE = "prod"`), which targets the `multi_config` retry
 loop. MoE prefill keeps the full `--threads-batch` while decode keeps the
 physical-core `--threads` split. Covered by 368/368 regression suites.
@@ -76,13 +93,16 @@ pipeline suite found and fixed an abort-before-round-1 `UnboundLocalError`).
 C4 adds `deploy/bump_version.py` (version.py + server anchor + pyproject,
 `--dry-run`/`--check`); C5 adds an opt-in integration matrix for Telegram,
 STT/TTS, vision, SearXNG, MCP and send_file. D1 adds relative-gain/net-token
-reporting; D2 adds the incremental repo index + query-selected preseed;
-D3 adds batch multi-edit (`edits=[...]`, one atomic write); D4 scopes
-`run_tests` through the testmap (`duo_selective_tests`); D5's Job-Object
-sandbox was already wired; D6 adds chat-scoped outcome hints (status only);
-D7 adds `/git/diff`, checkpoint listing/restore and the panel; D8 adds the
-Claude Code/Codex adapter scaffold. Residual: D2 eval A/B/deep-file retrieval,
-D3 multi-file dependency ordering, hosted C3 cron and real C5 credentials.
+reporting; D2 adds the incremental repo index + query-selected preseed plus
+deep retrieval (bounded nested walk ranking signature hints into the coder
+prompt; `duo_deep_retrieval*` / `duo_index_max_*` knobs); D3 adds batch
+multi-edit (`edits=[...]`, one atomic write); D4 scopes `run_tests` through
+the testmap (`duo_selective_tests`); D5's Job-Object sandbox was already
+wired; D6 adds chat-scoped outcome hints (status only); D7 adds
+`/git/diff`, checkpoint listing/restore and the panel; D8 adds the Claude
+Code/Codex adapter scaffold. Residual: the D2 eval A/B backing
+"fewer tokens at same or better success", D3 multi-file dependency
+ordering, hosted C3 cron and real C5 credentials.
 
 Dead code and single sources of truth: `_plan_state` slot transport,
 `_dump_for_test`, 11 unused preflight re-exports, the `core/duo` package

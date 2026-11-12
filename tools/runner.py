@@ -28,6 +28,7 @@ from tools.handlers import (
     _inline_tool_write_file_append,
     _inline_tool_patch_file,
     _inline_tool_edit_file,
+    _inline_tool_apply_patch,
     _inline_tool_replace_lines,
     _inline_tool_undo_last,
     _inline_tool_web_search,
@@ -416,6 +417,9 @@ _APPROVAL_TOOLS = frozenset({
     # replace_lines ARE offered in duo_full (patch_file is legacy, kept here as
     # belt-and-braces in case it is ever offered again).
     "edit_ast", "replace_lines", "patch_file",
+    # D3 (2026-11-11): apply_patch writes multiple files per call — gated
+    # like the other write tools.
+    "apply_patch",
     "git_commit",
     # AUDIT 2026-11-02 (README said "before everything that changes the
     # project"): run_tests executes arbitrary project code, undo_last reverts
@@ -1170,6 +1174,7 @@ _INLINE_TOOL_HANDLER_MAP = {
     "write_file_append": _inline_tool_write_file_append,
     "patch_file": _inline_tool_patch_file,
     "edit_file": _inline_tool_edit_file,
+    "apply_patch": _inline_tool_apply_patch,
     "replace_lines": _inline_tool_replace_lines,
     "edit_ast": _inline_tool_edit_ast,
     "undo_last": _inline_tool_undo_last,
@@ -1969,6 +1974,22 @@ async def _run_inline_tool(
                 except (ImportError, OSError, RuntimeError, ValueError,
                         AttributeError, TypeError):
                     pass
+                # AUTO-TEST-ON-EDIT (G#2 lever, 2026-11-11): opt-in
+                # (duo_auto_test_on_edit, default False) same-turn run of the
+                # testmap-mapped tests for the edited file. Bounded (timeout +
+                # per-run cap + signature dedup) and silent on any wiring
+                # problem; write_file_append is excluded (mid-sequence writes
+                # must not trigger a half-written-file test run).
+                if name != "write_file_append":
+                    try:
+                        from tools.auto_test import auto_test_note as _at_note
+                        _auto = await _at_note(
+                            [str(args.get("path"))], workspace, workspace_lock)
+                        if _auto:
+                            _result += "\n" + _auto
+                    except (ImportError, OSError, AttributeError, TypeError,
+                            ValueError):
+                        pass  # auto_test_note never raises by design
 
         # ── ProjectState: record build steps ──
         _ps = _current_project_state.get()

@@ -112,6 +112,63 @@ def build_preseed_context(workspace: str, ctx_tokens: int = 0,
     except (OSError, ValueError, TypeError):
         return "", []
 
+
+def _duo_deep_retrieval_cfg(settings_dict: dict | None = None) -> tuple:
+    """(enabled, max_hints, budget_chars, index_max_files, index_max_depth)
+    from the D2 deep-retrieval knobs; best-effort — a broken settings object
+    falls back to the shipped defaults."""
+    _s = settings_dict
+    if _s is None:
+        try:
+            from core import state as _st
+            _s = _st.settings
+        except (ImportError, AttributeError):
+            _s = {}
+
+    def _int(key: str, default: int, lo: int, hi: int) -> int:
+        try:
+            return max(lo, min(hi, int((_s or {}).get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    enabled = bool((_s or {}).get("duo_deep_retrieval", True))
+    max_hints = _int("duo_deep_retrieval_max_files", 5, 1, 32)
+    budget = _int("duo_deep_retrieval_max_chars", 3000, 300, 20000)
+    idx_files = _int("duo_index_max_files", 2000, 1, 50000)
+    idx_depth = _int("duo_index_max_depth", 6, 1, 24)
+    return enabled, max_hints, budget, idx_files, idx_depth
+
+
+def build_deep_retrieval_context(workspace: str, query: str = "",
+                                 settings_dict: dict | None = None
+                                 ) -> tuple[str, list[str]]:
+    """D2 deep retrieval (2026-11-11): rank nested repo files into a compact
+    hint block for the coder's first message.
+
+    Additive-only companion to build_preseed_context: the caller fires it
+    ONLY when the tiny-workspace pre-seed produced nothing, so the existing
+    pre-seed bytes are untouched. The block carries signatures (path + size
+    + top symbols), never full contents. Returns ("", []) for an empty
+    query, a no-match query, a disabled knob or any error — no arbitrary
+    picks. The index walk is bounded (heavy/hidden dirs pruned, depth +
+    max_files caps); callers run this off the event loop (asyncio.to_thread)
+    because the FIRST refresh of a large workspace reads up to
+    duo_index_max_files files.
+    """
+    if not str(query or "").strip():
+        return "", []
+    try:
+        enabled, max_hints, budget, idx_files, idx_depth = \
+            _duo_deep_retrieval_cfg(settings_dict)
+        if not enabled:
+            return "", []
+        from context.repo_index import deep_context_block as _dcb
+        return _dcb(str(workspace or ""), str(query), max_hints=max_hints,
+                    budget_chars=budget, max_files=idx_files,
+                    max_depth=idx_depth)
+    except (ImportError, OSError, ValueError, TypeError):
+        return "", []
+
 # READ-ONLY-CODER-NOTE (moved from duo_runner 2026-11-08): duo_round_input
 # needs it too; keeping it here removes the extracted-module back-edge.
 _READONLY_CODER_NOTE = (

@@ -9,6 +9,7 @@ through `ps`; the runner consumes them for the tool payload.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 
 import hashlib
@@ -22,6 +23,7 @@ from core.duo.preflight import (
 )
 from core.duo_helpers import (
     _resolve_tool_read_timeout_seconds, _should_escalate_pass_files,
+    build_deep_retrieval_context as _build_deep_retrieval_context,
     build_preseed_context as _build_preseed_context,
 )
 from hive_functions.ctx_utils import budget_explore_window
@@ -305,6 +307,21 @@ async def _duo_dtool_setup(ctx, ps):
                 pass
             logger.info("[PRESEED] %d small file(s) inlined: %s",
                         len(_preseed_names), ", ".join(_preseed_names))
+        else:
+            # D2 DEEP RETRIEVAL (2026-11-11): fires ONLY where the pre-seed
+            # produced nothing (deep/multi-file repos, no pre-explore) — the
+            # pre-seed bytes above stay byte-identical. The bounded repo
+            # index ranks nested files against the task text and the coder
+            # gets compact signature hints instead of blind list_dir rounds.
+            # Off-loop: the first refresh of a big workspace reads up to
+            # duo_index_max_files files once.
+            _deep_block, _deep_names = await asyncio.to_thread(
+                _build_deep_retrieval_context,
+                _ws_str, str(getattr(ctx, "user_input", "") or ""))
+            if _deep_block and _deep_names:
+                _dtool_msgs.append({"role": "user", "content": _deep_block})
+                logger.info("[DEEP-HINTS] %d file(s) ranked into round 0: %s",
+                            len(_deep_names), ", ".join(_deep_names))
 
     # Pre-populate Read-Guard with files already read by pre-explore.
     # Without this, edit_file on existing files gets READ_REQUIRED

@@ -136,3 +136,18 @@ duo_selective_tests
 
 # D2 context engine: pre-seed char budget (engine-side cap, no UI control).
 duo_context_budget_chars
+
+# D2 deep retrieval: engine-side retrieval knobs (settings.json only, tuned
+# per machine/repo size; engine prompt shaping, not a panel concern).
+duo_deep_retrieval
+duo_deep_retrieval_max_files
+duo_deep_retrieval_max_chars
+duo_index_max_files
+duo_index_max_depth
+
+# G#2 lever: auto-test-on-edit bounds (engine-side; the toggle is opt-in via
+# settings.json/POST /settings, no UI control - same class as
+# duo_selective_tests).
+duo_auto_test_on_edit
+duo_auto_test_max_per_run
+duo_auto_test_timeout
