@@ -11,10 +11,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+
+def _rmtree(path: Path) -> None:
+    """Remove directory tree even when Windows marks .git pack files read-only."""
+    if not path.exists():
+        return
+
+    def _on_err(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except OSError:
+            pass
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_on_err)
+    else:
+        shutil.rmtree(path, onerror=_on_err)
 
 DEFAULT_TASKS = [
     {
@@ -61,8 +82,7 @@ def import_task(deep_swe_dir: Path, out_dir: Path, spec: dict) -> dict:
 
     # 2. Clone repo at base commit
     repo_dst = target_dir / "repo"
-    if repo_dst.is_dir():
-        shutil.rmtree(repo_dst)
+    _rmtree(repo_dst)
 
     print(f"Cloning {spec['repo_url']} at {spec['base_commit'][:8]}...")
     subprocess.run(["git", "clone", spec["repo_url"], str(repo_dst)],
@@ -71,29 +91,27 @@ def import_task(deep_swe_dir: Path, out_dir: Path, spec: dict) -> dict:
                    cwd=str(repo_dst), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # 3. Apply test.patch to a temporary copy to extract pristine hidden tests
-    with tempfile.TemporaryDirectory() as td:
+    td = Path(tempfile.mkdtemp(prefix="hm_ds_patch_"))
+    try:
         patch_file = task_src / "tests" / "test.patch"
-        temp_repo = Path(td) / "repo"
+        temp_repo = td / "repo"
         shutil.copytree(repo_dst, temp_repo)
         subprocess.run(["git", "apply", str(patch_file)],
                        cwd=str(temp_repo), check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Copy EVERY file the official test patch added or changed, not just
-        # the main test file. Several tasks also patch tests/conftest.py (or
-        # fixtures); dropping those makes the hidden suite fail for reasons
-        # unrelated to the model. test.sh is the official harness wrapper and
-        # is not needed by the local check.
+        # Copy EVERY file the official test patch added or changed (both modified
+        # tracked files like tests/conftest.py and newly created test files).
+        # `git diff --name-only` alone misses untracked files created by `git apply`.
         changed = subprocess.check_output(
-            ["git", "-C", str(temp_repo), "diff", "--name-only"],
+            ["git", "-C", str(temp_repo), "ls-files", "--modified", "--others"],
             text=True).splitlines()
         changed = [p for p in changed if p.strip() and p.strip() != "test.sh"]
         if not changed:
             raise RuntimeError(f"No test files produced by patch for {spec['name']}")
 
         tests_dst = target_dir / "tests"
-        if tests_dst.is_dir():
-            shutil.rmtree(tests_dst)
+        _rmtree(tests_dst)
         tests_dst.mkdir(parents=True, exist_ok=True)
 
         for tf in changed:
@@ -106,9 +124,11 @@ def import_task(deep_swe_dir: Path, out_dir: Path, spec: dict) -> dict:
                 raise FileNotFoundError(
                     f"Expected test file not produced by patch: {tf}")
         spec = {**spec, "copied_test_files": changed}
+    finally:
+        _rmtree(td)
 
     # Remove .git from repo_dst to keep task workspaces lightweight and pure
-    shutil.rmtree(repo_dst / ".git", ignore_errors=True)
+    _rmtree(repo_dst / ".git")
 
     # 4. Write task.json
     task_meta = {
@@ -156,8 +176,8 @@ def main() -> int:
         (out_dir / "SOURCE.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         print(f"\nSuccessfully imported {len(imported)} DeepSWE tasks into {out_dir}")
     finally:
-        if tmp_dir and Path(tmp_dir).exists():
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        if tmp_dir:
+            _rmtree(Path(tmp_dir))
 
     return 0
 

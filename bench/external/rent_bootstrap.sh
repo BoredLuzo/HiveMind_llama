@@ -490,7 +490,7 @@ polyglot() {
   # Subset or full set of the official Aider polyglot (python) exercises.
   local src="$HOME/polyglot-benchmark"
   [ -d "$src/.git" ] || git clone --depth 1 https://github.com/Aider-AI/polyglot-benchmark.git "$src"
-  ( cd "$HM_DIR" && "$PY" bench/import_polyglot.py \
+  ( cd "$HM_DIR" && "$PY" -u bench/import_polyglot.py \
       --source "$src/python/exercises/practice" --out bench/tasks_polyglot \
       --names "${HM_POLYGLOT_NAMES:-all}" ${HM_POLYGLOT_LIMIT:+--limit "$HM_POLYGLOT_LIMIT"} )
   log "now: HM_TASKS=bench/tasks_polyglot bash $0 full"
@@ -498,7 +498,7 @@ polyglot() {
 
 deepswe() {
   # Pure-Python repo tasks from datacurve-ai/deep-swe
-  ( cd "$HM_DIR" && "$PY" bench/import_deepswe.py --out bench/tasks_deepswe )
+  ( cd "$HM_DIR" && "$PY" -u bench/import_deepswe.py --out bench/tasks_deepswe )
   log "installing deepswe test dependencies (hypothesis, trio, pytest)"
   python3 -m pip install -q hypothesis trio attrs pytest pytest-asyncio anyio 2>/dev/null || true
   "$PY" -m pip install -q hypothesis trio attrs pytest pytest-asyncio anyio 2>/dev/null || true
