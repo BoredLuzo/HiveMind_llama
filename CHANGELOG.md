@@ -1,3 +1,30 @@
+## [1.6.0-beta] - 2026-11-13
+
+Pre-benchmark beta release unifying local model discovery, Direct/Duo/Agentic
+transport & tool gating, scheduler hardening, and Linux/Colab benchmark parity.
+
+- **GGUF drop-in discovery & catalog hardening:** Extracted
+  `backend/gguf_meta.py` to inspect GGUF metadata, multi-part shards
+  (`-NNNNN-of-NNNNN`), and paired `mmproj` projectors safely across shared model
+  directories; aligned `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` vision
+  projector naming and split-shard manifest generation in `deploy/fetch_models.py`;
+  isolated cached model profiles via `deepcopy` in `model_configs/models_registry.py`.
+- **LLM transport & runtime reliability:** Extracted `core/llm_transport.py` for
+  shared non-streaming/streaming payload normalization (`cache_prompt`,
+  `preserve_thinking`, `thinking_budget`), prompt-only `usage_meta` reporting in
+  Direct/Chat runs, idempotent Duo in-flight slot cleanup, Linux `mmap+mlock`
+  down-grading when RLIMIT/RAM is tight, and `subagent_lite` / UI state sync.
+- **Tools & scheduler:** Made `subagent_research` a toggleable `[+Subagent]`
+  optional alongside `[+Websearch]` and `[+Git]` on `duo_core` (18 base +
+  `+Subagent` = 19 default), fixed `apply_patch` EOF/newline parsing and
+  `auto_test_note` settings propagation, and closed `SchedulerManager` spawn/fire
+  race conditions.
+- **Colab autopilot & packaging:** Removed `.approaches` solution spoilers from
+  Polyglot tasks, lowered `requires-python` to `>=3.12,<3.15` for Linux/Colab
+  compatibility, added clean-reset + 4B (100k ctx) / 35B-MTP (120k ctx) stages in
+  `bench/external/hivemind_bench_colab_autopilot.ipynb`, and fixed `rent_bootstrap.sh`
+  build-id parsing.
+
 ## [1.5.6] - 2026-11-12
 
 Maintainability sprint on top of 1.5.5, plus targeted routing and runtime
