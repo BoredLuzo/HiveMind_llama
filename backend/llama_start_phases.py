@@ -477,7 +477,7 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                      _def_threads_batch: int | None = None) -> _MoePhase:
     from backend.manager_load import _help_supports  # lazy: module cycle
     from . import llama_config as _llama_cfg
-    _moe_model_key = _strip_alias(model).replace("-ud", "")
+    _moe_model_key = _strip_alias(model).removesuffix("-ud")
     # Per-Model-Override (dict {model_key: n_cpu_moe}) > Registry-Config > Tabellen-Default.
     _moe_count = 0
     # MOE-PIN (2026-10-14): profile "moe": false forces dense — no expert
@@ -864,6 +864,7 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     _reg_distilled = None
     _reg_template = None
     _reg_is_mtp = None   # audit: pre-bind — the MTP block below calls it outside this import's try
+    _reg_extra_args: list[str] = []
     try:
         from model_configs.models_registry import (
             is_jinja as _reg_is_jinja,
@@ -871,13 +872,21 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
             is_distilled as _reg_is_distilled,
             get_chat_template as _reg_get_template,
             is_mtp as _reg_is_mtp,
+            get_extra_args as _reg_get_extra_args,
         )
         _reg_jinja = _reg_is_jinja(model)
         _reg_reasoning = _reg_get_reasoning(model)
         _reg_distilled = _reg_is_distilled(model)
         _reg_template = _reg_get_template(model)
+        _reg_extra_args = _reg_get_extra_args(model)
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
         logger.debug("[MODEL-CONFIG] registry probe skipped: %s", _e)
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        _gguf_meta = _read_gguf_meta(gguf_path or model)
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        logger.debug("[MODEL-CONFIG] gguf_meta probe skipped: %s", _e)
+        _gguf_meta = {}
 
     #
     # Per-Request-Kontrolle via /no_think Token im System-Prompt (server.py Tool-Calls).
@@ -906,6 +915,9 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
         logger.info(f"--reasoning on for thinking base: {model}")
     elif _model_base in ("qwen3.5", "omnicoder"):
         cmd += ["--reasoning", "off"]
+    elif _gguf_meta.get("has_thinking"):
+        cmd += ["--reasoning", "on"]
+        logger.info(f"--reasoning on for dropped GGUF with think tokens: {model}")
 
     # MTP SELF-SPECULATIVE DECODING (2026-10-08, user feedback: use mtp decoding with draft count 2):
     # registry mtp:true models carry predictive layers - draft-mtp uses
@@ -996,13 +1008,20 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
                 f"    3. Add an 'mmproj' key to models.json (if llama_models.py supports it)"
             )
 
-    _use_jinja = _reg_jinja if _reg_jinja is not None else (_model_base in _JINJA_BASES)
+    _use_jinja = (
+        _reg_jinja
+        if _reg_jinja is not None
+        else (_model_base in _JINJA_BASES or bool(_gguf_meta.get("has_chat_template")))
+    )
     if _use_jinja:
         cmd += ["--jinja"]
         logger.info(f"--jinja enabled for {model}")
     # CHAT-TEMPLATE-ONE (2026-10-30, audit S2): one helper, one flag —
     # registry template wins, fallback chain only for qwen*/hermes bases.
     _append_chat_template(cmd, _model_base, _reg_template)
+    if _reg_extra_args:
+        cmd.extend(_reg_extra_args)
+        logger.info(f"Extra args (profile) for {model}: {_reg_extra_args}")
 
     return _ModelFlagsPhase(cmd=cmd, mmproj_resolved=_mmproj_resolved)
 
@@ -1046,27 +1065,6 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         model, num_ctx, _fit.needed_mib, _fit.margin_mib, _fit.free_mib, _fit.source,
         "OK" if _fit.ok else "BLOCK",
     )
-    if (not _fit.ok and ub_delta_mib > 0 and ub_eff > ub_base
-            and _llama_cfg.VRAM_PREFLIGHT_GATE):
-        _fit_base = self.can_fit(
-            model, num_ctx, exclude_slot_id=slot.slot_id,
-            extra_needed_mib=max(0.0, float(_moe_cache_used) - float(ub_delta_mib)),
-        )
-        if _fit_base.ok:
-            try:
-                cmd[cmd.index("--ubatch-size") + 1] = str(int(ub_base))
-                cmd[cmd.index("--batch-size") + 1] = str(max(1024, int(ub_base)))
-            except (ValueError, TypeError):
-                logger.warning("[MOE-UBATCH] could not rewrite --ubatch-size in cmd")
-            _moe_cache_used = max(0.0, float(_moe_cache_used) - float(ub_delta_mib))
-            _fit = _fit_base
-            logger.warning(
-                "[MOE-UBATCH] %s: %d (%s) does not fit (needed=%.0fMiB, "
-                "free=%.0fMiB) — keeping baseline %d",
-                model, ub_eff, ub_src, _fit_base.needed_mib,
-                _fit_base.free_mib, ub_base,
-            )
-            ub_delta_mib = 0.0
     if not _fit.ok and _evicted_here:
         _fit = await self._pre_flight_grace_recheck(
             model, num_ctx, slot,
@@ -1163,6 +1161,30 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 )
                 if _fit.ok:
                     break
+    if not _fit.ok:
+        _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                            extra_needed_mib=_moe_cache_used)
+    if (not _fit.ok and ub_delta_mib > 0 and ub_eff > ub_base
+            and _llama_cfg.VRAM_PREFLIGHT_GATE):
+        _fit_base = self.can_fit(
+            model, num_ctx, exclude_slot_id=slot.slot_id,
+            extra_needed_mib=max(0.0, float(_moe_cache_used) - float(ub_delta_mib)),
+        )
+        if _fit_base.ok:
+            try:
+                cmd[cmd.index("--ubatch-size") + 1] = str(int(ub_base))
+                cmd[cmd.index("--batch-size") + 1] = str(max(1024, int(ub_base)))
+            except (ValueError, TypeError):
+                logger.warning("[MOE-UBATCH] could not rewrite --ubatch-size in cmd")
+            _moe_cache_used = max(0.0, float(_moe_cache_used) - float(ub_delta_mib))
+            _fit = _fit_base
+            logger.warning(
+                "[MOE-UBATCH] %s: %d (%s) does not fit (needed=%.0fMiB, "
+                "free=%.0fMiB) — keeping baseline %d",
+                model, ub_eff, ub_src, _fit_base.needed_mib,
+                _fit_base.free_mib, ub_base,
+            )
+            ub_delta_mib = 0.0
     if not _fit.ok:
         # AUDIT-FIX 2026-08-03: Diagnose-Attribute + Zeitreihen-Log.
         # external_usage_est = Total - frei - eigene geladene Slots (Fremdbelegung).

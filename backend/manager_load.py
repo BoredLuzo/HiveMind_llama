@@ -66,6 +66,25 @@ _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "minicpm-v", "minicpm-v
                          "spark-x2.6", "spark-x2.5"}
 
 
+def _wants_jinja(model: str, model_base: str) -> bool:
+    """Resolve whether llama-server should receive --jinja (profile > base table > GGUF template)."""
+    try:
+        from model_configs.models_registry import is_jinja as _reg_is_jinja
+        _rj = _reg_is_jinja(model)
+        if _rj is not None:
+            return bool(_rj)
+    except (ImportError, AttributeError, TypeError, ValueError) as _e:
+        logger.debug("_wants_jinja registry skipped for %s: %s", model, _e)
+    if model_base in _JINJA_BASES:
+        return True
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        return bool(_read_gguf_meta(model).get("has_chat_template"))
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        logger.debug("_wants_jinja gguf_meta skipped for %s: %s", model, _e)
+        return False
+
+
 def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
     """TEST SWITCH (2026-10-04): HIVEMIND_TEST_OMIT_MMPROJ omits
     --mmproj at server start so ONLY the post-load /props vision gate can
@@ -810,7 +829,7 @@ class LlamaLoadMixin:
                         await _kill_slot_async(slot)
                         slot = None
                     # "Cannot read image.png" via GGUF-Chat-Template auf b8940+.
-                    elif _base.startswith("qwen3") and not slot._jinja:
+                    elif _wants_jinja(model, _base) and not slot._jinja:
                         logger.info(
                             "ensure_loaded: %s jinja mismatch (--jinja missing) — reload.", model
                         )
@@ -1348,14 +1367,34 @@ class LlamaLoadMixin:
             # 64 MiB — llama.cpp fails the model load when it cannot lock
             # the weights. One-time warning; fix via --ulimit memlock=-1 in
             # docker run or llama_mlock=false in settings.
-            if (_load_mode == "mmap+mlock" and os.name != "nt"
-                    and not getattr(type(self), "_memlock_warned", False)):
-                type(self)._memlock_warned = True
-                logger.warning(
-                    "mlock enabled on Linux — needs RLIMIT_MEMLOCK (docker run: "
-                    "--ulimit memlock=-1). If the model load dies on mmap/mlock, "
-                    "set llama_mlock=false in settings."
-                )
+            if _load_mode == "mmap+mlock" and os.name != "nt":
+                # LINUX-MTP-MMAP-FALLBACK (2026-11-13): on Linux containers/Colab,
+                # spec_planned forces mmap+mlock even when llama_mlock=false or
+                # RLIMIT_MEMLOCK is tiny (e.g. 64 MiB), risking memlock/RAM-OOM on
+                # 20GB+ MoE models. Plain mmap avoids both --load-mode none (MTP
+                # crash guard) and locking gigabytes into RAM.
+                _memlock_too_small = False
+                try:
+                    import resource as _res
+                    _soft_ml, _ = _res.getrlimit(_res.RLIMIT_MEMLOCK)
+                    if 0 <= _soft_ml < 512 * 1024 * 1024:
+                        _memlock_too_small = True
+                except (ImportError, OSError, ValueError):
+                    pass
+                if (not _mlock_now and _spec_planned) or _memlock_too_small:
+                    _load_mode = "mmap"
+                    logger.info(
+                        "[MEMLOCK-GUARD] Linux downgrade mmap+mlock -> mmap for '%s' "
+                        "(mlock=%s, small_rlimit=%s)",
+                        model, bool(_mlock_now), _memlock_too_small,
+                    )
+                elif not getattr(type(self), "_memlock_warned", False):
+                    type(self)._memlock_warned = True
+                    logger.warning(
+                        "mlock enabled on Linux — needs RLIMIT_MEMLOCK (docker run: "
+                        "--ulimit memlock=-1). If the model load dies on mmap/mlock, "
+                        "set llama_mlock=false in settings."
+                    )
             cmd += ["--load-mode", _load_mode]
             # log line already emitted above (profile-override vs normal path)
         elif (type(self)._binary_build_number or 0) >= NO_MMAP_MIN_BUILD:

@@ -292,10 +292,17 @@ def _needs_mmproj(model: str, vision: bool = False) -> bool:
     if vision:
         try:
             from model_configs.models_registry import get_profile as _gp
-            if (_gp(model) or {}).get("mmproj_filename"):
+            _prof = _gp(model) or {}
+            if _prof.get("mmproj_filename") or ((_prof.get("capabilities") or {}).get("vision") is True):
                 return True
-        except (ImportError, AttributeError, TypeError, ValueError):
-            return False
+        except (ImportError, AttributeError, TypeError, ValueError) as _e:
+            logger.debug("_needs_mmproj registry check failed for %s: %s", model, _e)
+        try:
+            from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+            if _read_gguf_meta(model).get("has_vision"):
+                return True
+        except (ImportError, OSError, ValueError, TypeError) as _e:
+            logger.debug("_needs_mmproj gguf_meta check failed for %s: %s", model, _e)
     return False
 
 def _gguf_path_to_model_name(gguf_path: str) -> str | None:

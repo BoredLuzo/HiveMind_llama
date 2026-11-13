@@ -468,6 +468,18 @@ def get_model_capabilities(model_name: str) -> dict:
     profile = MODEL_PROFILES.get(base, MODEL_PROFILES.get(model_name, {}))
     if profile:
         return dict(profile)
+    # GGUF header metadata for arbitrary dropped models (thinking/vision/chat_template)
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        _meta = _read_gguf_meta(model_name)
+        if _meta:
+            return {
+                "thinking": bool(_meta.get("has_thinking")),
+                "vision": bool(_meta.get("has_vision")),
+                "tool_call": bool(_meta.get("has_chat_template")),
+            }
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        logger.debug("gguf_meta capabilities skipped for %s: %s", model_name, _e)
     # Heuristic: known thinking model patterns
     lo = model_name.lower()
     if any(x in lo for x in ("qwen3", "bonsai",

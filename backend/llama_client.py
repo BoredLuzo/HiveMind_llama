@@ -248,7 +248,11 @@ class LlamaClient:
                 # memory writes and insights persist what they get, and a
                 # think-block fragment must never end up as stored knowledge.
                 # Log it and return "" - the caller skips the result.
-                _msg = data["choices"][0]["message"]
+                _choices = data.get("choices") or []
+                if not _choices or not isinstance(_choices[0], dict):
+                    self._log.warning("[SIDE-SKIP] model=%s returned empty choices", model)
+                    return ""
+                _msg = _choices[0].get("message") or {}
                 _content = _msg.get("content") or ""
                 if not _content.strip():
                     _reason = (_msg.get("reasoning_content")
@@ -283,12 +287,13 @@ class LlamaClient:
                 raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
         raise LlamaError(f"[{req_id}] llama-server chat failure for '{model}' after retry")
 
-    async def chat_stream(self, model: str, messages: list, temperature: float = 0.3,
+    async def chat_stream(self, model: str, messages: list, temperature: float | None = 0.3,
                           max_tokens: int = 600, ctx: int = CONTEXT_SIZE_DEFAULT,
                           think: bool | None = None, no_cache: bool = False,
                           thinking_budget: int | None = None,
                           split_thinking: bool = False,
-                          usage_out: dict | None = None) -> AsyncIterator[str | tuple[str, str]]:
+                          usage_out: dict | None = None,
+                          sampler: dict | None = None) -> AsyncIterator[str | tuple[str, str]]:
 
 
         req_id = self._req_id("stream")
@@ -320,9 +325,17 @@ class LlamaClient:
                         req_id, model)
             except (ImportError, AttributeError, TypeError, ValueError) as _vt_err:
                 self._log.debug("req=%s vision-truth check skipped: %s", req_id, _vt_err)
-        payload = _build_payload(messages, temperature, max_tokens, stream=True,
+        _eff_temp = temperature
+        if _eff_temp is None:
+            if isinstance(sampler, dict) and sampler.get("temperature") is not None:
+                _eff_temp = float(sampler["temperature"])
+            else:
+                from core.model_sampling import get_sampling_profile as _gsp
+                _eff_temp = float(_gsp(model, thinking=bool(think)).get("temperature", 0.3))
+        payload = _build_payload(messages, _eff_temp, max_tokens, stream=True,
                                  cache_prompt=not no_cache, thinking=think,
-                                 thinking_budget=thinking_budget)
+                                 thinking_budget=thinking_budget,
+                                 sampler=sampler)
         # USAGE-REPORT (2026-10-20): nur wenn der Aufrufer es anfordert, damit
         # bestehende Pfade (direct, duo) unveraendert bleiben.
         if usage_out is not None:
@@ -395,7 +408,7 @@ class LlamaClient:
                                 _t = chunk.get("timings")
                                 if isinstance(_t, dict) and _t:
                                     usage_out["timings"] = _t
-                            delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                            delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
                             _content = delta.get("content", "")
                             # AGENT-THINKING: Reasoning-Felder getrennt erfassen
                             _thinking = ""
@@ -527,9 +540,9 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
         "temperature":       temperature,
         "max_tokens":        max_tokens,
         "stream":            stream,
-        "repeat_penalty":    1.25,
+        "repeat_penalty":    1.05,
         "repeat_last_n":     128,
-        "frequency_penalty": 0.1,
+        "frequency_penalty": 0.0,
         "cache_prompt":      cache_prompt,
     }
     # SIDE-CALL SAMPLER, OPT-IN ONLY (2026-10-30, audit fix): this used to
@@ -541,6 +554,17 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
     if sampler:
         for _k, _v in sampler.items():
             payload[_k] = _v
+        if "repetition_penalty" in sampler and "repeat_penalty" not in sampler:
+            payload["repeat_penalty"] = sampler["repetition_penalty"]
+        elif "repeat_penalty" in sampler and "repetition_penalty" not in sampler:
+            payload["repetition_penalty"] = sampler["repeat_penalty"]
+    # Explicit cache_prompt=False (e.g. no_cache=True) must never be clobbered by profile defaults.
+    if not cache_prompt:
+        payload["cache_prompt"] = False
+    if "preserve_thinking" in payload:
+        _pt_val = payload.pop("preserve_thinking")
+        if _pt_val is not None:
+            payload.setdefault("chat_template_kwargs", {}).setdefault("preserve_thinking", bool(_pt_val))
     if thinking is not None:
         payload["thinking"] = thinking
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = bool(thinking)

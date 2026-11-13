@@ -56,7 +56,7 @@ def _ask_bool(question: str, default: bool = False) -> bool:
 
 
 def _ask_int(question: str, default: int | None = None) -> int | None:
-    d = str(default) if default else ""
+    d = str(default) if default is not None else ""
     resp = _ask(question, d)
     if not resp.strip():
         return None
@@ -65,6 +65,15 @@ def _ask_int(question: str, default: int | None = None) -> int | None:
     except ValueError:
         print(f"    [WARN] '{resp}' is not a number - skipped.")
         return None
+
+
+def _ask_float(question: str, default: float) -> float:
+    resp = _ask(question, str(default))
+    try:
+        return float(resp)
+    except (ValueError, TypeError):
+        print(f"    [WARN] '{resp}' is not a float - using {default}.")
+        return float(default)
 
 
 def find_models_dir(arg_dir: str) -> Path:
@@ -109,6 +118,18 @@ def detect_canonical(path: Path) -> str | None:
         return None
 
 
+def _resolve_gguf_path(raw: str, *search_roots: Path) -> Path:
+    """Resolve a user- or JSON-provided GGUF path to a canonical absolute Path."""
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        for root in search_roots:
+            cand = (root / p).resolve()
+            if cand.is_file():
+                return cand
+        p = Path.cwd() / p
+    return p.resolve()
+
+
 def pick_gguf(mdir: Path) -> Path | None:
     print()
     print("  How do you want to specify the GGUF?")
@@ -134,14 +155,7 @@ def pick_gguf(mdir: Path) -> Path | None:
     raw = _ask("Path to the .gguf file", "")
     if not raw:
         return None
-    p = Path(raw).expanduser()
-    # ABS-PATH (2026-11-05 audit): a relative path was stored verbatim into
-    # models.json and resolved against the process CWD — the model worked
-    # only when HiveMind was started from the same folder. Resolve once,
-    # store absolute.
-    if not p.is_absolute():
-        p = Path.cwd() / p
-    p = p.resolve()
+    p = _resolve_gguf_path(raw, mdir)
     if not p.is_file():
         print(f"    [WARN] File not found: {p}")
         return None
@@ -184,9 +198,53 @@ def collect_config(gguf: Path, canonical: str, mdir: Path) -> dict:
     if num_ctx_duo:
         cfg["num_ctx_duo_coder"] = num_ctx_duo
 
+    # Thinking & Reasoning budget
+    if thinking:
+        t_budget = _ask_int("Thinking budget (tokens, default 2500)", 2500)
+        if t_budget is not None:
+            cfg["thinking_budget"] = t_budget
+
+    # Sampling defaults
+    print()
+    print("  Sampling configuration (Enter = default):")
+    temp_val = _ask_float("Default temperature", 0.6)
+    top_p_val = _ask_float("Top-p", 0.95)
+    top_k_val = _ask_int("Top-k", 20)
+    if top_k_val is None:
+        top_k_val = 20
+    pres_val = _ask_float("Presence penalty (0.0 recommended for coding/tools)", 0.0)
+    rep_val = _ask_float("Repeat/repetition penalty", 1.0)
+    _base_samp = {
+        "temperature": temp_val,
+        "top_p": top_p_val,
+        "top_k": top_k_val,
+        "min_p": 0.0,
+        "presence_penalty": pres_val,
+        "repeat_penalty": rep_val,
+        "repetition_penalty": rep_val,
+    }
+    cfg["sampling"] = {
+        "thinking": dict(_base_samp),
+        "non_thinking": dict(_base_samp),
+        "sampling_thinking_code": {**_base_samp, "presence_penalty": 0.0},
+    }
+
     # Advanced
     print()
-    print("  Optional launch settings (Enter = skip):")
+    print("  Optional launch & acceleration settings (Enter = skip):")
+    detected_mtp = "mtp" in canonical.lower()
+    is_mtp_val = _ask_bool("MTP (Multi-Token Prediction / speculative decoding)", detected_mtp)
+    if is_mtp_val:
+        cfg["mtp"] = True
+        n_max = _ask_int("MTP draft max tokens (mtp_draft_n_max, 1-4)", 2)
+        if n_max is not None:
+            cfg["mtp_draft_n_max"] = max(1, min(4, n_max))
+        cfg["mtp_draft_p_min"] = max(0.0, min(0.95, _ask_float("MTP draft min prob (mtp_draft_p_min, 0.0-0.95)", 0.8)))
+
+    load_mode = _ask("Load mode (none / mmap / mmap+mlock / Enter = auto)", "").strip().lower()
+    if load_mode in ("none", "mmap", "mmap+mlock"):
+        cfg["load_mode"] = load_mode
+
     mmproj = _ask("mmproj filename (vision projector)", "")
     if mmproj:
         cfg["mmproj_filename"] = mmproj
@@ -238,6 +296,14 @@ def assign_agent(canonical: str) -> None:
             ag = {}
             agents[role] = ag
         ag["model"] = canonical
+        mc = s.setdefault("agents_user_model_choice", {})
+        if isinstance(mc, dict):
+            mc[role] = canonical
+        excl = s.setdefault("automap_excluded", [])
+        if isinstance(excl, list) and role not in excl:
+            excl.append(role)
+        if role == "duo_coder":
+            s["duo_coder_model"] = canonical
         save_settings(s)
         print(f"    settings.json: agents[{role}].model = '{canonical}'")
         print("    The model appears automatically in the agent cards (UI refresh).")
@@ -272,11 +338,14 @@ def main() -> int:
         except Exception as e:
             print(f"[ERROR] JSON not readable: {e}")
             return 1
-        gguf_raw = data.get("gguf") or ""
+        gguf_raw = str(data.get("gguf") or "").strip()
         canonical = data.get("model") or ""
-        gguf = Path(gguf_raw).expanduser()
+        if not gguf_raw:
+            print("[ERROR] GGUF path missing in JSON ('gguf').")
+            return 1
+        gguf = _resolve_gguf_path(gguf_raw, Path(args.json).resolve().parent, mdir)
         if not gguf.is_file():
-            print(f"[ERROR] GGUF not found: {gguf_raw}")
+            print(f"[ERROR] GGUF not found: {gguf_raw} (resolved: {gguf})")
             return 1
         if not canonical:
             canonical = detect_canonical(gguf) or gguf.stem

@@ -155,6 +155,14 @@ _MOE_TABLE: dict[str, dict] = {
 _MOE_TABLE.setdefault("lfm2.5:24b-a2b", _MOE_TABLE["lfm2.5:24b"])
 
 
+def _read_profile(model_name: str) -> dict:
+    try:
+        from model_configs.models_registry import get_profile as _get_profile
+        return _get_profile(model_name) or {}
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
 def _profile_moe_cfg(model_name: str) -> dict | None:
     """MoE sizing from the LOCAL model profile when the static table is silent.
 
@@ -166,13 +174,8 @@ def _profile_moe_cfg(model_name: str) -> dict | None:
     Without moe_cpu_experts the model is not MoE and the dense path stays
     authoritative, so this can never make a dense estimate worse.
     """
-    try:
-        from model_configs.models_registry import get_profile as _get_profile
-    except ImportError:
-        return None
-    try:
-        prof = _get_profile(model_name) or {}
-    except (OSError, ValueError, KeyError, TypeError):
+    prof = _read_profile(model_name)
+    if not prof:
         return None
     try:
         moe = int(prof.get("moe_cpu_experts") or 0)
@@ -196,6 +199,22 @@ def _profile_moe_cfg(model_name: str) -> dict | None:
     if kv_bpt > 0:
         cfg["measured_bytes_per_token"] = int(kv_bpt)
     return cfg
+
+
+def _profile_dense_vram(model_name: str) -> tuple[float | None, float | None]:
+    """Optional `vram_gb_override` + `kv_bytes_per_token` for dense profiles."""
+    prof = _read_profile(model_name)
+    if not prof:
+        return None, None
+    try:
+        ov = float(prof.get("vram_gb_override") or 0)
+    except (TypeError, ValueError):
+        ov = 0.0
+    try:
+        kv_bpt = float(prof.get("kv_bytes_per_token") or 0)
+    except (TypeError, ValueError):
+        kv_bpt = 0.0
+    return (round(ov, 2) if ov > 0 else None), (kv_bpt if kv_bpt > 0 else None)
 
 
 # Fallback KV cost for a MoE that carries no KV numbers anywhere (12 KB/token,
@@ -305,7 +324,7 @@ _CTX_OVERHEAD_REF_SIZE_B: float = 4.0  # Referenz-Groesse in Milliarden Paramete
 
 def _extract_size_gb(model_name: str) -> float | None:
     """Extrahiert die Modellgroesse aus dem Namen (z.B. '4b' → 4.0, '1.5b' → 1.5)."""
-    m = re.search(r'[:\-](0?\d{1,2}(?:\.\d+)?)[bB](?:[\-]|$)', model_name)
+    m = re.search(r'[:\-](0?\d{1,3}(?:\.\d+)?)[bB](?:[\-]|$)', model_name)
     if m:
         return float(m.group(1))
     # E-Size: E4B → 4B equivalent
@@ -334,6 +353,10 @@ def vram_of(model_name: str) -> float:
     if _cfg and _cfg.get("active_gpu_gb"):
         return round(float(_cfg["active_gpu_gb"]), 2)
 
+    _dense_ov, _ = _profile_dense_vram(model_name)
+    if _dense_ov is not None:
+        return _dense_ov
+
     # 1. Exakter Match
     if name in _VRAM_TABLE:
         return _VRAM_TABLE[name]
@@ -357,7 +380,17 @@ def vram_of(model_name: str) -> float:
                 if key.startswith(f"{base_name}:") and _extract_size_gb(key) == size:
                     return val
 
-    # 3. size heuristic
+    # 3. GGUF metadata file size fallback (actual quant footprint for dropped-in GGUFs)
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        _meta = _read_gguf_meta(model_name)
+        _fsize = float(_meta.get("file_size_gb") or 0)
+        if _fsize > 0:
+            return round(_fsize * 1.08, 2)
+    except (ImportError, OSError, TypeError, ValueError) as _e:
+        _logger.debug("[VRAM] gguf_meta base size skipped for %r: %s", model_name, _e)
+
+    # 4. size heuristic
     size = _extract_size_gb(name)
     if size is not None:
         # Q4_K_M Faustregel: ~0.6 GB pro Milliarde Parameter
@@ -400,6 +433,10 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
     if num_ctx <= 4096:
         return base_vram
 
+    _, _kv_bpt = _profile_dense_vram(model_name)
+    if _kv_bpt is not None:
+        return round(base_vram + ((num_ctx - 4096) * _kv_bpt) / (1024 ** 3), 2)
+
     # QWEN35-HYBRID-KV (2026-10-10, gemessen): qwen3.5 traegt KV nur auf
     # 8 von 33 Layern (4 KV-Koepfe x 256 key_length, Rest SSM). Gemessen
     # (llama-server -v, q4_0/FA-on): 72 MiB @8192, 1062 MiB @120832 =
@@ -418,6 +455,24 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
         extra_ctx = num_ctx - 4096
         if extra_ctx > 0:
             return round(base_vram + (extra_ctx / 1024) * _kb / 1000, 2)
+
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        from backend.llama_config import KV_CACHE_TYPE, dense_kv_cache_type
+        _meta = _read_gguf_meta(model_name)
+        _kv_q4 = _meta.get("kv_bytes_per_token_q4")
+        _kv_f16 = _meta.get("kv_bytes_per_token_f16")
+        if _kv_q4 and _kv_f16:
+            _kv_type = dense_kv_cache_type(model_name, KV_CACHE_TYPE)
+            if _kv_type in ("f16", "bf16"):
+                _bpt = float(_kv_f16)
+            elif _kv_type == "q8_0":
+                _bpt = float(_kv_f16) * (34.0 / 64.0)
+            else:
+                _bpt = float(_kv_q4)
+            return round(base_vram + ((num_ctx - 4096) * _bpt) / (1024 ** 3), 2)
+    except (ImportError, OSError, TypeError, ValueError) as _e:
+        _logger.debug("[VRAM] gguf_meta kv fallback skipped for %r: %s", model_name, _e)
 
     size = _extract_size_gb(model_name) or 4.0
     size_factor = size / _CTX_OVERHEAD_REF_SIZE_B

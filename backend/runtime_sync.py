@@ -74,6 +74,18 @@ def sync_loader_settings(settings: dict) -> None:
     except (TypeError, ValueError):
         pass
 
+    # Optional global kv_cache_type override (if set in settings.json; default stays "q4_0")
+    try:
+        _kv_raw = str(settings.get("kv_cache_type") or "").strip().lower()
+        if _kv_raw in ("f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"):
+            _lc.KV_CACHE_TYPE = _kv_raw
+            for _mod_name in ("llama_server_manager", "manager_load", "llama_start_phases"):
+                _mod = sys.modules.get(f"backend.{_mod_name}")
+                if _mod is not None and hasattr(_mod, "KV_CACHE_TYPE"):
+                    setattr(_mod, "KV_CACHE_TYPE", _kv_raw)
+    except (TypeError, ValueError, AttributeError):
+        logger.debug("runtime sync: kv_cache_type skipped")
+
     # VRAM budget for the pre-flight gate. The load/evict/health modules bind
     # it BY VALUE (`from backend.llama_manager_utils import VRAM_BUDGET_GB`),
     # so writing one module attribute is a no-op for the code that actually

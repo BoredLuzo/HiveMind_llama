@@ -141,8 +141,52 @@ check("24 settings seam wins over registry",
       }).get("temperature") == 0.99)
 check("25 other mode key untouched",
       get_sampling_profile("smp-model:1b", thinking=False).get("temperature") == 0.8)
+check("25b DEFAULT_PROFILE presence_penalty is 0.0",
+      get_sampling_profile("smp-model:1b", thinking=False).get("presence_penalty") == 0.0)
+check("25c qwen3.5:4b-mtp non_thinking presence_penalty is 0.0",
+      get_sampling_profile("qwen3.5:4b-mtp", thinking=False).get("presence_penalty") == 0.0)
+check("25d mode=sampling_thinking_code with thinking=False falls back to non_thinking",
+      get_sampling_profile("smp-model:1b", thinking=False, mode="sampling_thinking_code", settings={
+          "_model_sampling_overrides": {"smp-model:1b": {
+              "thinking": {"temperature": 0.99},
+              "non_thinking": {"temperature": 0.21},
+          }}
+      }).get("temperature") == 0.21)
+check("25e mode=sampling_thinking_code with thinking=True falls back to thinking before non_thinking",
+      get_sampling_profile("smp-model:1b", thinking=True, mode="sampling_thinking_code", settings={
+          "_model_sampling_overrides": {"smp-model:1b": {
+              "thinking": {"temperature": 0.99},
+              "non_thinking": {"temperature": 0.21},
+          }}
+      }).get("temperature") == 0.99)
+check("25f mode_dict overrides flat top-level profile keys",
+      get_sampling_profile("smp-model:1b", thinking=False, settings={
+          "_model_sampling_overrides": {"smp-model:1b": {
+              "temperature": 0.12,
+              "non_thinking": {"temperature": 0.55},
+          }}
+      }).get("temperature") == 0.55)
 _cleanup()
 refresh()
 check("26 sampling cleaned up", get_sampling("smp-model:1b") == {})
+
+# 12) Thinking budget honors >8192 and tight context 40%-share cap
+from core.duo_helpers import _calculate_thinking_tokens
+check("27 thinking_budget > 8192 honored within 40% ctx share",
+      _calculate_thinking_tokens(
+          "qwen3.5:4b-mtp",
+          {"agents": {"duo_coder": {"thinking_budget": 16000}}},
+          input_tokens=4000,
+          available_ctx=65536,
+          agent_name="duo_coder",
+      ) == 16000)
+check("28 tight context below 64 thinking share returns 0 instead of overflowing",
+      _calculate_thinking_tokens(
+          "qwen3.5:4b-mtp",
+          {"agents": {"duo_coder": {"thinking_budget": 2500}}},
+          input_tokens=8092,
+          available_ctx=8192,
+          agent_name="duo_coder",
+      ) == 0)
 
 sys.exit(h.finish("models_registry"))

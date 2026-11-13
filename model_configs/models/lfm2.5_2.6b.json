@@ -20,5 +20,25 @@
   "dspark_draft_filename": "LFM2.5-2.6B-DSpark-Q4_K_M.gguf",
   "mmproj_filename": null,
   "vram_gb_override": 2.0,
-  "dspark_draft_n_max": 2
+  "dspark_draft_n_max": 2,
+  "sampling": {
+    "sampling_text": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    }
+  }
 }

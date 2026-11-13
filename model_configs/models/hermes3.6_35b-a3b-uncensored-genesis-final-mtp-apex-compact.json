@@ -26,6 +26,8 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.05,
+      "preserve_thinking": true,
+      "cache_prompt": true,
       "seed": 42
     },
     "non_thinking": {
@@ -35,6 +37,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "cache_prompt": true,
       "seed": 42
     },
     "sampling_thinking_code": {
@@ -44,6 +47,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "cache_prompt": true,
       "seed": 42
     },
     "sampling_thinking_code_precise": {
@@ -53,6 +57,8 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true,
       "seed": 42
     },
     "sampling_thinking_text": {
@@ -62,6 +68,8 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true,
       "seed": 42
     },
     "sampling_text": {
@@ -71,6 +79,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "cache_prompt": true,
       "seed": 42
     }
   },

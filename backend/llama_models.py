@@ -72,14 +72,19 @@ _QUANT_PRE = re.compile(
     re.IGNORECASE
 )
 
-_SIZE_PRE = re.compile(r'[-._](0?\d{1,2}(?:\.\d+)?[bB])')
+_SPLIT_SHARD_RE = re.compile(r'-(\d{5})-of-(\d{5})$', re.IGNORECASE)
+_SIZE_PRE = re.compile(r'[-._](0?\d{1,3}(?:\.\d+)?[bB])')
 _ESIZE_PRE = re.compile(r'[-._](E\d+B)', re.IGNORECASE)
+
+
+def _strip_shard_suffix(stem: str) -> str:
+    return _SPLIT_SHARD_RE.sub('', stem)
 
 
 def _parse_gguf_filename(filename: str) -> list[str]:
 
 
-    stem = Path(filename).stem
+    stem = _strip_shard_suffix(Path(filename).stem)
 
     cleaned = _QUANT_PRE.sub('', stem)
 
@@ -254,6 +259,12 @@ def _build_index() -> dict[str, Path]:
             _logger.debug(f"Skipping MTP drafter: {gguf.name}")
             continue
 
+        # Skip secondary shards of split GGUFs (only shard 00001 loads the full model)
+        _shard_m = _SPLIT_SHARD_RE.search(gguf.stem)
+        if _shard_m and int(_shard_m.group(1)) > 1:
+            _logger.debug(f"Skipping split-GGUF shard >1: {gguf.name}")
+            continue
+
         canonical_names = _parse_gguf_filename(gguf.name)
         if not canonical_names:
             _logger.debug(f"Cannot parse filename: {gguf.name}")
@@ -283,7 +294,7 @@ def _build_index() -> dict[str, Path]:
 
 def _quant_token(filename: str) -> str:
     """Trailing quant token of a GGUF filename, lowercase ('q4_k_m')."""
-    m = _QUANT_PRE.search(Path(filename).stem)
+    m = _QUANT_PRE.search(_strip_shard_suffix(Path(filename).stem))
     return m.group(0).lstrip("-._ ").lower() if m else ""
 
 

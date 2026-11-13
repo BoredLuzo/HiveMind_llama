@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import re
 from pathlib import Path
 
+_logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -86,6 +88,34 @@ def _find_llama_server() -> Path:
 
 
 LLAMA_BIN = _find_llama_server()
+
+
+def sync_runtime_backend(gpu_backend: str = "", llama_bin: Path | None = None) -> tuple[str, Path]:
+    """Update GPU_BACKEND and LLAMA_BIN across llama_config and value-importing modules."""
+    import importlib
+    import sys
+
+    global GPU_BACKEND, LLAMA_BIN
+    gb = str(gpu_backend or "").strip().lower()
+    if gb in ("vulkan", "cuda", "rocm", "cpu"):
+        GPU_BACKEND = gb
+    LLAMA_BIN = Path(llama_bin) if llama_bin is not None else _find_llama_server()
+
+    for mod_name in (
+        "backend.llama_server_manager",
+        "backend.manager_load",
+        "backend.llama_start_phases",
+    ):
+        mod = sys.modules.get(mod_name)
+        if mod is None:
+            try:
+                mod = importlib.import_module(mod_name)
+            except ImportError:
+                continue
+        setattr(mod, "GPU_BACKEND", GPU_BACKEND)
+        setattr(mod, "LLAMA_BIN", LLAMA_BIN)
+
+    return GPU_BACKEND, LLAMA_BIN
 
 
 def find_models_dir() -> Path:
@@ -289,27 +319,36 @@ _MOE_AUTODETECT_MIN_TOTAL_B = 30
 
 
 def is_moe_model(model_key: str) -> bool:
-
+    import re as _re_moe
 
     _key = str(model_key or "").strip().lower()
     if not _key:
         return False
-    # MOE-PIN (2026-10-14): an explicit profile answer ("moe": true/false in
-    # model_configs/models/*.json) beats every name heuristic — the 30B+
-    # autodetect is a guess, the model config is the user's call.
+    _norm = _re_moe.sub(r"(?:#\d+|:latest)+$", "", _key)
+    for _cand in (_key, _norm):
+        # MOE-PIN (2026-10-14): an explicit profile answer ("moe": true/false in
+        # model_configs/models/*.json) beats every name heuristic — the 30B+
+        # autodetect is a guess, the model config is the user's call.
+        try:
+            from model_configs.models_registry import get_moe_pin as _reg_pin
+            _pin = _reg_pin(_cand)
+            if _pin is not None:
+                return _pin
+        except Exception:
+            pass
+    if _key in _MOE_EXPERT_COUNTS or _norm in _MOE_EXPERT_COUNTS:
+        return True
+    if "moe" in _norm:
+        return True
+    if _re_moe.search(r"(^|[-._:])(a\d+(?:\.\d+)?b|\d+x\d+(?:\.\d+)?b)([-._:]|$)", _norm):
+        return True
     try:
-        from model_configs.models_registry import get_moe_pin as _reg_pin
-        _pin = _reg_pin(_key)
-        if _pin is not None:
-            return _pin
-    except Exception:
-        pass
-    if _key in _MOE_EXPERT_COUNTS:
-        return True
-    if "moe" in _key:
-        return True
-    import re as _re_moe
-    return bool(_re_moe.search(r"(^|[-._:])a\d+b([-._]|$)", _key))
+        from backend.gguf_meta import read_gguf_metadata as _gguf_meta
+        if _gguf_meta(model_key).get("is_moe"):
+            return True
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        _logger.debug("[MOE] gguf_meta fallback skipped for %s: %s", model_key, _e)
+    return False
 
 
 def _try_registry_moe(model_key: str) -> int:
@@ -352,13 +391,11 @@ def _try_registry_dspark_draft(model_key: str) -> str | None:
 
 
 def detect_moe_count(model_key: str) -> int:
-
-
-    _tbl = _MOE_EXPERT_COUNTS.get(str(model_key or ""))
+    import re as _re_moe2
+    _key = _re_moe2.sub(r"#\d+$", "", str(model_key or "").strip().lower()).removesuffix(":latest")
+    _tbl = _MOE_EXPERT_COUNTS.get(_key)
     if _tbl:
         return int(_tbl)
-    import re as _re_moe2
-    _key = str(model_key or "").strip().lower()
     m = _re_moe2.search(r"(\d+)\s*b[-_.]?a(\d+)\s*b", _key)
     if m:
         total_b = int(m.group(1))

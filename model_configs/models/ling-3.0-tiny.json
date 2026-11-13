@@ -20,7 +20,52 @@
   "mmproj_filename": null,
   "vram_gb_override": null,
   "sampling": {
-    "thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 20 },
-    "non_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": 20 }
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
+    "sampling_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "sampling_thinking_code": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    }
   }
 }

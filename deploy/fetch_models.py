@@ -35,6 +35,7 @@ Stdlib only — no huggingface_hub dependency.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import http.client
 import json
@@ -274,6 +275,60 @@ SPECS: list[dict] = [
         ],
         "mmproj_regex": [],
     },
+    {
+        "key": "lfm3:1.7b-uncensored-ad",
+        "tag": "lfm3:1.7b-uncensored-ad",
+        "desc": "LFM3 1.7B Uncensored Q4_K_M / Q6_K (tool-calling subagent, ~1.1GB, needs llama.cpp b12001+)",
+        "repo": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
+        "file_regex": [
+            r"(?i)^lfm3-1\.7b-uncensored-ad-q4_k_m\.gguf$",
+            r"(?i)^lfm3-1\.7b-uncensored-ad-q6_k\.gguf$",
+        ],
+        "mmproj_regex": [],
+        # Seeded on disk only when downloaded, so no loose config ships by default.
+        "default_profile": {
+            "model": "lfm3:1.7b-uncensored-ad",
+            "capabilities": {
+                "thinking": True,
+                "vision": False,
+                "tool_call": True,
+            },
+            "vision_preprocessing": False,
+            "num_ctx": 32768,
+            "num_ctx_analyst": 16384,
+            "num_ctx_duo_coder": 32768,
+            "num_ctx_vision": None,
+            "chat_template": None,
+            "jinja": True,
+            "reasoning": "on",
+            "distilled": False,
+            "moe_cpu_experts": 0,
+            "mtp": False,
+            "gpu_layers": 99,
+            "mmproj_filename": None,
+            "vram_gb_override": 1.6,
+            "sampling": {
+                "thinking": {
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 0,
+                    "min_p": 0.0,
+                    "presence_penalty": 0.0,
+                    "repetition_penalty": 1.0,
+                    "cache_prompt": True,
+                },
+                "non_thinking": {
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 0,
+                    "min_p": 0.0,
+                    "presence_penalty": 0.0,
+                    "repetition_penalty": 1.0,
+                    "cache_prompt": True,
+                },
+            },
+        },
+    },
     # ── Spark-X2.6 4B (XHToken, 2026-10) ──────────────────────────────────
     # Dense 4B, Apache-2.0, embedded chat template (jinja), thinking via the
     # template's enable_thinking switch. Replaces the Spark-X2.5 profiles
@@ -421,13 +476,14 @@ SPECS: list[dict] = [
         "desc": "Hermes3.6 Genesis APEX-Mini (Coder/Hermes agent, MoE+MTP+Vision, ~20GB download)",
         "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF",
         "file_regex": [
+            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-mtp-mxfp4\.gguf$",
             r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-apex-mini\.gguf$",
         ],
         "mmproj_regex": [
             r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
             r"(?i)^mmproj-.*hermes.*f16\.gguf$",
         ],
-        "mmproj_dest": "mmproj-hermes3.6-35b-genesis-apex-mini-f16.gguf",
+        "mmproj_dest": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
         "extra_files": [
             {"path": "chat_template.jinja",
              "dest": "model_configs/hermes36_apex_mini_chat_template.jinja"},
@@ -750,7 +806,8 @@ def _download_extra_file(repo: str, ef: dict) -> bool:
         url = HF_RESOLVE.format(repo=repo, path=ef["path"])
         print(f"    Downloading extra file: {ef['path']} -> {ef['dest']}")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(url, timeout=120) as r, open(part, "wb") as fh:
+        req = urllib.request.Request(url, headers=_hf_auth_headers())
+        with urllib.request.urlopen(req, timeout=120) as r, open(part, "wb") as fh:
             fh.write(r.read())
         part.replace(dest)
         print(f"    [OK] extra file -> {ef['dest']}")
@@ -783,6 +840,30 @@ def _record_known_filename(gguf_name: str, tag: str) -> None:
     except OSError as e:
         print(f"    [WARNING] could not update gguf_filename_tags.json: {e}")
 
+
+def _seed_spec_default_profile(spec: dict) -> Path | None:
+    """Seed a catalog spec's bundled default_profile on download if missing."""
+    profile = spec.get("default_profile")
+    if not isinstance(profile, dict):
+        return None
+    tag = str(spec.get("tag") or spec.get("key") or "").strip()
+    if not tag:
+        return None
+    try:
+        from model_configs.models_registry import find_profile_file, save_profile  # noqa: E402
+
+        if find_profile_file(tag) is not None:
+            return None
+        payload = copy.deepcopy(profile)
+        payload.setdefault("model", tag)
+        path = save_profile(tag, payload)
+        print(f"    default-profile written: {path.name}")
+        return path
+    except (ImportError, OSError, ValueError) as e:
+        print(f"    [WARNING] could not write default profile for {tag}: {e}")
+        return None
+
+
 def write_models_json(models_dir: Path, out: Path | None = None) -> int:
     """Populate models.json from all GGUFs in the folder."""
     from backend.llama_models import _parse_gguf_filename  # noqa: E402
@@ -793,11 +874,14 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
     families: set[str] = set()
 
     # Normal models first
-    from backend.llama_models import is_non_model_gguf  # noqa: E402
+    from backend.llama_models import _SPLIT_SHARD_RE, is_non_model_gguf  # noqa: E402
     for g in ggufs:
         # SHARED RULE (2026-11-05 audit): one non-model check for every
         # writer — the private copy here missed 'projector'/'vision_encoder'.
         if is_non_model_gguf(g.name):
+            continue
+        _sm_shard = _SPLIT_SHARD_RE.match(g.stem)
+        if _sm_shard and int(_sm_shard.group("shard")) > 1:
             continue
         # TAG-PIN (2026-09-12): a spec tag is authoritative — the filename
         # parser over-normalizes (unsloth names their MTP quants WITHOUT
@@ -1054,6 +1138,8 @@ def main() -> int:
         have = [n for n in local_files if re.search(spec["file_regex"][0], n)]
         if args.only_missing and have:
             print(f"    Already present: {have[0]} — skipping (--only-missing)")
+            if not args.list_only:
+                _seed_spec_default_profile(spec)
             continue
 
         if spec.get("repo"):
@@ -1121,6 +1207,7 @@ def main() -> int:
             local_files[main_file["path"].lower()] = mdir / Path(main_file["path"]).name
             if spec.get("tag"):
                 _record_known_filename(Path(main_file["path"]).name, spec["tag"])
+            _seed_spec_default_profile(spec)
 
         if spec["mmproj_regex"]:
             # RE-RUN GUARD (2026-10-03): an earlier install may already have

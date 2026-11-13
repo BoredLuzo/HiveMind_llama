@@ -34,6 +34,7 @@ Lookup order (get_profile):
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -61,6 +62,18 @@ _FILE_MTIMES: dict[str, float] = {}
 
 # Canonical mapping: filename stem → (canonical name, base name)
 _FILE_KEYS: dict[str, tuple[str, str]] = {}
+
+
+def _canonical_from_file(path: Path, data: dict) -> str:
+    """Canonical model name: explicit 'model' field > filename stem (last '_' -> ':')."""
+    explicit = str((data or {}).get("model") or "").strip()
+    if explicit:
+        return explicit
+    stem = path.stem
+    if "_" in stem:
+        base, tag = stem.rsplit("_", 1)
+        return f"{base}{_UNDERSCORE_PLACEHOLDER}{tag}"
+    return stem
 
 
 def _load_file(path: Path) -> dict:
@@ -96,10 +109,8 @@ def _scan() -> dict[str, dict]:
         _FILE_CACHE[p.name] = data
         _FILE_MTIMES[p.name] = mtime
         out[p.name] = data
-        # Canonical name: explicit "model" field > filename ("_" = ":").
-        _canonical = str(data.get("model") or "").strip()
-        if not _canonical:
-            _canonical = p.stem.replace("_", _UNDERSCORE_PLACEHOLDER)
+        # Canonical name: explicit "model" field > filename (last "_" = ":").
+        _canonical = _canonical_from_file(p, data)
         _new_keys[p.name] = (_canonical, _canonical.split(":")[0])
 
     # Remove orphaned cache entries (deleted files)
@@ -117,6 +128,10 @@ def refresh() -> None:
     """Discard the cache — the next access rescans."""
     global _profile_cache, _cache_ts
     _profile_cache = {}
+    _profile_mtimes.clear()
+    _FILE_CACHE.clear()
+    _FILE_MTIMES.clear()
+    _FILE_KEYS.clear()
     _cache_ts = 0.0
 
 
@@ -136,13 +151,11 @@ def _ensure_cache() -> dict[str, dict]:
 
 
 def _merge(base: dict, over: dict) -> dict:
-    """Shallow merge with dict deep-copy for 'capabilities'."""
+    """Recursive dict merge (preserves nested 'sampling' / 'capabilities' keys)."""
     result = dict(base)
     for k, v in over.items():
         if isinstance(v, dict) and isinstance(result.get(k), dict):
-            merged = dict(result[k])
-            merged.update(v)
-            result[k] = merged
+            result[k] = _merge(result[k], v)
         else:
             result[k] = v
     return result
@@ -187,11 +200,11 @@ def get_profile(model_name: str) -> dict:
     fallback = _reg.get(_base_key) if _base_key is not None else None
 
     if direct and fallback is not None and direct is not fallback:
-        return _merge(fallback, direct)
+        return copy.deepcopy(_merge(fallback, direct))
     if direct is not None:
-        return dict(direct)
+        return copy.deepcopy(direct)
     if fallback is not None:
-        return dict(fallback)
+        return copy.deepcopy(fallback)
     return {}
 
 
@@ -256,13 +269,19 @@ def is_distilled(model_name: str) -> bool | None:
 
 
 def get_moe_cpu_experts(model_name: str) -> int | None:
-    v = get_profile(model_name).get("moe_cpu_experts")
-    if v:
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return None
-    return None
+    prof = get_profile(model_name)
+    v = prof.get("moe_cpu_experts")
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    # Dense model configs (e.g. qwen3.5:4b-mtp) ship moe_cpu_experts=0; honor 0
+    # as an active override only when the profile explicitly sets moe=True.
+    if n == 0 and prof.get("moe") is not True:
+        return None
+    return n
 
 
 def is_mtp(model_name: str) -> bool | None:
@@ -305,7 +324,7 @@ def set_profile_key(model_name: str, key: str, value) -> Path | None:
     view). value=None removes the key. Returns the file path, or None when
     no profile file exists for this exact model name."""
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    want = (model_name or "").strip()
+    want = (model_name or "").strip().casefold()
     if not want:
         return None
     for p in sorted(_MODELS_DIR.glob("*.json")):
@@ -313,7 +332,7 @@ def set_profile_key(model_name: str, key: str, value) -> Path | None:
             raw = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError):
             continue
-        if isinstance(raw, dict) and str(raw.get("model", "")).strip() == want:
+        if isinstance(raw, dict) and _canonical_from_file(p, raw).casefold() == want:
             if value is None:
                 raw.pop(key, None)
             else:
@@ -328,12 +347,27 @@ def set_profile_key(model_name: str, key: str, value) -> Path | None:
 
 def get_gpu_layers(model_name: str) -> int | None:
     v = get_profile(model_name).get("gpu_layers")
-    if v:
+    if v is not None:
         try:
             return int(v)
         except (TypeError, ValueError):
             return None
     return None
+
+
+def get_kv_cache_type(model_name: str) -> str | None:
+    v = get_profile(model_name).get("kv_cache_type")
+    s = str(v).strip().lower() if v else ""
+    return s or None
+
+
+def get_extra_args(model_name: str) -> list[str]:
+    v = get_profile(model_name).get("extra_args")
+    if isinstance(v, str):
+        return [tok for tok in v.split() if tok]
+    if isinstance(v, list):
+        return [str(tok).strip() for tok in v if str(tok).strip()]
+    return []
 
 
 def get_ubatch(model_name: str) -> int | None:
@@ -383,14 +417,92 @@ def get_sampling(model_name: str) -> dict:
     return dict(v) if isinstance(v, dict) and v else {}
 
 
+def get_load_mode(model_name: str) -> str | None:
+    """Per-model load_mode override ("none" | "mmap" | "mmap+mlock"). None = auto."""
+    v = get_profile(model_name).get("load_mode")
+    return str(v).strip().lower() if v else None
+
+
+def get_thinking_budget(model_name: str) -> int | None:
+    """Per-model thinking budget (from profile top-level or sampling sub-block)."""
+    prof = get_profile(model_name)
+    v = prof.get("thinking_budget")
+    if v is not None:
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            pass
+    samp = prof.get("sampling", {})
+    if isinstance(samp, dict):
+        for block_name in ("thinking", "sampling_thinking_text", "sampling_thinking_code"):
+            blk = samp.get(block_name)
+            if isinstance(blk, dict) and blk.get("thinking_budget") is not None:
+                try:
+                    return int(blk["thinking_budget"])
+                except (ValueError, TypeError):
+                    pass
+    return None
+
+
+def get_mtp_draft_params(model_name: str) -> tuple[int | None, float | None]:
+    """Returns (mtp_draft_n_max, mtp_draft_p_min) from profile, if configured."""
+    prof = get_profile(model_name)
+    n_max = None
+    p_min = None
+    if prof.get("mtp_draft_n_max") is not None:
+        try:
+            n_max = int(prof["mtp_draft_n_max"])
+        except (ValueError, TypeError):
+            pass
+    if prof.get("mtp_draft_p_min") is not None:
+        try:
+            p_min = float(prof["mtp_draft_p_min"])
+        except (ValueError, TypeError):
+            pass
+    return n_max, p_min
+
+
+def find_profile_file(model_name: str) -> Path | None:
+    want = (model_name or "").strip().casefold()
+    if not want or not _MODELS_DIR.is_dir():
+        return None
+    for p in sorted(_MODELS_DIR.glob("*.json")):
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(raw, dict) and _canonical_from_file(p, raw).casefold() == want:
+            return p
+    return None
+
+
 def save_profile(model_name: str, data: dict) -> Path:
     """Schreibt eine Config-Datei nach model_configs/models/<name>.json."""
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     safe = (model_name or "model").replace("/", "_").replace("\\", "_")
     safe = "".join(c if c not in '<>:"|?*' else "_" for c in safe)
-    path = _MODELS_DIR / f"{safe}.json"
+    path = find_profile_file(model_name) or (_MODELS_DIR / f"{safe}.json")
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
     refresh()
     return path
+
+
+def upsert_profile(model_name: str, patch: dict) -> Path:
+    """Create or deep-merge a per-model defaults JSON file atomically."""
+    clean = (model_name or "").strip()
+    existing_path = find_profile_file(clean)
+    if existing_path and existing_path.is_file():
+        try:
+            base = json.loads(existing_path.read_text(encoding="utf-8"))
+            if not isinstance(base, dict):
+                base = {}
+        except (OSError, json.JSONDecodeError, ValueError):
+            base = {}
+    else:
+        base = {"model": clean}
+    merged = _merge(base, patch)
+    if not merged.get("model"):
+        merged["model"] = clean
+    return save_profile(clean, merged)

@@ -168,4 +168,57 @@ check("changelog states the determinism price",
 check("changelog drops the old essential-skip claim",
       "`--essential` implies it" not in _CH)
 
+# ── LFM3 1.7B Uncensored AD (2026-11-13) ────────────────────────────────
+# Must live ONLY in fetch_models SPECS (and docs/guide.md catalog table) so
+# no extra profile file ships in model_configs/models/ by default; defaults
+# are written into model_configs/models/ only when the user downloads it.
+_lfm_u = specs.get("lfm3:1.7b-uncensored-ad")
+check("lfm3:1.7b-uncensored-ad is in the catalog", _lfm_u is not None)
+if _lfm_u:
+    check("lfm3 uncensored repo pinned to AtomicChat",
+          _lfm_u["repo"] == "AtomicChat/LFM3-1.7B-Uncensored-GGUF", f"({_lfm_u['repo']})")
+    check("lfm3 uncensored regex matches Q4_K_M",
+          any(re.match(p, "LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf") for p in _lfm_u["file_regex"]))
+    check("lfm3 uncensored regex matches Q6_K fallback",
+          any(re.match(p, "LFM3-1.7B-Uncensored-AD-Q6_K.gguf") for p in _lfm_u["file_regex"]))
+    check("lfm3 uncensored regex rejects unrelated quant",
+          not any(re.match(p, "LFM3-1.7B-Uncensored-AD-Q8_0.gguf") for p in _lfm_u["file_regex"]))
+    check("lfm3 uncensored tag matches key",
+          _lfm_u.get("tag") == "lfm3:1.7b-uncensored-ad")
+    check("lfm3 uncensored stays optional (not in ESSENTIAL_KEYS)",
+          "lfm3:1.7b-uncensored-ad" not in fm.ESSENTIAL_KEYS)
+    _shipped_u = ROOT / "model_configs" / "models" / "lfm3_1.7b-uncensored-ad.json"
+    check("lfm3 uncensored profile file does NOT ship in repo",
+          not _shipped_u.exists(), f"({_shipped_u})")
+
+    import json as _json
+    import tempfile as _tempfile
+    import model_configs.models_registry as _mr
+
+    _orig_models_dir = _mr._MODELS_DIR
+    try:
+        with _tempfile.TemporaryDirectory() as _tmp:
+            _mr._MODELS_DIR = Path(_tmp)
+            _mr.refresh()
+            _seeded = fm._seed_spec_default_profile(_lfm_u)
+            check("on-download seeding writes lfm3_1.7b-uncensored-ad.json",
+                  _seeded is not None and _seeded.name == "lfm3_1.7b-uncensored-ad.json")
+            if _seeded and _seeded.exists():
+                _data = _json.loads(_seeded.read_text(encoding="utf-8"))
+                check("seeded profile targets lfm3:1.7b-uncensored-ad",
+                      _data.get("model") == "lfm3:1.7b-uncensored-ad")
+                check("seeded profile carries expected num_ctx & jinja/reasoning defaults",
+                      _data.get("num_ctx") == 32768
+                      and _data.get("jinja") is True
+                      and _data.get("reasoning") == "on"
+                      and (_data.get("sampling") or {}).get("thinking", {}).get("temperature") == 0.7)
+                _data["num_ctx"] = 65536
+                _mr.save_profile("lfm3:1.7b-uncensored-ad", _data)
+                _second = fm._seed_spec_default_profile(_lfm_u)
+                check("re-seeding never overwrites an existing user profile",
+                      _second is None and _mr.get_profile("lfm3:1.7b-uncensored-ad").get("num_ctx") == 65536)
+    finally:
+        _mr._MODELS_DIR = _orig_models_dir
+        _mr.refresh()
+
 sys.exit(h.finish("model_catalog"))
