@@ -52,7 +52,7 @@ async def _pre_explore_cache_invalidate_workspace(workspace: str):  # BUG-6 FIX:
 async def _pre_explore_cache_set(key: tuple, value: dict):  # BUG-6 FIX: async gemacht
     _results = value.get("results", [])
     _total_read = sum(r.get("n_files_read", 0) for r in _results) if _results else 0
-    _ctx_len = len(str(value.get("explore_ctx", "") or "").strip())
+    _ctx_len = len(str(value.get("explore_ctx") or value.get("ctx") or "").strip())
     if _total_read == 0 and _ctx_len < 30:
         logger.debug("pre_explore_cache: skip caching empty result")
         return

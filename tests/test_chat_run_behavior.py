@@ -166,7 +166,7 @@ async def _drive_run(overrides, request_ws, orchestrator, settings_extra=None):
     events = []
     with mock.patch.dict(sys.modules, {"server": _fake_server()}), \
             mock.patch.dict(S.settings, forced), \
-            mock.patch.object(C, "run_stream_orchestrated", new=_orch), \
+            mock.patch.object(C, "run_stream_orchestrated", new=(orchestrator or _orch)), \
             mock.patch.object(WSR, "save_last_workspace",
                               side_effect=lambda ws: saved_last.append(ws)), \
             mock.patch.object(WSR, "sync_env_workspace", new=lambda ws: None), \
@@ -275,6 +275,76 @@ async def main():
           and "Workspace invalid" in str(done2.get("summary", ""))
           and len(calls) == calls_before == 1,
           f" ({kinds}/{done2.get('stop_reason')}/{done2.get('summary')})")
+
+    # ── 7. atomic per-chat active-run claim & supersede guard ────────────
+    import infra.run_control as RC
+    ev_old = RC._register_abort("run-old-1")
+    first_claim = await RC.claim_chat_run("chat_atomic_1", "run-old-1")
+    superseded = await RC.claim_chat_run("chat_atomic_1", "run-new-2")
+    check("7a claim_chat_run supersedes prior active run atomically",
+          first_claim is None
+          and superseded == "run-old-1"
+          and ev_old.is_set()
+          and RC.get_active_chat_run("chat_atomic_1") == "run-new-2",
+          f" ({first_claim}/{superseded}/{ev_old.is_set()}/{RC.get_active_chat_run('chat_atomic_1')})")
+    RC._unregister_abort("run-old-1")
+    check("7b unregistering superseded run keeps newer active claim",
+          RC.get_active_chat_run("chat_atomic_1") == "run-new-2",
+          f" ({RC.get_active_chat_run('chat_atomic_1')})")
+    RC._unregister_abort("run-new-2")
+    check("7c unregistering active run clears active chat claim",
+          RC.get_active_chat_run("chat_atomic_1") == "",
+          f" ({RC.get_active_chat_run('chat_atomic_1')})")
+
+    # ── 8. P1 pause/resume/abort cleanup & pipeline exec_ctrl=None guard ─
+    import routers.core as _rcore
+    ev_pa = RC._register_abort("run-pa-1")
+    await RC.request_pause_after_chunk("run-pa-1")
+    RC.get_resume_signal("run-pa-1")
+    RC.get_abort_during_pause_signal("run-pa-1")
+    RC.signal_resume("run-pa-1")
+    RC.finish_manual_pause("run-pa-1")
+    abort_res = await _rcore.abort_run("run-pa-1")
+    check("8a finish_manual_pause drops pause signals so later POST /abort sets run abort event",
+          isinstance(abort_res, dict)
+          and abort_res.get("action") == "abort"
+          and ev_pa.is_set(),
+          f" (abort_res={abort_res}, ev_set={ev_pa.is_set()})")
+    RC._unregister_abort("run-pa-1")
+
+    ev_chat_run = RC._register_abort("run-chat-2")
+    RC.get_resume_signal("run-chat-2")
+    pause_ab = RC.get_abort_during_pause_signal("run-chat-2")
+    await RC.claim_chat_run("chat_atomic_2", "run-chat-2")
+    aborted_rid = await RC.abort_chat_run("chat_atomic_2")
+    check("8b abort_chat_run atomically triggers chat abort, run abort & pause-abort",
+          aborted_rid == "run-chat-2"
+          and (await RC._get_abort_event("chat_atomic_2")).is_set()
+          and ev_chat_run.is_set()
+          and pause_ab.is_set(),
+          f" (rid={aborted_rid}, run={ev_chat_run.is_set()}, pause={pause_ab.is_set()})")
+    RC.cleanup_pause_state("run-chat-2")
+    RC._unregister_abort("run-chat-2")
+    RC._chat_abort_registry.pop("chat_atomic_2", None)
+
+    import core.pipeline_runner as PR
+    async def _pipe_orch(ctx):
+        ctx.skip_agents = {"analyst", "refiner", "critic", "synthesizer"}
+        ctx.exec_ctrl = None
+        ctx.increment_run_counter = lambda: 1
+        ctx.maybe_trigger_soul_evolution = lambda _rc: asyncio.sleep(0)
+        async for ev in PR.run_pipeline(ctx):
+            yield ev
+
+    with mock.patch.object(PR, "run_peer_ratings", new=lambda *a, **k: asyncio.sleep(0)), \
+            mock.patch.object(PR, "_refresh_judge_keepalive", new=lambda *a, **k: asyncio.sleep(0)), \
+            mock.patch.object(PR, "_pin_pipeline_models", new=lambda *a, **k: asyncio.sleep(0)), \
+            mock.patch.object(PR, "_unpin_pipeline_models", new=lambda *a, **k: asyncio.sleep(0)):
+        ev_pipe, _calls_pipe, _sl_pipe, _rec_pipe = await _drive_run({}, str(ws), _pipe_orch)
+    done_pipe = next((e for e in ev_pipe if e.get("type") == "done"), {})
+    check("8c pipeline_runner completes cleanly when exec_ctrl is None & synthesizer skipped",
+          done_pipe.get("stop_reason") == "completed",
+          f" ({done_pipe})")
 
 
 asyncio.run(main())

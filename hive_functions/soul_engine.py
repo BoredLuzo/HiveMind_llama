@@ -5,6 +5,7 @@ import json
 import re
 import time
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -254,7 +255,34 @@ def _write_skills(insights: list[dict], base_path: Path = None):
             pass
 
 
-def run_soul_cycle(memory, settings: dict, focus_paths: list[str] = [], base_path: Path = None):
+def resolve_reflection_model(
+    settings_dict: dict,
+    direct_model: str | None,
+    *,
+    require_enabled: bool = True,
+) -> str:
+    """Resolve the Soul evolution reflection model with direct-model fallback.
+
+    When `require_enabled` is True (automatic triggers), a disabled dict
+    setting returns "" to skip evolution; when False (manual evolve), a
+    disabled dict falls back to `direct_model`.
+    """
+    sea = settings_dict.get("soul_evolve_agent", "direct")
+    if isinstance(sea, dict):
+        if not sea.get("enabled", False):
+            if require_enabled:
+                return ""
+            raw = ""
+        else:
+            raw = str(sea.get("model") or "").strip()
+    else:
+        raw = str(sea or "").strip()
+    if not raw or raw.lower() == "direct":
+        return str(direct_model or "").strip()
+    return raw
+
+
+def run_soul_cycle(memory, settings: dict, focus_paths: list[str] = [], base_path: Path | None = None):
     """Run Skill Distillation and optional Skill Writing after Soul Evolution.
 
     This is an add-on to the existing Soul Evolution logic.
@@ -268,39 +296,40 @@ def run_soul_cycle(memory, settings: dict, focus_paths: list[str] = [], base_pat
     """
     # Distillation: Decay, Merge, Evict
     _current_insights: list[dict] = []
-    if settings.get('soul_skill_distillation', True):
+    _distilled = False
+    _raw_lock = getattr(memory, '_insight_lock', None)
+    lock = _raw_lock if _raw_lock is not None else nullcontext()
+    if settings.get('soul_skill_distillation', False):
         try:
             from .skill_distiller import SkillDistiller
             distiller = SkillDistiller()
-            # Thread-safe: lock _insights for read-modify-write
-            lock = getattr(memory, '_insight_lock', None)
-            if lock:
-                lock.acquire()
-            try:
+            with lock:
                 memory._insights = distiller.run(memory._insights, focus_paths=focus_paths)
                 memory._persist_insights()  # Distiller always flushes — this is the main persist point
+                _distilled = True
                 _current_insights = list(memory._insights)  # snapshot under lock
-            finally:
-                if lock:
-                    lock.release()
             _logger.info("[SkillDistiller] Ran distillation: %d insights remaining, focus_paths=%s",
-                        len(memory._insights), focus_paths[:3])
+                        len(_current_insights), focus_paths[:3])
         except Exception as e:
             _logger.warning("[SkillDistiller] Failed: %s", e)
 
     # Skill Writing: Top-20 insights as .md files (opt-in)
-    # Uses the snapshot taken under lock — avoids reading memory._insights without
+    # Uses a snapshot taken under lock — avoids reading memory._insights without
     # the lock while remember_repo_insight could be modifying it from another thread.
-    if settings.get('soul_skill_writing', False) and _current_insights:
-        try:
-            _write_skills(_current_insights, base_path=base_path)
-            _logger.info("[SkillWriting] Wrote skill files to %s", _skills_dir(base_path))
-        except Exception as e:
-            _logger.warning("[SkillWriting] Failed: %s", e)
+    if settings.get('soul_skill_writing', False):
+        if not _current_insights:
+            with lock:
+                _current_insights = list(memory._insights)
+        if _current_insights:
+            try:
+                _write_skills(_current_insights, base_path=base_path)
+                _logger.info("[SkillWriting] Wrote skill files to %s", _skills_dir(base_path))
+            except Exception as e:
+                _logger.warning("[SkillWriting] Failed: %s", e)
 
     # PERF-3: If distillation was disabled or skipped but insights are dirty,
     # flush them to disk so no data is lost between cycles.
-    if not _current_insights and hasattr(memory, 'flush_insights_if_dirty'):
+    if not _distilled and hasattr(memory, 'flush_insights_if_dirty'):
         try:
             memory.flush_insights_if_dirty()
         except Exception:

@@ -32,6 +32,7 @@ from core.duo.preflight import (
 from core.duo_helpers import (
     _calculate_thinking_tokens, inloop_plan_should_run as _inloop_plan_should_run,
 )
+from core.run_context import is_ctx_aborted
 
 logger = logging.getLogger("hivemind.duo")
 
@@ -74,7 +75,7 @@ async def _duo_inloop_planner(ctx, ps):
     _run_thinking_now = _inloop_plan_should_run(
         ctx.duo_config.agentic_thinking,
         ctx.duo_config.thinking_per_chunk,
-        ctx.aborted(),
+        is_ctx_aborted(ctx),
         ctx.duo_config.planner,
         _has_plan,
         chunking_enabled=ctx.duo_config.chunking,

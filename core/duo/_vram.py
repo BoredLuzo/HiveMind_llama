@@ -242,10 +242,15 @@ async def _phase_vram(ctx, state: dict):
     _duo_seen_web_queries: set[str] = set()
     # BUDGETS (2026-10-14): the schema is REBUILT per run in
     # duo_runner once the real coder ctx is known (budget-fitted there via
-    # core/budgets). This initial build is the plain full set — no profile
-    # staffels, no model-name heuristics.
-    _xtools_ws = _get_inline_tools(include_websearch=_duo_ws, mode="duo_full")
-    _tool_think_auto_mode = str(ctx.duo_config.coder_tool_thinking_auto_mode or ctx.settings.get("ctx.duo_config.coder_tool_thinking_auto_mode", "off") or "off").strip().lower()
+    # core/budgets). Seed with the active coder tier so CPT probes measure the
+    # real tier schema instead of inflating against duo_full.
+    from core.duo_helpers import resolve_coder_tool_mode as _resolve_tier_mode
+    _xtools_ws = _get_inline_tools(
+        include_websearch=_duo_ws,
+        mode=_resolve_tier_mode(ctx.settings),
+        settings=ctx.settings,
+    )
+    _tool_think_auto_mode = str(ctx.duo_config.coder_tool_thinking_auto_mode or ctx.settings.get("duo_coder_tool_thinking_auto_mode", "off") or "off").strip().lower()
     if _tool_think_auto_mode == "critical":
         _tool_think_auto_mode = "on_fail"
     if _tool_think_auto_mode not in {"off", "balanced", "on_fail", "always"}:

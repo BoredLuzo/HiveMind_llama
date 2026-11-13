@@ -137,8 +137,16 @@ async def _chat_memory_shortcuts(ps):
 
         yield await emit({"type": "agent", "content": "Hivemind", "model": agent.model})
 
+        from core.model_sampling import resolve_agent_sampling as _resolve_sq_smp
+        _sq_temp, _sq_think, _sq_budget, _sq_smp = _resolve_sq_smp(
+            agent.model, agent=agent, settings=_state.settings, role="direct",
+        )
         parts, t = [], time.time()
-        async for tok in _pipeline_chat_stream(agent.model, messages, 0.3, 600):  # BUG-11 FIX: num_ctx via wrapper
+        async for tok in _pipeline_chat_stream(
+            agent.model, messages, _sq_temp, 600,
+            agent_role="direct", think=_sq_think,
+            thinking_budget=_sq_budget or None, sampler=_sq_smp,
+        ):  # BUG-11 FIX: num_ctx via wrapper
             parts.append(tok)
             yield await emit({"type": "token", "content": tok})
         yield await emit({"type": "agent_done", "elapsed": round(time.time() - t, 1)})

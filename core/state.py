@@ -93,12 +93,14 @@ def apply_settings_to_pipeline(s: dict):
                     _changed = True
                 pipeline.agents[key].model = cfg["model"]
                 _registry[key] = cfg["model"]
-            if cfg.get("temperature") is not None:
-                pipeline.agents[key].temperature = float(cfg["temperature"])
+            if "temperature" in cfg:
+                _t = cfg["temperature"]
+                pipeline.agents[key].temperature = None if _t is None else float(_t)
             if "max_tokens" in cfg:
                 pipeline.agents[key].max_tokens = int(cfg["max_tokens"])
             if "thinking" in cfg:
-                pipeline.agents[key].thinking = bool(cfg["thinking"])
+                _th = cfg["thinking"]
+                pipeline.agents[key].thinking = None if _th is None else bool(_th)
             if "thinking_budget" in cfg:
                 pipeline.agents[key].thinking_budget = int(cfg["thinking_budget"] or 0)
     if _changed:

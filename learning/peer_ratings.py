@@ -42,6 +42,12 @@ def _parse_rating_tune(text: str) -> dict:
     hm = re.search(r"hint=([^\s]+)", text)
     if hm:
         _hv = hm.group(1).lower()
+        if _hv not in ("leer", "none", "-", ""):
+            d["suggested_prompt_hint"] = hm.group(1).strip().replace("_", " ")
+    rm = re.search(r"reason=(.+)$", text.strip())
+    if rm and rm.group(1).strip():
+        d["adapt_reason"] = rm.group(1).strip()
+    return d
 
 
 async def run_peer_ratings(run_id, user_input, outputs, use_learned, rating_mode: str = "pipeline", has_images: bool = False):

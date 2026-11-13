@@ -879,6 +879,7 @@ async def _llm_stream(
     thinking_budget: int = 0,
     use_thinking: bool = False,
     ctx_limit: int = 0,
+    sampler: dict | None = None,
 ) -> tuple[str, str, bool]:
 
 
@@ -890,6 +891,7 @@ async def _llm_stream(
         "temperature": temp,
         "max_tokens": max_tokens,
     }
+    _apply_sampler_to_payload(payload, sampler)
     _apply_thinking_fields(payload, use_thinking, thinking_budget)
 
     # DEBUG-THINKING: Log actual payload sent to llama.cpp
@@ -1212,6 +1214,70 @@ async def _llm_stream_retry(
 # ═══════════════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _should_inject_prompt_think_tags(model_name: str) -> bool:
+    """Return True only when the model relies on /think /no_think prompt tags.
+
+    Models with a Jinja chat template (`jinja: true` in profile or GGUF metadata
+    containing `enable_thinking`) consume `chat_template_kwargs.enable_thinking`
+    natively without needing system-prompt tag injection.
+    """
+    try:
+        from model_configs.models_registry import is_jinja
+        if is_jinja(model_name) is True:
+            return False
+    except (ImportError, AttributeError, TypeError, ValueError) as _exc:
+        logger.debug("planner jinja lookup skipped for %s: %s", model_name, _exc)
+    try:
+        from backend.gguf_meta import read_gguf_metadata
+        _meta = read_gguf_metadata(model_name)
+        if _meta.get("has_chat_template") and "enable_thinking" in str(_meta.get("chat_template") or ""):
+            return False
+    except (ImportError, OSError, AttributeError, TypeError, ValueError) as _exc:
+        logger.debug("planner gguf_meta lookup skipped for %s: %s", model_name, _exc)
+    return True
+
+
+def _apply_sampler_to_payload(payload: dict, sampler: dict | None) -> None:
+    """Copy resolved sampling params (excluding temperature, set by caller) into payload."""
+    if not sampler or not isinstance(sampler, dict):
+        return
+    for _k in ("top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty", "repetition_penalty", "cache_prompt"):
+        if _k in sampler and sampler[_k] is not None:
+            payload[_k] = sampler[_k]
+    if sampler.get("seed") is not None:
+        payload["seed"] = int(sampler["seed"])
+
+
+def _resolve_planner_sampling(
+    model_name: str,
+    use_thinking: bool,
+    settings: dict | None,
+    *,
+    fallback_temp: float,
+) -> tuple[float, dict]:
+    """Resolve (temp, sampler) for planner calls; honors model JSON / UI overrides."""
+    from core.model_sampling import (
+        get_sampling_profile,
+        resolve_presence_penalty,
+        _registry_sampling,
+        _settings_sampling_override,
+        _select_override_mode_dict,
+    )
+    _mode = "sampling_thinking_code" if use_thinking else "sampling_text"
+    smp = get_sampling_profile(model_name, thinking=use_thinking, settings=settings, mode=_mode)
+    smp["presence_penalty"] = resolve_presence_penalty(
+        smp, model_name, thinking=use_thinking, settings=settings, mode=_mode,
+    )
+    has_explicit_temp = False
+    for layer in (_settings_sampling_override(model_name, settings), _registry_sampling(model_name)):
+        sub = _select_override_mode_dict(layer, _mode, use_thinking)
+        if (sub and "temperature" in sub) or ("temperature" in layer and not isinstance(layer["temperature"], dict)):
+            has_explicit_temp = True
+            break
+    temp = float(smp["temperature"]) if (has_explicit_temp and smp.get("temperature") is not None) else fallback_temp
+    return temp, smp
+
+
 def _resolve_planner_max_tokens(settings: dict | None, planner_ctx: int) -> int:
 
 
@@ -1309,13 +1375,13 @@ async def run_planner(
     _fallback_reason = ""
 
     # chat_template_kwargs.enable_thinking im Payload (_apply_thinking_fields unten).
+    _inject_think_tags = _should_inject_prompt_think_tags(planner_model)
     _sys_prompt = _planner_sys
-    if use_thinking:
-        if not planner_model.startswith("qwen3.6"):
+    if _inject_think_tags:
+        if use_thinking:
             if "/think" not in _sys_prompt:
                 _sys_prompt = "/think\n" + _sys_prompt
-    else:
-        if not planner_model.startswith("qwen3.6"):
+        else:
             if "/no_think" not in _sys_prompt:
                 _sys_prompt = _sys_prompt.rstrip() + "\n/no_think"
 
@@ -1339,11 +1405,14 @@ async def run_planner(
             except (TypeError, ValueError):
                 _budget_setting = 0
             _eff_think_budget = thinking_budget if thinking_budget > 0 else max(0, _budget_setting)
+            _p_temp, _p_smp = _resolve_planner_sampling(
+                planner_model, True, settings, fallback_temp=0.2,
+            )
             _plan_thinking, _plan_content, _hit_timeout = await _llm_stream_retry(
                 planner_model,
                 planner_port,
                 _messages,
-                temp=0.2,
+                temp=_p_temp,
                 # OUTPUT-LIMIT-POLICY (0.99.2): max_tokens = min(output+budget,
                 # min(setting, planner_ctx). Wall-Timeout schuetzt zeitlich.
                 max_tokens=min(max_output_tokens + _eff_think_budget, _planner_max_tokens),
@@ -1356,6 +1425,7 @@ async def run_planner(
                 use_thinking=True,
                 ctx_limit=planner_ctx,
                 num_ctx=planner_ctx,
+                sampler=_p_smp,
             )
             if _hit_timeout:
                 _used_fallback = True
@@ -1380,19 +1450,22 @@ async def run_planner(
                 except Exception:
                     pass
             _nt_sys = make_planner_sys(step_cap)
-            if "/no_think" not in _nt_sys:
+            if _inject_think_tags and "/no_think" not in _nt_sys:
                 _nt_sys = _nt_sys.rstrip() + "\n/no_think"
             _nt_messages = [
                 {"role": "system", "content": _nt_sys},
                 {"role": "user",   "content": _planner_user},
             ]
             _nt_timeout = float(settings.get("duo_soft_planner_wall_timeout_s", 180))
+            _nt_temp, _nt_smp = _resolve_planner_sampling(
+                planner_model, False, settings, fallback_temp=0.1,
+            )
             try:
                 _plan_thinking2, _plan_content2, _ = await _llm_stream_retry(
                     planner_model,
                     planner_port,
                     _nt_messages,
-                    temp=0.1,
+                    temp=_nt_temp,
                     # OUTPUT-LIMIT-POLICY (0.99.2): max_tokens = _planner_max_tokens
                     # (enthaelt min(setting, planner_ctx)).
                     max_tokens=_planner_max_tokens,
@@ -1402,6 +1475,7 @@ async def run_planner(
                     wall_timeout=_nt_timeout,
                     ctx_limit=planner_ctx,
                     num_ctx=planner_ctx,
+                    sampler=_nt_smp,
                 )
                 if _plan_content2:
                     _plan_content = _plan_content2
@@ -1427,12 +1501,15 @@ async def run_planner(
     else:
         # ── Non-Thinking Planner (Streaming) ──────────────────────────────────
         _nt_timeout = float(settings.get("duo_soft_planner_wall_timeout_s", 300))
+        _nt_temp, _nt_smp = _resolve_planner_sampling(
+            planner_model, False, settings, fallback_temp=0.1,
+        )
         try:
             _plan_thinking, _plan_content, _ = await _llm_stream_retry(
                 planner_model,
                 planner_port,
                 _messages,
-                temp=0.1,
+                temp=_nt_temp,
                 # OUTPUT-LIMIT-POLICY (0.99.2): max_tokens = _planner_max_tokens
                 # (enthaelt min(setting, planner_ctx)).
                 max_tokens=_planner_max_tokens,
@@ -1443,6 +1520,7 @@ async def run_planner(
                 heartbeat_fn=heartbeat_fn,
                 ctx_limit=planner_ctx,
                 num_ctx=planner_ctx,
+                sampler=_nt_smp,
             )
         except Exception as e:
             logger.error("[Planner] NT LLM error: %s", e, exc_info=True)
@@ -1555,12 +1633,11 @@ async def run_inloop_planner(
     )
 
     _inloop_plan_sys = make_thinking_planner_sys(step_cap, model_name=planner_model)
-    if use_thinking:
-        if not planner_model.startswith("qwen3.6"):
+    if _should_inject_prompt_think_tags(planner_model):
+        if use_thinking:
             if "/think" not in _inloop_plan_sys:
                 _inloop_plan_sys = "/think\n" + _inloop_plan_sys
-    else:
-        if not planner_model.startswith("qwen3.6"):
+        else:
             if "/no_think" not in _inloop_plan_sys:
                 _inloop_plan_sys = _inloop_plan_sys.rstrip() + "\n/no_think"
 
@@ -1569,6 +1646,9 @@ async def run_inloop_planner(
     except (TypeError, ValueError):
         _inloop_budget_setting = 0
     _inloop_eff_budget = thinking_budget if thinking_budget > 0 else max(0, _inloop_budget_setting)
+    _inloop_temp, _inloop_smp = _resolve_planner_sampling(
+        planner_model, use_thinking, settings, fallback_temp=0.3,
+    )
     _plan_payload = {
         "model":    planner_model,
         "messages": [
@@ -1576,9 +1656,10 @@ async def run_inloop_planner(
             {"role": "user",   "content": _plan_user_msg},
         ],
         "stream":          False,
-        "temperature":     0.3,
+        "temperature":     _inloop_temp,
         "max_tokens":      min(max_output_tokens + _inloop_eff_budget, _inloop_max_tokens),
     }
+    _apply_sampler_to_payload(_plan_payload, _inloop_smp)
     _apply_thinking_fields(_plan_payload, use_thinking, _inloop_eff_budget)
 
     # DEBUG-DUMP (task: dump instrumentation): the in-loop planner request,

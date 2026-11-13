@@ -31,9 +31,11 @@ from core import wedge_handoff as _wedge
 from core.tool_exec_helpers import (
     ToolRoundState,
     _SYS_PREFIX,
+    _invoke_inline_tool,
     _prefetch_readonly_tools, _warn_duplicate_write_targets, _track_focus_path,
     _note_successful_write, _update_read_ladder,
     _handle_too_large, _inject_tool_error_hints,
+    _append_tool_footer,
     _handle_ask_user, _execute_one_tool, _maybe_activate_reactive_think,
     _run_bash_fail_fix_pass_insight, _patch_file_fallback_hint,
     _read_required_and_python_hints, _unknown_error_hint,
@@ -46,6 +48,17 @@ if TYPE_CHECKING:
     from hive_functions.memory import ToolContextLRU
 
 _logger = logging.getLogger("tool_executor")
+
+
+def _extract_apply_patch_paths(dargs: dict | None, *, existing_only: bool = False) -> list[str]:
+    """Return unique target paths referenced by an apply_patch call."""
+    if not isinstance(dargs, dict):
+        return []
+    patch_text = str(dargs.get("patch") or dargs.get("diff") or "")
+    if not patch_text:
+        return []
+    from tools.patch_diff import patch_targets
+    return patch_targets(patch_text, include_new=not existing_only)
 
 
 # ── task_complete block/allow ladder (was 5 near-identical inline copies) ──
@@ -61,10 +74,10 @@ def _task_complete_ladder(trs, dtool_msgs, result, allow_on_blocked: bool,
     """
     trs.task_complete_blocked_count[0] += 1
     if trs.task_complete_blocked_count[0] < 3:
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + blocked_msg)})
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + blocked_msg)
         return "block"
     if allowed_msg is not None:
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + allowed_msg)})
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + allowed_msg)
     result.task_complete_called = True
     return "allow_break" if allow_on_blocked else "allow"
 
@@ -80,7 +93,8 @@ def _apply_test_truth_to_tc(result_text: str, outcome: str) -> str:
     return str(result_text).replace("Build: untested", f"Build: {_new}", 1)
 
 def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30,
-                      compact: bool = False) -> str:
+                      compact: bool = False,
+                      include_git: bool | None = None) -> str:
     """BASH-LOOP-REINJECT (2026-09-02): build a compact list of the tools that
     are actually available in this mode, so a bash-looping model is reminded of
     its full toolset instead of being aborted.
@@ -89,7 +103,9 @@ def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30,
     the model already has the full descriptions in its tool schema."""
     try:
         from tools.definitions import _get_inline_tools as _gt
-        _tools = _gt(include_websearch=duo_ws, mode=tool_mode) or []
+        _tools = _gt(
+            include_websearch=duo_ws, mode=tool_mode,
+            include_git=include_git) or []
     except Exception:
         return ""
     if compact:
@@ -370,11 +386,18 @@ def _edit_stub_text(dname: str, args: dict) -> str | None:
             return f"[applied edit: {path}]"
         if dname == "apply_patch":
             patch = str(args.get("patch", "") or args.get("diff", "") or "")
-            added = sum(1 for ln in patch.splitlines()
-                        if ln.startswith("+") and not ln.startswith("+++"))
-            removed = sum(1 for ln in patch.splitlines()
-                          if ln.startswith("-") and not ln.startswith("---"))
-            nfiles = patch.count("--- ") or 1
+            from tools.patch_diff import PatchError as _PE, parse_unified_diff as _parse_ud
+            try:
+                fps = _parse_ud(patch)
+                added = sum(fp.added() for fp in fps)
+                removed = sum(fp.removed() for fp in fps)
+                nfiles = len(fps)
+            except _PE:
+                added = sum(1 for ln in patch.splitlines()
+                            if ln.startswith("+") and not ln.startswith("+++"))
+                removed = sum(1 for ln in patch.splitlines()
+                              if ln.startswith("-") and not ln.startswith("---"))
+                nfiles = sum(1 for ln in patch.splitlines() if ln.startswith("--- ")) or 1
             return (f"[applied diff: {nfiles} file section(s) "
                     f"(+{added}/-{removed} lines)]")
     except (TypeError, ValueError, AttributeError):
@@ -382,11 +405,18 @@ def _edit_stub_text(dname: str, args: dict) -> str | None:
     return None
 
 
-def _compact_stale_edit_payloads(messages: list, current_assistant_idx: int) -> int:
+def _compact_stale_edit_payloads(
+    messages: list,
+    current_assistant_idx: int,
+    *,
+    cache_horizon: int = 0,
+) -> int:
     """Compact OLD write/edit payloads below the keep window to stubs.
 
-    Only assistant messages BEFORE ``current_assistant_idx`` are eligible
-    (the current round's message is _compact_round_write_args' business).
+    Only assistant messages BEFORE ``current_assistant_idx`` and AT OR AFTER
+    ``cache_horizon`` are eligible (mutating below ``cache_horizon`` would
+    invalidate the KV prefix cache, while the current round's message is
+    _compact_round_write_args' business).
     Returns the number of chars reclaimed; 0 = trigger not reached."""
     if not messages or current_assistant_idx <= 0:
         return 0
@@ -394,6 +424,8 @@ def _compact_stale_edit_payloads(messages: list, current_assistant_idx: int) -> 
     candidates: list[dict] = []
     assistants_seen = 0
     for idx in range(current_assistant_idx - 1, -1, -1):
+        if idx < cache_horizon:
+            break
         msg = messages[idx]
         tcs = msg.get("tool_calls") if isinstance(msg, dict) else None
         if not tcs:
@@ -468,7 +500,8 @@ async def execute_tool_round(
     run_id_global: str,
     chat_id: str,
     subtask_index: int,
-    _MAX_FOCUS_PATHS: int = 5) -> ToolExecResult:
+    _MAX_FOCUS_PATHS: int = 5,
+    include_git: bool | None = None) -> ToolExecResult:
     """Execute all tool calls for one round. Mutates dtool_msgs, round_state,
     and the passed-in mutable structures in-place. Returns structured result."""
 
@@ -529,11 +562,10 @@ async def execute_tool_round(
                     or time.monotonic() < trs.duo_deadline_at)
     if _deadline_ok and not hooks.is_aborted(chat_id):
         _pre_results = await _prefetch_readonly_tools(
-            tool_calls, exec_model, workspace_lock, tool_mode, duo_ws)
+            tool_calls, exec_model, workspace_lock, tool_mode, duo_ws,
+            include_git=include_git)
     else:
         _logger.info("[PREFETCH] skipped: round already over deadline or aborted")
-
-    _warn_duplicate_write_targets(tool_calls, dtool_msgs)
 
     for _i, _dtc_call in enumerate(tool_calls):
         # P3 (audit 2026-11-03): same truthiness guard as the prefetch above —
@@ -546,11 +578,11 @@ async def execute_tool_round(
                             _dtc_call.get("function", {}).get("name", "?"))
             _remaining = [_tc.get("function", {}).get("name", "?") for _tc in tool_calls[_i + 1:]]
             if _remaining:
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                     f"[TIMEOUT] Tool round exceeded deadline. "
                     f"These tool calls were NOT executed and must be retried: "
                     f"{', '.join(_remaining)}."
-                )})
+                ))
             break
 
         _dfn = _dtc_call.get("function", {})
@@ -648,7 +680,8 @@ async def execute_tool_round(
             else:
                 _dresult = await _execute_one_tool(
                     _dname, _dargs, _dargs_with_model, _i, _pre_results,
-                    trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
+                    trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws,
+                    include_git=include_git)
         # SEND-FILE (2026-11-04): validate now, deliver LATER. The model's
         # path is queued on the run result; the runner emits the actual
         # send_file event only after the final verification has passed, as
@@ -722,6 +755,11 @@ async def execute_tool_round(
         if _dname == "task_complete" and trs.last_test_outcome[0]:
             _dresult = _apply_test_truth_to_tc(_dresult, trs.last_test_outcome[0])
         await hooks.emit(_make_tool_result_event(_dname, _dresult))
+        if "\n\n[Diff — what changed]\n" in _dresult:
+            _dresult = re.sub(
+                r"\n\n\[Diff — what changed\]\n```diff\n[\s\S]*?\n```",
+                "", _dresult, count=1,
+            )
         if _dname == "ask_user":
             # ASK-USER-GATE-FIX (2026-09-02): agent_resumed only when the run
             # actually paused (gate == "open"). In throttled/autonomous mode
@@ -839,7 +877,7 @@ async def execute_tool_round(
                                 continue
                             _te_n = _te_m.get("name", "")
                             if _te_n in ("write_file", "edit_file",
-                                         "patch_file", "replace_lines"):
+                                         "patch_file", "replace_lines", "apply_patch"):
                                 _te_write_idx = _te_i
                             elif _te_n == "write_file_append":
                                 _te_append_idx = _te_i
@@ -861,7 +899,7 @@ async def execute_tool_round(
                             continue
                         _at_name = _at_m.get("name", "")
                         _at_content = str(_at_m.get("content") or "")
-                        if _at_name in ("write_file", "edit_file", "patch_file", "write_file_append", "replace_lines"):
+                        if _at_name in ("write_file", "edit_file", "patch_file", "write_file_append", "replace_lines", "apply_patch"):
                             _last_write_idx_at = _at_idx
                         elif _at_name == "run_tests" and not _at_content.startswith("[AUTO-TEST]"):
                             _last_test_idx_at = _at_idx
@@ -894,10 +932,12 @@ async def execute_tool_round(
                     if _last_test_idx_at <= _last_write_idx_at:
                         _logger.info("[AUTO-TEST] No test run since last edit - running run_tests")
                         try:
-                            _at_res = await _run_inline_tool(
+                            _at_res = await _invoke_inline_tool(
+                                _run_inline_tool,
                                 "run_tests", {"timeout": 90, "__model__": exec_model},
                                 workspace_lock=workspace_lock,
                                 tool_mode=tool_mode, include_websearch=duo_ws,
+                                include_git=include_git,
                             )
                         except Exception as _ate:
                             _at_res = _tool_error_response(
@@ -928,7 +968,7 @@ async def execute_tool_round(
                             if not trs.at_nosuite_nudged[0]:
                                 trs.at_nosuite_nudged[0] = True
                                 _logger.info("[AUTO-TEST] No test suite — nudging coder to write a minimal smoke test")
-                                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                                     "[NO TEST SUITE] No test framework was detected. Before completing: "
                                     "write a minimal smoke test that loads/executes the files you created and "
                                     "fails on errors (e.g. tests/smoke_test.py, or a quick headless check for "
@@ -936,7 +976,7 @@ async def execute_tool_round(
                                     "explicit output check — a file that cannot fail does not count as a test. "
                                     "Run it via run_bash and ensure exit code 0, then call "
                                     "task_complete again."
-                                )})
+                                ))
                                 _auto_test_skips_gate = True
                                 continue
                             _logger.info("[AUTO-TEST] No tests in the project - task_complete allowed through (smoke test nudge already given)")
@@ -969,7 +1009,7 @@ async def execute_tool_round(
                         continue
                     _tname = _m.get("name", "")
                     _last_tool_name = _tname
-                    if _tname in ("write_file", "edit_file", "patch_file", "write_file_append", "replace_lines"):
+                    if _tname in ("write_file", "edit_file", "patch_file", "write_file_append", "replace_lines", "apply_patch"):
                         _last_edit_idx = _idx
                     if _tname == "write_file_append":
                         _last_append_idx = _idx
@@ -1128,12 +1168,12 @@ async def execute_tool_round(
                     break
             if _total_tool_errors[0] >= _err_cap:
                 if not _recovery_saturated(dtool_msgs):
-                    dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                    _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                         f"[SYSTEM] {_err_cap} tool calls have failed across different "
                         "error types. The current approach is fundamentally "
                         "not working. Call task_complete with a summary of "
                         "what was accomplished and what remains."
-                    )})
+                    ))
                 _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
                 result.loop_detected = True
                 break
@@ -1156,19 +1196,26 @@ async def execute_tool_round(
                     if _rbn in trs.reads_seen:
                         _perf["reread_count"] += 1
                     trs.reads_seen[_rbn] = True
-            elif (_dname in ("edit_file", "patch_file", "replace_lines")
+            elif (_dname in ("edit_file", "patch_file", "replace_lines", "apply_patch")
                     and not _tool_call_failed(_dresult, _dname)
                     and len(trs.freshness_warned) < 4):
-                _rbp = str((_dargs or {}).get("path", "") or "")
-                _rbn = os.path.normcase(os.path.normpath(_rbp)) if _rbp else ""
-                if (_rbn and _rbn not in trs.reads_seen
-                        and _rbn not in trs.freshness_warned):
-                    trs.freshness_warned[_rbn] = True
-                    dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                        f"[FRESHNESS] You just edited {_rbp} without reading it "
-                        "this run. If more edits follow, read_file it first — "
-                        "your context may not match the file on disk."
-                    )})
+                _fresh_paths = (
+                    _extract_apply_patch_paths(_dargs, existing_only=True)
+                    if _dname == "apply_patch"
+                    else [str((_dargs or {}).get("path", "") or "")]
+                )
+                for _rbp in _fresh_paths:
+                    if len(trs.freshness_warned) >= 4:
+                        break
+                    _rbn = os.path.normcase(os.path.normpath(_rbp)) if _rbp else ""
+                    if (_rbn and _rbn not in trs.reads_seen
+                            and _rbn not in trs.freshness_warned):
+                        trs.freshness_warned[_rbn] = True
+                        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
+                            f"[FRESHNESS] You just edited {_rbp} without reading it "
+                            "this run. If more edits follow, read_file it first — "
+                            "your context may not match the file on disk."
+                        ))
         except (OSError, ValueError, TypeError) as _rb_err:
             _logger.debug("[READ-BEFORE-EDIT] skipped: %s", _rb_err)
 
@@ -1197,7 +1244,7 @@ async def execute_tool_round(
         # it immediately so the model neither wastes context nor trusts outdated
         # content for follow-up edits.
         if (
-            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines")
+            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines", "apply_patch")
             and _focus_path
             and not _tool_call_failed(_dresult, _dname)
         ):
@@ -1206,19 +1253,29 @@ async def execute_tool_round(
             # re-read + retry of the same wrong edit IS the wedge pattern.
             # Type-checker: same Optional-narrowing as above (local, then None check).
             _wedge_ws = getattr(trs, "wedge_state", None)
+            _stale_targets = (
+                _extract_apply_patch_paths(_dargs, existing_only=False)
+                if _dname == "apply_patch"
+                else [_focus_path]
+            )
             if _wedge_ws is not None:
-                _wedge.note_edit_success(_wedge_ws, _focus_path)
+                for _sp_w in (_stale_targets or [_focus_path]):
+                    if _sp_w:
+                        _wedge.note_edit_success(_wedge_ws, _sp_w)
             try:
                 from context.compression import evict_stale_reads_for_path as _evict_stale
-                _evicted_stale = _evict_stale(
-                    messages=dtool_msgs,
-                    # ToolRoundState.tool_ctx_lru is typed `object`; the runner
-                    # always passes the run's ToolContextLRU instance.
-                    lru=cast("ToolContextLRU", trs.tool_ctx_lru),
-                    path=_focus_path,
-                    cache_horizon=trs.cache_horizon,
-                    superseded=trs.superseded_paths,
-                )
+                _evicted_stale = 0
+                for _sp_e in (_stale_targets or [_focus_path]):
+                    if _sp_e:
+                        _evicted_stale += _evict_stale(
+                            messages=dtool_msgs,
+                            # ToolRoundState.tool_ctx_lru is typed `object`; the runner
+                            # always passes the run's ToolContextLRU instance.
+                            lru=cast("ToolContextLRU", trs.tool_ctx_lru),
+                            path=_sp_e,
+                            cache_horizon=trs.cache_horizon,
+                            superseded=trs.superseded_paths,
+                        )
                 if _evicted_stale:
                     _logger.info(
                         "[LRU-STALE] %s invalidated %d stale read_file output(s) of %s",
@@ -1261,7 +1318,7 @@ async def execute_tool_round(
         # compression nearly ineffective (a few 22k write attempts shaved the
         # context by only ~10k). Stub them with an explicit FAILED marker.
         elif (
-            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines")
+            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines", "apply_patch")
             and _focus_path
             and len(_raw_s) >= _WRITE_ARG_COMPACT_MIN
         ):
@@ -1280,7 +1337,10 @@ async def execute_tool_round(
                 and not _tool_call_failed(_dresult, _dname)):
             try:
                 _stale_saved = _compact_stale_edit_payloads(
-                    dtool_msgs, _assistant_idx)
+                    dtool_msgs,
+                    _assistant_idx,
+                    cache_horizon=getattr(trs, "cache_horizon", 0),
+                )
                 if _stale_saved:
                     _logger.info(
                         "[EDIT-COMPACT] stale edit payloads compacted "
@@ -1328,7 +1388,8 @@ async def execute_tool_round(
                 # PHASE-5 (2026-10-14, audit): names-only menu — the full menu
                 # ran up to ~5.2k chars per bash-loop breach; the model already
                 # carries the full descriptions in its tool schema.
-                _menu = _render_tool_menu(tool_mode, duo_ws, compact=True)
+                _menu = _render_tool_menu(
+                    tool_mode, duo_ws, compact=True, include_git=include_git)
                 await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — re-injecting all tools]\n"})
                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                     f"[LOOP DETECTED] run_bash was called repeatedly with the same or "
@@ -1351,11 +1412,11 @@ async def execute_tool_round(
         # ── Soft 2x check: read-only tools (hint only, no break) ──
         elif _last2_identical and _dname in ("search_code", "find_files", "git_status", "list_dir"):
             if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                     f"Same {_dname} call with identical args called twice — "
                     f"the result will not change. Skip this call and try a "
                     f"different pattern, path, or tool instead."
-                )})
+                ))
 
         # ── RUN-BASH-REPEAT HINT (2026-10-16): identical failing command
         # twice with NOTHING changed in between (live: PowerShell syntax in
@@ -1365,13 +1426,13 @@ async def execute_tool_round(
               and result.last_run_bash_failure
               and not result.changed_since_failure):
             if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                     "The same run_bash command just failed twice with identical args "
                     "and NO file changed since the first failure - an unchanged retry "
                     "will fail again. Change the command (the error names the shell "
                     "that ran), pick a different tool, or call "
                     "task_complete(status='blocked', reason='...')."
-                )})
+                ))
 
         # ── Read-file ladder: reads without any write/edit ──
         # READ-LADDER FIX (2026-10-17): the old condition additionally required
@@ -1396,12 +1457,12 @@ async def execute_tool_round(
             if not _recovery_saturated(dtool_msgs):
                 _logger.info("[READ-LADDER] fired consecutive=%d wide=%d kind=%s",
                              _consecutive_reads, _wide_read_streak, _ladder_kind)
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                     f"[READ LADDER] {_ladder_n} read_file calls ({_ladder_kind}) without any write/edit. "
                     f"You are exploring but not implementing. Pick the MOST RELEVANT file you've read and "
                     f"call write_file or edit_file on it NOW. Do NOT read any more files until you've "
                     f"made a change."
-                )})
+                ))
             else:
                 _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d wide=%d",
                              _consecutive_reads, _wide_read_streak)
@@ -1410,12 +1471,14 @@ async def execute_tool_round(
             trs.consecutive_reads[0] = 0
             trs.wide_read_streak[0] = 0
 
+    _warn_duplicate_write_targets(tool_calls, dtool_msgs)
+
     # NO-OP HINT (2026-09-07): append only after all tool results of this
     # round, so the assistant(tool_calls) -> tool-result ordering stays
     # intact.
     if _round_noop_hints:
         for _nh in _round_noop_hints:
-            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + _nh)})
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + _nh)
 
     # CACHE-HORIZON (2026-09-04): superseded read_file outputs live in the
     # already-sent prefix and were NOT replaced in-place. One-time tail note
@@ -1426,14 +1489,13 @@ async def execute_tool_round(
             if _sp and _sp not in _sup_clean:
                 _sup_clean.append(_sp)
         if _sup_clean:
-            dtool_msgs.append({"role": "user", "content": (
-                _SYS_PREFIX +
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                 "[CTX-HORIZON] Earlier read_file output(s) for the following path(s) "
                 "are superseded by newer changes and must be ignored: "
                 + ", ".join(_sup_clean[:8])
                 + ". The current file state (from your most recent write/edit or the "
                 "newest read_file) is authoritative. Do NOT edit based on the older copy."
-            )})
+            ))
 
     # Track last tool call for plan tracker
     result.last_tool_name = _dname

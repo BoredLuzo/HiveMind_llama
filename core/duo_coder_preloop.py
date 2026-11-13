@@ -25,6 +25,7 @@ from infra.run_control import (
 )
 from core.duo.preflight import write_pre_loop_resume as _pre_loop_resume
 from core.duo_helpers import CODER_VISION_NOTE, effective_image_plan
+from core.run_context import is_ctx_aborted
 from hive_functions.num_ctx_config import resolve_ctx
 
 logger = logging.getLogger("hivemind.duo")
@@ -109,6 +110,29 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
             except Exception:
                 pass
             _wb_hint_safe = max(2000, int(_wb_limit) - 1000)
+            from core.duo_helpers import (
+                resolve_coder_tool_mode as _rctm,
+                is_read_only_request as _iror,
+            )
+            from tools.definitions import _tool_names_for_mode as _tnfm
+            _pre_ro = bool(
+                getattr(ctx, "read_only", False)
+                or _iror(getattr(ctx, "user_input", "") or "")
+            )
+            _pre_tools = _tnfm(_rctm(ctx.settings, read_only=_pre_ro))
+            _apply_patch_hint = (
+                " To change SEVERAL files in one step (refactor: move + import "
+                "update, rename caller + definition), prefer apply_patch with a "
+                "unified diff (exact context lines required)."
+                if "apply_patch" in _pre_tools else ""
+            )
+            _append_hint = (
+                " If a write call is cut off by the output limit, the server keeps "
+                "everything up to the last complete line and tells you the line — "
+                "continue from there with write_file_append, never by rewriting "
+                "from the start."
+                if "write_file_append" in _pre_tools else ""
+            )
             # WRITE-RULES-DEDUPE (2026-09-17): the full chunk/marker contract
             # also lives in the write_file/write_file_append tool descriptions
             # — the system block now carries only the per-model numbers.
@@ -117,16 +141,12 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 f"characters per call (chunks well below ~{_wb_hint_safe}) and writes the "
                 f"COMPLETE file (create or overwrite). To change parts of an existing "
                 f"file: edit_file with old_text copied VERBATIM from your last read_file "
-                f"(must be unique in the file) and new_text as the replacement. To change "
-                f"SEVERAL files in one step (refactor: move + import update, rename "
-                f"caller + definition), prefer apply_patch with a unified diff (exact "
-                f"context lines required). NEVER drop "
+                f"(must be unique in the file) and new_text as the replacement."
+                f"{_apply_patch_hint} NEVER drop "
                 f"existing module-level constants, functions, or imports when adding to a "
                 f"file; when moving a symbol to another module for backward compatibility, "
-                f"re-export it directly via `from new_module import symbol` (not a wrapper `def`). If a write "
-                f"call is cut off by the output limit, the server keeps everything up to "
-                f"the last complete line and tells you the line — continue from there with "
-                f"write_file_append, never by rewriting from the start."
+                f"re-export it directly via `from new_module import symbol` (not a wrapper `def`)."
+                f"{_append_hint}"
             )
         except Exception:
             pass
@@ -300,26 +320,25 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
             try:
                 yield await ctx.emit({"type": "status", "content": "🧹 Freeing VRAM (unloading worker models)…"})
                 _evicted_workers = 0
+                from backend.llama_manager_utils import _nm as _canon_model
+                _exec_canon = _canon_model(exec_mdl)
+                _planner_canon = _canon_model(_planner_model)
                 if _use_parallel:
                     for _ws_entry in _worker_slots:
                         _wm = _ws_entry.get("model", "")
-                        _wm_base = _wm.rsplit("#", 1)[0] if "#" in _wm else _wm
-                        if _wm_base != exec_mdl:
+                        if _canon_model(_wm) != _exec_canon:
                             await _lsm2.evict(_wm)
                             _evicted_workers += 1
-                if _xexplore_mdl != exec_mdl:
+                if _canon_model(_xexplore_mdl) != _exec_canon:
                     await _lsm2.evict(_xexplore_mdl)
                     _evicted_workers += 1
                 try:
                     _loaded_after = await _lsm2.list_loaded()
-                    _exec_base = exec_mdl.rsplit("#", 1)[0] if "#" in exec_mdl else exec_mdl
-                    _planner_base = _planner_model.rsplit("#", 1)[0] if "#" in _planner_model else _planner_model
                     for _lm in _loaded_after:
                         _lname = str(_lm.get("name") or _lm.get("model") or "")
                         if not _lname:
                             continue
-                        _lbase = _lname.rsplit("#", 1)[0] if "#" in _lname else _lname
-                        if _lbase != _exec_base and _lbase != _planner_base:
+                        if _canon_model(_lname) not in (_exec_canon, _planner_canon):
                             await _lsm2.evict(_lname)
                             _evicted_workers += 1
                 except Exception:
@@ -447,7 +466,7 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                             # the retry — /stop is a cooperative Event (the
                             # emit succeeds anyway), so without this an
                             # aborted run burned ~10 min of load/kill churn.
-                            if ctx.aborted():
+                            if is_ctx_aborted(ctx):
                                 yield await ctx.emit({"type": "status",
                                     "content": "⏹ Coder load aborted (run was stopped)"})
                                 ctx.phase_timer.skip("coder_loop")
@@ -477,7 +496,7 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                     "content": f"⟳ Coder load timeout at ctx={_coder_ctx_try} — evicting the "
                                               f"stuck load, retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
                                 await asyncio.sleep(4.0)
-                                if ctx.aborted():
+                                if is_ctx_aborted(ctx):
                                     # the sleep is the second abort window
                                     yield await ctx.emit({"type": "status",
                                         "content": "⏹ Coder load aborted (run was stopped during retry wait)"})
@@ -560,7 +579,7 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                             _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                             break
                         except Exception as _cl_err:
-                            if ctx.aborted():
+                            if is_ctx_aborted(ctx):
                                 yield await ctx.emit({"type": "status",
                                     "content": "⏹ Coder load aborted (run was stopped)"})
                                 ctx.phase_timer.skip("coder_loop")
@@ -588,7 +607,7 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                     "content": f"⟳ Coder load error ({type(_cl_err).__name__}), retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
                                 await asyncio.sleep(4.0)
                                 _coder_ctx_try = _next_ctx
-                                if ctx.aborted():
+                                if is_ctx_aborted(ctx):
                                     yield await ctx.emit({"type": "status",
                                         "content": "⏹ Coder load aborted (run was stopped)"})
                                     ctx.phase_timer.skip("coder_loop")

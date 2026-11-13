@@ -125,4 +125,46 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     check("default mode still indexes top-level only",
           set(top_only.entries) == {"top.py"}, f"({sorted(top_only.entries)})")
 
+# SAFETY (2026-11-12 deep audit): nested=True skips non-code suffixes,
+# oversized files (> _MAX_EXTRACT_BYTES), and symlinks pointing outside root.
+from unittest import mock as _mock  # noqa: E402
+import context.repo_index as _ri      # noqa: E402
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td, \
+     tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as ext_td:
+    ws = Path(td)
+    sub = ws / "pkg"
+    sub.mkdir()
+    (sub / "good.py").write_text("def real_fn():\n    return 1\n", encoding="utf-8")
+    (sub / "notes.md").write_text("# heading\ndef fake_md_fn():\n", encoding="utf-8")
+    (sub / "huge.py").write_text("def huge_fn():\n" + ("    x = 1\n" * 20), encoding="utf-8")
+    ext_secret = Path(ext_td) / "secret.py"
+    ext_secret.write_text("SECRET_TOKEN = 'x'\n", encoding="utf-8")
+    sym_err = False
+    try:
+        (sub / "escape.py").symlink_to(ext_secret)
+    except OSError:
+        sym_err = True
+
+    with _mock.patch.object(_ri, "_MAX_EXTRACT_BYTES", 60):
+        nested_idx = RepoIndex(ws, nested=True)
+        nested_idx.refresh()
+        huge_syms = nested_idx.entries["pkg/huge.py"].symbols if "pkg/huge.py" in nested_idx.entries else None
+        md_syms = nested_idx.entries["pkg/notes.md"].symbols if "pkg/notes.md" in nested_idx.entries else None
+        good_syms = nested_idx.entries["pkg/good.py"].symbols if "pkg/good.py" in nested_idx.entries else None
+        check("nested indexes pkg/good.py symbols normally",
+              good_syms == ["real_fn"], f"({good_syms})")
+        check("nested skips symbol extraction on oversized files (> _MAX_EXTRACT_BYTES)",
+              huge_syms == [], f"({huge_syms})")
+        check("nested skips symbol extraction on non-code suffixes (_SYMBOL_SUFFIXES)",
+              md_syms == [], f"({md_syms})")
+        check("nested rejects external symlinks cleanly",
+              sym_err or "pkg/escape.py" not in nested_idx.entries,
+              f"({sorted(nested_idx.entries)})")
+
+    if not sym_err:
+        sym_entry = nested_idx._extract("pkg/escape.py", 0, 12)
+        check("_extract returns empty symbols for symlink target",
+              sym_entry.symbols == [], f"({sym_entry.symbols})")
+
 sys.exit(h.finish("repo_index"))

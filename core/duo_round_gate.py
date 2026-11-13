@@ -224,7 +224,7 @@ def _tool_budget_gate(
                                      emergency=_ctx_emergency):
             logger.warning(
                 "[CTX-FULL] storm guard: force compression throttled "
-                "(last=%d round=%d) - skipping this round instead of "
+                "(last=%s round=%d) - skipping this round instead of "
                 "shipping a doomed budget",
                 last_force_compress_round, dr,
             )

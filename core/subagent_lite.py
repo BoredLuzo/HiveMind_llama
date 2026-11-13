@@ -18,11 +18,19 @@ _active = False        # single-flight
 
 
 def _cfg() -> dict:
+    data: dict = {}
     try:
         from settings import load_settings
-        return load_settings() or {}
+        data = load_settings() or {}
     except Exception:
-        return {}
+        data = {}
+    try:
+        import core.state as _st
+        if isinstance(_st.settings, dict) and _st.settings:
+            data.update(_st.settings)
+    except (ImportError, AttributeError):
+        return data
+    return data
 
 
 def _s(key: str, default):
@@ -158,6 +166,8 @@ def _tool_schemas() -> list[dict]:
 
 async def _call_model(port: int, model: str, messages: list[dict]) -> dict:
     """Non-stream Chat-Call mit Tools. Returns raw assistant message dict."""
+    from core.llm_transport import post_chat_json
+
     payload = {
         "model": model,
         "messages": messages,
@@ -166,13 +176,14 @@ async def _call_model(port: int, model: str, messages: list[dict]) -> dict:
         "max_tokens": int(_s("subagent_lite_max_tokens", 700)),
         "tools": _tool_schemas(),
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4, read=60,
-                                                          write=10, pool=10)) as c:
-        r = await c.post(f"http://127.0.0.1:{port}/v1/chat/completions",
-                         json=payload)
-        r.raise_for_status()
-        data = r.json()
-    return (data.get("choices") or [{}])[0].get("message") or {}
+    res = await post_chat_json(
+        port,
+        payload,
+        timeout=httpx.Timeout(connect=4, read=60, write=10, pool=10),
+        max_attempts=2,
+        log_label="subagent_lite",
+    )
+    return res.message
 
 
 async def _run_sub_loop(task: str, workspace_lock: str | None,
@@ -226,10 +237,14 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
         _tr._files_seen_in_run.reset(_tok_seen)
         _tr._files_written_in_run.reset(_tok_written)
         _tr._files_in_context.reset(_tok_inctx)
+        _evict_task = asyncio.ensure_future(manager.evict(model))
+        _evict_task.add_done_callback(
+            lambda t: t.exception() if not t.cancelled() else None
+        )
         try:
-            await manager.evict(model)
+            await asyncio.shield(_evict_task)
+            await asyncio.sleep(1.5)
         except Exception:
             pass
-        await asyncio.sleep(1.5)
 
     return f"[subagent summary | {model}]\n{summary}"

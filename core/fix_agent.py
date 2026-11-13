@@ -117,6 +117,8 @@ def _tool_schemas() -> list[dict]:
 
 async def _post_chat(port: int, model: str, messages: list[dict]) -> dict:
     """Non-stream chat call with tools. Returns the raw assistant message."""
+    from core.llm_transport import post_chat_json
+
     payload = {
         "model": model,
         "messages": messages,
@@ -125,12 +127,14 @@ async def _post_chat(port: int, model: str, messages: list[dict]) -> dict:
         "max_tokens": int(_s("duo_wedge_handoff_max_tokens", 1200)),
         "tools": _tool_schemas(),
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(connect=4, read=90,
-                                                       write=10, pool=10)) as c:
-        r = await c.post(f"http://127.0.0.1:{port}/v1/chat/completions", json=payload)
-        r.raise_for_status()
-        data = r.json()
-    return (data.get("choices") or [{}])[0].get("message") or {}
+    res = await post_chat_json(
+        port,
+        payload,
+        timeout=httpx.Timeout(connect=4, read=90, write=10, pool=10),
+        max_attempts=2,
+        log_label="fix_agent",
+    )
+    return res.message
 
 
 async def _resolve_port(model: str, num_ctx: int, port: int | None) -> int:

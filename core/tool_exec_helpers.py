@@ -29,7 +29,31 @@ from tools.errors import (
 _SYS_PREFIX = "[AUTOMATED TOOL SYSTEM] "
 
 
-async def _prefetch_readonly_tools(tool_calls, exec_model, workspace_lock, tool_mode, duo_ws) -> dict:
+async def _invoke_inline_tool(
+    fn,
+    name: str,
+    args: dict,
+    *,
+    workspace_lock=None,
+    tool_mode=None,
+    include_websearch: bool = False,
+    include_git: bool | None = None,
+) -> str:
+    """Call ``_run_inline_tool`` forwarding ``include_git`` when provided."""
+    kw = {
+        "workspace_lock": workspace_lock,
+        "tool_mode": tool_mode,
+        "include_websearch": include_websearch,
+    }
+    if include_git is not None:
+        kw["include_git"] = include_git
+    return await fn(name, args, **kw)
+
+
+async def _prefetch_readonly_tools(
+    tool_calls, exec_model, workspace_lock, tool_mode, duo_ws,
+    include_git: bool | None = None,
+) -> dict:
     """Parallel-prefetch read-only tools (S0 part of execute_tool_round).
 
     B6 (audit, 2026-10-23): the gate opens for one more class — a single
@@ -54,10 +78,12 @@ async def _prefetch_readonly_tools(tool_calls, exec_model, workspace_lock, tool_
             _name = _fn.get("name", "")
             _args = _parse_tool_args(_fn.get("arguments", {}))
             try:
-                return await _run_inline_tool(
+                return await _invoke_inline_tool(
+                    _run_inline_tool,
                     _name, {**_args, "__model__": exec_model},
                     workspace_lock=workspace_lock,
-                    tool_mode=tool_mode, include_websearch=duo_ws)
+                    tool_mode=tool_mode, include_websearch=duo_ws,
+                    include_git=include_git)
             except Exception as _te:
                 return _tool_error_response(
                     "TOOL_EXEC_CRASH",
@@ -80,31 +106,48 @@ async def _prefetch_readonly_tools(tool_calls, exec_model, workspace_lock, tool_
 def _warn_duplicate_write_targets(tool_calls, dtool_msgs) -> None:
     """Scan for duplicate write targets in one round (U1)."""
     _write_tools = {"write_file", "edit_file", "patch_file",
-                    "replace_lines", "write_file_append"}
+                    "replace_lines", "write_file_append", "apply_patch"}
     _seen_paths: dict[str, str] = {}
     for _stc in tool_calls:
         _sname = _stc.get("function", {}).get("name", "")
         if _sname in _write_tools:
+            _paths: list[str] = []
             try:
                 _sargs_raw = _stc.get("function", {}).get("arguments", "{}")
                 _sargs = json.loads(_sargs_raw) if isinstance(_sargs_raw, str) else {}
-                _spath = _sargs.get("path", "") if isinstance(_sargs, dict) else ""
+                if isinstance(_sargs, dict):
+                    if _sname == "apply_patch":
+                        from tools.patch_diff import patch_targets as _pt
+                        _paths = _pt(str(_sargs.get("patch") or _sargs.get("diff") or ""))
+                    else:
+                        _sp = _sargs.get("path", "")
+                        if _sp:
+                            _paths = [_sp]
             except Exception:
-                _spath = ""
-            if _spath and _spath in _seen_paths:
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"[WARNING] Two writes to '{_spath}' in one round "
-                    f"({_seen_paths[_spath]} then {_sname}). "
-                    f"Second write will overwrite first. "
-                    f"Split into separate rounds if unintentional."
-                )})
-            elif _spath:
-                _seen_paths[_spath] = _sname
+                _paths = []
+            for _spath in _paths:
+                if _spath in _seen_paths:
+                    _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
+                        f"[WARNING] Two writes to '{_spath}' in one round "
+                        f"({_seen_paths[_spath]} then {_sname}). "
+                        f"Second write will overwrite first. "
+                        f"Split into separate rounds if unintentional."
+                    ))
+                else:
+                    _seen_paths[_spath] = _sname
 
 
 def _track_focus_path(dargs, dname, tool_ctx_lru, recent_focus_paths, max_focus_paths: int) -> str:
     """Focus-Pfad normalisieren + LRU-Decay + Ring-Puffer (S4)."""
     _focus_path = str(dargs.get("path", "") or dargs.get("file", "")).strip()
+    if not _focus_path and dname == "apply_patch":
+        try:
+            from tools.patch_diff import patch_targets as _pt_focus
+            _ap_f = _pt_focus(str(dargs.get("patch") or dargs.get("diff") or ""))
+            if _ap_f:
+                _focus_path = str(_ap_f[0]).strip()
+        except Exception:
+            _focus_path = ""
     if not _focus_path and dname == "run_bash":
         # WEDGE-AWARE (audit 2026-10-24): a run_bash wedge has no path arg —
         # key it by the first command word so a repeated failing command can
@@ -114,7 +157,7 @@ def _track_focus_path(dargs, dname, tool_ctx_lru, recent_focus_paths, max_focus_
             _focus_path = _cmd[0]
     tool_ctx_lru.decay(_focus_path)
 
-    if _focus_path and dname in ("patch_file", "edit_file", "write_file", "read_file"):
+    if _focus_path and dname in ("patch_file", "edit_file", "write_file", "read_file", "apply_patch"):
         _fp_norm = _focus_path.replace("\\", "/").strip()
         if _fp_norm not in recent_focus_paths:
             recent_focus_paths.insert(0, _fp_norm)
@@ -166,8 +209,11 @@ def _noop_hint_enabled() -> bool:
         return True
 
 
+_NO_CHANGE_TOOLS = ("edit_file", "patch_file", "write_file", "apply_patch")
+
+
 def _is_no_change_result(dname, dresult) -> bool:
-    if dname not in ("edit_file", "patch_file", "write_file"):
+    if dname not in _NO_CHANGE_TOOLS:
         return False
     return any(_m in str(dresult or "") for _m in _EDIT_NO_CHANGE_MARKERS)
 
@@ -183,7 +229,7 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
         return None
     if not path or round_state is None:
         return None
-    if dname not in ("edit_file", "patch_file", "write_file"):
+    if dname not in _NO_CHANGE_TOOLS:
         return None
     _result = str(dresult or "")
     _key = str(path).replace("\\", "/").strip()
@@ -192,7 +238,7 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
     _streak = round_state.edit_noop_streak
     if not _is_no_change_result(dname, _result):
         # Only real success (no [TOOL_ERROR]) resets the counter.
-        if not _result.startswith("[TOOL_ERROR") and dname in ("edit_file", "patch_file", "write_file"):
+        if not _result.startswith("[TOOL_ERROR") and dname in _NO_CHANGE_TOOLS:
             _streak.pop(_key, None)
         return None
     _n = _streak.get(_key, 0) + 1
@@ -202,10 +248,9 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
     _streak.pop(_key, None)
     return (
         f"[NO-OP] {dname} on '{_key}' repeatedly changed nothing "
-        f"(the SEARCH block no longer matches the current content, or the change "
-        f"is identical). Re-read the file with read_file (its content may have "
-        f"changed due to compression or earlier edits), then send a real "
-        f"SEARCH/REPLACE block against the current text."
+        f"(old_text no longer matches current content, or new_text equals old_text). "
+        f"Re-read the file with read_file (its content may have changed due to "
+        f"compression or earlier edits), then pass the actual edit via old_text/new_text."
     )
 
 
@@ -232,7 +277,7 @@ def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
             trs.consecutive_reads[0] += 1
         trs.last_read_path[0] = read_path
     elif dname in ("edit_file", "write_file", "patch_file", "write_file_append",
-                   "replace_lines", "run_bash", "run_python"):
+                   "replace_lines", "apply_patch", "run_bash", "run_python"):
         trs.consecutive_reads[0] = 0
         trs.wide_read_streak[0] = 0
         trs.read_ladder_fired[0] = False
@@ -256,20 +301,35 @@ def _recovery_saturated(msgs: list) -> bool:
 
     Two ways to saturate:
       - 3+ hint messages inside the last 6 messages (the historical rule)
-      - BUDGET (2026-10-17): the user-role text in that window already exceeds
-        the run's injection_budget. That budget was computed, logged and then
-        ignored, so ~73 hint sites could stack text without any cap; the
-        per-round telemetry row (injection_chars) showed the size but nothing
-        stopped it.
+      - BUDGET (2026-10-17): the user-role text + appended tool footers in
+        that window already exceed the run's injection_budget.
 
-    Unreadable budgets -> phrase rule only (never a reason to spam hints)."""
+    For `tool`-role messages only inspect the appended `[AUTOMATED TOOL SYSTEM]`
+    footer so arbitrary source/bash output containing words like "has occurred"
+    or "not working" cannot trigger false saturation.
+    """
     recent = msgs[-6:] if len(msgs) >= 6 else msgs
-    count = sum(
-        1 for m in recent
-        if m.get("role") in ("user", "system")
-        and any(phrase in (m.get("content") or "")
-                for phrase in _RECOVERY_PHRASES)
-    )
+    _SYS_MARKER = "[AUTOMATED TOOL SYSTEM]"
+
+    def _hint_text(m: dict) -> str:
+        role = m.get("role")
+        txt = str(m.get("content") or "")
+        if role in ("user", "system"):
+            return txt
+        if role == "tool":
+            idx = txt.find(_SYS_MARKER)
+            return txt[idx:] if idx >= 0 else ""
+        return ""
+
+    count = 0
+    _inj = 0
+    for m in recent:
+        htxt = _hint_text(m)
+        if not htxt:
+            continue
+        if any(phrase in htxt for phrase in _RECOVERY_PHRASES):
+            count += 1
+        _inj += len(htxt) if m.get("role") in ("user", "tool") else 0
     if count >= 3:
         return True
     try:
@@ -277,11 +337,8 @@ def _recovery_saturated(msgs: list) -> bool:
         _budget = int(getattr(_b_active(), "injection_budget", 0) or 0)
     except (ImportError, AttributeError, TypeError, ValueError):
         _budget = 0
-    if _budget > 0:
-        _inj = sum(len(str(m.get("content") or ""))
-                   for m in recent if m.get("role") == "user")
-        if _inj > _budget:
-            return True
+    if _budget > 0 and _inj > _budget:
+        return True
     return False
 
 
@@ -291,7 +348,7 @@ def _recovery_saturated(msgs: list) -> bool:
 # bash call SOMEWHERE in the history, so a model that read 10 files before its
 # first edit never got the hint.
 _WRITE_TOOL_NAMES = ("edit_file", "write_file", "write_file_append",
-                     "patch_file", "replace_lines", "edit_ast")
+                     "patch_file", "replace_lines", "edit_ast", "apply_patch")
 
 
 def _mode_can_write(tool_mode: str, duo_ws: bool = False) -> bool:
@@ -317,14 +374,14 @@ async def _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
     dtool_msgs.append({"role": "tool", "content": _dresult,
                         "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
     if not _recovery_saturated(dtool_msgs):
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             f"[SPLIT REQUIRED] {_dname} rejected: content too large.\n"
             f"You MUST split the file into chunks:\n"
             f"  1. edit_file(path, <first segment>)\n"
             f"  2. write_file_append(path, <next segment>)\n"
             f"  3. write_file_append(path, <rest...>)\n"
             f"Do NOT call edit_file again with the same large content. Start chunk 1 now."
-        )})
+        ))
     await hooks.emit({"type": "token", "content": f"\n[⚠ {_dname}: too large — forcing split mode]\n"})
 
 def _append_tool_msg(dtool_msgs, tc_id, dname, dresult) -> None:
@@ -332,10 +389,23 @@ def _append_tool_msg(dtool_msgs, tc_id, dname, dresult) -> None:
                        "tool_call_id": tc_id, "name": dname})
 
 
+def _append_tool_footer(dtool_msgs: list, text: str) -> None:
+    """Attach a system/recovery notice as a footer on the latest tool result
+    (preserving strict assistant->tool ordering and avoiding extra user turns).
+    Falls back to a user message only when no tool message sits at the tail."""
+    if not text:
+        return
+    if dtool_msgs and dtool_msgs[-1].get("role") == "tool":
+        prev = str(dtool_msgs[-1].get("content") or "")
+        dtool_msgs[-1]["content"] = f"{prev}\n\n{text}" if prev else text
+    else:
+        dtool_msgs.append({"role": "user", "content": text})
+
+
 def _append_user_hint(dtool_msgs, hint: str | None) -> None:
-    """User-side recovery hint, gated by saturation (hint budget)."""
+    """Recovery hint attached to the active tool result, gated by saturation."""
     if hint and not _recovery_saturated(dtool_msgs):
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + hint)})
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + hint)
 
 
 def _bump(counter: dict, key: str) -> int:
@@ -360,48 +430,54 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _ef_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"ef_malformed:{_ef_path}") >= 2:
             _dresult = (
-                f"[SYSTEM] edit_file malformed block on '{_ef_path}' repeatedly. "
-                "Use the exact format:\n<<<<<<< SEARCH\n(existing text)\n=======\n(new text)\n>>>>>>> REPLACE\n"
-                "Repeat for each edit. The SEARCH text must match EXACTLY the existing code."
+                f"[SYSTEM] edit_file arguments malformed on '{_ef_path}' repeatedly. "
+                "Pass old_text and new_text (exact match) or edits=[{old_text, new_text}]. "
+                "Alternatively use write_file with the complete updated file content."
             )
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
-                "EDIT_FILE_MALFORMED_BLOCK: your SEARCH/REPLACE block format was wrong.\n"
-                "Use:\n<<<<<<< SEARCH\n(existing text)\n=======\n(new text)\n>>>>>>> REPLACE\n"
-                "Repeat for each edit. The SEARCH text must match EXACTLY the existing code.")
+                "EDIT_FILE_MALFORMED_BLOCK: invalid edit_file arguments.\n"
+                "Pass exact strings as edit_file(path, old_text, new_text) or edits=[{old_text, new_text}].\n"
+                "old_text must match the existing code verbatim.")
 
-    elif _dname == "patch_file" and _tool_error_has_code(_dresult, "PATCH_FILE_OLD_STR_NOT_FOUND", "patch_file"):
+    elif _dname in ("patch_file", "edit_file") and (
+        _tool_error_has_code(_dresult, "EDIT_FILE_OLD_TEXT_NOT_FOUND", _dname)
+        or _tool_error_has_code(_dresult, "PATCH_FILE_OLD_STR_NOT_FOUND", _dname)
+    ):
         _matched = True
         _pf_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"pf_not_found:{_pf_path}") >= 3:
             _dresult = (
-                f"[SYSTEM] patch_file repeatedly failing on '{_pf_path}'. "
-                "Switch strategy: use edit_file with the full corrected block instead."
+                f"[SYSTEM] {_dname} repeatedly failed to match '{_pf_path}'. "
+                "Switch strategy: call read_file first, then use write_file with the complete updated file content instead."
             )
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
-                "PATCH_FILE_OLD_STR_NOT_FOUND: your old_str did not match exactly.\n"
-                "Call read_file on this path first, then retry with the exact "
+                f"EDIT_FILE_OLD_TEXT_NOT_FOUND on '{_pf_path}': old_text did not match the current file.\n"
+                "Call read_file on this path first, then retry edit_file(path, old_text, new_text) with exact "
                 "characters from the file — including whitespace and indentation.")
 
-    elif _dname == "patch_file" and _tool_error_has_code(_dresult, "PATCH_FILE_NON_UNIQUE_MATCH", "patch_file"):
+    elif _dname in ("patch_file", "edit_file") and (
+        _tool_error_has_code(_dresult, "EDIT_FILE_NOT_UNIQUE", _dname)
+        or _tool_error_has_code(_dresult, "PATCH_FILE_NON_UNIQUE_MATCH", _dname)
+    ):
         _matched = True
         _pf_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"pf_non_unique:{_pf_path}") >= 2:
             _dresult = (
-                f"[SYSTEM] patch_file still non-unique on '{_pf_path}'. "
-                "Switch to edit_file with complete block content instead."
+                f"[SYSTEM] {_dname} still non-unique on '{_pf_path}'. "
+                "Include more surrounding lines in old_text or use write_file with the complete file content instead."
             )
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
-                "PATCH_FILE_NON_UNIQUE_MATCH: old_str matched multiple locations.\n"
-                "Add more surrounding lines to make it unique, then retry.")
+                f"EDIT_FILE_NOT_UNIQUE on '{_pf_path}': old_text matched multiple locations.\n"
+                "Include more surrounding lines in old_text (or pass edits=[...]) to make the match unique, then retry.")
 
     elif _dname == "edit_file" and _tool_error_has_code(_dresult, "EDIT_FILE_NO_BLOCKS_APPLIED", "edit_file"):
         _matched = True
@@ -412,8 +488,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         if _bump(attempts_per_file, f"nb_{_pf_path}") >= 2:
             _dresult = (
                 f"[SYSTEM] Repeated EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}'. "
-                "Stop using edit_file here. Use write_file with the complete "
-                "file content as plain text — no SEARCH/REPLACE markers."
+                "Stop using edit_file here. Use write_file with the complete file content."
             )
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
@@ -422,7 +497,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                 _append_user_hint(dtool_msgs,
                     f"EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}': file is new or empty — "
                     "edit_file requires existing content to match. "
-                    "Use write_file with plain content instead (no SEARCH/REPLACE markers).")
+                    "Use write_file with the full content instead.")
             else:
                 _append_user_hint(dtool_msgs,
                     f"edit_file cannot apply to this content on '{_pf_path}'.\n"
@@ -440,16 +515,16 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 f"[SYSTEM] edit_file produced no change on '{_no_path}' 3x. "
-                "Your SEARCH and REPLACE are identical — the file is NOT modified. "
+                "Your old_text and new_text are identical — the file is NOT modified. "
                 f"Call read_file('{_no_path}') to see the current content, then "
-                "send a REPLACE block containing the NEW code."
+                "pass a different new_text containing the actual change."
             )
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
-                f"EDIT_FILE_NOOP on '{_no_path}': SEARCH and REPLACE were identical — "
+                f"EDIT_FILE_NOOP on '{_no_path}': old_text and new_text were identical — "
                 "no change was made. Read the file again, then provide the actual "
-                "new code in the REPLACE section (different from SEARCH).")
+                "new code in new_text (different from old_text).")
 
     elif _tool_error_has_code(_dresult, "RUN_BASH_TIMEOUT", "run_bash"):
         _matched = True
@@ -519,120 +594,120 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         # always surfaced: path guidance is cheap and precise
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             f"FILE_READ_FAILED on '{_dargs.get('path', '')}': check the path with list_dir, "
             "verify the file exists, then retry. If the file is missing, "
             "use find_files to locate it or create it with write_file."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "EDIT_AST_UNAVAILABLE", "edit_ast"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "EDIT_AST_UNAVAILABLE: AST editor not available. "
             "Use edit_file with SEARCH/REPLACE blocks as fallback. "
             "Read the file first, then build a SEARCH block with the "
             "exact target function/class to replace."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "GIT_COMMIT_FAILED", "git_commit"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "GIT_COMMIT_FAILED: run git_status first to check for "
             "conflicts, untracked files, or detached HEAD state, "
             "then resolve and retry the commit."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "WEBSEARCH_UNAVAILABLE", "web_search") or \
          _tool_error_has_code(_dresult, "WEBSEARCH_FAILED", "web_search"):
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Web search unavailable or failed. "
             "Use search_code to find patterns in the codebase, "
             "or rely on existing code knowledge. Do NOT retry web_search."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "WEBFETCH_UNAVAILABLE", "web_fetch") or \
          _tool_error_has_code(_dresult, "WEBFETCH_FAILED", "web_fetch"):
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Web fetch unavailable or failed. "
             "Use web_search to find the content elsewhere, "
             "or check if local documentation exists with find_files. "
             "Do NOT retry web_fetch with the same URL."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "GIT_UNAVAILABLE") or \
          _tool_error_has_code(_dresult, "GIT_STATUS_FAILED"):
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Git tools not available or git status failed — "
             "repo may be damaged or not initialized. "
             "Skip all git operations and use find_files + search_code "
             "to inspect project state. Do NOT retry git commands."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "TOOL_EXEC_CRASH") or \
          _tool_error_has_code(_dresult, "TOOL_NOT_FOUND") or \
          _tool_error_has_code(_dresult, "TOOL_NOT_ALLOWED"):
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Tool call failed (crash, unknown tool, or not allowed). "
             "Use only the tools listed in your system prompt function list. "
             "Try a different tool to achieve the same result. "
             "Do NOT retry the same call."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "FIND_FILES_FAILED", "find_files"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "FIND_FILES_FAILED: try a simpler glob like *.py or *.ts, "
             "or use list_dir to explore the directory manually."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "LIST_DIR_FAILED", "list_dir"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "LIST_DIR_FAILED: use find_files with **/* pattern "
             "to explore the directory instead."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "GET_SIGNATURES_FAILED", "get_signatures"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "GET_SIGNATURES_FAILED: use read_file with start_line/end_line "
             "to inspect the file section manually."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "WRITE_FILE_APPEND_FAILED", "write_file_append"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "WRITE_FILE_APPEND_FAILED: append failed (disk full or permission). "
             "Use write_file to fully overwrite the target path instead."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "REPLACE_LINES_INVALID_START", "replace_lines") or \
          _tool_error_has_code(_dresult, "REPLACE_LINES_INVALID_END", "replace_lines") or \
          _tool_error_has_code(_dresult, "REPLACE_LINES_FAILED", "replace_lines"):
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "REPLACE_LINES error: line numbers may be stale. "
             "Call read_file to get current line numbers, then retry. "
             "If that fails, use edit_file with SEARCH/REPLACE instead."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "MISSING_ARG", "git_commit"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
-        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+        _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "MISSING_ARG: git_commit requires a non-empty message. "
             "Provide a short one-line description of the changes."
-        )})
+        ))
 
     elif _tool_error_has_code(_dresult, "INVALID_ARGUMENT"):
         _matched = True
@@ -731,7 +806,8 @@ def _ws_tokens(query: str) -> set:
 
 
 async def _execute_one_tool(_dname, _dargs, _dargs_with_model, _i, _pre_results,
-                              duo_seen_web_queries, workspace_lock, tool_mode, duo_ws) -> str:
+                              duo_seen_web_queries, workspace_lock, tool_mode, duo_ws,
+                              include_git: bool | None = None) -> str:
     """S7: web_search dedup + tool execution (from execute_tool_round)."""
     # DEDUP-EXEC-MERGE (2026-09-09): web_search and the generic path shared
     # byte-identical execution code; only the dedup prelude differs.
@@ -779,16 +855,20 @@ async def _execute_one_tool(_dname, _dargs, _dargs_with_model, _i, _pre_results,
     try:
         if _dname in _READ_TOOLS:
             return await asyncio.wait_for(
-                _run_inline_tool(
+                _invoke_inline_tool(
+                    _run_inline_tool,
                     _dname, _dargs_with_model,
                     workspace_lock=workspace_lock,
-                    tool_mode=tool_mode, include_websearch=duo_ws),
+                    tool_mode=tool_mode, include_websearch=duo_ws,
+                    include_git=include_git),
                 timeout=_READ_TOOL_TIMEOUT,
             )
-        return await _run_inline_tool(
+        return await _invoke_inline_tool(
+            _run_inline_tool,
             _dname, _dargs_with_model,
             workspace_lock=workspace_lock,
-            tool_mode=tool_mode, include_websearch=duo_ws)
+            tool_mode=tool_mode, include_websearch=duo_ws,
+            include_git=include_git)
     except asyncio.TimeoutError:
         return _tool_error_response(
             "TOOL_TIMEOUT",
@@ -837,9 +917,9 @@ async def _maybe_activate_reactive_think(_dname, _dresult, round_state, dtool_ms
                 # re-enabled payload-side: duo_runner's chat_template_kwargs
                 # keys off think_runtime, so the only in-context change left
                 # is this appended note.
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                     "[THINKING ON] Repeated tool failures - think through the "
-                    "failure cause step by step before the next tool call.")})
+                    "failure cause step by step before the next tool call."))
                 await hooks.emit({
                     "type": "status",
                     "content": (
@@ -862,6 +942,13 @@ async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hook
     # call and permanently disarming the duo verify gates (VERIFY-GATE-OWNER,
     # critic veto, final hard-stop). Only a passing run_bash says "the last
     # mutations were verified".
+    if _dname == "run_tests":
+        _rt_str = str(_dresult or "")
+        if "[TEST-RESULT] ✅" in _rt_str:
+            result.verify_last_ok_serial = max(
+                result.verify_last_ok_serial, result.verify_mutation_serial
+            )
+        return
     if _dname != "run_bash":
         return
     _rb_failed = _run_bash_failed(_dresult)
@@ -910,15 +997,15 @@ def _patch_file_fallback_hint(_dname, _dargs, _dresult, attempts_per_file) -> st
         attempts_per_file[_pf_path] = attempts_per_file.get(_pf_path, 0) + 1
         if attempts_per_file[_pf_path] >= 2:
             _dresult += (
-                f"\n\n[STATE: patch_file failed {attempts_per_file[_pf_path]}x on this file. "
-                f"Switch strategy: use edit_file with the COMPLETE new file content instead. "
-                f"Read the file first, then edit_file with all changes applied.]"
+                f"\n\n[STATE: {_dname} failed {attempts_per_file[_pf_path]}x on this file. "
+                f"Switch strategy: call read_file first to verify exact current contents, then use write_file "
+                f"with the complete updated file content (or exact edit_file(old_text, new_text)).]"
             )
     if _tool_error_has_code(_dresult, "PATCH_FILE_EMPTY_OLD_STR", "patch_file"):
         _dresult += (
             "\n\nYou called patch_file with empty arguments. "
-            "Call read_file first, then either patch_file with exact old_str "
-            "or edit_file with complete new content."
+            "Call read_file first, then use edit_file(path, old_text, new_text) "
+            "or write_file with complete new content."
         )
 
     return _dresult
@@ -960,11 +1047,11 @@ def _unknown_error_hint(_dname, _dresult, _dtc_call, dtool_msgs, tool_error_retr
         tool_error_retries["unknown_error_consecutive"] = tool_error_retries.get("unknown_error_consecutive", 0) + 1
         if tool_error_retries["unknown_error_consecutive"] >= 3:
             if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
                     "[REPEATED ERROR] An unrecognized error has occurred 3 times. "
                     "Your current approach is not working. Switch to a completely "
                     "different tool or strategy to achieve the same result."
-                )})
+                ))
             tool_error_retries["unknown_error_consecutive"] = 0
     else:
         tool_error_retries["unknown_error_consecutive"] = 0
@@ -973,6 +1060,41 @@ def _unknown_error_hint(_dname, _dresult, _dtc_call, dtool_msgs, tool_error_retr
 async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
                                dtool_msgs, hooks, _is_git_repo, _ws_root=None):
     """S15: file-change tracking incl. git auto-diff (from execute_tool_round)."""
+    if _dname == "apply_patch" and not _tool_call_failed(_dresult, _dname):
+        from tools.patch_diff import PatchError as _PE, parse_unified_diff as _parse_ud
+        _ws = Path(_ws_root).resolve() if _ws_root else Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()
+        try:
+            _fps = _parse_ud(str((_dargs or {}).get("patch") or (_dargs or {}).get("diff") or ""))
+        except _PE:
+            _fps = []
+        _by_path: dict[str, dict] = {}
+        for _fp in _fps:
+            _t = _fp.target
+            if not _t:
+                continue
+            _entry = _by_path.setdefault(_t, {"added": 0, "removed": 0, "deleted": False, "created": _fp.is_new_file})
+            _entry["added"] += _fp.added()
+            _entry["removed"] += _fp.removed()
+            _entry["deleted"] = _fp.is_delete
+        for _t, _st in _by_path.items():
+            _op = "deleted" if _st["deleted"] else ("created" if _st["created"] else "patched")
+            def _read_ap_content(_tp: str = _t) -> str:
+                try:
+                    _p = Path(_tp)
+                    _abs = _p.resolve() if _p.is_absolute() else (_ws / _p).resolve()
+                    if _abs.exists() and _abs.stat().st_size <= 256 * 1024:
+                        return _abs.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    return ""
+                return ""
+            _fc_content = "" if _op == "deleted" else await asyncio.to_thread(_read_ap_content)
+            file_changes[_t] = {"op": _op, "lines_added": _st["added"], "lines_removed": _st["removed"]}
+            await hooks.emit({"type": "file_change", "path": _t, "op": _op,
+                              "lines_added": _st["added"], "lines_removed": _st["removed"],
+                              "content": _fc_content})
+            if result.last_run_bash_failure:
+                result.changed_since_failure.add(_t)
+        return
     _fc_path = _dargs.get("path", "")
     if _fc_path and not _tool_call_failed(_dresult, _dname):
         _fc_content = ""
@@ -1003,23 +1125,15 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
                               "op": "write", "lines": _fc_lines, "content": _fc_content})
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_fc_path)
-            if _is_git_repo:
-                try:
-                    _diff_proc = await asyncio.create_subprocess_exec(
-                        "git", "diff", "--stat", "HEAD", "--", str(_fc_path),
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                        cwd=str(_ws_root))
-                    _diff_out, _ = await asyncio.wait_for(_diff_proc.communicate(), 3)
-                    _diff_str = _diff_out.decode(errors="replace").strip()
-                    if _diff_str:
-                        dtool_msgs.append({"role": "tool", "content": f"[auto-diff] {_diff_str}"})
-                except Exception:
-                    pass
         elif _dname == "edit_file":
             # Parse unified edit_file/write_file result: created / rewrote / edited
             _cr = re.search(r"\[(?:edit_file|write_file): created '[^']+' \(\+(\d+) lines\)\]", _dresult)
             _rw = re.search(r"\[(?:edit_file|write_file): rewrote '[^']+' \(\+(\d+)/-(\d+) lines\)\]", _dresult)
-            _bl = re.search(r"\[(?:edit_file|write_file): '[^']+' - (\d+)/(\d+) blocks applied \(([+-]\d+) lines\)\]", _dresult)
+            _bl = (
+                re.search(r"\[(?:edit_file|write_file): '[^']+' - (\d+)/\d+ blocks applied \(([+-]\d+) lines\)\]", _dresult)
+                or re.search(r"\[(?:edit_file|write_file): '[^']+' applied (\d+) edits \(([+-]\d+) lines\)\]", _dresult)
+            )
+            _rp = None if _bl else re.search(r"\[(?:edit_file|write_file): '[^']+' replaced \(([+-]\d+) lines\)\]", _dresult)
             if _cr:
                 _added = int(_cr.group(1))
                 file_changes[_fc_path] = {"op": "created", "lines_added": _added, "lines_removed": 0}
@@ -1031,42 +1145,18 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
                 file_changes[_fc_path] = {"op": "rewrote", "lines_added": _added, "lines_removed": _removed}
                 await hooks.emit({"type": "file_change", "path": _fc_path,
                                   "op": "rewrote", "lines_added": _added, "lines_removed": _removed, "content": _fc_content})
-            elif _bl:
-                _applied = int(_bl.group(1))
-                _delta = int(_bl.group(3))
-                _added = max(0, _delta)
-                _removed = abs(min(0, _delta))
-                file_changes[_fc_path] = {"op": "edited", "blocks": _applied, "lines_added": _added, "lines_removed": _removed}
-                await hooks.emit({"type": "file_change", "path": _fc_path,
-                                  "op": "edited", "blocks": _applied, "lines_added": _added, "lines_removed": _removed, "content": _fc_content})
             else:
-                # REPLACED FORMAT (2026-09-20): the v1.2.1 edit_file rework
-                # phrases single-block results as "[edit_file: 'p' replaced
-                # (+N lines)]" — none of the three patterns above matched,
-                # so file_change was never emitted and the panel's File view
-                # stayed empty for the whole run.
-                _rp = re.search(r"\[(?:edit_file|write_file): '[^']+' replaced \(([+-]\d+) lines\)\]", _dresult)
-                if _rp:
-                    _delta = int(_rp.group(1))
+                _m = _bl if _bl is not None else _rp
+                if _m is not None:
+                    _applied = int(_bl.group(1)) if _bl is not None else 1
+                    _delta = int(_bl.group(2)) if _bl is not None else int(_m.group(1))
                     _added = max(0, _delta)
                     _removed = abs(min(0, _delta))
-                    file_changes[_fc_path] = {"op": "edited", "blocks": 1, "lines_added": _added, "lines_removed": _removed}
+                    file_changes[_fc_path] = {"op": "edited", "blocks": _applied, "lines_added": _added, "lines_removed": _removed}
                     await hooks.emit({"type": "file_change", "path": _fc_path,
-                                      "op": "edited", "blocks": 1, "lines_added": _added, "lines_removed": _removed, "content": _fc_content})
+                                      "op": "edited", "blocks": _applied, "lines_added": _added, "lines_removed": _removed, "content": _fc_content})
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_fc_path)
-            if _is_git_repo:
-                try:
-                    _diff_proc = await asyncio.create_subprocess_exec(
-                        "git", "diff", "--stat", "HEAD", "--", str(_fc_path),
-                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                        cwd=str(_ws_root))
-                    _diff_out, _ = await asyncio.wait_for(_diff_proc.communicate(), 3)
-                    _diff_str = _diff_out.decode(errors="replace").strip()
-                    if _diff_str:
-                        dtool_msgs.append({"role": "tool", "content": f"[auto-diff] {_diff_str}"})
-                except Exception:
-                    pass
         elif _dname == "write_file_append":
             _fc_lines = _dargs.get("content", "").count("\n") + 1
             _prev = file_changes.get(_fc_path, {"op": "append", "lines_added": 0, "lines_removed": 0})

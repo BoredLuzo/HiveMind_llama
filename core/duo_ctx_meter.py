@@ -233,12 +233,19 @@ def _ctx_shrink_round(
             res.est_tokens = _calib_tokens(coder_real_prompt_tokens, coder_est_at_real, int(_estimate_ctx_tokens(dtool_msgs)))
             res.guard_tokens = max(
                 int(coder_real_prompt_tokens[0] or 0), int(res.est_tokens))
-            res.events.append({"type": "status",
-                "content": f"🧹 Masked {res.masked_n} stale tool output(s) — no summary needed."})
-            logger.info(
-                "[CTX-MASK] masked=%d est_after=%d threshold=%d (LLM compression skipped)",
-                res.masked_n, int(res.est_tokens), int(compress_threshold),
-            )
             if res.guard_tokens <= int(compress_threshold):
                 res.compress_ok = False
+                res.events.append({"type": "status",
+                    "content": f"🧹 Masked {res.masked_n} stale tool output(s) — no summary needed."})
+                logger.info(
+                    "[CTX-MASK] masked=%d est_after=%d threshold=%d (LLM compression skipped)",
+                    res.masked_n, int(res.est_tokens), int(compress_threshold),
+                )
+            else:
+                res.events.append({"type": "status",
+                    "content": f"🧹 Masked {res.masked_n} stale tool output(s) — running summary."})
+                logger.info(
+                    "[CTX-MASK] masked=%d est_after=%d guard=%d threshold=%d (LLM compression still needed)",
+                    res.masked_n, int(res.est_tokens), int(res.guard_tokens), int(compress_threshold),
+                )
     return res

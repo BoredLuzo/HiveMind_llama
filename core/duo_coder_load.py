@@ -253,12 +253,15 @@ async def _duo_resolve_tool_budgets(
         )
         _budg.set_active(_run_budgets)
         state["_budgets"] = _run_budgets
+        from core.duo_helpers import resolve_coder_tool_mode as _resolve_tier_mode
         _xtools_ws = _get_inline_tools(
-            include_websearch=_duo_ws, mode="duo_full",
+            include_websearch=_duo_ws,
+            mode=_resolve_tier_mode(ctx.settings),
             budget_chars=_run_budgets.schema_budget,
             # Telegram runs may deliver files the model creates; desktop and
             # API runs never see a channel they cannot use.
-            include_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")))
+            include_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
+            settings=ctx.settings)
         state["_xtools_ws"] = _xtools_ws
         logger.info(
             "[BUDGETS] ctx=%d cpt=%.2f(%s) out=%d -> tool_cap=%d read_cap=%d schema=%d "

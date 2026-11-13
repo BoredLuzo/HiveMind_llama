@@ -870,8 +870,11 @@ check("23a every perf field carries a tooltip", not _missing_tips,
       f"(ohne: {_missing_tips})")
 check("23b the bubble is styled", ".ctx-perf-item[data-tip]::after" in _CSS2)
 check("23c the bubble is keyboard reachable", "focus-visible::after" in _CSS2)
-check("23d the cache buster moved", "app.js?v=20261102-01" in _HTML2
-      and "style.css?v=20261101-01" in _HTML2)
+_mjs = re.search(r"app\.js\?v=(\d{8}-\d{2})", _HTML2)
+_mcss = re.search(r"style\.css\?v=(\d{8}-\d{2})", _HTML2)
+check("23d the cache buster moved",
+      bool(_mjs) and _mjs.group(1) >= "20261102-01"
+      and bool(_mcss) and _mcss.group(1) >= "20261101-01")
 from settings import DEFAULT_SETTINGS as _D2                              # noqa: E402
 check("23e until_finished is on by default", _D2.get("until_finished") is True)
 _SRV2 = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
@@ -1382,6 +1385,92 @@ try:
           f"({_grab_32.messages[-1:]})")
 finally:
     _lg_32.removeHandler(_grab_32)
+
+
+# ── 33. P2 guard: non-dict arguments normalization & rejection ───────────
+async def _args_guard_flow():
+    class _FakeConn:
+        timeout_s = 5.0
+        dead = False
+        last_error = ""
+        _guard = asyncio.Lock()
+        calls = []
+
+        async def call_tool(self, tool, arguments, timeout=None):
+            self.calls.append((tool, arguments))
+            return f"ok:{arguments.get('text', '')}"
+
+    c = MC.McpClient()
+    fc = _FakeConn()
+    c._names = {"mcp_demo_echo": ("demo", "echo")}
+    c._conns = {"demo": fc}
+    r_json = await c.call("mcp_demo_echo", '{"text": "parsed"}')
+    r_none = await c.call("mcp_demo_echo", None)
+    r_bad_str = await c.call("mcp_demo_echo", "{not-json")
+    r_list = await c.call("mcp_demo_echo", ["bad"])
+    return r_json, r_none, r_bad_str, r_list, fc.calls
+
+
+_rj, _rn, _rbs, _rl, _fc_calls = asyncio.run(_args_guard_flow())
+check("33a valid JSON string arguments is normalized to dict",
+      _rj == "ok:parsed" and _fc_calls[0] == ("echo", {"text": "parsed"}), f"({_rj}, {_fc_calls})")
+check("33b None arguments coerces to empty dict",
+      _rn == "ok:" and _fc_calls[1] == ("echo", {}), f"({_rn}, {_fc_calls})")
+check("33c invalid JSON string arguments returns MCP_INVALID_ARGUMENTS",
+      "MCP_INVALID_ARGUMENTS" in _rbs, f"({_rbs!r})")
+check("33d non-dict list arguments returns MCP_INVALID_ARGUMENTS",
+      "MCP_INVALID_ARGUMENTS" in _rl, f"({_rl!r})")
+
+
+# ── 34. P2 guard order & non-serializable arg error (2026-11-13) ───────────
+async def _guard_and_serial_flow():
+    class _BusyConn:
+        timeout_s = 0.05
+        dead = False
+        last_error = ""
+        _guard = asyncio.Lock()
+
+        async def call_tool(self, tool, arguments, timeout=None):
+            return "should-not-run"
+
+    class _SerialConn:
+        timeout_s = 5.0
+        dead = False
+        last_error = ""
+        _guard = asyncio.Lock()
+
+        async def call_tool(self, tool, arguments, timeout=None):
+            json.dumps(arguments)
+            return "ok"
+
+    c = MC.McpClient()
+    budget_calls = []
+
+    async def _rec_budget(server):
+        budget_calls.append(server)
+        return None
+
+    c._budget_gate = _rec_budget
+    bc = _BusyConn()
+    c._names = {"mcp_demo_busy": ("busy_srv", "echo"),
+                "mcp_demo_ser": ("ser_srv", "echo")}
+    c._conns = {"busy_srv": bc, "ser_srv": _SerialConn()}
+    await bc._guard.acquire()
+    try:
+        res_busy = await c.call("mcp_demo_busy", {"a": 1}, timeout=0.05)
+    finally:
+        bc._guard.release()
+    budget_calls_busy = list(budget_calls)
+    res_unser = await c.call("mcp_demo_ser", {"bad": object()})
+    return res_busy, budget_calls_busy, res_unser
+
+
+_rbusy, _bcalls, _runser = asyncio.run(_guard_and_serial_flow())
+check("34a conn._guard timeout returns MCP_CALL_FAILED before _budget_gate consumes budget",
+      "MCP_CALL_FAILED" in _rbusy and _bcalls == [],
+      f"({_rbusy!r}, budget_calls={_bcalls})")
+check("34b non-JSON-serializable dict args returns MCP_INVALID_ARGUMENTS",
+      "MCP_INVALID_ARGUMENTS" in _runser, f"({_runser!r})")
 
 
 sys.exit(h.finish("mcp_client"))

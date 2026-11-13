@@ -33,7 +33,7 @@ async def run_pre_explore(
     pctx:          int = 0,
     thinking_override: bool | None = None,
     llm_read_timeout: float = 300.0,
-) -> tuple[str, list, list]:
+) -> tuple[str, list, list, list]:
 
 
     global _contract_fail_count
@@ -43,7 +43,7 @@ async def run_pre_explore(
         partitions = await _make_fallback_partition(workspace, tree_ctx, user_input)
         if not partitions:
             logger.warning("run_pre_explore: no partitions and fallback empty - skipping explore")
-            return "", [], []
+            return "", [], [], []
         logger.info("run_pre_explore: fallback partition generated (%d files)", len(partitions[0].get("paths", [])))
 
     # Worker-Slots aufbauen

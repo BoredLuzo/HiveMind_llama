@@ -87,9 +87,9 @@ class AgentConfig:
     key:         str
     name:        str
     model:       str
-    temperature: float
+    temperature: float | None
     max_tokens:  int
-    thinking:        bool = False
+    thinking:        bool | None = False
     thinking_budget: int = 0
 
     def display(self) -> str:

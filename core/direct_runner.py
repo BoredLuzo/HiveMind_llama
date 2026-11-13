@@ -14,15 +14,18 @@ from core.duo_helpers import (
     count_image_parts as _count_image_parts,
 )
 from infra.run_control import (
+    _abort_event,
     _get_abort_event,
     cleanup_pause_state as _cleanup_pause_state,
     clear_pause_request as _clear_pause_request,
     drain_steer_messages as _drain_steer_messages,
+    finish_manual_pause as _finish_manual_pause,
     get_abort_during_pause_signal as _get_abort_during_pause_signal,
     get_resume_signal as _get_resume_signal,
     is_pause_requested as _pause_requested,
     steer_queue_view as _steer_queue_view,
 )
+from core.run_context import is_ctx_aborted
 from learning.peer_ratings import run_peer_ratings
 from vram.loader import _refresh_judge_keepalive
 from routing.model_picker import _pick_direct_model
@@ -43,24 +46,38 @@ _DIRECT_WS_NOTE = (
     "cannot answer from your training data. Call the tools BEFORE answering."
 )
 
-def _direct_tools_note(tool_mode: str, ws_ok: bool = False) -> str:
+def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
+                       git_ok: bool = False,
+                       send_file_ok: bool = False) -> str:
     """TIER-AWARE (2026-09-02): only advertise tools the selected direct tier
     actually provides. The old note always listed read_file + web, which was
     wrong for the Websearch-only tier (models then called read_file and hit
     TOOL_NOT_ALLOWED)."""
     if tool_mode == "direct":
         _list = ("web_search / web_fetch" if ws_ok
-                 else "no tools (web search is currently unavailable)")
+                 else "dialog tools (ask_user, task_complete, get_datetime); web search is currently off")
     elif tool_mode == "direct_research":
         _list = ("read/search tools (read_file, list_dir, find_files, "
                  "search_code, get_signatures, find_references)"
+                 + (", web_search / web_fetch" if ws_ok else "")
+                 + (", git_status" if git_ok else ""))
+    elif tool_mode == "direct_mcp":
+        _list = ("connected MCP server tools (mcp_*), read/search tools "
+                 "(read_file, list_dir, find_files, search_code, get_signatures, "
+                 "find_references), get_datetime, task_complete"
+                 + (", send_file" if send_file_ok else "")
                  + (", web_search / web_fetch" if ws_ok else ""))
     elif tool_mode == "direct_python":
         _list = ("read_file, list_dir, find_files, search_code, get_signatures, "
-                 "find_references, run_python" + (", web_search / web_fetch" if ws_ok else ""))
+                 "find_references, run_python"
+                 + (", web_search / web_fetch" if ws_ok else "")
+                 + (", git_status" if git_ok else ""))
     else:  # direct_full
-        _list = ("read/write/edit tools (read_file, edit_file, write_file, ...), "
-                 "run_python, run_bash" + (", web_search / web_fetch" if ws_ok else ""))
+        _list = ("connected MCP server tools (mcp_*), read/write/edit tools "
+                 "(read_file, edit_file, write_file, ...), run_python, run_bash"
+                 + (", send_file" if send_file_ok else "")
+                 + (", web_search / web_fetch" if ws_ok else "")
+                 + (", git_status / git_commit" if git_ok else ""))
     return (
         "\n\nTOOLS ARE AVAILABLE: " + _list + ".\n"
         "Use tools ONLY when they actually help — for pure knowledge, conversation, "
@@ -109,7 +126,10 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         return
 
     try:
-        _ws_avail = bool(ctx.websearch_available)
+        from tools.definitions import git_tools_enabled as _gte
+        _settings_dict = getattr(ctx, "settings", {}) or {}
+        _ws_avail = bool(_settings_dict.get("duo_websearch_enabled", False) and ctx.websearch_available)
+        _git_avail = _gte(_settings_dict)
         _num_ctx = ctx.get_num_ctx(model, "direct") or 8192
         # SCHEMA-FIT (2026-10-17): the direct tiers used to ship the FULL tool
         # schema regardless of the window (direct_full = 25 tools / ~15.6k
@@ -120,11 +140,13 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             _schema_budget = schema_budget_for(_num_ctx, model)
         except (ImportError, AttributeError, TypeError, ValueError):
             _schema_budget = 0
-        _send_file_on = (tool_mode == "direct_full"
-                         and str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram"))
+        _send_file_on = (tool_mode in ("direct_full", "direct_mcp")
+                         and str(_settings_dict.get("source") or "").startswith("telegram"))
         _tools = _tools_fn(include_websearch=_ws_avail, mode=tool_mode,
                            budget_chars=_schema_budget or None,
-                           include_send_file=_send_file_on)
+                           include_send_file=_send_file_on,
+                           include_git=_git_avail,
+                           settings=_settings_dict)
         if not _tools:
             return
         # IMAGES (2026-10-03): raw parts need the projector — the CALLER
@@ -178,15 +200,25 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             _final_msgs = list(messages)
             return messages, None
 
+        _dir_user_samp = (_settings_dict.get("agents_user_sampling_choice") or {}).get("direct") or []
+        _dir_agent_temp = getattr(_agent, "temperature", None)
+        _dir_explicit_temp = (
+            float(_dir_agent_temp)
+            if _dir_agent_temp is not None and ("temperature" in _dir_user_samp or float(_dir_agent_temp) != 0.4)
+            else None
+        )
         _loop = ToolLoop(
             config=ToolLoopConfig(
                 stream=True, max_rounds=_rounds, max_post_attempts=3,
                 read_timeout_s=_read_timeout,
-                model=model, temperature=getattr(_agent, "temperature", 0.4),
+                model=model, temperature=_dir_explicit_temp,
                 max_tokens=_max_tokens, num_ctx=_num_ctx,
                 thinking=_think, thinking_budget=_budget,
                 tools=_tools, tool_mode=tool_mode,
                 include_websearch=_ws_avail,
+                include_git=_git_avail,
+                allow_send_file=_send_file_on,
+                settings=_settings_dict,
                 # Direct chat: a plain answer without tools is a valid final answer.
                 require_tool_call=False,
                 retry_on_5xx=True, retry_on_grammar_crash=True,
@@ -204,7 +236,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             # instantly aborted") and mid-run steering never drained in
             # direct mode (the drain site keys on the same id).
             run_id=str(getattr(ctx, "run_id", "") or ""),
-            abort_check=ctx.aborted,
+            abort_check=lambda: is_ctx_aborted(ctx),
             on_tool_result=_capture_tool_result,
             on_before_post=_capture_msgs,
             # NO-PROGRESS (2026-11-08): identical repeated tool calls get one
@@ -277,6 +309,8 @@ async def _direct_websearch_tool_round(ctx, model: str, msgs: list, num_ctx: int
     # first turn - HiveMind appends no-think/nudge notes as system messages
     _msgs = normalize_system_messages(list(msgs))
     _any = False
+    from core.llm_transport import post_chat_json as _ws_post_chat_json
+
     for _round in range(max_rounds):
         _payload = {
             "model": model,
@@ -287,13 +321,15 @@ async def _direct_websearch_tool_round(ctx, model: str, msgs: list, num_ctx: int
             "max_tokens": 500,
         }
         try:
-            async with _ws_httpx.AsyncClient(
-                timeout=_ws_httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)
-            ) as _c:
-                _r = await _c.post(f"http://127.0.0.1:{_port}/v1/chat/completions", json=_payload)
-                _r.raise_for_status()
-                _msg = (_r.json() or {}).get("choices", [{}])[0].get("message", {})
-        except Exception as _e:
+            _res = await _ws_post_chat_json(
+                _port,
+                _payload,
+                timeout=_ws_httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0),
+                max_attempts=2,
+                log_label="Direct-WS",
+            )
+            _msg = _res.message
+        except (_ws_httpx.HTTPError, ValueError, RuntimeError) as _e:
             _direct_log.debug("[Direct-WS] round %d failed: %s", _round, _e)
             break
         _tcs = _msg.get("tool_calls") or []
@@ -379,12 +415,15 @@ async def _direct_manual_pause_gate(ctx, outcome: _PauseGateResult,
     _resume_sig = _get_resume_signal(ctx.run_id)
     _abort_sig = _get_abort_during_pause_signal(ctx.run_id)
     _chat_ev = await _get_abort_event(ctx.chat_id) if ctx.chat_id else None
+    _run_ev = _abort_event(ctx.run_id) if hasattr(ctx, "run_id") else None
     _wait_tasks = [
         spawn(_resume_sig.wait()),
         spawn(_abort_sig.wait()),
     ]
     if _chat_ev is not None:
         _wait_tasks.append(asyncio.create_task(_chat_ev.wait()))
+    if _run_ev is not None:
+        _wait_tasks.append(asyncio.create_task(_run_ev.wait()))
     _pending_wait = (await asyncio.wait(
         _wait_tasks, return_when=asyncio.FIRST_COMPLETED,
     ))[1]
@@ -392,12 +431,15 @@ async def _direct_manual_pause_gate(ctx, outcome: _PauseGateResult,
         _tw.cancel()
     if _pending_wait:
         await asyncio.gather(*_pending_wait, return_exceptions=True)
-    # Consume the resume signal — a second pause of the same run must not
-    # wake up immediately (same fix as the Duo chunk loop).
-    _resume_sig.clear()
+    _aborted_during_pause = (
+        _abort_sig.is_set()
+        or (_chat_ev is not None and _chat_ev.is_set())
+        or (_run_ev is not None and _run_ev.is_set())
+    )
+    _finish_manual_pause(ctx.run_id)
     if ctx.chat_id:
         _clear_pause_state(ctx.chat_id)
-    if _abort_sig.is_set() or (_chat_ev is not None and _chat_ev.is_set()):
+    if _aborted_during_pause:
         outcome.continue_run = False
         yield await ctx.emit({"type": "status",
                               "content": "⏹ Aborted during pause — direct run ended."})
@@ -443,17 +485,32 @@ async def _inject_direct_steers(ctx, stream_msgs: list, vision_ok: bool = False)
                           "content": "➡ Steer applied at the model boundary."})
 
 
+def _cleanup_direct_run(ctx) -> None:
+    """Idempotent cleanup for per-run registries on any exit path."""
+    try:
+        from tools.runner import _files_written_by_run as _fw_cleanup
+        _fw_cleanup.pop(str(ctx.run_id), None)
+    except (ImportError, AttributeError, TypeError):
+        _direct_log.debug(
+            "[SEND-FILE] written-file registry cleanup failed",
+            exc_info=True)
+    ctx.unregister_abort(ctx.run_id)
+    ctx.unregister_step_skip(ctx.run_id)
+    _cleanup_pause_state(ctx.run_id)
+
+
 async def run_direct(ctx):
     """Direct-Mode handler for simple/trivial complexity."""
+    try:
+        async for _ev in _run_direct_inner(ctx):
+            yield _ev
+    finally:
+        _cleanup_direct_run(ctx)
+
+
+async def _run_direct_inner(ctx):
     def _aborted() -> bool:
-        # Benchmark / UI abort may target the chat id instead of the run id.
-        # Direct used to check only ctx.aborted(), so a timed-out benchmark
-        # run kept consuming llama-server while Aider/Hermes/Pi already ran.
-        _chat_aborted = getattr(ctx, "is_aborted_chat", None)
-        return bool(ctx.aborted()
-                    or (getattr(ctx, "chat_id", None)
-                        and _chat_aborted is not None
-                        and _chat_aborted(ctx.chat_id)))
+        return is_ctx_aborted(ctx)
 
     if ctx.complexity in ("trivial", "simple"):
         _available = list(ctx.models_cache) if ctx.models_cache else [ctx.pipeline.agents["direct"].model]
@@ -561,6 +618,7 @@ async def run_direct(ctx):
         _direct_tool_mode = {
             "readonly": "direct",
             "research": "direct_research",
+            "mcp": "direct_mcp",
             "python": "direct_python",
             "full": "direct_full",
         }.get(_direct_tier, "")
@@ -572,33 +630,43 @@ async def run_direct(ctx):
 
         # P2 + DIRECT-WS-TOOLCALLS (2026-08-27): Web search in direct chat.
         # Research mode: the model may call web_search/web_fetch as real tool
-        # calls — active when duo_websearch_enabled OR pipeline_websearch_enabled
-        # (default on) and SearXNG is reachable. pipeline_websearch_enabled also
-        # serves as fallback injection if no tool call happened.
+        # calls — active when duo_websearch_enabled is on and SearXNG is reachable.
+        # pipeline_websearch_enabled serves only as a legacy fallback injection
+        # when tool loops are off and duo_websearch_enabled is active.
         # When the direct tool loop is active, web is part of its tool set and
         # the legacy mini-round / inject are skipped (avoid double search).
-        _direct_ws_tool = bool(
-            (ctx.settings.get("duo_websearch_enabled", False)
-             or ctx.settings.get("pipeline_websearch_enabled", False))
+        _direct_ws_enabled = bool(
+            ctx.settings.get("duo_websearch_enabled", False)
             and ctx.websearch_available
-        ) and not _direct_tools_active and not _direct_tier_off
+        )
+        _direct_ws_tool = _direct_ws_enabled and not _direct_tools_active and not _direct_tier_off
         _direct_ws_inject = bool(
-            ctx.settings.get("pipeline_websearch_enabled", False) and ctx.websearch_available
+            _direct_ws_enabled
+            and ctx.settings.get("pipeline_websearch_enabled", False)
         ) and not _direct_tools_active and not _direct_tier_off
-        if (_direct_ws_tool or (_direct_tools_active and ctx.websearch_available)) \
+        if (_direct_ws_tool or (_direct_tools_active and _direct_ws_enabled)) \
                 and "WEB SEARCH IS AVAILABLE" not in sys_p:
             sys_p += _DIRECT_WS_NOTE
         if _direct_tools_active:
-            sys_p += _direct_tools_note(_direct_tool_mode,
-                                        ws_ok=bool(ctx.websearch_available))
-            if (str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")
-                    and _direct_tool_mode == "direct_full"):
+            from tools.definitions import git_tools_enabled as _gte_direct
+            _direct_tg = str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")
+            _direct_sf = _direct_tg and _direct_tool_mode in ("direct_full", "direct_mcp")
+            sys_p += _direct_tools_note(
+                _direct_tool_mode,
+                ws_ok=_direct_ws_enabled,
+                git_ok=_gte_direct(ctx.settings),
+                send_file_ok=_direct_sf,
+            )
+            if _direct_sf:
+                _write_hint = (
+                    "write it with write_file into the workspace and "
+                    if _direct_tool_mode == "direct_full"
+                    else "from the workspace (do not call write_file — unavailable here) and "
+                )
                 sys_p += (
-                    "\n\nFILE OUTPUT: when the user asks for a file or webpage, "
-                    "write it with write_file into the workspace and queue it "
-                    "with send_file. Do not paste the complete file content into "
-                    "the chat. Only say it was sent after send_file returned "
-                    "[FILE_QUEUED]."
+                    f"\n\nFILE OUTPUT: when the user asks for a file or webpage, {_write_hint}"
+                    "queue it with send_file. Do not paste the complete file content into "
+                    "the chat. Only say it was sent after send_file returned [FILE_QUEUED]."
                 )
         # DATE-FIX (2026-10-06): LAST position + explicit tomorrow anchor +
         # a direct anti-hallucination instruction - small models weight the
@@ -674,11 +742,24 @@ async def run_direct(ctx):
                     )
                     messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
                     yield await ctx.emit({"type": "status", "content": "✓ Web search complete"})
-        _direct_temp   = agent.temperature
+        from core.model_sampling import resolve_agent_sampling as _resolve_dir_smp
+        _dir_user_samp = (
+            ((ctx.settings or {}).get("agents_user_sampling_choice") or {}).get("direct") or []
+        )
+        _dir_agent_temp = getattr(agent, "temperature", None)
+        _dir_explicit_temp = (
+            float(_dir_agent_temp)
+            if _dir_agent_temp is not None and ("temperature" in _dir_user_samp or float(_dir_agent_temp) != 0.4)
+            else None
+        )
+        _direct_temp, _direct_think, _direct_budget, _direct_smp = _resolve_dir_smp(
+            _direct_model,
+            agent=agent,
+            temperature_override=_dir_explicit_temp,
+            settings=ctx.settings,
+            role="direct",
+        )
         _direct_tokens = agent.max_tokens
-        # AGENT-THINKING (2026-08-19): Per-agent switch from AgentConfig.
-        _direct_think = bool(getattr(agent, "thinking", False))
-        _direct_budget = int(getattr(agent, "thinking_budget", 0) or 0)
         if _direct_think:
             _direct_tokens = _direct_tokens + _direct_budget
         # OUTPUT-CAP (2026-08-27): max_tokens never above the effective context —
@@ -722,6 +803,8 @@ async def run_direct(ctx):
                                                             vision_ok=_direct_vision):
                         yield _sev
                     _round_tok_start = len(parts)
+                    if is_ctx_aborted(ctx):
+                        break
                     if _direct_think:
                         # Thinking mode: stream content and reasoning separately.
                         async for _cont, _thk in ctx.pipeline.ollama.chat_stream(
@@ -731,7 +814,8 @@ async def run_direct(ctx):
                                 think=True,
                                 thinking_budget=_direct_budget or None,
                                 split_thinking=True,
-                                usage_out=_usage):
+                                usage_out=_usage,
+                                sampler=_direct_smp):
                             if _aborted(): break
                             # A1 boundary: pause at a token chunk — the gate
                             # waits here, the upstream generator suspends at
@@ -761,7 +845,8 @@ async def run_direct(ctx):
                                 no_cache=ctx.prepro_success,
                                 think=False,
                                 split_thinking=True,
-                                usage_out=_usage):
+                                usage_out=_usage,
+                                sampler=_direct_smp):
                             if _aborted(): break
                             # A1 boundary: pause at a token chunk (see above).
                             _pg = _PauseGateResult()
@@ -810,9 +895,9 @@ async def run_direct(ctx):
             # the same include_usage pattern the pipeline wrapper uses. The model
             # rides run_meta so run records and the done event attribute direct
             # runs instead of showing the registry fallback only.
-            if _d_ct_sum > 0:
-                await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
-                await ctx.emit({"type": "usage_meta", "phase": "direct",
+            if _d_ct_sum > 0 or _d_pt_sum > 0:
+                yield await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
+                yield await ctx.emit({"type": "usage_meta", "phase": "direct",
                                 "timer_key": "direct_chat",
                                 "completion_tokens": _d_ct_sum,
                                 "prompt_tokens": _d_pt_sum,
@@ -871,19 +956,6 @@ async def run_direct(ctx):
                     "workspace": str(getattr(ctx, "workspace", "") or ""),
                 })
         yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), _direct_stop_reason, **ctx.collect_done_metrics()))
-        try:
-            from tools.runner import _files_written_by_run as _fw_cleanup
-            _fw_cleanup.pop(str(ctx.run_id), None)
-        except (ImportError, AttributeError, TypeError):
-            _direct_log.debug(
-                "[SEND-FILE] written-file registry cleanup failed",
-                exc_info=True)
-        ctx.unregister_abort(ctx.run_id)
-        ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing
-        # A1 (2026-11-11): drop a leftover pause/resume state — a /pause that
-        # arrived after the last boundary (or on a tool-loop round) used to
-        # keep the flag pending until the 2h registry sweep.
-        _cleanup_pause_state(ctx.run_id)
         spawn(_refresh_judge_keepalive())
         if ctx.settings.get("pin_direct_after_response", False):
             async def _pin_direct_bg():

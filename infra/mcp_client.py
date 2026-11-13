@@ -576,8 +576,9 @@ class ServerConn:
     # -- tools ---------------------------------------------------------
     async def call_tool(self, tool: str, arguments: dict,
                         timeout: float | None = None) -> str:
+        args = arguments if isinstance(arguments, dict) else {}
         result = await self.request("tools/call",
-                                    {"name": tool, "arguments": arguments or {}},
+                                    {"name": tool, "arguments": args},
                                     timeout=timeout)
         return _render_result(result)
 
@@ -1069,8 +1070,9 @@ class HttpConn:
 
     async def call_tool(self, tool: str, arguments: dict,
                         timeout: float | None = None) -> str:
+        args = arguments if isinstance(arguments, dict) else {}
         result = await self.request("tools/call",
-                                    {"name": tool, "arguments": arguments or {}},
+                                    {"name": tool, "arguments": args},
                                     timeout=timeout)
         return _render_result(result)
 
@@ -1572,6 +1574,17 @@ class McpClient:
             return ("[MCP] reloaded.\n" + ("\n".join(lines) if lines else
                                           "no servers configured")
                     + f"\nAvailable tools: {len(self._defs or []) - 1}")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments.strip() else {}
+            except ValueError:
+                return (f"[TOOL_ERROR: MCP_INVALID_ARGUMENTS]\n"
+                        f"Arguments for '{name}' must be a JSON object (got invalid JSON string).")
+        if arguments is None:
+            arguments = {}
+        elif not isinstance(arguments, dict):
+            return (f"[TOOL_ERROR: MCP_INVALID_ARGUMENTS]\n"
+                    f"Arguments for '{name}' must be a JSON object (got {type(arguments).__name__}).")
         target = self._names.get(name)
         if not target:
             hint = ""
@@ -1587,11 +1600,6 @@ class McpClient:
             return (f"[TOOL_ERROR: MCP_SERVER_DOWN]\n{server} is not running"
                     f"{': ' + conn.last_error if conn and conn.last_error else ''}. "
                     f"Fix the server config or disable it.")
-        # per-server call budget: checked before the call is sent anywhere,
-        # so an exhausted server sees no traffic until the window resets
-        budget_err = await self._budget_gate(server)
-        if budget_err is not None:
-            return budget_err
         # C11 (2026-10-31): the lookup above is synchronous, so a concurrent
         # refresh cannot tear it apart mid-lookup. The guard keeps the call
         # itself alive: refresh()/close_all() may pop and close this conn,
@@ -1605,10 +1613,18 @@ class McpClient:
             return (f"[TOOL_ERROR: MCP_CALL_FAILED]\n{server} is busy with "
                     f"another call (waited {limit:.1f}s)")
         try:
+            # per-server call budget: checked AFTER acquiring the guard so a
+            # guard-busy timeout never burns a call slot.
+            budget_err = await self._budget_gate(server)
+            if budget_err is not None:
+                return budget_err
             return await conn.call_tool(tool, arguments, timeout=timeout)
         except McpAuthError as exc:
             logger.info("[MCP] %s.%s failed: %s", server, tool, exc)
             return f"[TOOL_ERROR: MCP_AUTH_FAILED]\n{exc}"
+        except (TypeError, ValueError) as exc:
+            logger.info("[MCP] %s.%s invalid arguments: %s", server, tool, exc)
+            return f"[TOOL_ERROR: MCP_INVALID_ARGUMENTS]\n{exc}"
         except McpError as exc:
             logger.info("[MCP] %s.%s failed: %s", server, tool, exc)
             return f"[TOOL_ERROR: MCP_CALL_FAILED]\n{exc}"

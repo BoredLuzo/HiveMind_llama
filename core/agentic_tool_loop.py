@@ -7,8 +7,21 @@ import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
 from core.agentic_duo_state import DuoRoundState
-from utils.messages import normalize_system_messages
+from core.run_context import is_ctx_aborted
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, CODER_VISION_NOTE as _CODER_VISION_NOTE
+from core.llm_transport import (
+    apply_tool_call_grammar as _t_apply_grammar,
+    build_chat_url as _t_chat_url,
+    disable_thinking_in_payload as _t_disable_thinking,
+    extract_response_error_text as _t_err_text,
+    iter_sse_json as _t_iter_sse,
+    normalize_chat_payload as _t_norm_payload,
+    parse_timings as _t_parse_timings,
+    parse_usage as _t_parse_usage,
+    probe_and_evict_slot as _t_probe_evict,
+    should_retry_http_status as _t_should_retry_status,
+    strip_payload_extras as _t_strip_extras,
+)
 
 # NOTE REPLACEMENT (2026-10-04): removing the note only
 # stops the false claim - the model must KNOW the image is gone, or it
@@ -104,34 +117,12 @@ logger = logging.getLogger("hivemind.agentic_tool_loop")
 # The 500-recovery branches above (parse-json -> thinking off, CallExpression
 # -> grammar/fallback) are self-bounded (parse_errors cap, one-shot
 # fallbacks) and keep their own continue paths - untouched.
-_OVERFLOW_MARKERS_LOCAL = ("exceed", "context", "too many tokens",
-                           "context window", "n_predict")
 
 
 def _f3_should_retry_status(status_code: int, body: str, attempt: int,
                             max_attempts: int) -> bool:
-    """True only when another POST attempt can plausibly succeed (F3 policy).
-
-    Reuses the real helper from backend/llama_client when importable (lazy
-    import - backend never imports core, so there is no cycle; the codebase
-    imports backend modules lazily inside functions everywhere). Falls back
-    to an identical local predicate only if that import ever fails.
-    """
-    try:
-        from backend.llama_client import _should_retry_http_status as _impl
-        return _impl(status_code, body, attempt, max_attempts)
-    except ImportError:
-        # Local copy of the F3 policy (backend/llama_client.py) - keep in sync.
-        if status_code not in (408, 429, 500, 502, 503, 504):
-            return False
-        if attempt >= max_attempts - 1:
-            return False
-        if status_code in (500, 502, 504):
-            _low = (body or "").lower()
-            if any(marker in _low for marker in _OVERFLOW_MARKERS_LOCAL):
-                return False
-            return attempt < 2      # 3 total attempts, like F3
-        return True                 # 408/429/503: long retry, unchanged
+    """True only when another POST attempt can plausibly succeed (F3 policy)."""
+    return _t_should_retry_status(status_code, body, attempt, max_attempts)
 
 
 class AgenticToolLoop(ToolLoop):
@@ -160,10 +151,7 @@ class AgenticToolLoop(ToolLoop):
         Calls ctx.emit() for status/token events.
         Raises RuntimeError if all attempts fail.
         """
-        # strict templates reject a system message after the first turn
-        if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
-            payload = {**payload,
-                       "messages": normalize_system_messages(payload["messages"])}
+        payload = _t_norm_payload(payload)
         result = {
             "dr_msg": None, "dr_content_parts": [], "dr_thinking_parts": [],
             "dr_tool_calls_acc": {}, "dport": self.round_state.current_port,
@@ -281,31 +269,28 @@ class AgenticToolLoop(ToolLoop):
                 if _USE_GBNF_GRAMMAR and getattr(self.round_state, "force_grammar", False):
                     self.round_state.force_grammar = False
                     # GRAMMAR-GUARD (2026-08-25): llama.cpp lehnt grammar+tools
-                    if not _grammar_compatible(payload):
+                    payload, _g_status = _t_apply_grammar(
+                        payload, _grammar_compatible, _build_tool_call_grammar
+                    )
+                    if _g_status == "skipped_tools_active":
                         await self._emit({"type": "status",
                             "content": "\u26a0 Grammar-forced retry skipped \u2014 tools active (server rejects grammar+tools)"})
-                    else:
-                        _tn = [t.get("function", {}).get("name", "")
-                               for t in (payload.get("tools") or [])]
-                        _g = _build_tool_call_grammar([n for n in _tn if n])
-                        if _g:
-                            payload = {**payload, "grammar": _g}
-                            await self._emit({"type": "status",
-                                "content": "🔒 Grammar-forced retry (tool-call JSON constrained)"})
+                    elif _g_status == "applied":
+                        await self._emit({"type": "status",
+                            "content": "🔒 Grammar-forced retry (tool-call JSON constrained)"})
                 _timeout = httpx.Timeout(connect=10.0, read=self.round_state.tool_read_timeout_s, write=10.0, pool=5.0)
                 _gen_t0 = time.monotonic()
                 _ttfb_ms = None
                 _t_last_ms = None
                 _dr_prompt_timings = None
                 async with self._client.stream(
-                    "POST", f"http://127.0.0.1:{result['dport']}/v1/chat/completions",
+                    "POST", _t_chat_url(result["dport"]),
                     json=payload, timeout=_timeout,
                 ) as _resp:
                     #  5xx Handler 
                     if _resp.status_code in (500, 502, 503, 504) and _post_attempt < self.cfg.max_post_attempts - 1:
                         _dr_post_errors["5xx"] = _dr_post_errors.get("5xx", 0) + 1
-                        await _resp.aread()
-                        _err_body = _resp.text[:300]
+                        _err_body = await _t_err_text(_resp, limit=300)
                         if not self.round_state.first_err_body and _err_body:
                             self.round_state.first_err_body = f"HTTP 500: {_err_body[:150]}"
                             await self._emit({"type": "status", "content": f"? {self.round_state.first_err_body}"})
@@ -326,11 +311,10 @@ class AgenticToolLoop(ToolLoop):
                                         "caused by thinking - continue WITHOUT a "
                                         "thinking section in your next answer."})
                                     payload = {**payload, "messages": dtool_msgs}
-                                payload = {**payload, "thinking": False, "thinking_budget": 0,
-                                           "max_tokens": int(self.round_state.dtool_opts.get("num_predict", 800) or 800)}
-                                _ctk_parse = dict(payload.get("chat_template_kwargs") or {})
-                                _ctk_parse["enable_thinking"] = False
-                                payload["chat_template_kwargs"] = _ctk_parse
+                                payload = _t_disable_thinking(
+                                    payload,
+                                    max_tokens=int(self.round_state.dtool_opts.get("num_predict", 800) or 800),
+                                )
                                 self.round_state.force_grammar = True
                                 await self._emit({"type": "status",
                                     "content": "? Tool thinking caused JSON errors — disabling thinking for tool calls and retrying."})
@@ -358,11 +342,10 @@ class AgenticToolLoop(ToolLoop):
                         if _resp.status_code == 500 and "CallExpression" in _err_body:
                             if self.round_state.think_runtime:
                                 self.round_state.think_runtime = False
-                                payload = {**payload, "thinking": False, "thinking_budget": 0,
-                                           "max_tokens": int(self.round_state.dtool_opts.get("num_predict", 800) or 800)}
-                                _ctk_call = dict(payload.get("chat_template_kwargs") or {})
-                                _ctk_call["enable_thinking"] = False
-                                payload["chat_template_kwargs"] = _ctk_call
+                                payload = _t_disable_thinking(
+                                    payload,
+                                    max_tokens=int(self.round_state.dtool_opts.get("num_predict", 800) or 800),
+                                )
                                 if not self.round_state.inject_no_think:
                                     self.round_state.inject_no_think = True
                                     # CACHE (task 4): was a full system-message
@@ -381,12 +364,8 @@ class AgenticToolLoop(ToolLoop):
                                 if not self.round_state.no_extras_fallback:
                                     _dr_post_errors["500-fallback-stripped"] = _dr_post_errors.get("500-fallback-stripped", 0) + 1
                                     self.round_state.no_extras_fallback = True
-                                    payload.pop("cache_prompt", None)
-                                    payload.pop("min_p", None)
+                                    payload = _t_strip_extras(payload)
                                     self.round_state.force_grammar = True
-                                    _ctk_fb = dict(payload.get("chat_template_kwargs") or {})
-                                    _ctk_fb["enable_thinking"] = False
-                                    payload["chat_template_kwargs"] = _ctk_fb
                                     await self._emit({"type": "status",
                                         "content": "? 500 despite Thinking=off — stripping extras and retrying."})
                                     continue
@@ -416,8 +395,7 @@ class AgenticToolLoop(ToolLoop):
 
                     #  4xx Handlers 
                     if _resp.status_code >= 400:
-                        await _resp.aread()
-                        _err_body = _resp.text[:300]
+                        _err_body = await _t_err_text(_resp, limit=300)
 
                         if _resp.status_code == 404:
                             _dr_post_errors["404"] = _dr_post_errors.get("404", 0) + 1
@@ -425,11 +403,11 @@ class AgenticToolLoop(ToolLoop):
                             if self.round_state.http_404_retries <= 2:
                                 await self._emit({"type": "status",
                                     "content": f"? Tool loop HTTP 404 (attempt {self.round_state.http_404_retries}/2) — rebinding model port"})
-                                try:
-                                    from backend.llama_server_manager import manager as _lsm404
-                                    await _lsm404.evict(self.round_state.exec_model)
-                                except Exception:
-                                    logger.debug("404 evict failed for %s", self.round_state.exec_model, exc_info=True)
+                                await _t_probe_evict(
+                                    self.round_state.exec_model,
+                                    check_health=False,
+                                    evict_first=True,
+                                )
                                 result["dport"] = await self._ensure_loaded(self.round_state.exec_model)
                                 self.round_state.cached_port = result["dport"]
                                 continue
@@ -497,13 +475,8 @@ class AgenticToolLoop(ToolLoop):
                     from utils.tool import arguments_repetition_drift as _arg_drift
                     _drift_args_buf = ""
                     _drift_cut = False
-                    async for _sse_line in _resp.aiter_lines():
-                        if not _sse_line.startswith("data:"): continue
+                    async for _sse_chunk in _t_iter_sse(_resp):
                         self._diag_chunk_n = getattr(self, '_diag_chunk_n', 0) + 1
-                        _sse_data = _sse_line[5:].strip()
-                        if _sse_data == "[DONE]": break
-                        try: _sse_chunk = json.loads(_sse_data)
-                        except Exception: continue
                         if _ttfb_ms is None:
                             _ttfb_ms = int((time.monotonic() - _gen_t0) * 1000)
                         _t_last_ms = int((time.monotonic() - _gen_t0) * 1000)
@@ -521,13 +494,9 @@ class AgenticToolLoop(ToolLoop):
                         # PREFILL-RATE (2026-10-09): the same final chunk carries
                         # the prompt-processing side - prompt_ms / prompt_n feed
                         # the a+b*depth prefill model (step 1h).
-                        if _sse_timings.get("prompt_ms") is not None:
-                            _dr_prompt_timings = {
-                                "prompt_n": int(_sse_timings.get("prompt_n") or 0),
-                                "prompt_ms": float(_sse_timings.get("prompt_ms") or 0.0),
-                                "prompt_per_second": float(
-                                    _sse_timings.get("prompt_per_second") or 0.0),
-                            }
+                        _parsed_timings = _t_parse_timings(_sse_timings)
+                        if _parsed_timings is not None:
+                            _dr_prompt_timings = _parsed_timings
                             # PREFILL-EMA FEED (2026-10-14, task 4): real
                             # prompt tok/s per model -> persisted state file
                             # (core/budgets reads it at the NEXT run's
@@ -543,23 +512,16 @@ class AgenticToolLoop(ToolLoop):
                                          prompt_n=_dr_prompt_timings["prompt_n"])
                             except Exception:
                                 pass
-                        if _sse_usage and _sse_usage.get("completion_tokens"):
+                        _parsed_usage = _t_parse_usage(
+                            _sse_usage,
+                            gen_ms=int((time.monotonic() - _gen_t0) * 1000),
+                            decode_tps=getattr(self.round_state, "decode_tps", None),
+                        )
+                        if _parsed_usage is not None:
                             # D2-DIAG (2026-08-21): cached_tokens from
                             # prompt_tokens_details → Cache-Reuse pro Request messbar.
-                            _cached = 0
-                            try:
-                                _cached = int((_sse_usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                            except Exception:
-                                pass
-                            _dr_usage_final = {
-                                "completion_tokens": int(_sse_usage["completion_tokens"]),
-                                "prompt_tokens": int(_sse_usage.get("prompt_tokens") or 0),
-                                "cached_tokens": _cached,
-                                "gen_ms": int((time.monotonic() - _gen_t0) * 1000),
-                            }
-                            _dr_tps = getattr(self.round_state, "decode_tps", None)
-                            if _dr_tps:
-                                _dr_usage_final["decode_tps"] = float(_dr_tps)
+                            _cached = int(_parsed_usage.get("cached_tokens") or 0)
+                            _dr_usage_final = _parsed_usage
                             # CACHE-TELEMETRY (2026-09-04): reuse% per coder round.
                             # prompt gross + cached klein => Prefix/Suffix-Cache
                             # was invalidated (in-place mutation, compression).
@@ -657,7 +619,7 @@ class AgenticToolLoop(ToolLoop):
                         if _sse_fr:
                             _dr_finish_reason = _sse_fr
                         _sse_delta = _sse_choices[0].get("delta", {})
-                        if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
+                        if is_ctx_aborted(ctx):
                             _dr_aborted_mid = True
                             break
                         # DENY-INTERRUPT (2026-09-18): the user denied the
@@ -983,19 +945,14 @@ class AgenticToolLoop(ToolLoop):
             except httpx.ConnectError:
                 if _post_attempt < self.cfg.max_post_attempts - 1:
                     _dr_post_errors["ConnectError"] = _dr_post_errors.get("ConnectError", 0) + 1
-                    _srv_alive = False
-                    try:
-                        _hr = await self._client.get(f"http://127.0.0.1:{result['dport']}/health",
-                                                      timeout=httpx.Timeout(connect=2.0, read=2.0, write=1.0, pool=1.0))
-                        _srv_alive = (_hr.status_code == 200)
-                    except Exception:
-                        logger.debug("Health check failed on port %s", result["dport"], exc_info=True)
+                    _srv_alive = await _t_probe_evict(
+                        self.round_state.exec_model,
+                        client=self._client,
+                        port=result["dport"],
+                        check_health=True,
+                        evict_first=True,
+                    )
                     if not _srv_alive:
-                        try:
-                            from backend.llama_server_manager import manager as _lsm_cr
-                            await _lsm_cr.evict(self.round_state.exec_model)
-                        except Exception:
-                            logger.debug("Evict failed during crash recovery for %s", self.round_state.exec_model, exc_info=True)
                         await self._emit({"type": "status",
                             "content": f"? llama-server for {self.round_state.exec_model} crashed — restarting (attempt {_post_attempt+2}/{self.cfg.max_post_attempts})"})
                     else:

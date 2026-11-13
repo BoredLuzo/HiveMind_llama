@@ -98,7 +98,7 @@ async def _chat_route_decision(ps):
         complexity = force_complexity
         _complexity_source = "manual"
         yield await emit({"type": "status", "content": f">> complexity manually: {complexity.upper()}"})
-    elif mode == "simple":
+    elif mode in ("simple", "chat"):
         complexity = "simple"
         _complexity_source = "mode"
     elif mode == "pipeline":

@@ -114,10 +114,18 @@ async def _chat_route_pre(ps):
         messages   = _make_messages(_state.pipeline, custom_sys, question, images, True, True, cached_mem_ctx=_pipeline_mem_ctx, cached_sess_msgs=_pipeline_sess_msgs)
         intent_model = registry_get(intent_agent)
         yield await emit({"type": "agent", "content": agent.name, "model": intent_model})
+        from core.model_sampling import resolve_agent_sampling as _resolve_intent_smp
+        _int_temp, _int_think, _int_budget, _int_smp = _resolve_intent_smp(
+            intent_model, agent=agent, settings=settings, role=intent_agent,
+        )
         parts, t = [], time.time()
         _think_open_i = False
         async for tok in _pipeline_chat_stream(
-            intent_model, messages, agent.temperature, agent.max_tokens
+            intent_model, messages, _int_temp, agent.max_tokens,
+            agent_role=intent_agent,
+            think=_int_think,
+            thinking_budget=_int_budget or None,
+            sampler=_int_smp,
         ):
             if _aborted(): break
             if _step_skipped():   # NEW

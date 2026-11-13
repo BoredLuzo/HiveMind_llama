@@ -8,6 +8,8 @@ import re
 import sys
 from pathlib import Path
 
+logger = logging.getLogger("hivemind.duo_helpers")
+
 from utils.token import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
 
 # ── Constants ──────────────────────────────────────────────────────────
@@ -351,16 +353,39 @@ def _build_dropped_tool_retry(names: list[str]) -> str:
 
 
 def _get_thinking_profile(model_name: str, settings_dict: dict | None = None) -> dict:
-    _s = settings_dict or {}
-    _model_profiles = _s.get("_model_profiles", {})
-    _profile = _model_profiles.get(model_name, {})
-    if not _profile:
-        _base = model_name.split(":")[0]
-        for k, v in _model_profiles.items():
-            if k.startswith(_base):
-                _profile = v
-                break
-    return _profile or {"thinking_enabled": False, "thinking_budget": 0, "max_tokens": 4096}
+    _mp_overrides = (settings_dict or {}).get("_model_profiles", {})
+    _base = (model_name or "").split(":")[0]
+    _ov = _mp_overrides.get(model_name) or (
+        next((v for k, v in _mp_overrides.items()
+              if k == _base or k.startswith(_base + ":")), {})
+        if _base else {}
+    )
+    if _ov and _ov.get("thinking_enabled") is not None:
+        return dict(_ov)
+
+    from model_configs.models_registry import get_profile, get_capabilities, get_thinking_budget
+    from core.model_sampling import _model_profile
+
+    prof = get_profile(model_name) or {}
+    caps = get_capabilities(model_name) or {}
+    mp = _model_profile(model_name) or {}
+    thinking = bool(
+        caps.get("thinking") or prof.get("thinking")
+        or prof.get("reasoning") in ("on", True) or mp.get("thinking")
+    )
+    _gtb = get_thinking_budget(model_name)
+    raw_tb = _gtb if _gtb is not None else prof.get("thinking_budget")
+    try:
+        budget = int(raw_tb) if raw_tb is not None else 0
+    except (ValueError, TypeError):
+        budget = 0
+    if thinking and budget <= 0:
+        budget = 2500
+    try:
+        max_tokens = int(prof.get("max_tokens") or 4096)
+    except (ValueError, TypeError):
+        max_tokens = 4096
+    return {"thinking_enabled": thinking, "thinking_budget": budget, "max_tokens": max_tokens}
 
 
 def _calculate_thinking_tokens(
@@ -375,20 +400,33 @@ def _calculate_thinking_tokens(
     if agent_name:
         agent_cfg = _s.get("agents", {}).get(agent_name, {})
         if "thinking_budget" in agent_cfg:
-            base_budget = agent_cfg["thinking_budget"]
+            tb = agent_cfg.get("thinking_budget")
+            if tb is not None:
+                try:
+                    val = int(tb)
+                    if val > 0:
+                        base_budget = val
+                except (ValueError, TypeError):
+                    pass
+
+    profile = _get_thinking_profile(model_name, _s)
     if base_budget is None:
-        profile = _get_thinking_profile(model_name, _s)
         if not profile.get("thinking_enabled"):
             return 0
         base_budget = profile.get("thinking_budget", 2500)
+        if base_budget <= 0:
+            base_budget = 2500
+
     if input_tokens > 0 and input_tokens < base_budget * 0.2:
         adaptive_budget = max(200, int(base_budget * 0.3))
     else:
         adaptive_budget = base_budget
+
     available = max(0, available_ctx - input_tokens)
     _max_thinking_share = int(available * 0.40)
-    adaptive_budget = min(adaptive_budget, _max_thinking_share)
-    return max(0, adaptive_budget)
+    if _max_thinking_share < 64 or adaptive_budget <= 0:
+        return 0
+    return min(max(64, int(adaptive_budget)), _max_thinking_share)
 
 
 def _apply_thinking_fields(payload: dict, thinking_on: bool, thinking_budget: int) -> dict:
@@ -723,6 +761,10 @@ def resolve_coder_tool_mode(settings: dict | None, read_only: bool = False) -> s
         return "duo_full"
     if _t == "lean":
         return "duo_lean"
+    if _t == "mcp":
+        return "duo_mcp"
+    if _t in ("readonly", "research"):
+        return "duo_readonly"
     return "duo_core"
 
 

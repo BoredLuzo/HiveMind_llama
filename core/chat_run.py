@@ -111,6 +111,7 @@ async def run_stream(
         _abort_event, _is_aborted,
         _register_abort, _unregister_abort,
         _register_step_skip, _unregister_step_skip, _clear_step_skip,
+        claim_chat_run,
     )
     from vram.loader import (
         _bk_evict, _bk_load, _bk_pin,
@@ -212,6 +213,11 @@ async def run_stream(
     _run_settings = dict(settings)
     if model_overrides:
         _run_settings.update(model_overrides)
+    if (
+        not (model_overrides and str(model_overrides.get("direct_model") or "").strip())
+        and str(((_run_settings.get("agents") or {}).get("direct") or {}).get("model") or "").strip()
+    ):
+        _run_settings.pop("direct_model", None)
     logger.warning("[RUN-TRACE] settings-kopie ok (overrides=%s)", sorted(model_overrides or {}))
     # F10 (2026-11-08): lift the merged run settings into the tool-layer
     # snapshot ContextVar. Handlers that must not re-read the live dict
@@ -259,11 +265,12 @@ async def run_stream(
             n = _estimate_tokens_from_content(str(data["content"]))
             _ledger.token_estimate += n
             _phase_timer.add_tokens(n)
-        # A-P2-7: echte completion_tokens vom llama.cpp-Server akkumulieren (pro Phase).
-        if data.get("type") == "usage_meta" and data.get("completion_tokens"):
+        # A-P2-7: echte Token-Statistiken vom llama.cpp-Server akkumulieren (pro Phase).
+        if data.get("type") == "usage_meta" and (data.get("completion_tokens") or data.get("prompt_tokens")):
             _ph = str(data.get("phase") or "coder")
+            _ct_n = int(data.get("completion_tokens") or 0)
             _ledger.requests += 1
-            _ledger.real_by_phase[_ph] = _ledger.real_by_phase.get(_ph, 0) + int(data["completion_tokens"])
+            _ledger.real_by_phase[_ph] = _ledger.real_by_phase.get(_ph, 0) + _ct_n
             _ledger.prompt_by_phase[_ph] = _ledger.prompt_by_phase.get(_ph, 0) + int(data.get("prompt_tokens") or 0)
             _ledger.cached_by_phase[_ph] = _ledger.cached_by_phase.get(_ph, 0) + int(data.get("cached_tokens") or 0)
             # D2-DIAG (2026-08-21): detect cache miss — large prompt, small cached,
@@ -280,7 +287,8 @@ async def run_stream(
             except Exception:
                 pass
             _pt_key = str(data.get("timer_key") or _pt_key_for_phase(_ph))
-            _phase_timer.add_real(_pt_key, int(data["completion_tokens"]), float(data.get("gen_ms") or 0.0))
+            if _ct_n > 0:
+                _phase_timer.add_real(_pt_key, _ct_n, float(data.get("gen_ms") or 0.0))
         if data.get("type") == "run_meta" and isinstance(data.get("models"), dict):
             _ledger.models.update(data["models"])
             return ""
@@ -291,10 +299,16 @@ async def run_stream(
         return "pipeline_" + str(phase or "pipeline")
 
     def _phase_from_role(role) -> str:
-        """agent_role -> Phase: analyst | refiner | critic | synthesizer | vision | pipeline"""
+        """agent_role -> Phase: analyst | refiner | critic | synthesizer | vision | coder | planner | pipeline"""
         _r = str(role or "").strip().lower()
         if _r in ("vision_agent", "vision", "va"):
             return "vision"
+        if _r in ("duo_coder", "coder"):
+            return "coder"
+        if _r in ("duo_planner", "planner"):
+            return "planner"
+        if _r == "duo_critic":
+            return "critic"
         for _known in ("analyst", "refiner", "critic", "synthesizer"):
             if _r.startswith(_known):
                 return _known
@@ -576,6 +590,8 @@ async def run_stream(
     _raw_budget = settings.get("vram_budget_gb")
     _vram_budget = float(_raw_budget) if _raw_budget is not None else DEFAULT_VRAM_BUDGET_GB
     abort_ev      = _register_abort(run_id)
+    if chat_id:
+        await claim_chat_run(chat_id, run_id)
     step_skip_ev = _register_step_skip(run_id)  # NEW
     # TAINT-RESET (2026-11-02): every run starts with no untrusted content
     # seen; a previous run's web/MCP reads must not gate this one.
@@ -804,7 +820,7 @@ async def run_stream(
     _pipeline_soul = load_soul(THIS_FILE)
 
     def _aborted() -> bool:
-        return abort_ev.is_set()
+        return abort_ev.is_set() or bool(chat_id and _is_aborted(chat_id))
      
     def _step_skipped() -> bool:
         return step_skip_ev.is_set()
@@ -932,6 +948,18 @@ async def run_stream(
 
     def _build_run_context():
         """Build RunContext with all shared state for extracted runners."""
+        def _get_num_ctx_for_run(model: str, agent_role: str | None = None) -> int | None:
+            if agent_role == "direct" and isinstance(_run_settings, dict):
+                raw_dir_ctx = _run_settings.get("direct_ctx_target")
+                if raw_dir_ctx is not None:
+                    try:
+                        dir_ctx = int(raw_dir_ctx)
+                        if dir_ctx > 0:
+                            return dir_ctx
+                    except (TypeError, ValueError):
+                        pass
+            return _get_num_ctx(model, agent_role)
+
         return RunContext(
             user_input=user_input,
             images=images,
@@ -987,7 +1015,7 @@ async def run_stream(
             auto_memory_from_input=_auto_memory_from_input,
             pick_direct_model=_pick_direct_model,
             model_profile=_model_profile,
-            get_num_ctx=_get_num_ctx,
+            get_num_ctx=_get_num_ctx_for_run,
             bk_load=_bk_load,
             bk_pin=_bk_pin,
             bk_evict=_bk_evict,

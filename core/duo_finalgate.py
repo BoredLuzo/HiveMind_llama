@@ -12,6 +12,7 @@ import dataclasses
 import logging
 
 from core.duo.preflight import needs_test_verification
+from core.run_context import is_ctx_aborted
 
 logger = logging.getLogger("hivemind.duo")
 
@@ -45,7 +46,7 @@ async def _duo_final_verify_gate(ctx, ps):
     if (
         ps._verify_mutation_serial > ps._verify_last_ok_serial
         and needs_test_verification(ps._written_files)
-        and not ctx.aborted()
+        and not is_ctx_aborted(ctx)
         and not ps._verify_warned
     ):
         ps._duo_hard_stop = True
@@ -78,7 +79,7 @@ async def _duo_final_verify_gate(ctx, ps):
             )
     elif (ps._verify_mutation_serial > ps._verify_last_ok_serial
           and needs_test_verification(ps._written_files)
-          and not ctx.aborted()):
+          and not is_ctx_aborted(ctx)):
         logger.warning(
             "[VERIFY-GATE-FINAL] no hard stop (coder warned): written_files=%d _verify_warned=True (A-P0-2 fallback)",
             len(ps._written_files or []),

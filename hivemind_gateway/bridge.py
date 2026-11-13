@@ -2783,9 +2783,11 @@ class RunBridge:
                    "off": "off", "aus": "off", "0": "off",
                    "web": "readonly", "websearch": "readonly",
                    "read": "readonly", "readonly": "readonly",
+                   "mcp": "mcp",
                    "py": "python", "python": "python",
                    "full": "full", "all": "full"}
         labels = {"off": "off (plain chat)", "readonly": "websearch only",
+                  "mcp": "MCP + web + read",
                   "python": "read + python", "full": "full (read/write/shell)"}
         a = (arg or "").strip().lower()
         cur = str(self.state.data.get("direct_tools_tier") or "").strip().lower()
@@ -2797,10 +2799,11 @@ class RunBridge:
             return (f"Direct access (Telegram): {cur_txt}.\n\n"
                     "  /tools off        - plain chat, no tools\n"
                     "  /tools websearch  - web search/fetch only\n"
+                    "  /tools mcp        - connected MCP servers + web + read\n"
                     "  /tools python     - read files + run_python\n"
                     "  /tools full       - read/write/shell (workspace-locked)")
         if a not in aliases:
-            return ("❌ Use /tools off | websearch | python | full.")
+            return ("❌ Use /tools off | websearch | mcp | python | full.")
         tier = aliases[a]
         self.state.data["direct_tools_tier"] = tier
         self.state.data["tools"] = tier != "off"

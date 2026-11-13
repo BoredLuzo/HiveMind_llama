@@ -17,6 +17,7 @@ import time
 
 import httpx
 
+from core.run_context import is_ctx_aborted
 from utils.bg_tasks import spawn
 
 logger = logging.getLogger("hivemind.duo")
@@ -73,7 +74,7 @@ async def _duo_session_epilogue(ctx, ps):
                 _eff_stop = "timeout_guard"
             elif _loop_detected:
                 _eff_stop = "loop_detected"
-            elif ctx.aborted():
+            elif is_ctx_aborted(ctx):
                 _eff_stop = "aborted"
             else:
                 _eff_stop = "completed"
@@ -150,7 +151,7 @@ async def _duo_session_epilogue(ctx, ps):
 
     _ratings_agentic = bool(ctx.settings.get("duo_peer_ratings_agentic", False))
     _rating_source = _combined_coder_out or coder_out
-    if _rating_source and not ctx.aborted() and not ps._duo_hard_stop and (not ctx.duo_config.agentic_mode or _ratings_agentic):
+    if _rating_source and not is_ctx_aborted(ctx) and not ps._duo_hard_stop and (not ctx.duo_config.agentic_mode or _ratings_agentic):
         _duo_rating_out = {
             "duo_coder":  _rating_source,
             "duo_critic": ps.carry['final_verdict'],
@@ -169,7 +170,7 @@ async def _duo_session_epilogue(ctx, ps):
         yield await ctx.emit({"type": "status",
             "content": f"📁 {len(ps._written_files or [])} file(s) changed: {_fc_summary}{_fc_more}"})
 
-    if ctx.duo_config.use_pipeline and not ctx.duo_config.agentic_mode and _combined_coder_out and not ctx.aborted() and not ps._duo_hard_stop:
+    if ctx.duo_config.use_pipeline and not ctx.duo_config.agentic_mode and _combined_coder_out and not is_ctx_aborted(ctx) and not ps._duo_hard_stop:
         yield await ctx.emit({"type": "status", "content": "⚙ Duo → Pipeline: synthesizer analysis..."})
         yield await ctx.emit({"type": "pipeline_start", "content": ctx.user_input})
         _duo_pipeline_input = (
@@ -190,9 +191,17 @@ async def _duo_session_epilogue(ctx, ps):
                               "role": "Final quality assessment"})
             _pparts, _pt = [], time.time()
             try:
-                async for _tok in ctx.pipeline_chat_stream(_pipe_synth.model, _pipe_msgs,
-                                                        _pipe_synth.temperature, _pipe_synth.max_tokens):
-                    if ctx.aborted(): break
+                from core.model_sampling import resolve_agent_sampling as _resolve_ep_smp
+                _ep_temp, _ep_think, _ep_budget, _ep_smp = _resolve_ep_smp(
+                    _pipe_synth.model, agent=_pipe_synth,
+                    settings=ctx.settings, role="synthesizer",
+                )
+                async for _tok in ctx.pipeline_chat_stream(
+                    _pipe_synth.model, _pipe_msgs, _ep_temp, _pipe_synth.max_tokens,
+                    agent_role="synthesizer", think=_ep_think,
+                    thinking_budget=_ep_budget or None, sampler=_ep_smp,
+                ):
+                    if is_ctx_aborted(ctx): break
                     _pparts.append(_tok)
                     yield await ctx.emit({"type": "token", "content": _tok})
             except (OSError, RuntimeError, ValueError, TypeError, KeyError,

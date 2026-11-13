@@ -37,6 +37,8 @@ TEXT_SUFFIXES = frozenset({
     ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml",
     ".yaml", ".yml", ".md", ".txt", ".html", ".css", ".sh",
 })
+_SYMBOL_SUFFIXES = frozenset({".py", ".js", ".jsx", ".ts", ".tsx"})
+_MAX_EXTRACT_BYTES = 512 * 1024
 
 # Cheap JS/TS symbol extraction — no tree-sitter. Good enough for retrieval
 # ranking; never used for guards or edits.
@@ -199,6 +201,7 @@ class RepoIndex:
         except OSError:
             self.entries.clear()
             return {}
+        root_resolved = root.resolve()
         seen: dict[str, tuple[int, int]] = {}
         count = 0
         for p in candidates:
@@ -206,9 +209,11 @@ class RepoIndex:
                 self.truncated = True
                 break
             try:
-                if not p.is_file() or p.name.startswith("."):
+                if p.is_symlink() or not p.is_file() or p.name.startswith("."):
                     continue
                 if p.suffix.lower() not in TEXT_SUFFIXES:
+                    continue
+                if not p.resolve().is_relative_to(root_resolved):
                     continue
                 st = p.stat()
             except OSError:
@@ -252,7 +257,7 @@ class RepoIndex:
                     continue
                 full = os.path.join(dirpath, name)
                 try:
-                    if not os.path.isfile(full):
+                    if os.path.islink(full) or not os.path.isfile(full):
                         continue
                     st = os.stat(full)
                 except OSError:
@@ -266,18 +271,21 @@ class RepoIndex:
     def _extract(self, rel: str, mtime_ns: int, size: int) -> _Entry:
         self.extractions += 1
         suffix = "." + rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
-        try:
-            src = (self.root / rel).read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        symbols: list[str] = []
+        if suffix in _SYMBOL_SUFFIXES and 0 <= size <= _MAX_EXTRACT_BYTES:
+            target = self.root / rel
             src = ""
-        if "\x00" in src:
-            symbols: list[str] = []
-        elif suffix == ".py":
-            symbols = _py_symbols(src)
-        elif suffix in (".js", ".jsx", ".ts", ".tsx"):
-            symbols = _js_symbols(src)
-        else:
-            symbols = []
+            try:
+                if (not target.is_symlink()
+                        and target.resolve().is_relative_to(self.root.resolve())):
+                    src = target.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                src = ""
+            if src and "\x00" not in src:
+                if suffix == ".py":
+                    symbols = _py_symbols(src)
+                elif suffix in (".js", ".jsx", ".ts", ".tsx"):
+                    symbols = _js_symbols(src)
         return _Entry(rel, mtime_ns, size, symbols)
 
     def search(self, query: str, limit: int = 4) -> list[tuple[str, int]]:

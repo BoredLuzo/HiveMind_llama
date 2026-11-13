@@ -2238,7 +2238,7 @@ async def _phase_pre_explore(ctx, state: dict):
                             logger.warning("[PRE-EXPLORE-FALLBACK] %s", _explore_error)
                             _explore_ctx = ""
                             await _xq.put(await ctx.emit({"type": "status", "content": f"⛔ Pre-Explore: model {_xexplore_mdl.split(':')[0]} has no valid port — skipped."}))
-                            return "", [], []
+                            return "", [], [], []
                         try:
                             _n_parts_seq = len(_partitions)
                             _total_files_seq = sum(len(p.get("paths", [])) for p in _partitions)

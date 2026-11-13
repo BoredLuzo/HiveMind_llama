@@ -147,3 +147,16 @@ class RunContext:
     is_aborted_chat: Callable = lambda *a: False
     append_learning_log: Callable = lambda *a, **kw: None
     build_soul_prompt_layer: Callable = lambda *a, **kw: ""
+
+
+def is_ctx_aborted(ctx: Any) -> bool:
+    """Return True if the run or its owning chat was aborted."""
+    if ctx is None:
+        return False
+    aborted = getattr(ctx, "aborted", None)
+    chat_id = getattr(ctx, "chat_id", None)
+    is_aborted_chat = getattr(ctx, "is_aborted_chat", None)
+    return bool(
+        (callable(aborted) and aborted())
+        or (chat_id and callable(is_aborted_chat) and is_aborted_chat(chat_id))
+    )

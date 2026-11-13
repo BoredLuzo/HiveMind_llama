@@ -15,6 +15,7 @@ from core.state import pipeline, registry_all, settings
 from model_configs import append_learning_log, read_learning_log
 from hive_functions.soul_engine import (
     maybe_evolve_soul,
+    resolve_reflection_model,
     MIN_RUNS_FOR_EVOLUTION, EVOLUTION_INTERVAL_RUNS,
     FORCED_EVOLUTION_COOLDOWN,
 )
@@ -35,9 +36,8 @@ async def _maybe_trigger_soul_evolution_forced(run_count: int):
     """Immediately on bad peer scores, ignoring the normal interval.
     Cooldown: at least FORCED_EVOLUTION_COOLDOWN runs between forced evolutions."""
     global _last_forced_evolution_run
-    # Soul-Heal (14.08.): soul_evolve_agent.enabled als Toggle respektieren ?
-    _sea_cfg0 = settings.get("soul_evolve_agent", {})
-    if isinstance(_sea_cfg0, dict) and not bool(_sea_cfg0.get("enabled", False)):
+    reflection_model = resolve_reflection_model(settings, registry_all().get("direct"))
+    if not reflection_model:
         return
     _base = _base_path
     if _base is None:
@@ -47,9 +47,6 @@ async def _maybe_trigger_soul_evolution_forced(run_count: int):
         return
     _last_forced_evolution_run = run_count
 
-    _sea = settings.get("soul_evolve_agent", "direct")
-    # Direct use as model= would pass a dict ─ Ollama crash.
-    reflection_model = _sea.get("model", "direct") if isinstance(_sea, dict) else str(_sea)
     new_soul = await maybe_evolve_soul(
         base_path           = _base,
         ollama_client       = pipeline.ollama,
@@ -72,9 +69,8 @@ async def _maybe_trigger_soul_evolution_forced(run_count: int):
 
 
 async def _maybe_trigger_soul_evolution(run_count: int):
-    # Soul-Heal (14.08.): soul_evolve_agent.enabled als Toggle respektieren ?
-    _sea_cfg = settings.get("soul_evolve_agent", {})
-    if isinstance(_sea_cfg, dict) and not bool(_sea_cfg.get("enabled", False)):
+    reflection_model = resolve_reflection_model(settings, registry_all().get("direct"))
+    if not reflection_model:
         return
     _base = _base_path
     if _base is None:
@@ -84,8 +80,6 @@ async def _maybe_trigger_soul_evolution(run_count: int):
         return
     if (run_count - MIN_RUNS_FOR_EVOLUTION) % EVOLUTION_INTERVAL_RUNS != 0:
         return
-    _sea2 = settings.get("soul_evolve_agent", "direct")
-    reflection_model = _sea2.get("model", "direct") if isinstance(_sea2, dict) else str(_sea2)
     new_soul = await maybe_evolve_soul(
         base_path           = _base,
         ollama_client       = pipeline.ollama,

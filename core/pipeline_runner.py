@@ -9,6 +9,18 @@ from vram.loader import _bk_evict
 from vram.loader import _bk_load
 from vram.loader import _get_loaded_models_set
 from vram.loader import _refresh_judge_keepalive
+from core.model_sampling import resolve_agent_sampling
+from core.duo_helpers import _apply_thinking_fields
+
+
+def _resolve_stage_call(ctx, a, model: str, *, mode: str = "") -> tuple[float, bool, int, int, dict]:
+    """Resolve (temp, think, budget, max_tokens, sampler) for a pipeline stage."""
+    _t, _th, _b, _smp = resolve_agent_sampling(
+        model, agent=a, settings=ctx.settings, role=a.key, mode=mode,
+    )
+    _ctx_tok = ctx.get_num_ctx(model, a.key) or 8192
+    _max_tok = min(int(a.max_tokens + _b), max(256, _ctx_tok))
+    return _t, _th, _b, _max_tok, _smp
 
 async def run_pipeline(ctx):
     """Full Hivemind Pipeline mode — multi-agent analysis → synthesis.
@@ -119,40 +131,43 @@ async def run_pipeline(ctx):
                 _va_port = await _lsm_va.ensure_loaded(_va_model, num_ctx=_va_ctx, vision=True)
                 _va_read_s = float(ctx.settings.get("duo_llm_slow_timeout_s", 300))
                 import httpx
-                import json
-                async with httpx.AsyncClient(timeout=httpx.Timeout(
-                        connect=10.0, read=_va_read_s, write=10.0, pool=5.0)) as _vac:
-                    async with _vac.stream(
-                        "POST",
-                        f"http://127.0.0.1:{_va_port}/v1/chat/completions",
-                        json={
-                            "model":          _va_model,
-                            "messages":       _va_msgs,
-                            "stream":         True,
-                            "temperature":    va.temperature,
-                            "max_tokens":     va.max_tokens,
-                            "repeat_penalty": 1.3,
-                            "stop":           ["<|im_end|>", "<|endoftext|>", "\n\n\n"],
-                            "cache_prompt":   False,
-                        },
-                    ) as _va_resp:
-                        async for _va_line in _va_resp.aiter_lines():
-                            if ctx.aborted(): break
-                            if not _va_line or not _va_line.startswith("data:"):
-                                continue
-                            _va_raw = _va_line[6:].strip()
-                            if _va_raw == "[DONE]":
-                                break
-                            try:
-                                _va_d   = json.loads(_va_raw)
-                                _va_tok = (_va_d.get("choices", [{}])[0]
-                                               .get("delta", {})
-                                               .get("content", "") or "")
-                                if _va_tok:
-                                    parts.append(_va_tok)
-                                    yield await ctx.emit({"type": "token", "content": _va_tok})
-                            except Exception:
-                                continue
+                from core.llm_transport import stream_chat_chunks as _stream_chat_chunks
+                _va_temp, _va_think, _va_budget, _va_smp = resolve_agent_sampling(
+                    _va_model, agent=va, settings=ctx.settings, role="vision", mode="sampling_vl",
+                )
+                _va_payload = {
+                    "model":              _va_model,
+                    "messages":           _va_msgs,
+                    "stream":             True,
+                    "temperature":        _va_temp,
+                    "top_p":              _va_smp.get("top_p", 0.9),
+                    "top_k":              int(_va_smp.get("top_k", 40)),
+                    "min_p":              float(_va_smp.get("min_p", 0.0)),
+                    "presence_penalty":   float(_va_smp.get("presence_penalty", 0.0)),
+                    "repeat_penalty":     float(_va_smp.get("repeat_penalty", _va_smp.get("repetition_penalty", 1.0))),
+                    "repetition_penalty": float(_va_smp.get("repetition_penalty", _va_smp.get("repeat_penalty", 1.0))),
+                    "max_tokens":         va.max_tokens,
+                    "stop":               ["<|im_end|>", "<|endoftext|>", "\n\n\n"],
+                    "cache_prompt":       False,
+                }
+                if _va_smp.get("seed") is not None:
+                    _va_payload["seed"] = int(_va_smp["seed"])
+                _apply_thinking_fields(_va_payload, _va_think, _va_budget)
+                async for _va_d in _stream_chat_chunks(
+                    _va_port,
+                    _va_payload,
+                    timeout=httpx.Timeout(connect=10.0, read=_va_read_s, write=10.0, pool=5.0),
+                    max_attempts=3,
+                    log_label="Vision-Agent",
+                ):
+                    if ctx.aborted():
+                        break
+                    _va_tok = ((_va_d.get("choices") or [{}])[0]
+                                   .get("delta", {})
+                                   .get("content", "") or "")
+                    if _va_tok:
+                        parts.append(_va_tok)
+                        yield await ctx.emit({"type": "token", "content": _va_tok})
             except Exception as e:
                 err = f"[Vision-Agent error: {str(e)[:100]}]"
                 parts.append(err)
@@ -274,19 +289,16 @@ async def run_pipeline(ctx):
                 parts, t = [], time.time()
                 if "refiner" not in ctx.skip_agents:
                     ctx.schedule_prefetch(ctx.registry_get("refiner"), "analyst", t)
-                # AGENT-THINKING (2026-08-19): per-agent switches from AgentConfig.
-                _ag_think = bool(getattr(a, "thinking", False))
-                _ag_budget = int(getattr(a, "thinking_budget", 0) or 0)
+                _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, a.model)
                 _ag_no_cache = bool(_analyst_vision and ctx.images)
-                _ag_ctx = ctx.get_num_ctx(a.model, "analyst") or 8192
-                _ag_max = min(int(a.max_tokens + _ag_budget), max(256, _ag_ctx))
                 try:
                     if _ag_think:
                         async for _c, _th in ctx.pipeline_chat_stream(
-                                a.model, msgs, a.temperature, _ag_max,
+                                a.model, msgs, _ag_temp, _ag_max,
                                 agent_role="analyst", think=True,
                                 thinking_budget=_ag_budget or None,
-                                split_thinking=True, no_cache=_ag_no_cache):
+                                split_thinking=True, no_cache=_ag_no_cache,
+                                sampler=_ag_smp):
                             if ctx.aborted(): break
                             if _th:
                                 yield await ctx.emit({"type": "thinking_token", "content": _th})
@@ -295,8 +307,9 @@ async def run_pipeline(ctx):
                                 yield await ctx.emit({"type": "token", "content": _c})
                     else:
                         _think_open = False
-                        async for tok in ctx.pipeline_chat_stream(a.model, msgs, a.temperature, _ag_max,
-                                                               agent_role="analyst", no_cache=_ag_no_cache):
+                        async for tok in ctx.pipeline_chat_stream(a.model, msgs, _ag_temp, _ag_max,
+                                                               agent_role="analyst", think=False,
+                                                               no_cache=_ag_no_cache, sampler=_ag_smp):
                             if ctx.aborted(): break
                             parts.append(tok)
                             if not _think_open and "<think>" in tok:
@@ -326,11 +339,25 @@ async def run_pipeline(ctx):
                     retry_msgs = ctx.make_messages(ctx.pipeline, sys_p, analyst_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_analyst, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
                     retry_parts = []
                     try:
-                        async for tok in ctx.pipeline_chat_stream(a.model, retry_msgs, a.temperature, retry_tokens,
-                                                               agent_role="analyst"):
-                            if ctx.aborted(): break
-                            retry_parts.append(tok)
-                            yield await ctx.emit({"type": "token", "content": tok})
+                        if _ag_think:
+                            async for _rc, _rth in ctx.pipeline_chat_stream(
+                                    a.model, retry_msgs, _ag_temp, retry_tokens,
+                                    agent_role="analyst", think=True,
+                                    thinking_budget=_ag_budget or None,
+                                    split_thinking=True, sampler=_ag_smp):
+                                if ctx.aborted(): break
+                                if _rth:
+                                    yield await ctx.emit({"type": "thinking_token", "content": _rth})
+                                if _rc:
+                                    retry_parts.append(_rc)
+                                    yield await ctx.emit({"type": "token", "content": _rc})
+                        else:
+                            async for tok in ctx.pipeline_chat_stream(
+                                    a.model, retry_msgs, _ag_temp, retry_tokens,
+                                    agent_role="analyst", think=False, sampler=_ag_smp):
+                                if ctx.aborted(): break
+                                retry_parts.append(tok)
+                                yield await ctx.emit({"type": "token", "content": tok})
                         retry_out = "".join(retry_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
                         if retry_out and not ctx.is_truncated(retry_out):
                             analyst_out = retry_out
@@ -392,16 +419,13 @@ async def run_pipeline(ctx):
                 parts, t = [], time.time()
                 if "critic" not in ctx.skip_agents:
                     ctx.schedule_prefetch(ctx.registry_get("critic"), "refiner", t)
-                _ag_think = bool(getattr(a, "thinking", False))
-                _ag_budget = int(getattr(a, "thinking_budget", 0) or 0)
-                _ag_ctx = ctx.get_num_ctx(a.model) or 8192
-                _ag_max = min(int(a.max_tokens + _ag_budget), max(256, _ag_ctx))
+                _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, a.model)
                 try:
                     if _ag_think:
                         async for _c, _th in ctx.pipeline_chat_stream(
-                                a.model, msgs, a.temperature, _ag_max,
+                                a.model, msgs, _ag_temp, _ag_max,
                                 agent_role=a.key, think=True, thinking_budget=_ag_budget or None,
-                                split_thinking=True, no_cache=_refiner_vision):
+                                split_thinking=True, no_cache=_refiner_vision, sampler=_ag_smp):
                             if ctx.aborted(): break
                             if _th:
                                 yield await ctx.emit({"type": "thinking_token", "content": _th})
@@ -410,7 +434,8 @@ async def run_pipeline(ctx):
                                 yield await ctx.emit({"type": "token", "content": _c})
                     else:
                         async for tok in ctx.pipeline_chat_stream(
-                            a.model, msgs, a.temperature, _ag_max, agent_role=a.key, no_cache=_refiner_vision
+                            a.model, msgs, _ag_temp, _ag_max, agent_role=a.key,
+                            think=False, no_cache=_refiner_vision, sampler=_ag_smp,
                         ):
                             if ctx.aborted(): break
                             parts.append(tok)
@@ -429,10 +454,25 @@ async def run_pipeline(ctx):
                     retry_msgs2 = ctx.make_messages(ctx.pipeline, sys_p, refiner_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_refiner, False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
                     retry_parts2 = []
                     try:
-                        async for tok in ctx.pipeline_chat_stream(a.model, retry_msgs2, a.temperature, retry_tokens, agent_role=a.key):
-                            if ctx.aborted(): break
-                            retry_parts2.append(tok)
-                            yield await ctx.emit({"type": "token", "content": tok})
+                        if _ag_think:
+                            async for _rc, _rth in ctx.pipeline_chat_stream(
+                                    a.model, retry_msgs2, _ag_temp, retry_tokens,
+                                    agent_role=a.key, think=True,
+                                    thinking_budget=_ag_budget or None,
+                                    split_thinking=True, sampler=_ag_smp):
+                                if ctx.aborted(): break
+                                if _rth:
+                                    yield await ctx.emit({"type": "thinking_token", "content": _rth})
+                                if _rc:
+                                    retry_parts2.append(_rc)
+                                    yield await ctx.emit({"type": "token", "content": _rc})
+                        else:
+                            async for tok in ctx.pipeline_chat_stream(
+                                    a.model, retry_msgs2, _ag_temp, retry_tokens,
+                                    agent_role=a.key, think=False, sampler=_ag_smp):
+                                if ctx.aborted(): break
+                                retry_parts2.append(tok)
+                                yield await ctx.emit({"type": "token", "content": tok})
                         retry_out2 = "".join(retry_parts2).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
                         if retry_out2 and len(retry_out2) > len(refiner_out):
                             refiner_out = retry_out2
@@ -507,16 +547,13 @@ async def run_pipeline(ctx):
                 _is_last_iter = (i == ctx.iterations - 1)
                 if "synthesizer" not in ctx.skip_agents and _is_last_iter:
                     ctx.schedule_prefetch(ctx.registry_get("synthesizer"), "critic", t)
-                _ag_think = bool(getattr(a, "thinking", False))
-                _ag_budget = int(getattr(a, "thinking_budget", 0) or 0)
-                _ag_ctx = ctx.get_num_ctx(a.model) or 8192
-                _ag_max = min(int(a.max_tokens + _ag_budget), max(256, _ag_ctx))
+                _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, a.model)
                 try:
                     if _ag_think:
                         async for _c, _th in ctx.pipeline_chat_stream(
-                                a.model, msgs, a.temperature, _ag_max,
+                                a.model, msgs, _ag_temp, _ag_max,
                                 agent_role=a.key, think=True, thinking_budget=_ag_budget or None,
-                                split_thinking=True, no_cache=_critic_vision):
+                                split_thinking=True, no_cache=_critic_vision, sampler=_ag_smp):
                             if ctx.aborted(): break
                             if _th:
                                 yield await ctx.emit({"type": "thinking_token", "content": _th})
@@ -526,7 +563,8 @@ async def run_pipeline(ctx):
                                     yield await ctx.emit({"type": "token", "content": _c})
                     else:
                         async for tok in ctx.pipeline_chat_stream(
-                            a.model, msgs, a.temperature, _ag_max, agent_role=a.key, no_cache=_critic_vision
+                            a.model, msgs, _ag_temp, _ag_max, agent_role=a.key,
+                            think=False, no_cache=_critic_vision, sampler=_ag_smp,
                         ):
                             if ctx.aborted(): break
                             parts.append(tok)
@@ -647,17 +685,14 @@ async def run_pipeline(ctx):
             })
 
             parts, t = [], time.time()
-            _ag_think = bool(getattr(a, "thinking", False))
-            _ag_budget = int(getattr(a, "thinking_budget", 0) or 0)
-            _ag_ctx = ctx.get_num_ctx(a.model) or 8192
-            _ag_max = min(int(a.max_tokens + _ag_budget), max(256, _ag_ctx))
+            _synth_mdl = ctx.registry_get("synthesizer") or a.model
+            _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, _synth_mdl)
             try:
-                _synth_mdl = ctx.registry_get("synthesizer")
                 if _ag_think:
                     async for _c, _th in ctx.pipeline_chat_stream(
-                            _synth_mdl, msgs, a.temperature, _ag_max,
+                            _synth_mdl, msgs, _ag_temp, _ag_max,
                             agent_role=a.key, think=True, thinking_budget=_ag_budget or None,
-                            split_thinking=True, no_cache=_synth_vision):
+                            split_thinking=True, no_cache=_synth_vision, sampler=_ag_smp):
                         if ctx.aborted(): break
                         if _th:
                             yield await ctx.emit({"type": "thinking_token", "content": _th})
@@ -666,7 +701,8 @@ async def run_pipeline(ctx):
                             yield await ctx.emit({"type": "token", "content": _c})
                 else:
                     async for tok in ctx.pipeline_chat_stream(
-                        _synth_mdl, msgs, a.temperature, _ag_max, agent_role=a.key, no_cache=_synth_vision
+                        _synth_mdl, msgs, _ag_temp, _ag_max, agent_role=a.key,
+                        think=False, no_cache=_synth_vision, sampler=_ag_smp,
                     ):
                         if ctx.aborted(): break
                         parts.append(tok)
@@ -690,10 +726,25 @@ async def run_pipeline(ctx):
                 _synth_retry_msgs = ctx.make_messages(ctx.pipeline, sys_p, _synth_retry_input, [], False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
                 _synth_retry_parts: list[str] = []
                 try:
-                    async for tok in ctx.pipeline_chat_stream(a.model, _synth_retry_msgs, a.temperature, retry_tokens_s, agent_role=a.key):
-                        if ctx.aborted(): break
-                        _synth_retry_parts.append(tok)
-                        yield await ctx.emit({"type": "token", "content": tok})
+                    if _ag_think:
+                        async for _rc, _rth in ctx.pipeline_chat_stream(
+                                _synth_mdl, _synth_retry_msgs, _ag_temp, retry_tokens_s,
+                                agent_role=a.key, think=True,
+                                thinking_budget=_ag_budget or None,
+                                split_thinking=True, sampler=_ag_smp):
+                            if ctx.aborted(): break
+                            if _rth:
+                                yield await ctx.emit({"type": "thinking_token", "content": _rth})
+                            if _rc:
+                                _synth_retry_parts.append(_rc)
+                                yield await ctx.emit({"type": "token", "content": _rc})
+                    else:
+                        async for tok in ctx.pipeline_chat_stream(
+                                _synth_mdl, _synth_retry_msgs, _ag_temp, retry_tokens_s,
+                                agent_role=a.key, think=False, sampler=_ag_smp):
+                            if ctx.aborted(): break
+                            _synth_retry_parts.append(tok)
+                            yield await ctx.emit({"type": "token", "content": tok})
                     _synth_retry_out = "".join(_synth_retry_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
                     if _synth_retry_out and len(_synth_retry_out) > len(synth_out):
                         synth_out = _synth_retry_out
@@ -778,11 +829,12 @@ async def run_pipeline(ctx):
             ))
             spawn(ctx.maybe_trigger_soul_evolution(run_count))
 
-            if not ctx.aborted() and ctx.exec_ctrl.stop_reason:
+            if not ctx.aborted() and ctx.exec_ctrl and ctx.exec_ctrl.stop_reason:
                 yield await ctx.emit({"type": "token", "content": f"\n\n{ctx.exec_ctrl.get_summary()}\n"})
 
             _final_stop_reason = "aborted" if ctx.aborted() else (
-                ctx.exec_ctrl.stop_reason.value if ctx.exec_ctrl.stop_reason else "completed"
+                ctx.exec_ctrl.stop_reason.value
+                if (ctx.exec_ctrl and ctx.exec_ctrl.stop_reason) else "completed"
             )
             yield await ctx.emit(
                 ctx.done_event(

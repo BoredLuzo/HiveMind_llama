@@ -34,6 +34,14 @@ from utils.tool import parse_tool_args as _parse_tool_args
 logger = logging.getLogger("hivemind.duo")
 
 
+def _normalize_path_set(paths, workspace: str) -> set[str]:
+    """Normalize non-empty workspace paths with `_normalize_tool_path`."""
+    return {
+        np for p in (paths or ()) if p
+        for np in (_normalize_tool_path(str(p), workspace),) if np
+    }
+
+
 async def _duo_dtool_setup(ctx, ps):
     _di = ps._di
     coder_mdl = ps.carry["coder_mdl"]
@@ -53,6 +61,7 @@ async def _duo_dtool_setup(ctx, ps):
     _is_first_outer_round = ps._is_first_outer_round
     _ws_str = ps._ws_str
     _touched_block_persisted = ps._touched_block_persisted
+    _touched_norm = _normalize_path_set(_touched_paths, _ws_str)
 
     # _dtool_sys_eff: Coder-Prompt + OS-Hint + Workspace.
     # Workflow instructions are already in the modular prompt blocks
@@ -265,7 +274,7 @@ async def _duo_dtool_setup(ctx, ps):
                         _touched_block = _touched_block[:8000].rsplit("\n\n", 1)[0] + "\n\n[... truncated]"
                     _bridge_msg["content"] += _touched_block
                     _touched_block_persisted = _touched_block
-                    from tools.runner import _files_in_context; _files_in_context.set(set(_touched_paths))
+                    from tools.runner import _files_in_context; _files_in_context.set(set(_touched_norm))
     else:
         _dtool_msgs = [
             {**m, "content": _dtool_sys_eff} if _mi == 0 and m.get("role") == "system" else m
@@ -278,14 +287,20 @@ async def _duo_dtool_setup(ctx, ps):
             is_first_outer_round=_is_first_outer_round,
         )
 
+    _preseed_block = ""
+    _preseed_names: list[str] = []
+    _deep_block = ""
+    _deep_names: list[str] = []
     # PRE-SEED SMALL WORKSPACE (2026-11-09): avoid the extra read_file round
     # when the task is a tiny top-level file set and no pre-explore already
     # supplied the contents. Aider-style one-shot context for the cases where
     # the tool loop is pure overhead; large repos never match the cap.
     if _is_first_outer_round and not _pre_explore_msgs and not _already_read:
-        _preseed_block, _preseed_names = _build_preseed_context(
+        _preseed_block, _preseed_names = await asyncio.to_thread(
+            _build_preseed_context,
             _ws_str, int(_dtool_ctx or 0),
-            query=str(getattr(ctx, "user_input", "") or ""))
+            query=str(getattr(ctx, "user_input", "") or ""),
+        )
         if _preseed_block and _preseed_names:
             _dtool_msgs.append({"role": "user", "content": _preseed_block})
             try:
@@ -317,7 +332,8 @@ async def _duo_dtool_setup(ctx, ps):
             # duo_index_max_files files once.
             _deep_block, _deep_names = await asyncio.to_thread(
                 _build_deep_retrieval_context,
-                _ws_str, str(getattr(ctx, "user_input", "") or ""))
+                _ws_str, str(getattr(ctx, "user_input", "") or ""),
+                settings_dict=getattr(ctx, "settings", None))
             if _deep_block and _deep_names:
                 _dtool_msgs.append({"role": "user", "content": _deep_block})
                 logger.info("[DEEP-HINTS] %d file(s) ranked into round 0: %s",
@@ -347,7 +363,7 @@ async def _duo_dtool_setup(ctx, ps):
             _wp = _normalize_tool_path(_p, _ws_str)
             if _wp:
                 _read_set.add(_wp)
-                if _ctx_set is not None and (_pass_mode in ("all", "true", "1") or _wp in _touched_paths):
+                if _ctx_set is not None and (_pass_mode in ("all", "true", "1") or _wp in _touched_paths or _wp in _touched_norm):
                     _ctx_set.add(_wp)
         # Add touched_paths that were NOT in _already_read
         # (intersection→union fix: _already_read ∩ _touched_paths
@@ -369,8 +385,8 @@ async def _duo_dtool_setup(ctx, ps):
     _task_sig_current = hashlib.md5(ctx.user_input[:60].encode()).hexdigest()[:8]
     _task_sig_persisted = _persisted.get("task_sig", "")
     if _task_sig_persisted == _task_sig_current:
-        _persisted_read = set(_persisted.get("files_read_in_run", []))
-        _persisted_touched = set(_persisted.get("touched_paths", []))
+        _persisted_read = _normalize_path_set(_persisted.get("files_read_in_run", []), _ws_str)
+        _persisted_touched = _normalize_path_set(_persisted.get("touched_paths", []), _ws_str)
     else:
         _persisted_read = set()
         _persisted_touched = set()
@@ -392,7 +408,13 @@ async def _duo_dtool_setup(ctx, ps):
         c.get("exports") or c.get("role") or c.get("purpose")
         for c in (_contracts_raw or []) if isinstance(c, dict)
     )
-    _explore_usable = bool(_explore_ctx and len(_explore_ctx) > 500 and _contracts_usable)
+    _has_retrieval_ctx = bool(
+        (_preseed_block and _preseed_names) or (_deep_block and _deep_names)
+    )
+    _explore_usable = bool(
+        (_explore_ctx and len(_explore_ctx) > 500 and _contracts_usable)
+        or _has_retrieval_ctx
+    )
     _plan_content_available = bool(
         _plan_result is not None and _plan_result.plan_content
     )
@@ -433,9 +455,14 @@ async def _duo_dtool_setup(ctx, ps):
                                + _existing_content
                 }
             else:
+                _pin_prefix = (
+                    "[GOAL — this is your fixed objective for this chunk, do not lose track of it]"
+                    if (_goal_summary and _goal_summary in str(_existing_content))
+                    else _goal_pin_msg["content"]
+                )
                 _dtool_msgs[1] = {
                     **_dtool_msgs[1],
-                    "content": _goal_pin_msg["content"] + "\n\n" + str(_existing_content)
+                    "content": _pin_prefix + "\n\n" + str(_existing_content)
                 }
         else:
             _dtool_msgs = (

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.duo._pre_explore import _explore_extract_files
 from core.duo_helpers import read_loop_key
+from core.run_context import is_ctx_aborted
 from hive_functions.loop_machine import AgentState, StopReason
 import httpx
 from vram.loader import _bk_load
@@ -817,8 +818,8 @@ async def keepalive_vision(vis_mdl: str) -> None:
 async def emit_chunk_planner_heartbeat(ctx, hb_queue, hb_stop, planner_model: str) -> None:
     _elapsed = 0
     await asyncio.sleep(1.0)
-    while not hb_stop.is_set() and not ctx.aborted():
-        if hb_stop.is_set() or ctx.aborted():
+    while not hb_stop.is_set() and not is_ctx_aborted(ctx):
+        if hb_stop.is_set() or is_ctx_aborted(ctx):
             break
         _elapsed += 1
         try:
@@ -881,11 +882,7 @@ async def plan_emit_fn(plan_event_q, event: dict) -> None:
 def plan_aborted_fn(ctx) -> bool:
     # A timed-out benchmark run is aborted by chat id; the planner must stop
     # too, or it keeps the model busy while the next harness starts.
-    _chat_aborted = getattr(ctx, "is_aborted_chat", None)
-    return bool(ctx.aborted()
-                or (getattr(ctx, "chat_id", None)
-                    and _chat_aborted is not None
-                    and _chat_aborted(ctx.chat_id)))
+    return is_ctx_aborted(ctx)
 
 
 async def plan_heartbeat_fn(plan_event_q, planner_hb_queue) -> None:

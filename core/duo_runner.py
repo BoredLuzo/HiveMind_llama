@@ -23,8 +23,9 @@ from infra.run_control import (
     is_graceful_stop_requested, clear_graceful_stop,
     is_pause_requested, clear_pause_request,
     get_resume_signal, get_abort_during_pause_signal,
-    drain_steer_messages,
+    drain_steer_messages, finish_manual_pause as _finish_manual_pause,
     cleanup_pause_state as _cleanup_pause_state,
+    _abort_event,
     _get_abort_event,
 )
 from context.pause_state import (
@@ -42,7 +43,7 @@ from context.ctx_guard import (
 
 
 # ── Tools ──
-from tools.definitions import _get_inline_tools, _filter_tools_for_mode
+from tools.definitions import _get_inline_tools, _filter_tools_for_mode, git_tools_enabled
 from tools.runner import _run_inline_tool, _current_project_state
 from tools.workspace import new_transaction
 
@@ -71,6 +72,7 @@ from hive_functions.planner import (
     make_planner_analysis_sys,
 )
 from hive_functions.chunking import ChunkState, ChunkAction
+from core.run_context import is_ctx_aborted
 from hive_functions.loop_machine import AgentState, StopReason, ExecutionController
 from hive_functions.memory import ToolContextLRU
 from hive_functions.test_runner import (
@@ -89,7 +91,7 @@ _fallback_planner_steps = fallback_planner_steps
 
 _CRITIC_VERIFY_TOOLS = _get_inline_tools(include_websearch=False, mode="critic_verify")
 
-from core.model_sampling import get_sampling_profile
+from core.model_sampling import get_sampling_profile, resolve_presence_penalty
 
 from core.agentic_duo_state import DuoRoundState
 from core.tool_executor import execute_tool_round, ToolExecHooks, ToolRoundState
@@ -840,7 +842,7 @@ async def _duo_planner_phase(
                         break
                     # PLANNER-SKIP (2026-09-04): Skip pressed while the
                     # planner is running -> abort planner, go to coder.
-                    if ctx.step_skipped() and not ctx.aborted():
+                    if ctx.step_skipped() and not is_ctx_aborted(ctx):
                         _planner_skip_mid = True
                         ctx.clear_step_skip()
                         try:
@@ -1091,6 +1093,51 @@ class _DuoCriticReviewState:
     verify_gate_blocked: bool = False
 
 
+def _build_critic_payload(
+    critic_mdl: str,
+    messages: list,
+    tools: list,
+    *,
+    tool_choice: str | None = None,
+    temp_override: float | None,
+    max_tokens: int,
+    critic_profile: dict,
+    critic_thinking: bool,
+    critic_thinking_budget: int,
+    settings: dict | None,
+) -> dict:
+    """Build identical /v1/chat/completions payload for critic tool/plain paths."""
+    from core.duo_helpers import _apply_thinking_fields
+    payload: dict = {
+        "model": critic_mdl,
+        "messages": messages,
+        "tools": tools,
+        "stream": False,
+        "temperature": temp_override if temp_override is not None else critic_profile.get("temperature", 0.15),
+        "top_p": critic_profile.get("top_p", 0.95),
+        "top_k": critic_profile.get("top_k", 20),
+        "presence_penalty": resolve_presence_penalty(
+            critic_profile, critic_mdl, critic_thinking, settings,
+        ),
+        "repeat_penalty": critic_profile.get("repeat_penalty", critic_profile.get("repetition_penalty", 1.0)),
+        "repetition_penalty": critic_profile.get("repetition_penalty", critic_profile.get("repeat_penalty", 1.0)),
+        "max_tokens": max_tokens,
+    }
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
+    if critic_profile.get("seed") is not None:
+        payload["seed"] = int(critic_profile["seed"])
+    if "min_p" in critic_profile:
+        payload["min_p"] = critic_profile["min_p"]
+    if critic_profile.get("cache_prompt"):
+        payload["cache_prompt"] = True
+    payload = _apply_thinking_kwargs(
+        payload, critic_profile, critic_thinking, coder_tool_think=critic_thinking,
+    )
+    payload = _apply_thinking_fields(payload, critic_thinking, critic_thinking_budget)
+    return payload
+
+
 async def _duo_critic_review(
     ctx, ps: _DuoCriticReviewState, *,
     coder_mdl, coder_out, critic_mdl, _ws_str, _di, _subtask,
@@ -1137,71 +1184,47 @@ async def _duo_critic_review(
         from backend.llama_server_manager import manager as _lsm_c
         _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic"))
 
+        _critic_ag = (ctx.pipeline.agents.get("duo_critic") if getattr(ctx, "pipeline", None) else None)
+        _critic_think_budget = int(getattr(_critic_ag, "thinking_budget", 0) or 0)
         if _critic_tools_enabled:
             # ── Critic Tool-Loop ─────────────────────────────────────
             # Critic can read files and run tests before giving verdict.
             # Max 3 rounds to keep VRAM pressure low on 8GB GPUs.
             _critic_tc_msgs  = list(_critic_msgs)
             _critic_tc_max   = 3
-            _cresp = None
-            _c_gen_t0 = 0.0
             try:
+                from core.llm_transport import post_chat_json as _post_chat_json
                 async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
                   for _ in range(_critic_tc_max):
-                    if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
+                    if is_ctx_aborted(ctx):
                         break
-                    # Retry transient server errors (up to 3 attempts per tool round)
-                    for _critic_post_attempt in range(3):
-                        try:
-                            _c_gen_t0 = time.monotonic()  # GEN-TIME: critic POST duration
-                            _critic_tc_payload = {
-                                "model": critic_mdl,
-                                "messages": _critic_tc_msgs,
-                                "tools": _CRITIC_VERIFY_TOOLS,
-                                "stream": False,
-                                "tool_choice": "auto",
-                                "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
-                                "top_p": _critic_profile.get("top_p", 0.95),
-                                "top_k": _critic_profile.get("top_k", 20),
-                                "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                                "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                                "max_tokens": _duo_critic_tok,
-                            }
-                            if _critic_profile.get("seed") is not None:
-                                _critic_tc_payload["seed"] = int(_critic_profile["seed"])
-                            _cresp = await _chttpc.post(
-                                    f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                             json=_critic_tc_payload
-                                    )
-                            if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
-                                await _cresp.aread()
-                                await asyncio.sleep(2.0)
-                                continue
-                            break
-                        except httpx.ConnectError:
-                            if _critic_post_attempt < 2:
-                                await asyncio.sleep(3.0)
-                                continue
-                            raise
-                    if _cresp is None:
-                        raise RuntimeError("Critic POST failed after retries")
-                    if _cresp.status_code != 200:
-                        raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
-                    _cd = _cresp.json()
-                    _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
-                             if "choices" in _cd else _cd.get("message", {}))
-                    _cusage = _cd.get("usage") or {}
-                    if _cusage.get("completion_tokens"):
-                        # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
-                        try:
-                            _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                        except Exception:
-                            _cc_cached = 0
-                        yield await ctx.emit({"type": "usage_meta", "phase": "critic",
-                            "completion_tokens": int(_cusage["completion_tokens"]),
-                            "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
-                            "cached_tokens": _cc_cached,
-                            "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
+                    _critic_tc_payload = _build_critic_payload(
+                        critic_mdl,
+                        _critic_tc_msgs,
+                        _CRITIC_VERIFY_TOOLS,
+                        tool_choice="auto",
+                        temp_override=_duo_critic_temp,
+                        max_tokens=_duo_critic_tok,
+                        critic_profile=_critic_profile,
+                        critic_thinking=_critic_thinking,
+                        critic_thinking_budget=_critic_think_budget,
+                        settings=ctx.settings,
+                    )
+                    _cres_obj = await _post_chat_json(
+                        _critic_port,
+                        _critic_tc_payload,
+                        timeout=_critic_tc_timeout,
+                        max_attempts=3,
+                        retry_statuses=(500, 502, 503, 504),
+                        retry_sleep_s=2.0,
+                        connect_sleep_s=3.0,
+                        client=_chttpc,
+                        raise_on_status=False,
+                        log_label="Critic",
+                    )
+                    _cmsg = _cres_obj.message
+                    if _cres_obj.usage:
+                        yield await ctx.emit({"type": "usage_meta", "phase": "critic", **_cres_obj.usage})
                     _ctc = _cmsg.get("tool_calls", [])
                     if not _ctc:
                         # No more tool calls — this is the final verdict
@@ -1233,70 +1256,34 @@ async def _duo_critic_review(
                 _parts.append(json.dumps({"approved": False, "issues": [f"Critic-tool-error: {str(_cte)[:80]}"], "verdict": "tool_error"}))
         else:
             # ── Critic Plain Request ──────────────────────────────────
-            _critic_plain_payload = {
-                "model": critic_mdl,
-                "messages": _critic_msgs,
-                "tools": [],
-                "stream": False,
-                "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
-                "top_p": _critic_profile.get("top_p", 0.95),
-                "top_k": _critic_profile.get("top_k", 20),
-                "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                "max_tokens": _duo_critic_tok,
-            }
-            if _critic_profile.get("seed") is not None:
-                _critic_plain_payload["seed"] = int(_critic_profile["seed"])
-            # MIN-P-EXPLICIT (2026-09-20): see the coder payload — a
-            # declared min_p 0.0 must ship (API default is 0.05).
-            if "min_p" in _critic_profile:
-                _critic_plain_payload["min_p"] = _critic_profile["min_p"]
-            if _critic_profile.get("cache_prompt"):
-                _critic_plain_payload["cache_prompt"] = True
-            _critic_plain_payload = _apply_thinking_kwargs(
-                _critic_plain_payload, _critic_profile, _critic_thinking, coder_tool_think=False
+            _critic_plain_payload = _build_critic_payload(
+                critic_mdl,
+                _critic_msgs,
+                [],
+                temp_override=_duo_critic_temp,
+                max_tokens=_duo_critic_tok,
+                critic_profile=_critic_profile,
+                critic_thinking=_critic_thinking,
+                critic_thinking_budget=_critic_think_budget,
+                settings=ctx.settings,
             )
-            _cresp = None
-            _c_gen_t0 = 0.0
             try:
-                async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc_plain:
-                    for _critic_post_attempt in range(3):
-                        try:
-                            _c_gen_t0 = time.monotonic()  # GEN-TIME: Critic-POST-Dauer
-                            _cresp = await _chttpc_plain.post(
-                                f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                                json=_critic_plain_payload,
-                            )
-                            if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
-                                await _cresp.aread()
-                                await asyncio.sleep(2.0)
-                                continue
-                            break
-                        except httpx.ConnectError:
-                            if _critic_post_attempt < 2:
-                                await asyncio.sleep(3.0)
-                                continue
-                            raise
-                    if _cresp is None:
-                        raise RuntimeError("Critic POST failed after retries")
-                    if _cresp.status_code != 200:
-                        raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
-                    _cd = _cresp.json()
-                    _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
-                             if "choices" in _cd else _cd.get("message", {}))
-                    _cusage = _cd.get("usage") or {}
-                    if _cusage.get("completion_tokens"):
-                        # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
-                        try:
-                            _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                        except Exception:
-                            _cc_cached = 0
-                        yield await ctx.emit({"type": "usage_meta", "phase": "critic",
-                            "completion_tokens": int(_cusage["completion_tokens"]),
-                            "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
-                            "cached_tokens": _cc_cached,
-                            "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
-                    _parts.append(_cmsg.get("content", "").strip())
+                from core.llm_transport import post_chat_json as _post_chat_json
+                _cres_obj = await _post_chat_json(
+                    _critic_port,
+                    _critic_plain_payload,
+                    timeout=_critic_tc_timeout,
+                    max_attempts=3,
+                    retry_statuses=(500, 502, 503, 504),
+                    retry_sleep_s=2.0,
+                    connect_sleep_s=3.0,
+                    raise_on_status=False,
+                    log_label="Critic",
+                )
+                _cmsg = _cres_obj.message
+                if _cres_obj.usage:
+                    yield await ctx.emit({"type": "usage_meta", "phase": "critic", **_cres_obj.usage})
+                _parts.append(_cmsg.get("content", "").strip())
             except Exception as _cre:
                 _err_d = {"approved": False, "issues": [f"Critic error: {str(_cre)[:80]}"], "verdict": "error"}
                 _parts.append(json.dumps(_err_d))
@@ -1365,7 +1352,7 @@ async def _duo_final_test(ctx, state, _cs, _n_items, *, _eff_run_ws):
     # moved VERBATIM from run_code_duo (function-level block, same
     # indent). Reads shared objects only (_cs mutated in place).
     _final_test_fb = bool(ctx.duo_config.test_feedback_final)
-    if _final_test_fb and _cs.has_written_files and not ctx.aborted():
+    if _final_test_fb and _cs.has_written_files and not is_ctx_aborted(ctx):
         yield await ctx.emit({"type": "status", "content": "\U0001f9ea Final test run after all chunks..."})
         try:
             _final_test_result = await _run_test_suite(
@@ -1515,6 +1502,7 @@ async def _duo_exec_round_task(
             run_id_global=_run_id_global,
             chat_id=ctx.chat_id,
             subtask_index=_di,
+            include_git=git_tools_enabled(ctx.settings),
         ))
         _hb_interval = _read_hb_interval(ctx.settings)
         _hb_start = time.monotonic()
@@ -1809,6 +1797,7 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
     # the pin so normal eviction can reclaim VRAM after the run.
     try:
         from backend.llama_server_manager import manager as _lsm_unpin
+        _lsm_unpin._reasoning_override = None
         for _m in (_planner_model, exec_mdl):
             if _m:
                 _lsm_unpin.clear_pin(_m)
@@ -1833,6 +1822,9 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
         if _rid:
             from infra.run_control import cleanup_pause
             cleanup_pause(_rid)
+            _cleanup_pause_state(_rid)
+        ctx.unregister_abort(ctx.run_id)
+        ctx.unregister_step_skip(ctx.run_id)
     except Exception as _err:
         if isinstance(_err, (
             GeneratorExit,
@@ -1946,77 +1938,83 @@ async def _duo_coder_post_wait(
         )
         _hb_start = time.monotonic()
         _hb_last = _hb_start
-        while True:
-            _hb_had = False
-            while not _coder_event_q.empty():
-                _hb_had = True
-                try:
-                    yield _coder_event_q.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-            if _hb_had:
-                _hb_last = time.monotonic()
-            if _post_task.done():
-                break
-            # HEARTBEAT (2026-08-21): during long prompt processing
-            if time.monotonic() - _hb_last >= _hb_interval:
-                _hb_total = int(time.monotonic() - _hb_start)
-                _hb_last = time.monotonic()
-                # PREFILL-METER (2026-09-20): attach live llama-server
-                # prefill progress when one is running (post-compress
-                # re-prefill, ctx reload) so the UI shows percent + rate
-                # instead of a blind elapsed counter.
-                _hb_ev = {"type": "heartbeat", "elapsed": _hb_total}
-                # F4 (2026-11-07): meter is async now — discovery +
-                # tail read run via to_thread, off the loop.
-                _hb_pf = await _llama_prefill_progress(_dport)
-                if _hb_pf:
-                    _hb_ev["prefill"] = _hb_pf
-                yield await ctx.emit(_hb_ev)
-            await asyncio.sleep(0.02)
-        # TASK-DEATH FIX (2026-10-10): post_with_retry can die
-        # with an unhandled RuntimeError (in-loop ensure_loaded
-        # after ctx mismatch / evict). .result() re-raises into
-        # the surrounding frame, which swallowed it silently -
-        # six runs ended with no usage, no [CACHE], no error
-        # message (asyncio only logged the orphaned task).
-        # Surface it and end the run with a real reason.
         try:
-            _result = _post_task.result()
-        except Exception as _pt_exc:
-            logger.warning(
-                "[CODER-ROUND-FAIL] post task died: %s: %s",
-                type(_pt_exc).__name__, str(_pt_exc)[:200],
-            )
-            yield await ctx.emit({"type": "status",
-                "content": f"⛔ Coder round failed ({type(_pt_exc).__name__}): {str(_pt_exc)[:140]}"})
-            ctx.phase_timer.skip("coder_loop")
+            while True:
+                _hb_had = False
+                while not _coder_event_q.empty():
+                    _hb_had = True
+                    try:
+                        yield _coder_event_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                if _hb_had:
+                    _hb_last = time.monotonic()
+                if _post_task.done():
+                    break
+                # HEARTBEAT (2026-08-21): during long prompt processing
+                if time.monotonic() - _hb_last >= _hb_interval:
+                    _hb_total = int(time.monotonic() - _hb_start)
+                    _hb_last = time.monotonic()
+                    # PREFILL-METER (2026-09-20): attach live llama-server
+                    # prefill progress when one is running (post-compress
+                    # re-prefill, ctx reload) so the UI shows percent + rate
+                    # instead of a blind elapsed counter.
+                    _hb_ev = {"type": "heartbeat", "elapsed": _hb_total}
+                    # F4 (2026-11-07): meter is async now — discovery +
+                    # tail read run via to_thread, off the loop.
+                    _hb_pf = await _llama_prefill_progress(_dport)
+                    if _hb_pf:
+                        _hb_ev["prefill"] = _hb_pf
+                    yield await ctx.emit(_hb_ev)
+                await asyncio.sleep(0.02)
+            # TASK-DEATH FIX (2026-10-10): post_with_retry can die
+            # with an unhandled RuntimeError (in-loop ensure_loaded
+            # after ctx mismatch / evict). .result() re-raises into
+            # the surrounding frame, which swallowed it silently -
+            # six runs ended with no usage, no [CACHE], no error
+            # message (asyncio only logged the orphaned task).
+            # Surface it and end the run with a real reason.
+            try:
+                _result = _post_task.result()
+            except Exception as _pt_exc:
+                logger.warning(
+                    "[CODER-ROUND-FAIL] post task died: %s: %s",
+                    type(_pt_exc).__name__, str(_pt_exc)[:200],
+                )
+                yield await ctx.emit({"type": "status",
+                    "content": f"⛔ Coder round failed ({type(_pt_exc).__name__}): {str(_pt_exc)[:140]}"})
+                ctx.phase_timer.skip("coder_loop")
+                if _inuse_slot is not None:
+                    try:
+                        _inuse_slot.clear_in_flight()
+                    except (AttributeError, TypeError):
+                        pass
+                    _inuse_slot = None
+                clear_graceful_stop(ctx.run_id)
+                _cleanup_pause_state(ctx.run_id)
+                if ctx.chat_id:
+                    _clear_pause_state(ctx.chat_id)
+                _cleanup_governor(ctx.chat_id or ctx.run_id)
+                ctx.duo_stop_reason = "runtime_error"
+                yield await ctx.emit(ctx.done_event(
+                    round(time.time() - ctx.t_total, 1),
+                    ctx.duo_stop_reason,
+                    **ctx.collect_done_metrics(),
+                ))
+                # (F13 carve) the old bare `return` from run_code_duo ended the
+                # whole run: surface it as run_ended — the runner returns after
+                # it has relayed the status + done events above.
+                _run_ended = True; return
+        finally:
+            if not _post_task.done():
+                _post_task.cancel()
             if _inuse_slot is not None:
                 try:
                     _inuse_slot.clear_in_flight()
                 except (AttributeError, TypeError):
                     pass
-            clear_graceful_stop(ctx.run_id)
-            _cleanup_pause_state(ctx.run_id)
-            if ctx.chat_id:
-                _clear_pause_state(ctx.chat_id)
-            _cleanup_governor(ctx.chat_id or ctx.run_id)
-            ctx.duo_stop_reason = "runtime_error"
-            yield await ctx.emit(ctx.done_event(
-                round(time.time() - ctx.t_total, 1),
-                ctx.duo_stop_reason,
-                **ctx.collect_done_metrics(),
-            ))
-            # (F13 carve) the old bare `return` from run_code_duo ended the
-            # whole run: surface it as run_ended — the runner returns after
-            # it has relayed the status + done events above.
-            _run_ended = True; return
+                _inuse_slot = None
         # _duo_state mutated in-place by AgenticToolLoop — no sync needed
-        if _inuse_slot is not None:
-            try:
-                _inuse_slot.clear_in_flight()
-            except (AttributeError, TypeError):
-                pass
         _dport = _result["dport"]
         _cached_coder_port = _duo_state.cached_port
         _dr_msg = _result["dr_msg"]
@@ -2119,6 +2117,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         if ctx.chat_id:
             _clear_pause_state(ctx.chat_id)
         _cleanup_governor(ctx.chat_id or ctx.run_id)
+        ctx.unregister_abort(ctx.run_id)
+        ctx.unregister_step_skip(ctx.run_id)
         # VRAM-GUARD-DONE (2026-09-15): this used to be a silent return — no
         # done event, so the UI just showed nothing happening ("passiert nix").
         # The vram guard already emitted the reason as a status event; close
@@ -2135,6 +2135,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
     coder_mdl = state["coder_mdl"]
     critic_mdl = state["critic_mdl"]
     exec_mdl = state["exec_mdl"]
+    if exec_mdl:
+        yield await ctx.emit({"type": "run_meta", "models": {"coder": str(exec_mdl)}})
     _duo_runtime_profile = state["_duo_runtime_profile"]
     duo_rounds = state["duo_rounds"]
     _planner_step_cap = state["_planner_step_cap"]
@@ -2256,11 +2258,20 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         ctx.pipeline.agents["duo_critic"].model = critic_mdl
 
     _duo_coder_cfg  = ctx.get_effective_config(ctx.this_file, coder_mdl,  "duo_coder",  ctx.use_learned) if ctx.use_learned else {}
-    _duo_coder_temp  = float(_duo_coder_cfg.get("temperature", ctx.pipeline.agents["duo_coder"].temperature))
+    _duo_coder_settings_temp = ((ctx.settings or {}).get("agents") or {}).get("duo_coder", {}).get("temperature")
+    if _duo_coder_cfg.get("temperature") is not None:
+        _duo_coder_temp: float | None = float(_duo_coder_cfg["temperature"])
+    elif _duo_coder_settings_temp is not None:
+        _duo_coder_temp = float(_duo_coder_settings_temp)
+    else:
+        _duo_coder_temp = None
     _duo_coder_tok   = int(_duo_coder_cfg.get("max_tokens",    ctx.pipeline.agents["duo_coder"].max_tokens))
     if not ctx.duo_config.agentic_mode:
                         _duo_critic_cfg = ctx.get_effective_config(ctx.this_file, critic_mdl, "duo_critic", ctx.use_learned) if ctx.use_learned else {}
-                        _duo_critic_temp = float(_duo_critic_cfg.get("temperature", ctx.pipeline.agents["duo_critic"].temperature))
+                        _raw_critic_temp = (_duo_critic_cfg.get("temperature") if _duo_critic_cfg else None)
+                        if _raw_critic_temp is None:
+                            _raw_critic_temp = ((ctx.settings or {}).get("agents") or {}).get("duo_critic", {}).get("temperature", ctx.pipeline.agents["duo_critic"].temperature)
+                        _duo_critic_temp: float | None = float(_raw_critic_temp) if _raw_critic_temp is not None else None
                         _duo_critic_tok  = int(_duo_critic_cfg.get("max_tokens",   ctx.pipeline.agents["duo_critic"].max_tokens))
     # Agentic mode never reaches the critic call below (its chunk branch
     # continues), so the critic config/prompt defaults are not bound here.
@@ -2275,7 +2286,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _duo_critic_sys = ctx.get_effective_prompt_with_override(_duo_critic_key, ctx.active_preset, ctx.use_learned)
         if not _duo_critic_sys:
             _duo_critic_sys = _DUO_CRITIC_CODE_DEFAULT if ctx.duo_config.coding_mode else _DUO_CRITIC_GEN_DEFAULT
-        _critic_thinking = False
+        _raw_critic_think = _duo_critic_cfg.get(
+            "thinking", getattr(ctx.pipeline.agents["duo_critic"], "thinking", False)
+        )
+        if _raw_critic_think is None:
+            from core.model_sampling import _model_thinking_default
+            _critic_thinking = _model_thinking_default(critic_mdl)
+        else:
+            _critic_thinking = bool(_raw_critic_think)
         # IMAGE DESCRIPTION FOR CRITIC (2026-10-03): the critic judges the
         # coder's output against the image - without the description it
         # cannot check visual requirements (live: "add a firework like in
@@ -2420,7 +2438,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         # parse - exactly the "new plan out of nowhere" the follow-up must not
         # do.
         _follow_up_active = bool(state.get("_follow_up_active"))
-        if (ctx.duo_config.chunking or ctx.duo_config.planner) and ctx.step_skipped() and not ctx.aborted():
+        if (ctx.duo_config.chunking or ctx.duo_config.planner) and ctx.step_skipped() and not is_ctx_aborted(ctx):
             ctx.clear_step_skip()
             yield await ctx.emit({"type":"status",
                 "content": "⏭ Planner skipped — going straight to coder"})
@@ -2428,7 +2446,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             yield await ctx.emit({"type": "planner_done", "summary": "⏭ skipped"})
             ctx.phase_timer.skip("soft_planner")
         if (not (ctx.duo_config.chunking or ctx.duo_config.planner)
-                and not ctx.aborted() and not _resume_data
+                and not is_ctx_aborted(ctx) and not _resume_data
                 and not ctx.step_skipped()):
             # PLANNER-VISIBILITY (2026-09-08): this state used to fall through
             # silently — planner toggle off + chunking off skipped the whole
@@ -2932,12 +2950,15 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 _resume_sig = get_resume_signal(ctx.run_id)
                 _abort_pause_sig = get_abort_during_pause_signal(ctx.run_id)
                 _chat_abort_ev = await _get_abort_event(ctx.chat_id) if ctx.chat_id else None
+                _run_abort_ev = _abort_event(ctx.run_id) if hasattr(ctx, "run_id") else None
                 _wait_tasks = [
                     spawn(_resume_sig.wait()),
                     spawn(_abort_pause_sig.wait()),
                 ]
                 if _chat_abort_ev is not None:
                     _wait_tasks.append(asyncio.create_task(_chat_abort_ev.wait()))
+                if _run_abort_ev is not None:
+                    _wait_tasks.append(asyncio.create_task(_run_abort_ev.wait()))
                 _pending_wait = (await asyncio.wait(
                     _wait_tasks, return_when=asyncio.FIRST_COMPLETED,
                 ))[1]
@@ -2945,15 +2966,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _tw.cancel()
                 if _pending_wait:
                     await asyncio.gather(*_pending_wait, return_exceptions=True)
-                # FIX: consume the resume signal — otherwise a second
-                # pause of the same run would wake up immediately (event stays set).
-                _resume_sig.clear()
-                if ctx.chat_id:
-                    _clear_pause_state(ctx.chat_id)
                 _aborted_during_pause = (
                     _abort_pause_sig.is_set()
                     or (_chat_abort_ev is not None and _chat_abort_ev.is_set())
+                    or (_run_abort_ev is not None and _run_abort_ev.is_set())
                 )
+                _finish_manual_pause(ctx.run_id)
+                if ctx.chat_id:
+                    _clear_pause_state(ctx.chat_id)
                 if _aborted_during_pause:
                     _remaining_items_ap = [
                         {"title": str(t)} for t in _loop_items[_di:]
@@ -2992,7 +3012,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             # ── SKIP-CHECK: Skip button skips current phase (not the whole run) ──
             # In the Duo-Loop, skip means "skip this chunk/round and move to next".
             # Auto-consumed: ctx.clear_step_skip() resets so next skip requires another press.
-            if ctx.step_skipped() and not ctx.aborted():
+            if ctx.step_skipped() and not is_ctx_aborted(ctx):
                 ctx.clear_step_skip()
                 # SKIP-GUARD (2026-09-04): A single non-chunk round must not be
                 # silently skipped - that would end the run with "Coder 0s"
@@ -3098,6 +3118,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         ),
                 })
             _is_tool_round = (_tool_round_base or _auto_tool_promote_active) and _coder_tc
+            if ctx.duo_config.tool_rounds <= 0 and ctx.settings.get("direct_tools_enabled") is False:
+                _is_tool_round = False
+                _auto_tool_promote_streak = 0
             if _auto_tool_promote_active:
                 _auto_tool_promote_streak += 1
             elif _tool_round_base:
@@ -3194,7 +3217,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 logger.warning(
                     "[PLAN-TO-EXEC] _is_tool_round=%s ctx.aborted=%s _dtool_msgs_len=%d "
                     "_run_thinking_now=%s exec_mdl=%s",
-                    _is_tool_round, ctx.aborted(), len(_dtool_msgs),
+                    _is_tool_round, is_ctx_aborted(ctx), len(_dtool_msgs),
                     _run_thinking_now, exec_mdl,
                 )
 
@@ -3430,11 +3453,21 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _read_only_task = _read_only_task_request
                     _tool_mode = resolve_coder_tool_mode(
                         ctx.settings, read_only=_read_only_task)
-                    _active_tools = _filter_tools_for_mode(
-                        _xtools_ws,
-                        mode=_tool_mode,
-                        include_websearch=_duo_ws,
-                    )
+                    if _read_only_task:
+                        _ro_budget = getattr(state.get("_budgets"), "schema_budget", None)
+                        _active_tools = _get_inline_tools(
+                            include_websearch=_duo_ws,
+                            mode=_tool_mode,
+                            budget_chars=_ro_budget,
+                            settings=ctx.settings,
+                        )
+                    else:
+                        _active_tools = _filter_tools_for_mode(
+                            _xtools_ws,
+                            mode=_tool_mode,
+                            include_websearch=_duo_ws,
+                            settings=ctx.settings,
+                        )
                     if _read_only_task:
                         yield await ctx.emit({
                             "type": "status",
@@ -3514,7 +3547,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
     # forces memory-based edits. Non-focus history pays instead.
                     _tool_exec_hooks = ToolExecHooks(
                         emit=_coder_emit_fn,
-                        is_aborted=lambda cid: bool(ctx.is_aborted_chat(cid)),
+                        is_aborted=lambda cid: bool(is_ctx_aborted(ctx) or (cid and ctx.is_aborted_chat(cid))),
                         on_tool_result=_stuck_handler,
                         remember_insight=ctx.memory.remember_repo_insight,
                         evict_model=partial(evict_model_handler, ctx),
@@ -3524,7 +3557,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     # extra slots stay gated on _grace_round_active at the top.
                     for _dr in range(_max_tool_rounds + 2):
                         _round_t0 = time.monotonic()
-                        if ctx.aborted() or ctx.is_aborted_chat(ctx.chat_id) or _loop_detected:
+                        if is_ctx_aborted(ctx) or _loop_detected:
                             break
                         if _dr >= _round_budget0 and not _grace_round_active:
                             break
@@ -3635,7 +3668,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _force_compress_next = _cm.force_compress_next
                         _ctx_critical_warned = _cm.ctx_critical_warned
                         _ctx_pressure_warned = _cm.ctx_pressure_warned
-                        _dtool_msgs.extend(_cm.messages)
+                        for _cm_m in _cm.messages:
+                            if (_dtool_msgs and _dtool_msgs[-1].get("role") == "tool"
+                                    and _cm_m.get("role") == "user"):
+                                _prev_c = str(_dtool_msgs[-1].get("content") or "")
+                                _cm_c = str(_cm_m.get("content") or "")
+                                _dtool_msgs[-1]["content"] = f"{_prev_c}\n\n{_cm_c}" if _prev_c else _cm_c
+                            else:
+                                _dtool_msgs.append(_cm_m)
                         for _cm_ev in _cm.events:
                             yield await ctx.emit(_cm_ev)
                         # OUTSOURCED (F13 split): the shrink decision —
@@ -3783,7 +3823,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         else:
                             _tool_thinking_budget = 0
                         _thinking = bool(_tool_thinking_budget > 0)
-                        _profile = get_sampling_profile(exec_mdl, _thinking, ctx.settings)
+                        _profile = get_sampling_profile(
+                            exec_mdl, _thinking, ctx.settings, mode="sampling_thinking_code",
+                        )
                         # Guarantee system message at position 0 (Jinja template requires it)
                         if _dtool_msgs and _dtool_msgs[0].get("role") != "system":
                             _sys = next((m for m in _dtool_msgs if m.get("role") == "system"), None)
@@ -3876,8 +3918,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             "temperature": _duo_coder_temp if _duo_coder_temp is not None else _profile.get("temperature", 0.6),
                             "top_p": _profile.get("top_p", 0.95),
                             "top_k": _profile.get("top_k", 20),
-                            "presence_penalty": _profile.get("presence_penalty", 1.5),
-                            "repetition_penalty": _profile.get("repetition_penalty", 1.0),
+                            "presence_penalty": resolve_presence_penalty(
+                                _profile, exec_mdl, _thinking, ctx.settings,
+                                mode="sampling_thinking_code",
+                            ),
+                            "repeat_penalty": _profile.get("repeat_penalty", _profile.get("repetition_penalty", 1.0)),
+                            "repetition_penalty": _profile.get("repetition_penalty", _profile.get("repeat_penalty", 1.0)),
                             # OUTPUT-LIMIT-POLICY (2026-08-12): max_tokens = visible
                             "max_tokens": _max_tokens_round,
                             "thinking": _thinking,
@@ -3903,7 +3949,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _tool_payload["chat_template_kwargs"] = {"enable_thinking": False}
                         _tool_payload = _apply_thinking_kwargs(
                             _tool_payload, _profile, _thinking,
-                            _coder_tool_think and _tool_thinking_budget > 0,
+                            _thinking,
                         )
                         # delta.thinking/reasoning_content → ctx.emit as thinking_token + accumulate.
                         # AgenticToolLoop: POST+retry+SSE parse. Shares _duo_state in-place.
@@ -4414,7 +4460,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     )
                     _dce_type = type(_dce).__name__
                     _dce_msg  = str(_dce) or "(no message)"
-                    if _dce_type in ("ReadError", "RemoteProtocolError", "ConnectError", "ReadTimeout", "TimeoutException") and not ctx.aborted():
+                    if _dce_type in ("ReadError", "RemoteProtocolError", "ConnectError", "ReadTimeout", "TimeoutException") and not is_ctx_aborted(ctx):
                         _connect_error_retries += 1
                         if _connect_error_retries > 3:
                             logger.error("[DUO] ConnectError retries exhausted (%d) — aborting tool loop", _connect_error_retries)
@@ -4491,11 +4537,25 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 for _coder_attempt in range(2):
                     _parts_attempt = []
                     try:
-                        async for _tok in ctx.pipeline_chat_stream(coder_mdl, _coder_msgs, _duo_coder_temp, _duo_coder_tok,
+                        _plain_think_on = bool(_coder_tool_think and _exec_supports_thinking)
+                        _plain_coder_smp = get_sampling_profile(
+                            coder_mdl, _plain_think_on, ctx.settings, mode="sampling_thinking_code",
+                        )
+                        _plain_coder_smp["presence_penalty"] = resolve_presence_penalty(
+                            _plain_coder_smp, coder_mdl, _plain_think_on, ctx.settings,
+                            mode="sampling_thinking_code",
+                        )
+                        _plain_coder_temp = (
+                            _duo_coder_temp
+                            if _duo_coder_temp is not None
+                            else float(_plain_coder_smp.get("temperature", 0.6))
+                        )
+                        async for _tok in ctx.pipeline_chat_stream(coder_mdl, _coder_msgs, _plain_coder_temp, _duo_coder_tok,
                                                                    agent_role="duo_coder",
-                                                                   force_ctx=_runtime_ctx_target,
-                                                                    think=_coder_tool_think if _exec_supports_thinking else None):
-                            if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
+                                                                   force_ctx=_coder_ctx_eff,
+                                                                    think=_coder_tool_think if _exec_supports_thinking else False,
+                                                                    sampler=_plain_coder_smp):
+                            if is_ctx_aborted(ctx):
                                 break
                             _parts_attempt.append(_tok)
                             yield await ctx.emit({"type": "token", "content": _tok})
@@ -4687,7 +4747,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             # ── SKIP-CHECK: Skip Critic (auto-approve current chunk) ──────
             # If skip was pressed during/after Coder, skip Critic review
             # and auto-approve → move to next chunk or finish.
-            if ctx.step_skipped() and not ctx.aborted():
+            if ctx.step_skipped() and not is_ctx_aborted(ctx):
                 ctx.clear_step_skip()
                 critic_issues = []
                 final_verdict = "Skipped (⏭)"
@@ -4717,11 +4777,11 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 critic_issues = []  # CROSS-CHUNK-CLEANUP
                 _duo_test_feedback = bool(ctx.duo_config.test_feedback_chunk)
                 # SKIP-CHECK: Skip auto-test if skip pressed during Coder
-                if ctx.step_skipped() and not ctx.aborted():
+                if ctx.step_skipped() and not is_ctx_aborted(ctx):
                     ctx.clear_step_skip()
                     yield await ctx.emit({"type":"status",
                             "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
-                elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
+                elif _duo_test_feedback and _cs.has_written_files and not is_ctx_aborted(ctx):
                     _ws_path = _eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", ""))
                     # Auto-test execution/failure policy moved verbatim into
                     # core/duo_round_gate.py (_run_auto_test_gate; the agentic
@@ -4829,14 +4889,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     # Delegates to ChunkState for the self-fix/re-awaken pattern.
                     _duo_test_feedback = bool(ctx.duo_config.test_feedback_chunk)
                     # SKIP-CHECK: Skip auto-test if skip pressed after Critic
-                    if ctx.step_skipped() and not ctx.aborted():
+                    if ctx.step_skipped() and not is_ctx_aborted(ctx):
                         ctx.clear_step_skip()
                         yield await ctx.emit({"type":"status",
                         "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
                         _advance_chunk()
                         if _is_last:
                             break
-                    elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
+                    elif _duo_test_feedback and _cs.has_written_files and not is_ctx_aborted(ctx):
                         _ws_path = _eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", ""))
                         # Auto-test execution/failure policy moved verbatim into
                         # core/duo_round_gate.py (_run_auto_test_gate: runs
@@ -5046,3 +5106,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _di = _fin_ps._di
         _n_items = _fin_ps._n_items
         _loop_items = _fin_ps._loop_items
+        ctx.unregister_abort(ctx.run_id)
+        ctx.unregister_step_skip(ctx.run_id)
+        _cleanup_pause_state(ctx.run_id)

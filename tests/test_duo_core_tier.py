@@ -16,7 +16,9 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core.duo_helpers import resolve_coder_tool_mode  # noqa: E402
-from tools.definitions import _TOOL_PRIORITY, _get_inline_tools  # noqa: E402
+from tools.definitions import (  # noqa: E402
+    _TOOL_PRIORITY, _get_inline_tools, _tool_names_for_mode, init_websearch,
+)
 from tests._harness import Harness  # noqa: E402
 
 h = Harness()
@@ -87,5 +89,43 @@ check("direct research: no write/exec/python",
       f" ({sorted(_research & {'edit_file', 'write_file', 'run_bash'})})")
 check("direct research: no git/lsp",
       not ({"git_status", "lsp_status"} & _research))
+
+# Additive Optionals (2026-11-12): websearch & git can opt into lean & core.
+import tools.definitions as _defs_mod  # noqa: E402
+_was_ws_avail = _defs_mod._WEBSEARCH_AVAILABLE
+_was_ws_mod = _defs_mod._websearch
+try:
+    init_websearch(True, object())
+    check("coder lean + websearch adds web_search/web_fetch",
+          {"web_search", "web_fetch"} <= _tool_names_for_mode("duo_lean", include_websearch=True))
+    check("coder core + websearch adds web_search/web_fetch",
+          {"web_search", "web_fetch"} <= _tool_names_for_mode("duo_core", include_websearch=True))
+    check("coder lean without websearch drops web_search/web_fetch",
+          not ({"web_search", "web_fetch"} & _tool_names_for_mode("duo_lean", include_websearch=False)))
+finally:
+    init_websearch(_was_ws_avail, _was_ws_mod)
+
+check("coder lean + git toggle ON with creds adds git tools",
+      {"git_status", "git_commit"} <= _names(
+          "duo_lean", settings={"git_tools_enabled": "true", "git_token": "x"}))
+check("coder core + git toggle ON with creds adds git tools",
+      {"git_status", "git_commit"} <= _names(
+          "duo_core", settings={"git_tools_enabled": "true", "git_token": "x"}))
+check("coder core + git toggle ON WITHOUT creds keeps git tools out",
+      not ({"git_status", "git_commit"} & _names(
+          "duo_core", settings={"git_tools_enabled": "true"})))
+
+check("coder lean + subagent toggle ON adds subagent_research",
+      "subagent_research" in _names(
+          "duo_lean", settings={"subagent_lite_enabled": True}))
+check("coder core + subagent toggle ON adds subagent_research",
+      "subagent_research" in _names(
+          "duo_core", settings={"subagent_lite_enabled": True}))
+check("coder full + subagent toggle OFF drops subagent_research",
+      "subagent_research" not in _names(
+          "duo_full", settings={"subagent_lite_enabled": False}))
+check("direct research + subagent toggle ON adds subagent_research",
+      "subagent_research" in _names(
+          "direct_research", settings={"subagent_lite_enabled": True}))
 
 sys.exit(h.finish("duo_core_tier"))

@@ -119,8 +119,12 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
         _tool_schema_budget = _sbf(_tool_ctx_override, _tool_model)
     except (ImportError, AttributeError, TypeError, ValueError):
         _tool_schema_budget = 0
+    from tools.definitions import git_tools_enabled as _gte_ct
+    _tool_git = _gte_ct(settings)
     _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent",
-                                      budget_chars=_tool_schema_budget or None)
+                                      budget_chars=_tool_schema_budget or None,
+                                      include_git=_tool_git,
+                                      settings=settings)
     _tool_names_txt = ", ".join(t["function"]["name"] for t in _active_tools)
     _tool_sys = (
         "Use the available tools to complete file and code operations. "
@@ -164,6 +168,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                     num_ctx=_tool_opts.get("num_ctx", 4096),
                     tools=_active_tools, tool_mode="tool_agent",
                     include_websearch=_tool_ws,
+                    include_git=_tool_git,
                     read_timeout_s=_tool_read_timeout_s,
                 ),
                 http_client=_tc, port=_tool_port,

@@ -17,6 +17,7 @@ import logging
 import time
 from datetime import datetime
 
+from core.run_context import is_ctx_aborted
 from hive_functions.loop_machine import AgentState
 
 if TYPE_CHECKING:
@@ -44,7 +45,7 @@ async def _duo_run_finalize(ctx, ps):
     from utils.bg_tasks import spawn
     from vram.loader import _refresh_judge_keepalive
 
-    if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
+    if is_ctx_aborted(ctx):
         ctx.duo_stop_reason = "aborted"
     elif ps._graceful_stopped:
         ctx.duo_stop_reason = "graceful_stop"
@@ -179,7 +180,7 @@ async def _duo_run_finalize(ctx, ps):
                            and bool(ps._pending_send_files))
     if ((ctx.duo_stop_reason == "completed" or _loop_file_delivery)
             and str(ctx.settings.get("source") or "").startswith("telegram")
-            and not ctx.aborted()):
+            and not is_ctx_aborted(ctx)):
         if _loop_file_delivery:
             # The model explicitly queued this file before the loop guard
             # stopped the run; dropping it silently loses work the owner
@@ -235,10 +236,14 @@ async def _duo_run_finalize(ctx, ps):
             spawn(ps.carry["_warm_workers_fn"](list(_wk_slots_run),
                                                ps.carry["exec_mdl"], pin=True))
     spawn(_refresh_judge_keepalive())
-    # ── Insight Extractor: Post-loop structured learning ──────────────────
-    # Fire-and-forget background task — extracts structured insights from the
-    # completed agentic loop using the INSIGHT_EXTRACTOR prompt.
-    if ps._written_files and ctx.duo_stop_reason == "completed" and not ctx.aborted():
+    # ── Insight Extractor + Skill Distillation: Post-loop learning ─────────
+    # Gated by soul_skill_distillation / soul_skill_writing so turning learning off
+    # avoids unexpected post-run LLM calls and model loads.
+    _distill_on = bool(
+        ctx.settings.get("soul_skill_distillation", False)
+        or ctx.settings.get("soul_skill_writing", False)
+    )
+    if _distill_on and ps._written_files and ctx.duo_stop_reason == "completed" and not is_ctx_aborted(ctx):
         spawn(ctx.run_insight_extractor(
             task=ctx.user_input,
             written_files=list(ps._written_files),
@@ -246,18 +251,18 @@ async def _duo_run_finalize(ctx, ps):
             critic_issues=list(ps.carry.get("critic_issues") or []),
             workspace=ps._ws_str,
         ))
-    # ── Skill Distillation: Run after every completed Duo loop ─────────────
-    # Previously only ran during soul evolution (too infrequent).
-    # Now runs after each Duo completion so insights get decayed/merged promptly.
-    if ctx.pipeline.memory and ctx.duo_stop_reason == "completed":
+    if _distill_on and ctx.pipeline.memory and ctx.duo_stop_reason == "completed":
         spawn(asyncio.to_thread(
             ctx.run_soul_cycle, ctx.pipeline.memory, ctx.settings,
             list(ps.carry.get("_recent_focus_paths") or []), ps.carry["this_file"]
         ))
+    elif (not _distill_on and ctx.pipeline.memory
+          and hasattr(ctx.pipeline.memory, "flush_insights_if_dirty")):
+        spawn(asyncio.to_thread(ctx.pipeline.memory.flush_insights_if_dirty))
     # ── Skill distillation (phase 2): recurring patterns → real skills ──
     # Gated by soul_skill_writing (repurposed as "auto-distillation"). Max 1
     if (ctx.pipeline.memory and ctx.duo_stop_reason == "completed"
-            and not ctx.aborted() and ctx.settings.get("soul_skill_writing", False)):
+            and not is_ctx_aborted(ctx) and ctx.settings.get("soul_skill_writing", False)):
         spawn(ctx.run_skill_distillation(ps._ws_str))
     # Keep the vision slot warm
     _vis_mdl = ctx.vision_cfg.get("model", "") if ctx.vision_cfg.get("enabled") else ""

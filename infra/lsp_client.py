@@ -769,7 +769,7 @@ class _LspConnection:
             deadline = self.loop.time() + wait_s
             while self.loop.time() < deadline:
                 if (self._diag_gen.get(uri, 0) > gen0
-                        and self.diagnostics.get(uri)):
+                        and (self.diagnostics.get(uri) or self.language_id != "rust")):
                     got = self._diag_version.get(uri)
                     if got is None or expected is None or got >= expected:
                         break
@@ -974,6 +974,7 @@ class LspManager:
                     f"of restarting on every call")
             argv = registry.resolve(language_id, self._override)
             if argv is None:
+                self._start_failed_at[language_id] = self._now()
                 tried = registry.candidates(language_id, self._override)
                 names = ", ".join(" ".join(c) for c in tried) or "none"
                 raise LspError(f"no language server found for "

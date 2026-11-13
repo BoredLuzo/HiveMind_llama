@@ -9,6 +9,7 @@ _cache_lock = threading.Lock()
 
 _chat_abort_registry: dict[str, asyncio.Event] = {}
 _chat_abort_lock: asyncio.Lock | None = None
+_chat_active_run: dict[str, str] = {}
 
 _run_abort_registry: dict[str, asyncio.Event] = {}
 _run_abort_registry_ts: dict[str, float] = {}
@@ -59,6 +60,33 @@ async def _clear_abort_event(chat_id: str):
             # Previously an interim ev.set() (stop click) got lost,
             # because the old object was replaced by a fresh unset one.
             _ev.clear()
+
+
+def get_active_chat_run(chat_id: str) -> str:
+    return _chat_active_run.get(str(chat_id or ""), "")
+
+
+async def claim_chat_run(chat_id: str, run_id: str) -> str | None:
+    """Atomically supersede any prior active run on chat_id, clear the chat
+    abort event for the new run, and bind chat_id -> run_id."""
+    if not chat_id:
+        return None
+    async with _get_abort_lock():
+        prev_rid = _chat_active_run.get(chat_id)
+        if prev_rid and prev_rid != run_id:
+            prev_ev = _run_abort_registry.get(prev_rid)
+            if prev_ev is not None:
+                prev_ev.set()
+            prev_pause_ev = _ABORT_DURING_PAUSE_SIGNALS.get(prev_rid)
+            if prev_pause_ev is not None:
+                prev_pause_ev.set()
+        _ev = _chat_abort_registry.get(chat_id)
+        if _ev is None:
+            _chat_abort_registry[chat_id] = asyncio.Event()
+        else:
+            _ev.clear()
+        _chat_active_run[chat_id] = run_id
+        return prev_rid if (prev_rid and prev_rid != run_id) else None
  
 def _is_aborted(chat_id: str) -> bool:
     ev = _chat_abort_registry.get(chat_id)
@@ -225,6 +253,9 @@ def _register_abort(run_id: str) -> asyncio.Event:
 def _unregister_abort(run_id: str):
     _run_abort_registry.pop(run_id, None)
     _run_abort_registry_ts.pop(run_id, None)
+    for _cid, _rid in list(_chat_active_run.items()):
+        if _rid == run_id:
+            _chat_active_run.pop(_cid, None)
 
 
 def _abort_event(run_id: str) -> asyncio.Event | None:
@@ -315,10 +346,43 @@ def pause_abort_signal_pending(run_id: str) -> bool:
     return sig is not None and not sig.is_set()
 
 
+def finish_manual_pause(run_id: str) -> None:
+    """Drop manual-pause signals once the pause wait completes cleanly.
+
+    Clearing `_resume_sig` alone left both dicts holding unset asyncio.Events,
+    so `is_pause_pending(run_id) and pause_abort_signal_pending(run_id)` stayed
+    True after pause+resume and intercepted later `POST /abort/{run_id}` calls.
+    """
+    _PAUSE_AFTER_CHUNK_FLAGS.pop(run_id, None)
+    _RESUME_SIGNALS.pop(run_id, None)
+    _ABORT_DURING_PAUSE_SIGNALS.pop(run_id, None)
+
+
 def cleanup_pause_state(run_id: str) -> None:
     _PAUSE_AFTER_CHUNK_FLAGS.pop(run_id, None)
     _RESUME_SIGNALS.pop(run_id, None)
     _ABORT_DURING_PAUSE_SIGNALS.pop(run_id, None)
+
+
+async def abort_chat_run(chat_id: str) -> str:
+    """Atomically set chat abort event and signal any currently claimed run_id."""
+    cid = str(chat_id or "")
+    if not cid:
+        return ""
+    async with _get_abort_lock():
+        ev = _chat_abort_registry.get(cid)
+        if ev is None:
+            ev = asyncio.Event()
+            _chat_abort_registry[cid] = ev
+        ev.set()
+        active_rid = _chat_active_run.get(cid, "")
+        if active_rid:
+            run_ev = _run_abort_registry.get(active_rid)
+            if run_ev is not None:
+                run_ev.set()
+            if is_pause_pending(active_rid) and pause_abort_signal_pending(active_rid):
+                signal_abort_during_pause(active_rid)
+        return active_rid
 
 
 # -- Mid-run steering queue (per run_id; 2026-09-29) --
