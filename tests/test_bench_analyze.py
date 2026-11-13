@@ -189,4 +189,47 @@ check("relative: printed in readable output",
 check("relative: category deltas printed",
       "bugfix" in _out and "multi-file" in _out, f" ({_out[-300:]!r})")
 
+# ── checkpoint resume pooling + --by-model full disambiguation ──────────────
+import json as _json          # noqa: E402
+import tempfile as _tmp      # noqa: E402
+from pathlib import Path as _P  # noqa: E402
+from bench.analyze import load_and_pool_results  # noqa: E402
+
+with _tmp.TemporaryDirectory(ignore_cleanup_errors=True) as _td2:
+    _p2 = _P(_td2)
+    _cp1 = _p2 / "cp1.json"
+    _cp2 = _p2 / "cp2_resume.json"
+    _cp3 = _p2 / "cp3_indep.json"
+    _cp1.write_text(_json.dumps({"results": [
+        {"condition": "hivemind_duo", "task": "t1", "run": 1, "ok": True,
+         "seconds": 5.0, "tokens": 100, "timestamp": "2026-11-12T01:00:00Z"},
+    ]}), encoding="utf-8")
+    _cp2.write_text(_json.dumps({"results": [
+        {"condition": "hivemind_duo", "task": "t1", "run": 1, "ok": True,
+         "seconds": 5.0, "tokens": 100, "timestamp": "2026-11-12T01:00:00Z"},
+        {"condition": "hivemind_duo", "task": "t1", "run": 2, "ok": True,
+         "seconds": 6.0, "tokens": 120, "timestamp": "2026-11-12T02:00:00Z"},
+    ]}), encoding="utf-8")
+    _cp3.write_text(_json.dumps({"results": [
+        {"condition": "hivemind_duo", "task": "t1", "run": 1, "ok": False,
+         "seconds": 7.0, "tokens": 140, "timestamp": "2026-11-12T03:00:00Z"},
+    ]}), encoding="utf-8")
+    _pooled = load_and_pool_results([_cp1, _cp2, _cp3])
+    _runs = sorted(r["run"] for r in _pooled)
+    check("resumed checkpoint keeps run=2 unshifted while independent run shifts to 3",
+          _runs == [1, 2, 3] and len(_pooled) == 3, f" (runs={_runs}, len={len(_pooled)})")
+
+    _m1 = _p2 / "m1.json"
+    _m2 = _p2 / "m2.json"
+    _m1.write_text(_json.dumps({"model": "qwen3.5:4b", "results": [
+        {"condition": "hivemind_duo", "task": "t1", "run": 1, "ok": True, "timestamp": "T1"},
+    ]}), encoding="utf-8")
+    _m2.write_text(_json.dumps({"model": "qwen3.6:4b", "results": [
+        {"condition": "hivemind_duo", "task": "t1", "run": 1, "ok": False, "timestamp": "T2"},
+    ]}), encoding="utf-8")
+    _bm = load_and_pool_results([_m1, _m2], by_model=True)
+    _conds = {r["condition"] for r in _bm}
+    check("--by-model keeps distinct prefixes with shared tag (qwen3.5:4b vs qwen3.6:4b)",
+          _conds == {"hivemind_duo@qwen3.5:4b", "hivemind_duo@qwen3.6:4b"}, f" ({_conds})")
+
 sys.exit(h.finish("bench_analyze"))

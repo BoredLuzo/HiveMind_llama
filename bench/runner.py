@@ -260,8 +260,8 @@ def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[boo
     timeout = timeout_s or task.timeout_s
     env = dict(os.environ)
     py_bin_dir = str(Path(sys.executable).parent)
-    env["PATH"] = f"{py_bin_dir}:{env.get('PATH', '')}"
-    env["PYTHONPATH"] = f"{work}:{env.get('PYTHONPATH', '')}"
+    env["PATH"] = f"{py_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["PYTHONPATH"] = f"{work}{os.pathsep}{env.get('PYTHONPATH', '')}"
     try:
         r = subprocess.run(
             task.check, shell=True, cwd=str(work), capture_output=True,
@@ -428,6 +428,10 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         # a different product than a fresh install (2026-11-08 run showed a
         # duo coder that answered once without reading a file).
         "until_finished": True,
+        "duo_websearch_enabled": False,
+        "git_tools_enabled": "false",
+        "lsp_auto_diagnostics": False,
+        "lsp_auto_warm_on_write": False,
     }
     if duo:
         body["duo_agentic_mode"] = True
@@ -435,6 +439,16 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         # duo_planner_enabled; _body_or_settings maps them).
         body["duo_planner"] = bool(duo_planner)
         body["duo_chunking"] = False
+        body["duo_pre_explore"] = False
+        body["duo_parallel_preexplore"] = False
+        body["duo_git_autocommit"] = False
+        body["duo_agentic_thinking"] = False
+        body["duo_thinking_per_chunk"] = False
+        body["duo_coder_tool_thinking"] = False
+        body["duo_coder_tool_thinking_auto_mode"] = "off"
+        body["duo_critic_tools"] = False
+        body["duo_runtime_profile"] = "balanced"
+        body["duo_pass_explore_files"] = "touched"
         # TOOL-ROUNDS (2026-11-08 discovery): an install with
         # duo_tool_rounds=0 runs the coder WITHOUT tools. Pin the shipped
         # default (50); otherwise "duo" measures a text-only coder.
@@ -450,6 +464,7 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         # Context: default 32k, configurable via --num-ctx (e.g. 128k for deepswe)
         body["duo_coder_ctx_agentic"] = int(ctx_tokens)
         body["duo_coder_ctx_normal"] = int(ctx_tokens)
+        body["duo_planner_ctx_target"] = int(ctx_tokens)
         # Agentic duo resolves coder/critic/planner from the agent cards; the
         # server patches both the card and the flat key for these overrides.
         body["duo_coder_model"] = model
@@ -458,6 +473,7 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
     else:
         body["direct_tools_enabled"] = True
         body["direct_tools_tier"] = "full"
+        body["direct_ctx_target"] = int(ctx_tokens)
     return body
 
 
@@ -601,7 +617,8 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
         "--model", f"openai/{cfg.model}",
         "--openai-api-base", api_base,
         "--model-metadata-file", str(_meta_file),
-        "--max-chat-history-tokens", str(cfg.ctx_tokens),
+        # Leave ~12k headroom for system prompt + repo files + 8k output before ctx overflows.
+        "--max-chat-history-tokens", str(max(2048, int(cfg.ctx_tokens) - 12288)),
     ]
     cmd.extend(["--message", task.prompt, *_aider_files(work)])
     env = {**os.environ, "OPENAI_API_KEY": api_key,
@@ -870,7 +887,7 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
                             "cacheWrite": 0,
                         },
                         "contextWindow": cfg.ctx_tokens,
-                        "maxTokens": 4096,
+                        "maxTokens": 8192,
                     }
                 ],
             }
@@ -981,6 +998,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     ok, check_out = run_check(task, work, cfg.task_timeout_s)
     tok_total = int(extra.get("tokens") or 0)
     tok_sec = round(tok_total / seconds, 1) if seconds > 0 and tok_total > 0 else 0.0
+    _net_tok = extra.get("net_tokens")
     return {
         "task": task.id,
         "condition": cond,
@@ -990,7 +1008,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         "seconds": seconds,
         "tokens": tok_total,
         "cached_tokens": int(extra.get("cached_tokens") or 0),
-        "net_tokens": int(extra.get("net_tokens") or tok_total),
+        "net_tokens": int(_net_tok) if _net_tok is not None else tok_total,
         "tok_per_sec": tok_sec,
         "rounds": int(extra.get("rounds") or 0),
         "stop_reason": extra.get("stop_reason", ""),

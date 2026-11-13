@@ -12,7 +12,7 @@ token cost reported together.
 | Condition | What runs |
 |---|---|
 | `hivemind_direct` | HiveMind `/stream`, `mode=simple`, direct tools tier `full`. |
-| `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`, `duo_core` tier (18 tools by default). |
+| `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`, `duo_core` tier (18 base + `+Subagent` = 19 default). |
 | `hivemind_duo_full` | Same, `duo_coder_tool_tier=full` (git/web/MCP/browser/LSP extras). |
 | `aider` | Aider CLI against the same OpenAI-compatible llama-server. |
 | `hermes` | Hermes agent CLI against the same endpoint; tokens read from its `state.db`. |
@@ -89,7 +89,7 @@ workspaces under `bench/.work/` for inspection.
   numbers use other models/servers and are reported separately; see
   `bench/external/README.md`.
 
-## Starter corpus (21 tasks)
+## Starter corpus (23 tasks)
 
 Synthetic, dependency-free, each verified red before the reference fix and
 green after it:
@@ -101,6 +101,7 @@ green after it:
   `feature_word_freq`, `feature_flatten`
 - **refactor:** `refactor_extract`, `refactor_rename`, `refactor_dedupe`
 - **multi-file:** `multi_move`, `multi_wire`, `multi_config`, `multi_shape`
+- **hard:** `hard_cycle_detect`, `hard_lru_cache`
 
 Still missing for D1: 5–10 tasks from real repositories (where "correct" is
 known) and, optionally, Aider's public benchmark tasks as a shared yardstick.

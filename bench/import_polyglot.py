@@ -28,9 +28,15 @@ def _read_instructions(ex: Path) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+_SKIP_NAMES = frozenset({".docs", ".meta", ".approaches", "__pycache__"})
+
+
+def _is_skipped_name(name: str) -> bool:
+    return name in _SKIP_NAMES or name.endswith("_test.py")
+
+
 def _ignore(_dir: str, names: list[str]) -> set[str]:
-    return {n for n in names if n in {".docs", ".meta", "__pycache__"}
-            or n.endswith("_test.py")}
+    return {n for n in names if _is_skipped_name(n)}
 
 
 def import_exercise(src: Path, out: Path, slug: str) -> dict:
@@ -45,7 +51,7 @@ def import_exercise(src: Path, out: Path, slug: str) -> dict:
     (dst / "repo").mkdir(parents=True)
     (dst / "tests").mkdir()
     for p in ex.iterdir():
-        if p.name in {".docs", ".meta", "__pycache__"} or p.name.endswith("_test.py"):
+        if _is_skipped_name(p.name):
             continue
         if p.is_dir():
             shutil.copytree(p, dst / "repo" / p.name, ignore=_ignore)

@@ -90,11 +90,7 @@ if [ -z "${HM_CTX:-}" ] && [ -f "$HM_DIR/.active_ctx" ]; then
   [ -n "$_saved_ctx" ] && HM_CTX="$_saved_ctx"
 fi
 if [ -z "${HM_CTX:-}" ]; then
-  if [ "$HM_MODEL" = "qwen3.5:4b-mtp" ]; then
-    HM_CTX="131072"
-  else
-    HM_CTX="32768"
-  fi
+  HM_CTX="102400"
 fi
 
 log() { printf '\n[bench] %s\n' "$*"; }
@@ -115,7 +111,10 @@ setup() {
   # Only install missing utilities (tmux, rsync) without hanging on dead apt mirrors.
   if ! command -v tmux >/dev/null || ! command -v rsync >/dev/null; then
     log "[Step 0/5] Installing tmux / rsync..."
-    $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null || true
+    $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null \
+      || ($SUDO apt-get update -qq 2>/dev/null && $SUDO apt-get install -y -qq --no-install-recommends tmux rsync 2>/dev/null) \
+      || true
+    command -v tmux >/dev/null || log "WARN: tmux missing — use 'fg' instead of 'full'"
   fi
 
   log "[Step 1/5] Installing uv package manager..."
@@ -147,8 +146,7 @@ setup() {
   # Linux CUDA builds link the CUDA runtime dynamically; the release ships it
   # in a separate cudart archive next to the main build.
   _exe="$(find "$HM_DIR/llama" -name llama-server -type f | head -1)"
-  _bdir="$(dirname "$_exe")"
-  _build="${_bdir##*llama-b}"
+  _build="$(printf '%s\n' "$_exe" | sed -n 's/.*llama-b\([0-9][0-9]*\).*/\1/p')"
   if [ -n "$_build" ]; then
     _cudart_url="https://github.com/ggml-org/llama.cpp/releases/download/b${_build}/cudart-llama-b${_build}-bin-ubuntu-cuda-${HM_LLAMA_CUDA}-x64.tar.gz"
     if ! find "$HM_DIR/llama" -name 'libcudart.so*' | grep -q .; then
@@ -182,7 +180,11 @@ setup() {
     uv pip install --python "$HERMES_VENV/bin/python" hermes-agent 2>/dev/null \
       || curl -fsSL https://hermes-agent.nousresearch.com/install.sh 2>/dev/null | bash 2>/dev/null || log "WARN: hermes-agent install skipped"
   fi
-  [ -x "$HERMES_VENV/bin/hermes" ] && "$HERMES_VENV/bin/hermes" --version 2>/dev/null || command -v hermes >/dev/null && hermes --version 2>/dev/null || true
+  if [ -x "$HERMES_VENV/bin/hermes" ]; then
+    "$HERMES_VENV/bin/hermes" --version 2>/dev/null || true
+  elif command -v hermes >/dev/null 2>&1; then
+    hermes --version 2>/dev/null || true
+  fi
 
   if ! find_pi_bin >/dev/null 2>&1; then
     log "Installing Pi coding agent CLI..."
@@ -221,7 +223,7 @@ setup() {
 
 detect_llama_url() {
   local _base_port=$(( PORT + 100 ))
-  for _p in "$_base_port" $(( _base_port + 1 )) 8101 8102 8080; do
+  for _p in "$_base_port" $(( _base_port + 1 )) 8101 8102 8103 8080; do
     if curl --max-time 2 -fsS "http://127.0.0.1:$_p/health" >/dev/null 2>&1; then
       HM_LLAMA_URL="http://127.0.0.1:$_p"; return
     fi
@@ -332,6 +334,7 @@ gpu_patch = {
         "qwen3.6:35b-a3b": cpu_experts,
         "qwen3.6:35b-a3b-ud": cpu_experts,
         "hermes3.6:35b-a3b": cpu_experts,
+        "hermes3.6:35b-a3b-uncensored-genesis-apex-mini": cpu_experts,
     },
     "vram_budget_gb": budget_gb,
     "llama_mlock": False,
@@ -432,35 +435,61 @@ PY
   log "Engine and model ($HM_MODEL @ ctx $HM_CTX) fully ready for benchmarks!"
 }
 
-run_bench() {  # $1 = extra args
-  local _extra_args=""
+run_bench() {  # $@ = extra args (optional)
+  local -a _extra_args=()
+  if [ -z "${HM_SYNC_DIR:-}" ] && [ -d "/content/drive/MyDrive" ]; then
+    HM_SYNC_DIR="/content/drive/MyDrive/hivemind_bench/results"
+  fi
+  [ -n "${HM_SYNC_DIR:-}" ] && mkdir -p "$HM_SYNC_DIR" || true
+  if [ "${HM_CTX:-0}" -lt 65536 ] && printf ',%s,' "$HM_CONDITIONS" | grep -q ',hermes,'; then
+    log "[warn] Hermes erfordert >=64k Kontext (aktiv: ${HM_CTX}) -> uebersprungen"
+    HM_CONDITIONS="$(printf '%s' "$HM_CONDITIONS" | tr ',' '\n' | grep -vx 'hermes' | paste -sd, -)"
+  fi
+  if [ -z "${HM_OUT:-}" ] && ! printf ' %s ' "$*" | grep -q ' --only '; then
+    local _suite="custom" _mtag="custom" _k="$(( ${HM_CTX:-65536} / 1024 ))k"
+    case "$HM_TASKS" in
+      *tasks_polyglot*) _suite="polyglot" ;;
+      *tasks_deepswe*) _suite="deepswe" ;;
+      bench/tasks|*/bench/tasks) _suite="core" ;;
+      *) _suite="$(basename "$HM_TASKS")" ;;
+    esac
+    case "$HM_MODEL" in
+      *4b*|*4B*) _mtag="4b" ;;
+      *35b*|*35B*) _mtag="35b" ;;
+      *) _mtag="$(printf '%s' "$HM_MODEL" | tr ':/ ' '___')" ;;
+    esac
+    HM_OUT="$HM_DIR/bench/results/${_suite}_${_mtag}_${_k}.json"
+    HM_RESUME="${HM_RESUME:-1}"
+  fi
   if echo "$HM_CONDITIONS" | grep -q "aider"; then
     if [ -x "$AIDER_VENV/bin/aider" ]; then
-      _extra_args="$_extra_args --aider-bin $AIDER_VENV/bin/aider"
+      _extra_args+=(--aider-bin "$AIDER_VENV/bin/aider")
     elif command -v aider >/dev/null; then
-      _extra_args="$_extra_args --aider-bin $(command -v aider)"
+      _extra_args+=(--aider-bin "$(command -v aider)")
     else
       die "aider missing (run setup or omit aider from HM_CONDITIONS)"
     fi
   elif [ -x "$AIDER_VENV/bin/aider" ]; then
-    _extra_args="$_extra_args --aider-bin $AIDER_VENV/bin/aider"
+    _extra_args+=(--aider-bin "$AIDER_VENV/bin/aider")
   fi
   [ -n "$HM_LLAMA_URL" ] || detect_llama_url
   if [ -x "$HERMES_VENV/bin/hermes" ]; then
-    _extra_args="$_extra_args --hermes-bin $HERMES_VENV/bin/hermes"
+    _extra_args+=(--hermes-bin "$HERMES_VENV/bin/hermes")
   elif command -v hermes >/dev/null; then
-    _extra_args="$_extra_args --hermes-bin $(command -v hermes)"
+    _extra_args+=(--hermes-bin "$(command -v hermes)")
   fi
   _pi_exe="$(find_pi_bin 2>/dev/null || true)"
   if [ -n "$_pi_exe" ]; then
-    _extra_args="$_extra_args --pi-bin $_pi_exe"
+    _extra_args+=(--pi-bin "$_pi_exe")
   elif command -v pi >/dev/null; then
-    _extra_args="$_extra_args --pi-bin $(command -v pi)"
+    _extra_args+=(--pi-bin "$(command -v pi)")
   fi
-  [ -n "${HM_TASK_TIMEOUT:-}" ] && _extra_args="$_extra_args --task-timeout $HM_TASK_TIMEOUT"
-  [ -n "${HM_OUT:-}" ] && _extra_args="$_extra_args --out $HM_OUT"
-  [ -n "${HM_SYNC_DIR:-}" ] && _extra_args="$_extra_args --sync-dir $HM_SYNC_DIR"
-  [ "${HM_RESUME:-0}" = "1" ] && _extra_args="$_extra_args --resume"
+  [ -n "${HM_TASK_TIMEOUT:-}" ] && _extra_args+=(--task-timeout "$HM_TASK_TIMEOUT")
+  [ -n "${HM_OUT:-}" ] && _extra_args+=(--out "$HM_OUT")
+  [ -n "${HM_SYNC_DIR:-}" ] && _extra_args+=(--sync-dir "$HM_SYNC_DIR")
+  [ "${HM_RESUME:-0}" = "1" ] && _extra_args+=(--resume)
+  log "run_bench: model=$HM_MODEL ctx=$HM_CTX tasks=$HM_TASKS runs=$HM_RUNS conds=$HM_CONDITIONS out=${HM_OUT:-auto} sync=${HM_SYNC_DIR:-off} resume=${HM_RESUME:-0}"
+  local _rc=0
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
@@ -472,19 +501,28 @@ run_bench() {  # $1 = extra args
       --cell-timeout "${HM_CELL_TIMEOUT:-900}" \
       --hivemind "http://127.0.0.1:$PORT" \
       --llama "$HM_LLAMA_URL" \
-      $_extra_args \
-      $1 )
+      "${_extra_args[@]}" \
+      "$@" ) || _rc=$?
+  if [ -d "/content/drive/MyDrive" ]; then
+    local _dlogs="/content/drive/MyDrive/hivemind_bench/logs"
+    mkdir -p "$_dlogs" 2>/dev/null || true
+    cp -f "$HM_DIR/bench_full.log" "$HM_DIR/bench_engine.log" "$_dlogs/" 2>/dev/null || true
+  fi
+  if [ -n "${HM_OUT:-}" ] && [ -f "$HM_OUT" ]; then
+    "$PY" -c 'import json,pathlib,sys; p=pathlib.Path(sys.argv[1]); r=json.loads(p.read_text()).get("results",[]); ok=sum(1 for x in r if x.get("ok")); print(f"[bench] Saved {p.name}: {len(r)} rows ({ok} PASS) | {p.stat().st_size/1024:.1f} KB")' "$HM_OUT" 2>/dev/null || true
+  fi
+  return "$_rc"
 }
 
 smoke() {
   serve
   log "smoke: 3 tasks, HiveMind vs aider - note the wall time per condition"
   local t0; t0=$(date +%s)
-  local _only="--only fix_add,fix_off_by_one,multi_move"
+  local -a _only=(--only fix_add,fix_off_by_one,multi_move)
   if [ "$HM_TASKS" = "bench/tasks_polyglot" ]; then
-    _only="--only polyglot_affine_cipher,polyglot_beer_song,polyglot_grade_school"
+    _only=(--only polyglot_affine_cipher,polyglot_beer_song,polyglot_grade_school)
   fi
-  HM_RUNS=1 run_bench "$_only"
+  HM_RUNS=1 run_bench "${_only[@]}"
   log "smoke wall time: $(( $(date +%s) - t0 )) s  (full run ~ this x tasks/3 x runs)"
   log "check: pass/fail per condition, tokens > 0, 'aider is not installed' absent"
 }
@@ -515,7 +553,7 @@ full() {
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' \
+    "cd '$HM_DIR' && HIVEMIND_PORT='$PORT' HIVEMIND_MODELS_DIR='$MODELS_DIR' HM_LLAMA_URL='$HM_LLAMA_URL' AIDER_VENV='$AIDER_VENV' HERMES_VENV='$HERMES_VENV' HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 
@@ -525,8 +563,10 @@ status() {
   printf '=======================================================\n'
   if tmux has-session -t hmbench 2>/dev/null; then
     printf '[-] Benchmark Runner : RUNNING (tmux session "hmbench" active)\n'
+  elif pgrep -f "bench/runner\.py" >/dev/null 2>&1; then
+    printf '[-] Benchmark Runner : RUNNING (foreground)\n'
   else
-    printf '[-] Benchmark Runner : IDLE / STOPPED (no active tmux run)\n'
+    printf '[-] Benchmark Runner : IDLE / STOPPED\n'
   fi
 
   if curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
@@ -557,7 +597,19 @@ status() {
   fi
 
   printf '\n--- Neueste Ergebnis-Dateien (bench/results/*.json) ---\n'
-  ls -lh "$HM_DIR"/bench/results/*.json 2>/dev/null | tail -5 || printf 'Noch keine Ergebnisse vorhanden.\n'
+  if compgen -G "$HM_DIR/bench/results/*.json" >/dev/null 2>&1 || compgen -G "$HM_DIR/bench/results/external/*.json" >/dev/null 2>&1; then
+    "$PY" -c '
+import glob, json, pathlib
+files = sorted(glob.glob("'"$HM_DIR"'/bench/results/*.json") + glob.glob("'"$HM_DIR"'/bench/results/external/*.json"), key=lambda p: pathlib.Path(p).stat().st_mtime)[-8:]
+for p in files:
+    d = json.loads(pathlib.Path(p).read_text(encoding="utf-8"))
+    rows = d.get("results", [])
+    ok = sum(1 for r in rows if r.get("ok"))
+    print(f"  {pathlib.Path(p).name:30s} | rows={len(rows):3d} | pass={ok}/{len(rows)} | model={d.get('\''model'\'','\''?'\'')} ctx={d.get('\''num_ctx'\'','\''?'\'')}")
+' 2>/dev/null || ls -lh "$HM_DIR"/bench/results/*.json 2>/dev/null | tail -5
+  else
+    printf 'Noch keine Ergebnisse vorhanden.\n'
+  fi
   printf '=======================================================\n\n'
 }
 
@@ -597,8 +649,8 @@ case "${1:-}" in
   polyglot) polyglot ;;
   deepswe) deepswe ;;
   full) full ;;
-  fg) serve; run_bench "" ;;
-  _run) run_bench "" ;;
+  fg) serve; run_bench 2>&1 | tee -a "$HM_DIR/bench_full.log" ;;
+  _run) run_bench ;;
   status) status ;;
   stop) stop ;;
   *) sed -n '2,25p' "$0"; exit 2 ;;

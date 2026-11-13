@@ -68,7 +68,10 @@ def condition_stats(rows: list[dict], cond: str) -> dict:
         return {}
     tokens = sum(int(r.get("tokens") or 0) for r in mine)
     cached = sum(int(r.get("cached_tokens") or 0) for r in mine)
-    net = sum(int(r.get("net_tokens") or r.get("tokens") or 0) for r in mine)
+    net = sum(
+        int(r["net_tokens"] if r.get("net_tokens") is not None else (r.get("tokens") or 0))
+        for r in mine
+    )
     rounds = [int(r.get("rounds") or 0) for r in mine]
     cats: dict[str, list[int]] = {}
     for row in mine:
@@ -97,18 +100,19 @@ def build_relative(rows: list[dict]) -> dict:
     """
     order = _condition_order(rows)
     stats = {cond: condition_stats(rows, cond) for cond in order}
-    ref = stats.get(REFERENCE_CONDITION, {})
     out: dict = {
         "baseline": BASELINES[0],
-        "baselines_present": [b for b in BASELINES if b in stats],
+        "baselines_present": [b for b in BASELINES if any(c == b or c.startswith(b + "@") for c in stats)],
         "reference": REFERENCE_CONDITION,
         "conditions": {},
     }
     for cond in order:
         mine = stats[cond]
+        sfx = f"@{cond.split('@', 1)[1]}" if "@" in cond else ""
+        ref = stats.get(REFERENCE_CONDITION + sfx, {})
         entry: dict = {"pass_rate": mine["pass_rate"]}
         for base in BASELINES:
-            base_stats = stats.get(base)
+            base_stats = stats.get(base + sfx)
             entry[f"delta_vs_{base}"] = (
                 None if base_stats is None
                 else round(mine["pass_rate"] - base_stats["pass_rate"], 4))
@@ -116,7 +120,7 @@ def build_relative(rows: list[dict]) -> dict:
         for name, rate in mine["categories"].items():
             cat_entry: dict = {"pass_rate": rate}
             for base in BASELINES:
-                base_rate = stats.get(base, {}).get("categories", {}).get(name)
+                base_rate = stats.get(base + sfx, {}).get("categories", {}).get(name)
                 cat_entry[f"delta_vs_{base}"] = (
                     None if base_rate is None else round(rate - base_rate, 4))
             cats[name] = cat_entry

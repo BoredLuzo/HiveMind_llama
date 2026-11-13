@@ -372,6 +372,12 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           all(duo_body.get(k) == "qwen3.5:4b-mtp"
               for k in ("duo_coder_model", "duo_critic_model", "duo_planner_model")),
           f" ({ {k: duo_body.get(k) for k in ('duo_coder_model','duo_critic_model','duo_planner_model')} })")
+    check("body: duo pins websearch=False and git=false for clean eval",
+          duo_body.get("duo_websearch_enabled") is False
+          and duo_body.get("git_tools_enabled") == "false")
+    check("body: direct pins websearch=False and git=false for clean eval",
+          direct_body.get("duo_websearch_enabled") is False
+          and direct_body.get("git_tools_enabled") == "false")
 
     check("tokens: plain number", _parse_token_count("345") == 345)
     check("tokens: thousands separator", _parse_token_count("1,234") == 1234)

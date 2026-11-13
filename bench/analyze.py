@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -79,23 +80,116 @@ def _category(task: str) -> str:
     return _rel_category(task)
 
 
+def _format_model_tag(model: str) -> str:
+    """Normalize full model identifier for --by-model labels without tail collisions."""
+    return re.sub(r"[^a-z0-9._:-]+", "_", str(model).strip().lower()).strip("_")
+
+
+def _ts_fingerprint(row: dict, condition: str | None = None) -> tuple | None:
+    """Return timestamp+measurement fingerprint for checkpoint duplicate detection."""
+    ts = str(row.get("timestamp") or "")
+    if not ts:
+        return None
+    cond = str(condition if condition is not None else (row.get("condition") or ""))
+    return (
+        "cell",
+        cond,
+        str(row.get("task") or ""),
+        ts,
+        row.get("seconds"),
+        row.get("tokens"),
+        row.get("ok"),
+    )
+
+
+def _dedupe_rows(rows: list[dict]) -> list[dict]:
+    """Deduplicate checkpoint/resumed rows by timestamp fingerprint or (condition, task, run)."""
+    unique: dict[tuple, dict] = {}
+    for idx, row in enumerate(rows):
+        fp = _ts_fingerprint(row)
+        if fp is not None:
+            key = fp
+        else:
+            key = (str(row.get("condition") or ""), str(row.get("task") or ""), row.get("run", idx))
+        unique[key] = row
+    return list(unique.values())
+
+
+def _pool_file_rows(
+    rows: list[dict],
+    file_rows: list[dict],
+    file_model: str,
+    offsets_per_group: dict[tuple[str, str], int],
+    *,
+    by_model: bool = False,
+) -> None:
+    """Append file_rows into rows without shifting resumed checkpoint duplicates."""
+    seen_ts = {fp for existing in rows if (fp := _ts_fingerprint(existing)) is not None}
+    prepared: list[tuple[dict, tuple[str, str], tuple | None]] = []
+    dup_groups: set[tuple[str, str]] = set()
+    for raw_r in file_rows:
+        r = dict(raw_r)
+        if not r.get("model") and file_model:
+            r["model"] = file_model
+        c = r.get("condition") or "unknown"
+        if by_model and r.get("model"):
+            c = f"{c}@{_format_model_tag(str(r['model']))}"
+            r["condition"] = c
+        t = r.get("task") or ""
+        grp_key = (c, t)
+        fp = _ts_fingerprint(r, c)
+        if fp is not None and fp in seen_ts:
+            dup_groups.add(grp_key)
+        prepared.append((r, grp_key, fp))
+
+    cur_file_max_runs: dict[tuple[str, str], int] = {}
+    for r, grp_key, fp in prepared:
+        if fp is not None and fp in seen_ts:
+            continue
+        if fp is not None:
+            seen_ts.add(fp)
+        orig_run = int(r.get("run") or 1)
+        if grp_key in dup_groups:
+            r["run"] = orig_run
+            offsets_per_group[grp_key] = max(offsets_per_group.get(grp_key, 0), orig_run)
+        else:
+            off = offsets_per_group.get(grp_key, 0)
+            r["run"] = orig_run + off
+            cur_file_max_runs[grp_key] = max(cur_file_max_runs.get(grp_key, 0), orig_run)
+        rows.append(r)
+
+    for k, max_run in cur_file_max_runs.items():
+        offsets_per_group[k] = offsets_per_group.get(k, 0) + max_run
+
+
+def load_and_pool_results(
+    result_paths: list[str | Path], *, by_model: bool = False
+) -> list[dict]:
+    """Load, pool, and deduplicate result JSON files across independent/resumed runs."""
+    rows: list[dict] = []
+    offsets_per_group: dict[tuple[str, str], int] = {}
+    for path_like in result_paths:
+        p = Path(path_like)
+        if not p.exists():
+            continue
+        data = json.loads(p.read_text(encoding="utf-8"))
+        file_model = data.get("model") or ""
+        _pool_file_rows(
+            rows,
+            data.get("results") or [],
+            file_model,
+            offsets_per_group,
+            by_model=by_model,
+        )
+    return _dedupe_rows(rows)
+
+
 def summarize(rows: list[dict]) -> dict:
     # DEDUPE (2026-11-08): overlapping result files (resumed run + original)
     # must not double-vote a task. The run number is shifted per file, so the
     # same cell copied into two checkpoints can arrive under two run numbers;
     # its timestamp + measurement fingerprint identifies the duplicate.
-    _unique: dict[tuple, dict] = {}
-    for _idx, _row in enumerate(rows):
-        _ts = str(_row.get("timestamp") or "")
-        if _ts:
-            _key = ("cell", str(_row.get("condition") or ""),
-                    str(_row.get("task") or ""), _ts,
-                    _row.get("seconds"), _row.get("tokens"), _row.get("ok"))
-        else:
-            _key = (str(_row.get("condition") or ""), str(_row.get("task") or ""),
-                    _row.get("run", _idx))
-        _unique[_key] = _row
-    rows = list(_unique.values())
+    rows = _dedupe_rows(rows)
     conditions: dict[str, dict] = {}
     for cond in sorted({str(r.get("condition") or "") for r in rows} - {""}):
         mine = [r for r in rows if r.get("condition") == cond]
@@ -108,7 +202,10 @@ def summarize(rows: list[dict]) -> dict:
             "ci95": [round(lo, 4), round(hi, 4)],
             "tokens_total": sum(int(r.get("tokens") or 0) for r in mine),
             "cached_tokens_total": sum(int(r.get("cached_tokens") or 0) for r in mine),
-            "net_tokens_total": sum(int(r.get("net_tokens") or r.get("tokens") or 0) for r in mine),
+            "net_tokens_total": sum(
+                int(r["net_tokens"] if r.get("net_tokens") is not None else (r.get("tokens") or 0))
+                for r in mine
+            ),
         }
     verdicts = majority_verdicts(rows)
     paired = {}
@@ -190,25 +287,14 @@ def main() -> int:
         file_gpu = data.get("gpu") or {}
         if isinstance(file_gpu, dict) and file_gpu.get("name") and file_gpu["name"] != "Unknown":
             gpus.add(f"{file_gpu['name']} ({file_gpu.get('vram_total', '').strip()})".strip())
-        file_rows = data.get("results") or []
-        cur_file_max_runs: dict[tuple[str, str], int] = {}
-        for r in file_rows:
-            if not r.get("model") and file_model:
-                r["model"] = file_model
-            c = r.get("condition") or "unknown"
-            if args.by_model and r.get("model"):
-                m_short = r["model"].split(":")[-1] if ":" in r["model"] else r["model"]
-                c = f"{c}@{m_short}"
-                r["condition"] = c
-            t = r.get("task") or ""
-            grp_key = (c, t)
-            orig_run = int(r.get("run") or 1)
-            off = offsets_per_group.get(grp_key, 0)
-            r["run"] = orig_run + off
-            cur_file_max_runs[grp_key] = max(cur_file_max_runs.get(grp_key, 0), orig_run)
-            rows.append(r)
-        for k, max_run in cur_file_max_runs.items():
-            offsets_per_group[k] = offsets_per_group.get(k, 0) + max_run
+        _pool_file_rows(
+            rows,
+            data.get("results") or [],
+            file_model,
+            offsets_per_group,
+            by_model=bool(args.by_model),
+        )
+    rows = _dedupe_rows(rows)
     if not rows:
         print("no result rows", file=sys.stderr)
         return 2
