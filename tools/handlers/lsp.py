@@ -704,13 +704,18 @@ def merge_post_write_diagnostics(result: str, lsp_note: str,
 
     file_ops always appends its lint block (`\\n[lint/...`). When the LSP
     published diagnostics - even a clean result - drop that block and use the
-    LSP text. When the LSP was unavailable/cold, keep the lint block.
+    LSP text while preserving trailing [AUTO-TEST] and [Diff] blocks.
+    When the LSP was unavailable/cold, keep the lint block.
     """
     if not lsp_handled:
         return result
-    _lint_at = result.find("\n[lint/")
-    if _lint_at != -1:
-        result = result[:_lint_at]
+    _tail_markers = ("\n[AUTO-TEST]", "\n\n[Diff \u2014 what changed]")
+    while (_lint_at := result.find("\n[lint/")) != -1:
+        _ends = [idx for m in _tail_markers if (idx := result.find(m, _lint_at + 1)) != -1]
+        if _ends:
+            result = result[:_lint_at] + result[min(_ends):]
+        else:
+            result = result[:_lint_at]
     if lsp_note:
         result = result.rstrip() + "\n\n" + lsp_note
     return result
@@ -970,6 +975,7 @@ async def _inline_tool_lsp_format(args: dict, workspace: Path,
         _werr = await _caw(p, formatted, workspace_lock, tool)
         if _werr:
             return _werr
+        notify_watched_change(workspace, [p])
         return (f"Formatted {_rel(workspace, p)}: {len(edits)} edit(s) "
                 f"applied, file rewritten "
                 f"({len(original)} -> {len(formatted)} chars). "

@@ -383,7 +383,7 @@ _res2, _h2, _m2, _, _, _ = run_round([tc("run_bash", {"cmd": "Test-Path x"})],
                                      trs=_rep_trs)
 check("run_bash repeat: hint injected on 2nd identical failure",
       any("failed twice with identical args" in str(m.get("content", ""))
-          for m in _m2 if m.get("role") == "user"))
+          for m in _m2 if m.get("role") in ("tool", "user")))
 check("run_bash repeat: no loop abort at 2x", not _res2.loop_detected)
 # 3rd identical call -> BASH-LOOP-REINJECT still fires (hard stop preserved)
 _res3, _h3, _m3, _, _, _ = run_round([tc("run_bash", {"cmd": "Test-Path x"})],

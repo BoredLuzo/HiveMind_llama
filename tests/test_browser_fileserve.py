@@ -60,6 +60,53 @@ def main() -> int:
         _check("guard blocks foreign loopback port", bool(_guard_browser_url("http://127.0.0.1:12345/x")))
         _check("guard blocks localhost by name", bool(_guard_browser_url("http://localhost:12345/x")))
 
+    import asyncio, time
+    import tools.browser as B
+    stopped = []
+    class _FakePW:
+        def stop(self):
+            stopped.append(True)
+    B._playwright = _FakePW()
+    B._cleanup_failed_launch()
+    _check("_cleanup_failed_launch stops playwright and resets state",
+           stopped == [True] and B._playwright is None)
+
+    def _slow_exec(*_a):
+        time.sleep(0.3)
+        return "late"
+
+    _orig_exec = B._dispatch_on_executor
+    _orig_wait = asyncio.wait_for
+    async def _fast_timeout(coro, timeout=None):
+        return await _orig_wait(coro, timeout=0.05)
+    old_executor = B._BROWSER_EXECUTOR
+    try:
+        B._dispatch_on_executor = _slow_exec
+        asyncio.wait_for = _fast_timeout
+        res = asyncio.run(B.browser_tool({"action": "open"}, ws, None))
+        _check(f"browser_tool timeout returns error instead of hanging (got {res!r})",
+               "timed out" in res)
+        _check("browser_tool timeout retires stalled executor to prevent starvation",
+               B._BROWSER_EXECUTOR is not old_executor)
+    finally:
+        B._dispatch_on_executor = _orig_exec
+        asyncio.wait_for = _orig_wait
+
+    # screenshot forwards workspace_lock via _dispatch_on_executor -> _dispatch
+    with tempfile.TemporaryDirectory() as lock_tmp:
+        lws = Path(lock_tmp) / "ws"
+        lws.mkdir()
+        escaped = Path(lock_tmp) / "escaped.png"
+        B._page = object()
+        try:
+            lock_res = asyncio.run(B.browser_tool(
+                {"action": "screenshot", "path": "../escaped.png"},
+                str(lws), str(lws)))
+            _check(f"screenshot enforces workspace_lock (got {lock_res!r})",
+                   "WORKSPACE" in lock_res and not escaped.exists())
+        finally:
+            B._page = None
+
     _stop_file_server()
     print("PASS" if _ok else "FAIL")
     return 0 if _ok else 1

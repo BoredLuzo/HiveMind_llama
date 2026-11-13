@@ -142,13 +142,19 @@ def test_tool_tiers_pinned():
     src = APP.read_text(encoding="utf-8")
     html = IDX.read_text(encoding="utf-8")
     checks = [
+        "direct_tools_enabled: S.directToolsEnabled !== false",
         "direct_tools_tier: S.directToolsTier",
         "duo_coder_tool_tier: S.duoCoderToolTier",
+        "duo_websearch_enabled: !!S.duoWebsearch",
+        "git_tools_enabled: S.gitToolsEnabled",
         "lsp_auto_diagnostics: typeof S.lspAutoDiag",
     ]
     missing = [c for c in checks if c not in src]
     ui = ('id="dt-tier-research"' in html
           and 'id="duo-coder-tool-tier"' in html
+          and 'id="dct-tier-lean"' in html
+          and 'id="tools-optionals-card"' in html
+          and 'id="duo-tools-slot"' in html
           and 'value="research"' in html)
     if not missing and ui:
         ok("tool tiers are pinned in /stream and exposed in the UI")

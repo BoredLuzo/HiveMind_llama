@@ -230,6 +230,38 @@ def _reset_state() -> None:
     _page = None
 
 
+def _cleanup_failed_launch() -> None:
+    global _playwright, _browser
+    try:
+        if _browser is not None:
+            try:
+                _browser.close()
+            except (OSError, RuntimeError, AttributeError, ValueError, TimeoutError) as _br_err:
+                logger.debug("[browser] browser.close() after failed launch: %s", _br_err)
+        if _playwright is not None:
+            try:
+                _playwright.stop()
+            except (OSError, RuntimeError, AttributeError, ValueError, TimeoutError) as _pw_err:
+                logger.debug("[browser] playwright.stop() after failed launch: %s", _pw_err)
+    finally:
+        _reset_state()
+
+
+def _retire_stalled_executor() -> None:
+    """Replace the single-worker executor after a hard timeout so subsequent calls never queue behind a stuck thread."""
+    global _BROWSER_EXECUTOR
+    old = _BROWSER_EXECUTOR
+    _BROWSER_EXECUTOR = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="hivemind-browser"
+    )
+    try:
+        old.shutdown(wait=False, cancel_futures=True)
+    except (RuntimeError, OSError) as _ex_err:
+        logger.debug("[browser] stalled executor shutdown: %s", _ex_err)
+    _stop_file_server()
+    _reset_state()
+
+
 def _ensure_page():
     global _playwright, _browser, _page, _console_msgs, _pageerrors
     if _page is not None:
@@ -251,33 +283,41 @@ def _ensure_page():
         # first (it ships with the same build), then say exactly what to run.
         _msg = str(_launch_err)
         if "Executable doesn't exist" not in _msg:
+            _cleanup_failed_launch()
             raise
         try:
             _browser = _playwright.chromium.launch(
                 headless=True, channel="chromium")
         except Exception:            # the fallback failed too - explain it
+            _cleanup_failed_launch()
             raise RuntimeError(
                 "The Playwright browser build does not match the installed "
                 "playwright package. Fix once with: "
                 + ".venv\\Scripts\\python.exe -m playwright install chromium "
                 + f"(original error: {_msg.splitlines()[0][:160]})"
             ) from None
-    _page = _browser.new_page()
-    _console_msgs = []
-    _pageerrors = []
-    _page.on("console", lambda m: _console_msgs.append(f"[{m.type}] {m.text}"))
-    _page.on("pageerror", lambda e: _pageerrors.append(str(e)))
-
-    def _route_guard(route):
-        if _guard_browser_url(route.request.url):
-            route.abort()
-        else:
-            route.continue_()
-
+    _page_ok = False
     try:
-        _page.route("**/*", _route_guard)
-    except Exception:
-        pass
+        _page = _browser.new_page()
+        _console_msgs = []
+        _pageerrors = []
+        _page.on("console", lambda m: _console_msgs.append(f"[{m.type}] {m.text}"))
+        _page.on("pageerror", lambda e: _pageerrors.append(str(e)))
+
+        def _route_guard(route):
+            if _guard_browser_url(route.request.url):
+                route.abort()
+            else:
+                route.continue_()
+
+        try:
+            _page.route("**/*", _route_guard)
+        except Exception as _route_err:
+            logger.debug("[browser] route guard hook failed: %s", _route_err)
+        _page_ok = True
+    finally:
+        if not _page_ok:
+            _cleanup_failed_launch()
     return _page
 
 
@@ -461,7 +501,16 @@ async def browser_tool(args: dict, workspace, workspace_lock) -> str:
     """Inline-Tool-Handler (blocking Playwright sync API, pinned to ONE thread)."""
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(_BROWSER_EXECUTOR, _dispatch_on_executor, args or {}, workspace)
+        return await asyncio.wait_for(
+            loop.run_in_executor(
+                _BROWSER_EXECUTOR, _dispatch_on_executor,
+                args or {}, workspace, workspace_lock,
+            ),
+            timeout=65.0,
+        )
+    except asyncio.TimeoutError:
+        _retire_stalled_executor()
+        return "[browser error] browser action timed out after 65s"
     except RuntimeError as e:
         return f"[browser error] {e}"
     except Exception as e:
@@ -485,3 +534,4 @@ def close_browser(timeout: float = 15.0) -> None:
         _BROWSER_EXECUTOR.submit(_shutdown).result(timeout=timeout)
     except Exception as e:
         logger.debug("[browser] shutdown error: %s", e)
+        _retire_stalled_executor()

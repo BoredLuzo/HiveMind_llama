@@ -356,11 +356,15 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "write_file_append"):
         return err  # H-audit: containment BEFORE the exists probe (oracle)
-    target = workspace / args.get("path", "")
-    if not target.exists():
+    if not p.exists():
         return _tool_error_response(
             "FILE_NOT_FOUND",
             "write_file_append requires an EXISTING file — create it with write_file first.",
+            tool="write_file_append")
+    if p.is_dir():
+        return _tool_error_response(
+            "FILE_IS_DIRECTORY",
+            f"write_file_append target '{p}' is a directory, not a file.",
             tool="write_file_append")
     content = str(args.get("content", ""))
     get_transaction().capture_before(p)
@@ -392,8 +396,12 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                 p, workspace_lock, "write_file_append")
             if _chk:
                 raise PermissionError("workspace containment re-check failed")
-            p.parent.mkdir(parents=True, exist_ok=True)
-            _head = p.read_text(encoding="utf-8", errors="replace", newline="") if p.stat().st_size else ""
+            if not p.is_file():
+                raise FileNotFoundError(f"write_file_append target '{p}' is missing or not a file")
+            _head = ""
+            if p.stat().st_size:
+                with open(p, "r", encoding="utf-8", errors="replace", newline="") as _rf:
+                    _head = _rf.read()
             _body = content
             if _head and not _head.endswith("\n") and not _body.startswith("\n"):
                 _body = "\n" + _body
@@ -736,6 +744,164 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_note_cap) if _note_cap and _lines * 80 > _note_cap else ""}"
 
 
+def _unique_ws_normalized_replace(
+    working: str,
+    old_n: str,
+    new_n: str,
+    *,
+    allow_indent_strip: bool = True,
+) -> str | None:
+    """Fallback exact-ish replacement tolerant of trailing/outer whitespace drift.
+
+    Requires a single unique line-block match (trailing-whitespace `rstrip`
+    first, then optional full-line `strip` on substantial blocks with uniform
+    reindentation). Returns updated text or None if 0 or >1 matches exist.
+    """
+    if not old_n or not old_n.strip():
+        return None
+    if old_n.endswith("\n") and (new_n.endswith("\n") or new_n == ""):
+        old_lines = old_n[:-1].split("\n")
+        new_lines = [] if new_n == "" else new_n[:-1].split("\n")
+    else:
+        old_lines = old_n.split("\n")
+        new_lines = new_n.split("\n")
+    w_lines = working.split("\n")
+    blen = len(old_lines)
+    if blen == 0 or len(w_lines) < blen:
+        return None
+    limit = len(w_lines) - blen
+    exp_r = [line.rstrip() for line in old_lines]
+    w_r = [line.rstrip() for line in w_lines]
+    used_strip = False
+    matches = [p for p in range(limit + 1) if w_r[p:p + blen] == exp_r]
+    if not matches and allow_indent_strip and (
+        blen >= 2 or len(old_lines[0].strip()) >= 10
+    ):
+        exp_s = [line.strip() for line in old_lines]
+        w_s = [line.strip() for line in w_lines]
+        matches = [p for p in range(limit + 1) if w_s[p:p + blen] == exp_s]
+        if matches:
+            used_strip = True
+    if len(matches) != 1:
+        return None
+    pos = matches[0]
+    rep_lines = new_lines
+    if used_strip:
+        from tools.patch_diff import reindent_matched_block
+        rep_lines = reindent_matched_block(
+            w_lines[pos:pos + blen], old_lines, new_lines)
+        if rep_lines is None:
+            return None
+    return "\n".join(w_lines[:pos] + rep_lines + w_lines[pos + blen:])
+
+
+def _tolerant_replace(
+    p: Path,
+    working: str,
+    old_n: str,
+    new_n: str,
+    args: dict,
+    workspace: Path,
+) -> tuple[str | None, bool, str]:
+    """Fallback replacement ladder when exact match fails:
+    trailing-WS rstrip -> STALE-GATE -> indent-strip WS -> fuzzy_replace.
+    Returns (new_text_or_None, used_fuzzy, stale_note).
+    """
+    ws_rep = _unique_ws_normalized_replace(
+        working, old_n, new_n, allow_indent_strip=False)
+    if ws_rep is not None:
+        return ws_rep, False, ""
+    fuzzy_ok, stale_note = _can_fuzzy_edit(p, args, workspace)
+    if not fuzzy_ok:
+        return None, False, stale_note
+    ws_rep = _unique_ws_normalized_replace(
+        working, old_n, new_n, allow_indent_strip=True)
+    if ws_rep is not None:
+        return ws_rep, False, stale_note
+    try:
+        from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
+        fzr = _p2_fzr(working, old_n, new_n)
+    except ImportError:
+        fzr = None
+    return fzr, (fzr is not None), stale_note
+
+
+def _can_fuzzy_edit(p: Path, args: dict, workspace: Path) -> tuple[bool, str]:
+    """Check STALE-GATE before allowing fuzzy fallback on edit_file."""
+    _fuzzy_ok = False
+    _stale_note = ""
+    try:
+        from tools.runner import (
+            _files_read_in_run as _fri,
+            _files_seen_in_run as _fsi,
+            _read_signatures as _rsig,
+            _normalize_tool_path as _ntp,
+        )
+        _rs = _fri.get(None)
+        _ek = _ntp(args.get("path", ""), workspace)
+        _as = _fsi.get(None)
+        _fuzzy_ok = bool((_rs and _ek in _rs) or (_as and _ek in _as))
+        _sig = _rsig.get(_ek)
+        if _sig:
+            try:
+                _st = p.stat()
+                _sig_now = (_st.st_mtime_ns, _st.st_size)
+                if _sig_now != _sig:
+                    _stale_note = (
+                        " The file changed on disk since your last read_file "
+                        "(or was never read this run) — read_file it again to "
+                        "see its current state.")
+                    _fuzzy_ok = False
+            except OSError:
+                _fuzzy_ok = False
+    except ImportError:
+        _fuzzy_ok = False
+    return _fuzzy_ok, _stale_note
+
+
+def _build_edit_mismatch_anchor(p: Path, text: str, old_n: str) -> str:
+    """Return a 15-20 line current-file snippet near the closest match."""
+    try:
+        _cur = text.splitlines()
+        _anchor_center = -1
+        _anchor_ratio = 0.0
+        try:
+            from tools.patch_2_fuzzy_edit import best_match_location as _bml
+            _loc = _bml("\n".join(_cur), old_n)
+            if _loc:
+                _anchor_center, _anchor_ratio = int(_loc[0]), float(_loc[1])
+        except (ImportError, ValueError, TypeError, AttributeError):
+            _anchor_center = -1
+        if _anchor_center >= 0:
+            try:
+                from core.budgets import active as _bgt_anchor
+                _aw = max(int(_bgt_anchor().anchor_lines), 9)
+            except (ImportError, AttributeError, TypeError, ValueError):
+                _aw = 9
+            _lo = max(0, _anchor_center - _aw)
+            _hi = min(len(_cur), _anchor_center + max(old_n.count("\n"), 0) + _aw + 1)
+            _head = "\n".join(_cur[_lo:_hi])
+            if len(_head) > 1400:
+                _head = _head[:1400] + "\n... [truncated]"
+            return (
+                "\n\n[CURRENT CONTENT of '" + p.name + "' lines "
+                + str(_lo + 1) + "-" + str(_hi)
+                + " (closest match to your old_text, ratio "
+                + f"{_anchor_ratio:.2f}" + ") — build your next edit_file "
+                "old_text from EXACTLY this:]\n" + _head
+            )
+        _head = "\n".join(_cur[:25])
+        if len(_head) > 1400:
+            _head = _head[:1400] + "\n... [truncated]"
+        return (
+            "\n\n[CURRENT CONTENT of '" + p.name + "' — first "
+            + str(min(25, len(_cur))) + " lines (no close match found). "
+            "read_file the file and COPY a passage verbatim:]\n" + _head
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ""
+
+
 async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     """Exact-match edit: replace ONE unique occurrence of old_text with new_text.
 
@@ -813,115 +979,21 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
 
     count = working.count(old_n)
     _first_hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
+    _ws_replaced: str | None = None
+    _used_fuzzy = False
     if count == 0:
-        # Fuzzy fallback: ONE best window, line-level ratio >= 0.85, spliced at
-        # line granularity. STALE-GATE (2026-09-17): fuzzy only when the model
-        # has actually READ this file this run AND the file is unchanged since
-        # that read (mtime+size signature) — editing a never-read or externally
-        # modified version must fail clearly, not fuzzy-match "something".
-        _fuzzy_ok = False
-        _stale_note = ""
-        try:
-            from tools.runner import _files_read_in_run as _fri, _files_seen_in_run as _fsi, _read_signatures as _rsig, _normalize_tool_path as _ntp
-            _rs = _fri.get(None)
-            _ek = _ntp(args.get("path", ""), workspace)
-            _as = _fsi.get(None)
-            _fuzzy_ok = bool((_rs and _ek in _rs) or (_as and _ek in _as))
-            _sig = _rsig.get(_ek)
-            if _sig:
-                try:
-                    _st = p.stat()
-                    _sig_now = (_st.st_mtime_ns, _st.st_size)
-                    if _sig_now != _sig:
-                        _stale_note = (
-                            " The file changed on disk since your last read_file "
-                            "(or was never read this run) — read_file it again to "
-                            "see its current state.")
-                        _fuzzy_ok = False
-                except OSError:
-                    _fuzzy_ok = False
-        except ImportError:
-            _fuzzy_ok = False
-        _fzr = None
-        if _fuzzy_ok:
-            try:
-                from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
-                _fzr = _p2_fzr(working, old_n, new_n)
-            except ImportError:
-                _fzr = None
-        if _fzr is not None:
-            working = _fzr
-            if not args.get("confirm_shrink") and not args.get("allow_overwrite"):
-                _dropped_fz = _missing_top_level_py_symbols(p, content, working)
-                if _dropped_fz:
-                    _dlist_fz = ", ".join(_dropped_fz[:10])
-                    return _tool_error_response(
-                        "WOULD_DROP_SYMBOLS",
-                        f"Edit to '{p.name}' would remove existing top-level symbol(s): "
-                        f"{_dlist_fz}. Keep existing module-level constants, functions, "
-                        "classes, and re-exports (or re-export moved symbols via "
-                        "'from new_module import symbol'). The file on disk was NOT modified."
-                        f"{_symbol_definition_hints(content, _dropped_fz)}",
-                        tool="edit_file")
-            final = working.replace("\n", "\r\n") if _has_crlf else working
-
-            _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
-            if _chk:
-                return _chk  # T6: containment re-check BEFORE any byte is written
-            _lint = await _auto_lint_result(p, workspace)
-            return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
-        # OLD-TEXT RE-ANCHOR (2026-10-08, user feedback: the old_text retry loop): the
-        # model edits from memory after context compression and repeats the
-        # same failed edit. Attach the CURRENT content around the CLOSEST
-        # match to the failed old_text (audit phase 5, 2026-10-14: was a
-        # fixed 60-line head, up to 4000 chars per failed attempt — the
-        # closest-window anchor is smaller AND points at the right region).
-        _anchor = ""
-        try:
-            _cur = p.read_text(encoding="utf-8", errors="replace").splitlines()
-            _anchor_center = -1
-            _anchor_ratio = 0.0
-            try:
-                from tools.patch_2_fuzzy_edit import best_match_location as _bml
-                _loc = _bml("\n".join(_cur), old_n)
-                if _loc:
-                    _anchor_center, _anchor_ratio = int(_loc[0]), float(_loc[1])
-            except Exception:
-                _anchor_center = -1
-            if _anchor_center >= 0:
-                # PHASE-5/BUDGETS (2026-10-14): window from the run's injection
-                # budget (core/budgets anchor_lines), not a fixed ±5.
-                try:
-                    from core.budgets import active as _bgt_anchor
-                    _aw = int(_bgt_anchor().anchor_lines)
-                except Exception:
-                    _aw = 8
-                _lo = max(0, _anchor_center - _aw)
-                _hi = min(len(_cur), _anchor_center + max(old_n.count("\n"), 0) + _aw + 1)
-                _head = "\n".join(_cur[_lo:_hi])
-                if len(_head) > 1200:
-                    _head = _head[:1200] + "\n... [truncated]"
-                _anchor = ("\n\n[CURRENT CONTENT of '" + p.name + "' lines "
-                           + str(_lo + 1) + "-" + str(_hi) + " (closest match to your old_text, ratio "
-                           + f"{_anchor_ratio:.2f}" + ") — build your next edit_file "
-                           "old_text from EXACTLY this:]\n" + _head)
-            else:
-                _head = "\n".join(_cur[:30])
-                if len(_head) > 1200:
-                    _head = _head[:1200] + "\n... [truncated]"
-                _anchor = ("\n\n[CURRENT CONTENT of '" + p.name + "' — first "
-                           + str(min(30, len(_cur))) + " lines (no close match found). "
-                           "read_file the file and COPY a passage verbatim:]\n" + _head)
-        except Exception:
-            pass
-        return _tool_error_response(
-            "EDIT_FILE_OLD_TEXT_NOT_FOUND",
-            f"old_text not found in '{p}' (exact or fuzzy).\n"
-            f"  Looking for: {_first_hint!r}\n"
-            "  read_file the file and COPY the passage verbatim — check indentation "
-            "and whitespace; add surrounding lines to make it unique."
-            + (_stale_note if _stale_note else "") + _anchor,
-            tool="edit_file")
+        _ws_replaced, _used_fuzzy, _stale_note = _tolerant_replace(
+            p, working, old_n, new_n, args, workspace)
+        if _ws_replaced is None:
+            _anchor = _build_edit_mismatch_anchor(p, working, old_n)
+            return _tool_error_response(
+                "EDIT_FILE_OLD_TEXT_NOT_FOUND",
+                f"old_text not found in '{p}' (exact or fuzzy).\n"
+                f"  Looking for: {_first_hint!r}\n"
+                "  read_file the file and COPY the passage verbatim — check indentation "
+                "and whitespace; add surrounding lines to make it unique."
+                + (_stale_note or "") + _anchor,
+                tool="edit_file")
     if count > 1:
         return _tool_error_response(
             "EDIT_FILE_NOT_UNIQUE",
@@ -934,7 +1006,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     # compared the result with itself, so the guard never fired (a single
     # malformed edit could collapse a large file silently).
     _pre_n = len([l for l in working.splitlines() if l.strip()])
-    working = working.replace(old_n, new_n, 1)
+    working = _ws_replaced if _ws_replaced is not None else working.replace(old_n, new_n, 1)
     if working.strip() == content.replace("\r\n", "\n").strip():
         return _tool_error_response(
             "EDIT_FILE_NOOP",
@@ -978,6 +1050,8 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     _new_lines_n = final.count("\n") + 1
     _delta = _new_lines_n - _old_lines_n
     _lint = await _auto_lint_result(p, workspace)
+    if _used_fuzzy:
+        return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
     result = f"[edit_file: '{p}' replaced ({_delta:+d} lines)]"
     if _delta == 0:
         # 0-LINES-CLARITY: same line count, different content — report the
@@ -1014,13 +1088,13 @@ def _validate_edit_batch(edits) -> list[tuple[str, str]] | str:
             return (f"edits[{i}] is not an object — each entry needs "
                     "old_text and new_text.")
         old_e = _first_dict_value(e, ("old_text",) + _JSON_EDIT_KEY_OLD)
-        new_e = _first_dict_value(e, ("new_text",) + _JSON_EDIT_KEY_NEW)
+        new_e = _first_present_str(e, ("new_text",) + _JSON_EDIT_KEY_NEW)
         if not old_e.strip():
             return (f"edits[{i}].old_text is empty — copy the exact text "
                     "to replace from read_file.")
-        if not new_e.strip():
-            return (f"edits[{i}].new_text is empty — replace the passage "
-                    "with the corrected version.")
+        if new_e is None:
+            return (f"edits[{i}].new_text is missing — provide the replacement "
+                    "string (or '' to delete old_text).")
         if "<parameter=" in old_e or "<parameter=" in new_e:
             return (f"edits[{i}] contains <parameter= fragments from a "
                     "truncated tool call. Resend the batch with complete "
@@ -1059,11 +1133,18 @@ async def _inline_tool_edit_file_batch(args: dict, p: Path, workspace: Path,
         count = working.count(old_n)
         _first_hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
         if count == 0:
+            _rep, _, _stale_note = _tolerant_replace(
+                p, working, old_n, new_n, args, workspace)
+            if _rep is not None:
+                working = _rep
+                continue
+            _anchor = _build_edit_mismatch_anchor(p, working, old_n)
             return _tool_error_response(
                 "EDIT_FILE_OLD_TEXT_NOT_FOUND",
-                f"edits[{i}]: old_text not found in '{p}' (exact match). "
+                f"edits[{i}]: old_text not found in '{p}' (exact or whitespace-normalized match). "
                 f"Looking for: {_first_hint!r}. NOTHING was written — "
-                "read_file the file and copy every old_text verbatim.",
+                "read_file the file and copy every old_text verbatim."
+                + (_stale_note or "") + _anchor,
                 tool="edit_file")
         if count > 1:
             return _tool_error_response(
@@ -1226,6 +1307,14 @@ def _first_dict_value(e: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
+def _first_present_str(e: dict, keys: tuple[str, ...]) -> str | None:
+    """Return str(e[k]) for the first present non-None key (allows '' deletion)."""
+    for k in keys:
+        if k in e and e[k] is not None:
+            return str(e[k])
+    return None
+
+
 def _looks_like_json_edit_args(edits_str: str) -> bool:
 
 
@@ -1244,8 +1333,12 @@ def _try_convert_json_edits(edits_str: str) -> str:
             if any(k in _keys for k in _JSON_EDIT_KEY_OLD):
                 blocks = []
                 for e in parsed:
-                    old = _first_dict_value(e, _JSON_EDIT_KEY_OLD)
-                    new = _first_dict_value(e, _JSON_EDIT_KEY_NEW)
+                    old = _first_present_str(e, _JSON_EDIT_KEY_OLD)
+                    new = _first_present_str(e, _JSON_EDIT_KEY_NEW)
+                    if old is None:
+                        old = ""
+                    if new is None:
+                        new = ""
                     blocks.append(f"<<<<<<< SEARCH\n{old}\n=======\n{new}\n>>>>>>> REPLACE")
                 return "\n\n".join(blocks)
     except Exception:

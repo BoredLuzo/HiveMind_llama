@@ -42,7 +42,8 @@ async def _seed(ws: Path, name: str, body: str) -> None:
 
 
 def _read(ws: Path, name: str) -> str:
-    return (ws / name).read_text(encoding="utf-8", newline="")
+    with open(ws / name, "r", encoding="utf-8", newline="") as f:
+        return f.read()
 
 
 # ── 1. happy path: single-file patch ────────────────────────────────────────
@@ -205,6 +206,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
           "APPLY_PATCH_FAILED" in out and "b.py" in out
           and "NOTHING was written" in out,
           f"({out.strip()[:120]})")
+    check("mismatch error includes current file context anchor",
+          "[CURRENT CONTENT of 'b.py'" in out and "y = 2" in out,
+          f"({out.strip()[:160]})")
     check("first file NOT written although its hunk matched",
           "x = 1" in _read(ws, "a.py") and "y = 2" in _read(ws, "b.py"))
 
@@ -299,6 +303,20 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     check("header line numbers may drift (content match wins)",
           "apply_patch: 1 file(s) patched" in out, f"({out.strip()[:80]})")
 
+# ── 8b. trailing-whitespace / indentation drift tolerated when unique ───────
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    asyncio.run(_seed(ws, "ws_drift.py", "def calc(n):  \n    res = n + 1\n    return res\n"))
+    out_ws = asyncio.run(_inline_tool_apply_patch({
+        "patch": (
+            "--- a/ws_drift.py\n+++ b/ws_drift.py\n"
+            "@@ -1,3 +1,3 @@\n def calc(n):\n-  res = n + 1\n+    res = n + 2\n     return res\n"
+        ),
+    }, ws, str(ws)))
+    check("progressive match applies patch despite trailing/indentation whitespace drift",
+          "apply_patch: 1 file(s) patched" in out_ws and "res = n + 2" in _read(ws, "ws_drift.py"),
+          f"({out_ws.strip()[:100]})")
+
 # ── 9. pure parser checks (no I/O) ──────────────────────────────────────────
 fp_patch = (
     "--- /dev/null\n+++ b/n.py\n@@ -0,0 +1,1 @@\n+brand new\n")
@@ -312,5 +330,138 @@ try:
     check("both-null header rejected", False)
 except PatchError as e:
     check("both-null header rejected", e.code == "PATCH_MALFORMED")
+
+# ── 10. runner read-before-write guard (READ_REQUIRED) on apply_patch ────────
+from tools import runner as _tr  # noqa: E402
+from core import state as _st    # noqa: E402
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    asyncio.run(_seed(ws, "guarded.py", "VAL = 1\n"))
+    _orig_rg = _st.settings.get("read_guard_enabled")
+    _st.settings["read_guard_enabled"] = True
+    _tr._files_read_in_run.set(set())
+    _tr._files_seen_in_run.set(set())
+    _tr._files_written_in_run.set(set())
+    _tr._files_in_context.set(set())
+    _patch = (
+        "--- a/guarded.py\n+++ b/guarded.py\n"
+        "@@ -1,1 +1,1 @@\n-VAL = 1\n+VAL = 2\n"
+    )
+    try:
+        out_blk = asyncio.run(_tr._run_inline_tool(
+            "apply_patch", {"patch": _patch}, str(ws), tool_mode="direct_full"
+        ))
+        check("runner blocks apply_patch on unread existing file in non-duo mode",
+              "READ_REQUIRED" in out_blk and "VAL = 1" in _read(ws, "guarded.py"),
+              f"({out_blk.strip()[:120]})")
+        asyncio.run(_tr._run_inline_tool(
+            "read_file", {"path": "guarded.py"}, str(ws), tool_mode="direct_full"
+        ))
+        out_ok = asyncio.run(_tr._run_inline_tool(
+            "apply_patch", {"patch": _patch}, str(ws), tool_mode="direct_full"
+        ))
+        check("runner allows apply_patch after read_file in non-duo mode",
+              "apply_patch: 1 file(s) patched" in out_ok and "VAL = 2" in _read(ws, "guarded.py"),
+              f"({out_ok.strip()[:120]})")
+    finally:
+        if _orig_rg is None:
+            _st.settings.pop("read_guard_enabled", None)
+        else:
+            _st.settings["read_guard_enabled"] = _orig_rg
+
+# ── 11. P2: diff= alias, _track_focus_path, reindent & STALE-GATE (2026-11-13) ─
+from core.tool_exec_helpers import _track_focus_path  # noqa: E402
+
+
+class _DummyLRU:
+    def __init__(self):
+        self.decayed: list[str] = []
+
+    def decay(self, p: str) -> None:
+        self.decayed.append(p)
+
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    asyncio.run(_seed(ws, "diff_alias.py", "X = 1\n"))
+    _orig_rg = _st.settings.get("read_guard_enabled")
+    _st.settings["read_guard_enabled"] = True
+    _tr._files_read_in_run.set(set())
+    _tr._files_seen_in_run.set(set())
+    _tr._files_written_in_run.set(set())
+    _tr._files_in_context.set(set())
+    _patch_diff_arg = (
+        "--- a/diff_alias.py\n+++ b/diff_alias.py\n"
+        "@@ -1,1 +1,1 @@\n-X = 1\n+X = 2\n"
+    )
+    try:
+        out_diff_blk = asyncio.run(_tr._run_inline_tool(
+            "apply_patch", {"diff": _patch_diff_arg}, str(ws), tool_mode="direct_full"
+        ))
+        check("11a runner read_guard inspects diff= alias too",
+              "READ_REQUIRED" in out_diff_blk and "X = 1" in _read(ws, "diff_alias.py"),
+              f"({out_diff_blk.strip()[:120]})")
+        lru = _DummyLRU()
+        recent: list[str] = []
+        fp = _track_focus_path({"diff": _patch_diff_arg}, "apply_patch", lru, recent, 5)
+        check("11b _track_focus_path extracts target from apply_patch diff=",
+              fp == "diff_alias.py" and recent == ["diff_alias.py"] and lru.decayed == ["diff_alias.py"],
+              f"(fp={fp!r}, recent={recent})")
+
+        # 11c uniform indent shift reindents replacement lines cleanly
+        asyncio.run(_seed(ws, "reind.py", "def f():\n    a = 1\n        b = 2\n    return a + b\n"))
+        out_re = asyncio.run(_inline_tool_apply_patch({
+            "patch": (
+                "--- a/reind.py\n+++ b/reind.py\n"
+                "@@ -2,2 +2,2 @@\n a = 1\n-    b = 2\n+    b = 3\n"
+            ),
+        }, ws, str(ws)))
+        check("11c uniform strip-WS match reindents replacement to file indent",
+              "apply_patch: 1 file(s) patched" in out_re
+              and "    a = 1\n        b = 3\n" in _read(ws, "reind.py"),
+              f"({out_re.strip()[:100]} | {_read(ws, 'reind.py')!r})")
+
+        # 11d inconsistent indent across matched lines is rejected (not flattened)
+        asyncio.run(_seed(ws, "badind.py", "    if cond:\n        do_work()\n"))
+        out_bad = asyncio.run(_inline_tool_apply_patch({
+            "patch": (
+                "--- a/badind.py\n+++ b/badind.py\n"
+                "@@ -1,2 +1,2 @@\n if cond:\n-do_work()\n+do_other()\n"
+            ),
+        }, ws, str(ws)))
+        check("11d inconsistent indent across matched block is rejected",
+              "PATCH_CONTEXT_NOT_FOUND" in out_bad and "do_work()" in _read(ws, "badind.py"),
+              f"({out_bad.strip()[:120]})")
+
+        # 11e edit_file enforces STALE-GATE before leading-indent strip fallback
+        asyncio.run(_seed(ws, "stale_ind.py", "def g():\n    val = 10\n    return val\n"))
+        _tr._files_read_in_run.set(set())
+        _tr._files_seen_in_run.set(set())
+        _tr._files_in_context.set(set())
+        out_stale = asyncio.run(_inline_tool_edit_file({
+            "path": "stale_ind.py",
+            "old_text": "val = 10\nreturn val",
+            "new_text": "val = 20\nreturn val",
+        }, ws, str(ws)))
+        check("11e edit_file blocks strip-WS fallback before file is read (STALE-GATE)",
+              "EDIT_FILE_OLD_TEXT_NOT_FOUND" in out_stale and "val = 10" in _read(ws, "stale_ind.py"),
+              f"({out_stale.strip()[:120]})")
+        asyncio.run(_tr._run_inline_tool(
+            "read_file", {"path": "stale_ind.py"}, str(ws), tool_mode="direct_full"
+        ))
+        out_fresh = asyncio.run(_inline_tool_edit_file({
+            "path": "stale_ind.py",
+            "old_text": "val = 10\nreturn val",
+            "new_text": "val = 20\nreturn val",
+        }, ws, str(ws)))
+        check("11f edit_file applies + reindents strip-WS fallback once file is read",
+              "val = 20" in _read(ws, "stale_ind.py") and "    val = 20\n    return val\n" in _read(ws, "stale_ind.py"),
+              f"({out_fresh.strip()[:120]} | {_read(ws, 'stale_ind.py')!r})")
+    finally:
+        if _orig_rg is None:
+            _st.settings.pop("read_guard_enabled", None)
+        else:
+            _st.settings["read_guard_enabled"] = _orig_rg
 
 sys.exit(h.finish("apply_patch"))

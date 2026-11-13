@@ -533,6 +533,18 @@ _SEND_FILE_TOOL = {"type": "function", "function": {
     }, "required": ["path"]}
 }}
 
+_PIPELINE_TOOL = {"type": "function", "function": {
+    "name": "hivemind_pipeline",
+    "description": (
+        "Delegate a complex query or task to the full HiveMind multi-agent "
+        "pipeline (analyst + synthesizer) or auto-routed workflow."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "Task or question for the HiveMind pipeline"},
+        "mode":  {"type": "string", "description": "Optional routing mode (default: auto)"},
+    }, "required": ["query"]},
+}}
+
 
 # edit_file intentionally excluded from critic — critic must not modify code.
 # Defined here, AFTER _INLINE_CODING_TOOLS, to avoid NameError at module load.
@@ -573,8 +585,7 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
                                            "replace_lines", "edit_ast",
                                            "send_file"},
     # CORE CODER (2026-11-08): token-saving default for the coder/planner.
-    # Read + edit + run + tests only. Git/web/MCP/browser/LSP/background/
-    # install/subagent stay out and become opt-in via duo_full.
+    # Read + edit + run + tests only; Web/Git/Subagent become opt-in optionals.
     "duo_core": {
         "read_file", "get_signatures", "find_references", "list_dir",
         "find_files", "search_code", "edit_file", "write_file",
@@ -605,6 +616,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # lsp_* tools incl. lsp_rename via _INLINE_TOOL_NAMES.
     "duo_readonly": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"}
                     | _LSP_READ_TIER_EXTRAS,
+    "duo_mcp": set(_READ_ONLY_INLINE_TOOL_NAMES)
+               | {"web_search", "web_fetch", "task_complete", "send_file"},
     "pre_explore": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"}
                    | _LSP_READ_TIER_EXTRAS,
     "critic_verify": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"run_bash"}
@@ -630,6 +643,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # between "direct" (web only) and "direct_python".
     "direct_research": set(_READ_ONLY_INLINE_TOOL_NAMES)
                        | {"web_search", "web_fetch", "task_complete"},
+    "direct_mcp": set(_READ_ONLY_INLINE_TOOL_NAMES)
+                  | {"web_search", "web_fetch", "task_complete", "send_file"},
     "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
                                              "send_file"},
 }
@@ -666,48 +681,105 @@ def get_tools_for_phase(phase: str) -> list:
     return [t for t in _INLINE_CODING_TOOLS if t["function"]["name"] in _names]
 
 
-def _tool_names_for_mode(mode: str, include_websearch: bool = False) -> set[str]:
-    allowed = set(_TOOL_MODE_ALLOWLISTS.get(mode, _READ_ONLY_INLINE_TOOL_NAMES))
-    if not include_websearch or not _WEBSEARCH_AVAILABLE:
-        allowed.discard("web_search")
-        allowed.discard("web_fetch")
-    return allowed
+_WEB_TOOL_NAMES = ("web_search", "web_fetch")
+_WEBSEARCH_OPT_IN_MODES = frozenset({"duo_lean", "duo_core"})
+
+_SUBAGENT_TOOL_NAME = "subagent_research"
+_SUBAGENT_OPT_IN_MODES = frozenset({
+    "duo_lean", "duo_core", "duo_full",
+    "direct_research", "direct_python", "direct_full",
+    "tool_agent", "mcp_agent", "openai_agent",
+})
 
 
-# ── GIT-TOOLS-GATE (2026-10-17) ─────────────────────────────────────────────
-# git_status/git_commit are only worth schema space when git is actually set up
-# for this install. They now follow the git credentials/toggles:
-#   settings git_tools_enabled: "auto" (default) | true | false
-#   "auto" = at least one of git_repo_url / git_username / git_email /
-#            git_token is set.
-# read-only "background"/research tools are deliberately NOT gated (they work
-# without any configured service).
-_GIT_TOOL_NAMES = ("git_status", "git_commit")
-_GIT_CREDENTIAL_KEYS = ("git_repo_url", "git_username", "git_email", "git_token")
-
-
-def git_tools_enabled(settings: dict | None = None) -> bool:
-    """True if the git tools should ship in a schema (see _GIT_TOOL_NAMES).
-
-    Unreadable/unavailable settings -> True (keep the previous behaviour: the
-    gate must never be the reason a tool silently vanishes on a settings
-    read error)."""
+def subagent_tools_enabled(settings: dict | None = None) -> bool:
+    """True if subagent_research should ship as an active Optional tool."""
     try:
         if settings is None:
             from settings import load_settings
             settings = load_settings() or {}
     except (ImportError, AttributeError, TypeError, ValueError, OSError):
         return True
+    raw = (settings or {}).get("subagent_lite_enabled", True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() not in ("0", "false", "off", "no")
+
+
+def _tool_names_for_mode(
+    mode: str,
+    include_websearch: bool = False,
+    include_git: bool | None = None,
+    include_subagent: bool | None = None,
+) -> set[str]:
+    allowed = set(_TOOL_MODE_ALLOWLISTS.get(mode, _READ_ONLY_INLINE_TOOL_NAMES))
+    if include_websearch and _WEBSEARCH_AVAILABLE:
+        if mode in _WEBSEARCH_OPT_IN_MODES:
+            allowed.update(_WEB_TOOL_NAMES)
+    else:
+        allowed.difference_update(_WEB_TOOL_NAMES)
+    if include_git is True:
+        if mode in _GIT_OPT_IN_MODES:
+            allowed.update(_GIT_TOOL_NAMES)
+        elif mode in _GIT_READ_OPT_IN_MODES:
+            allowed.add("git_status")
+    elif include_git is False:
+        allowed.difference_update(_GIT_TOOL_NAMES)
+    if include_subagent is True:
+        if mode in _SUBAGENT_OPT_IN_MODES:
+            allowed.add(_SUBAGENT_TOOL_NAME)
+    elif include_subagent is False:
+        allowed.discard(_SUBAGENT_TOOL_NAME)
+    return allowed
+
+
+# ── GIT-TOOLS-GATE (2026-10-17, updated 2026-11-12) ──────────────────────────
+# git_status/git_commit are exposed only when git credentials are configured
+# AND the git tools toggle is not turned off:
+#   settings git_tools_enabled: "auto" (default) | true | false
+#   No credentials => ALWAYS False (even if toggle is "true").
+#   With credentials => "false" keeps them off; "auto"/"true" turns them on.
+# read-only "background"/research tools are deliberately NOT gated (they work
+# without any configured service).
+_GIT_TOOL_NAMES = ("git_status", "git_commit")
+_GIT_CREDENTIAL_KEYS = ("git_repo_url", "git_username", "git_email", "git_token")
+_GIT_OPT_IN_MODES = frozenset({
+    "duo_lean", "duo_core", "duo_full", "direct_full",
+    "tool_agent", "mcp_agent", "openai_agent",
+})
+_GIT_READ_OPT_IN_MODES = frozenset({"direct_research", "direct_python"})
+
+
+def has_git_credentials(settings: dict | None = None) -> bool:
+    """True when at least one git credential/identity field is non-empty."""
+    if settings is None:
+        from settings import load_settings
+        settings = load_settings() or {}
+    return any(str(settings.get(_k) or "").strip()
+               for _k in _GIT_CREDENTIAL_KEYS)
+
+
+def git_tools_enabled(settings: dict | None = None) -> bool:
+    """True if the git tools should ship in a schema (see _GIT_TOOL_NAMES).
+
+    Requires at least one configured git credential even when
+    git_tools_enabled is "true"/True. Unreadable/unavailable settings -> True
+    (keeps the historical safeguard so a transient read failure never drops tools)."""
+    try:
+        if settings is None:
+            from settings import load_settings
+            settings = load_settings() or {}
+    except (ImportError, AttributeError, TypeError, ValueError, OSError):
+        return True
+    _has_creds = any(str(settings.get(_k) or "").strip()
+                     for _k in _GIT_CREDENTIAL_KEYS)
     _raw = settings.get("git_tools_enabled", "auto")
     if isinstance(_raw, bool):
-        return _raw                     # JSON true/false, not the string form
+        return _raw and _has_creds      # JSON true/false, requires credentials
     _mode = str(_raw or "auto").strip().lower()
     if _mode in ("0", "false", "off", "no", "never"):
         return False
-    if _mode in ("1", "true", "on", "yes", "always"):
-        return True
-    return any(str(settings.get(_k) or "").strip()
-               for _k in _GIT_CREDENTIAL_KEYS)
+    return _has_creds
 
 
 def lsp_tools_enabled(settings: dict | None = None) -> bool:
@@ -728,12 +800,35 @@ def lsp_tools_enabled(settings: dict | None = None) -> bool:
     return str(raw or "").strip().lower() not in ("0", "false", "off", "no")
 
 
-def _filter_tools_for_mode(tools: list, mode: str, include_websearch: bool = False) -> list:
-    allowed = _tool_names_for_mode(mode, include_websearch=include_websearch)
-    out = [t for t in tools if t.get("function", {}).get("name") in allowed]
-    if not git_tools_enabled():
+def _filter_tools_for_mode(
+    tools: list,
+    mode: str,
+    include_websearch: bool = False,
+    include_git: bool | None = None,
+    settings: dict | None = None,
+    include_subagent: bool | None = None,
+) -> list:
+    _eff_git = include_git
+    if _eff_git is None and settings is not None:
+        _eff_git = git_tools_enabled(settings)
+    _eff_sub = include_subagent
+    if _eff_sub is None and settings is not None:
+        _eff_sub = subagent_tools_enabled(settings)
+    allowed = _tool_names_for_mode(
+        mode, include_websearch=include_websearch, include_git=_eff_git,
+        include_subagent=_eff_sub)
+    allow_mcp = (not mode or mcp_allowed_in_mode(mode))
+    out = [
+        t for t in tools
+        if t.get("function", {}).get("name") in allowed
+        or (allow_mcp and str(t.get("function", {}).get("name") or "").startswith("mcp_"))
+    ]
+    if _eff_git is None and not git_tools_enabled(settings):
         out = [t for t in out
                if t.get("function", {}).get("name") not in _GIT_TOOL_NAMES]
+    if _eff_sub is None and not subagent_tools_enabled(settings):
+        out = [t for t in out
+               if t.get("function", {}).get("name") != _SUBAGENT_TOOL_NAME]
     return out
 
 
@@ -751,7 +846,7 @@ _TOOL_PRIORITY = [
     # tier 1 — the working set
     "run_tests", "search_code", "list_dir", "find_files", "get_signatures",
     "find_references", "run_python",
-    "undo_last", "ask_user", "write_file_append",
+    "undo_last", "ask_user", "write_file_append", "apply_patch",
     # tier 1b — full/direct extras
     "get_datetime",
     "send_file",
@@ -759,14 +854,12 @@ _TOOL_PRIORITY = [
     # were dropped first by the schema fitter (audit 2026-10-31, P2-5).
     "lsp_status", "lsp_diagnostics",
     # tier 2 — everything else (web, git, background, browser, research...)
-    # D3 patch-native multi-file edits (2026-11-11): UPGRADES LAST on tight
-    # schema budgets — the tier-0 descriptions (read_file carries the run's
-    # resolved read cap) must never lose their space to this tool.
-    "apply_patch",
 ]
 
 
-def _tool_priority(name: str) -> int:
+def _tool_priority(name: str, mode: str = "") -> int:
+    if mode in ("direct_mcp", "duo_mcp", "mcp_agent") and str(name).startswith("mcp_"):
+        return 6  # keep MCP tools alongside search/list in MCP-centric tiers
     try:
         return _TOOL_PRIORITY.index(name)
     except ValueError:
@@ -783,7 +876,7 @@ def _desc_at_level(desc: str, level: int) -> str:
     return " ".join(flat.split()[:10]).rstrip(".,;:")  # minimal: ~10 words
 
 
-def fit_tools_to_budget(tools: list, budget_chars: int) -> list:
+def fit_tools_to_budget(tools: list, budget_chars: int, *, mode: str = "") -> list:
     import json as _json
     if budget_chars is None or budget_chars <= 0 or not tools:
         return list(tools)
@@ -805,17 +898,17 @@ def fit_tools_to_budget(tools: list, budget_chars: int) -> list:
     state = {n: 0 for n in pool}
 
     # 1. drop non-core tools that keep the MINIMAL set over budget
-    for n in sorted(pool, key=_tool_priority, reverse=True):
+    for n in sorted(pool, key=lambda name: _tool_priority(name, mode), reverse=True):
         if _total(state, pool) <= budget_chars:
             break
-        if _tool_priority(n) == 0:
+        if _tool_priority(n, mode) == 0:
             continue  # tier 0 is always kept
         del pool[n]
         del state[n]
 
     # 2. upgrade by priority, two steps (minimal -> sentence -> full)
     for target_level in (1, 2):
-        for n in sorted(pool, key=_tool_priority):
+        for n in sorted(pool, key=lambda name: _tool_priority(name, mode)):
             if state[n] >= target_level:
                 continue
             old = state[n]
@@ -864,8 +957,8 @@ def _apply_budget_texts(tools: list, budgets) -> list:
 # is the full-access direct tier and stays included. (I15, 2026-10-31: the
 # old comment said "the direct chat is excluded", which read as if
 # direct_full were excluded too - it is not.)
-MCP_TOOL_MODES = frozenset({"duo_full", "tool_agent", "mcp_agent",
-                            "openai_agent", "direct_full"})
+MCP_TOOL_MODES = frozenset({"duo_full", "duo_mcp", "tool_agent", "mcp_agent",
+                            "openai_agent", "direct_full", "direct_mcp"})
 
 
 def mcp_allowed_in_mode(mode: str | None) -> bool:
@@ -895,20 +988,28 @@ def _mcp_tool_defs() -> list:
 
 def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
                       budget_chars: int | None = None,
-                      include_send_file: bool = False) -> list:
+                      include_send_file: bool = False,
+                      include_git: bool | None = None,
+                      settings: dict | None = None,
+                      include_subagent: bool | None = None) -> list:
     tools = list(_INLINE_CODING_TOOLS)
     if include_send_file:
         tools.append(_SEND_FILE_TOOL)
+    if mode == "openai_agent":
+        tools.append(_PIPELINE_TOOL)
     if include_websearch and _WEBSEARCH_AVAILABLE and _websearch is not None:
         tools.extend(_websearch.get_tool_defs())
     if mode:
-        tools = _filter_tools_for_mode(tools, mode, include_websearch=include_websearch)
+        tools = _filter_tools_for_mode(
+            tools, mode, include_websearch=include_websearch,
+            include_git=include_git, settings=settings,
+            include_subagent=include_subagent)
     # MCP CLIENT (beta): exactly one place. The names are dynamic, so a static
     # mode allowlist cannot hold them and they are added AFTER the filter.
     # (_mcp_tool_defs is cache-only; servers start on /mcp/reload or at boot.)
     if not mode or mcp_allowed_in_mode(mode):
         tools.extend(_mcp_tool_defs())
-    if not lsp_tools_enabled():
+    if not lsp_tools_enabled(settings):
         tools = [t for t in tools
                  if not str(t.get("function", {}).get("name", "")).startswith("lsp_")]
     if budget_chars:
@@ -917,14 +1018,12 @@ def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
             tools = _apply_budget_texts(tools, _b_active())
         except Exception:
             pass
-        tools = fit_tools_to_budget(tools, budget_chars)
-    try:
-        from settings import load_settings as _ls_settings
-        if not bool((_ls_settings() or {}).get("subagent_lite_enabled", True)):
-            tools = [t for t in tools
-                     if t.get("function", {}).get("name") != "subagent_research"]
-    except Exception:
-        pass
+        tools = fit_tools_to_budget(tools, budget_chars, mode=mode or "")
+    if include_subagent is False or (
+        include_subagent is None and not mode and not subagent_tools_enabled(settings)
+    ):
+        tools = [t for t in tools
+                 if t.get("function", {}).get("name") != _SUBAGENT_TOOL_NAME]
     return tools
 
 

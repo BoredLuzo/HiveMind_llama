@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 __all__ = [
     "PatchError", "FilePatch", "Hunk", "DiffLine",
     "parse_unified_diff", "apply_hunks_to_text", "sanitize_patch_path",
-    "strip_prefix",
+    "strip_prefix", "patch_targets",
 ]
 
 
@@ -59,6 +59,7 @@ class Hunk:
     new_start: int          # 1-based
     new_count: int
     lines: list[DiffLine] = field(default_factory=list)
+    old_ends_without_newline: bool = False  # "\ No newline at end of file" on the old side
     new_ends_without_newline: bool = False  # "\ No newline at end of file" on the new side
 
     def old_lines(self) -> list[str]:
@@ -108,12 +109,21 @@ class FilePatch:
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _HUNK_HEADER_RE = re.compile(
     r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+_WINDOWS_RESERVED_DEVICES = frozenset({
+    "con", "prn", "aux", "nul",
+    *(f"com{n}" for n in range(1, 10)),
+    *(f"lpt{n}" for n in range(1, 10)),
+})
+
 # git header noise between file sections (never carries hunk payload)
 _HEADER_NOISE_PREFIXES = (
     "diff ", "index ", "old mode ", "new mode ", "new file mode ",
     "deleted file mode ", "similarity index ", "dissimilarity index ",
-    "rename from ", "rename to ", "copy from ", "copy to ",
     "Binary files ", "GIT binary patch",
+)
+
+_UNSUPPORTED_GIT_HEADER_PREFIXES = (
+    "rename from ", "rename to ", "copy from ", "copy to ",
 )
 
 
@@ -142,7 +152,7 @@ def sanitize_patch_path(raw: str | None) -> str | None:
     if raw is None:
         return None
     p = _unquote(raw)
-    if p in ("/dev/null", "NUL", "/NUL"):
+    if p.lower() in ("/dev/null", "nul", "/nul"):
         return None
     p = strip_prefix(p).replace("\\", "/")
     if not p:
@@ -163,14 +173,26 @@ def sanitize_patch_path(raw: str | None) -> str | None:
         raise PatchError(
             "PATCH_PATH_INVALID",
             f"path escape rejected ('..' component): {raw!r}")
-    if any(seg.lower() in ("con", "prn", "aux", "nul") for seg in parts[:1]):
-        # Windows reserved device names as the first component
+    if any(seg.split(".")[0].rstrip(":").lower() in _WINDOWS_RESERVED_DEVICES
+           for seg in parts):
+        # Windows reserved device names (with or without extension/colon) anywhere in path
         raise PatchError(
             "PATCH_PATH_INVALID", f"reserved device name: {raw!r}")
     return "/".join(parts)
 
 
 # ── parsing ─────────────────────────────────────────────────────────────
+
+def _apply_no_nl_marker(raw: str, h: Hunk) -> None:
+    if raw.rstrip().endswith("end of file"):
+        _prev_tag = h.lines[-1].tag if h.lines else ""
+        if _prev_tag == "-":
+            h.old_ends_without_newline = True
+        else:
+            h.new_ends_without_newline = True
+            if _prev_tag == " ":
+                h.old_ends_without_newline = True
+
 
 def _parse_hunks(lines: list[str], i: int) -> tuple[list[Hunk], int]:
     """Read hunks starting at lines[i] (the first @@ header) until counts
@@ -192,8 +214,7 @@ def _parse_hunks(lines: list[str], i: int) -> tuple[list[Hunk], int]:
         while (need_old > 0 or need_new > 0) and i < n:
             raw = lines[i]
             if raw.startswith("\\"):
-                if raw.rstrip().endswith("end of file"):
-                    h.new_ends_without_newline = True
+                _apply_no_nl_marker(raw, h)
                 i += 1
                 continue
             if not raw:
@@ -223,6 +244,7 @@ def _parse_hunks(lines: list[str], i: int) -> tuple[list[Hunk], int]:
                         "PATCH_MALFORMED",
                         f"hunk header counts exceeded at line {i + 1} "
                         f"(extra '+' line)")
+                h.new_ends_without_newline = False
                 need_new -= 1
             else:
                 raise PatchError(
@@ -230,6 +252,9 @@ def _parse_hunks(lines: list[str], i: int) -> tuple[list[Hunk], int]:
                     f"line {i + 1} does not start with ' ', '+' or '-' inside "
                     f"a hunk: {raw[:60]!r} (truncated patch?)")
             h.lines.append(DiffLine(tag=tag, text=text))
+            i += 1
+        while i < n and lines[i].startswith("\\"):
+            _apply_no_nl_marker(lines[i], h)
             i += 1
         if need_old > 0 or need_new > 0:
             raise PatchError(
@@ -272,6 +297,11 @@ def parse_unified_diff(text: str) -> list[FilePatch]:
                 raise PatchError(
                     "PATCH_MALFORMED",
                     "file section has /dev/null on BOTH sides")
+            if old_path is not None and new_path is not None and old_path != new_path:
+                raise PatchError(
+                    "PATCH_MALFORMED",
+                    f"renames across paths ('{old_path}' -> '{new_path}') "
+                    "are not supported — use delete + new file sections")
             i += 2
             hunks, i = _parse_hunks(lines, i)
             if not hunks:
@@ -282,6 +312,10 @@ def parse_unified_diff(text: str) -> list[FilePatch]:
             patches.append(FilePatch(old_path=old_path, new_path=new_path,
                                      hunks=hunks))
             continue
+        if line.startswith(_UNSUPPORTED_GIT_HEADER_PREFIXES):
+            raise PatchError(
+                "PATCH_MALFORMED",
+                f"git rename/copy diff header not supported: {line[:60]!r}")
         if line.startswith(_HEADER_NOISE_PREFIXES):
             i += 1
             continue
@@ -300,6 +334,24 @@ def parse_unified_diff(text: str) -> list[FilePatch]:
         raise PatchError(
             "PATCH_EMPTY", "no file sections with hunks found in patch")
     return patches
+
+
+def patch_targets(patch_text: str, *, include_new: bool = True,
+                  include_delete: bool = True) -> list[str]:
+    """Best-effort unique target paths from a unified diff (never raises)."""
+    try:
+        fps = parse_unified_diff(str(patch_text or ""))
+    except PatchError:
+        return []
+    states: dict[str, tuple[bool, bool]] = {}
+    for fp in fps:
+        if fp.target:
+            is_new = states[fp.target][0] if fp.target in states else bool(fp.is_new_file)
+            states[fp.target] = (is_new, bool(fp.is_delete))
+    return [
+        t for t, (is_new, is_del) in states.items()
+        if (include_new or not is_new) and (include_delete or not is_del)
+    ]
 
 
 # ── application (pure: text in, text out) ──────────────────────────────
@@ -324,7 +376,7 @@ def apply_hunks_to_text(original_lf: str, hunks: list[Hunk], *,
         for h in hunks:
             out.extend(h.new_lines())
         joined = "\n".join(out)
-        if any(h.new_ends_without_newline for h in hunks):
+        if hunks and hunks[-1].new_ends_without_newline:
             return joined
         return joined + "\n" if joined else ""
 
@@ -334,6 +386,7 @@ def apply_hunks_to_text(original_lf: str, hunks: list[Hunk], *,
         src.pop()
         trailing_nl = True
     out = list(src)
+    ends_with_nl = trailing_nl
     cursor = 0  # exclusive end (line index) of the previous replacement
     for h in hunks:
         expected = h.old_lines()
@@ -347,15 +400,32 @@ def apply_hunks_to_text(original_lf: str, hunks: list[Hunk], *,
                 "PATCH_UNVERIFIABLE",
                 "insertion hunk carries no context lines — include the "
                 "surrounding lines so the insertion point is verifiable")
-        pos = _find_unique(out, expected, h.old_start - 1)
+        pos, used_strip = _find_unique(out, expected, h.old_start - 1)
         if pos < cursor:
             raise PatchError(
                 "PATCH_HUNK_ORDER",
                 "hunks overlap or a later hunk matched before an earlier "
                 "hunk's replacement — re-generate the patch with hunks in "
                 "file order")
+        if used_strip:
+            reindented = reindent_matched_block(
+                out[pos:pos + len(expected)], expected, replacement)
+            if reindented is None:
+                raise PatchError(
+                    "PATCH_CONTEXT_NOT_FOUND",
+                    "matched block has inconsistent indentation — "
+                    "read_file the current state and regenerate the patch")
+            replacement = reindented
+        touches_eof = (pos + len(expected) == len(out))
         out[pos:pos + len(expected)] = replacement
         cursor = pos + len(replacement)
+        if touches_eof:
+            if h.new_ends_without_newline:
+                ends_with_nl = False
+            elif h.old_ends_without_newline or (
+                h.lines and h.lines[-1].tag in ("+", "-")
+            ):
+                ends_with_nl = bool(out)
     result = "\n".join(out)
     if is_delete:
         if result.strip():
@@ -364,20 +434,72 @@ def apply_hunks_to_text(original_lf: str, hunks: list[Hunk], *,
                 "delete patch leaves content behind (only '-' and context "
                 "lines are allowed)")
         return ""
-    if trailing_nl and not any(h.new_ends_without_newline for h in hunks):
+    if ends_with_nl and result:
         result += "\n"
     return result
 
 
+def _leading_ws(line: str) -> str:
+    return line[:len(line) - len(line.lstrip(" \t"))]
+
+
+def reindent_matched_block(
+    actual: list[str],
+    expected: list[str],
+    replacement: list[str],
+) -> list[str] | None:
+    """Shift `replacement` by the uniform leading-whitespace delta between
+    `expected` and `actual`, or return None if indentation is inconsistent.
+    """
+    pairs = [
+        (_leading_ws(a), _leading_ws(e))
+        for a, e in zip(actual, expected)
+        if a.strip() or e.strip()
+    ]
+    if not pairs:
+        return list(replacement)
+    a0, e0 = pairs[0]
+    if len(a0) >= len(e0) and a0.endswith(e0):
+        add_ws = a0[:len(a0) - len(e0)]
+        if all(a == add_ws + e for a, e in pairs):
+            if not add_ws:
+                return list(replacement)
+            return [add_ws + r if r.strip() else "" for r in replacement]
+    elif e0.endswith(a0):
+        rem_ws = e0[:len(e0) - len(a0)]
+        if all(e == rem_ws + a for a, e in pairs):
+            out: list[str] = []
+            for r in replacement:
+                if not r.strip():
+                    out.append("")
+                elif r.startswith(rem_ws):
+                    out.append(r[len(rem_ws):])
+                else:
+                    return None
+            return out
+    # Non-uniform delta: still allow an in-place indent fix when at least one
+    # non-empty line already anchors exact file indent and every non-empty
+    # replacement line preserves actual's leading indentation (e.g. fixing a
+    # single-line space typo without flattening nested blocks).
+    if (
+        len(actual) == len(replacement)
+        and any(a == e and a != "" for a, e in pairs)
+        and [_leading_ws(r) for r in replacement if r.strip()]
+        == [_leading_ws(a) for a in actual if a.strip()]
+    ):
+        return list(replacement)
+    return None
+
+
 def _find_unique(lines: list[str], expected: list[str],
-                 hint: int) -> int:
+                 hint: int) -> tuple[int, bool]:
     """Find the unique occurrence of `expected` in `lines`.
 
-    Line numbers may drift (patch produced against a slightly different
-    revision), so the whole file is a candidate — but the block must match
-    EXACTLY exactly once. The hint position is checked first (cheap common
-    case), then the full scan collects every match. Raises
-    PATCH_CONTEXT_NOT_FOUND / PATCH_CONTEXT_NOT_UNIQUE."""
+    Uses a 3-stage progressive match ladder (exact -> trailing-whitespace
+    `rstrip` -> leading+trailing `strip` on substantial blocks), preserving
+    uniqueness at every stage and tolerance for header line-number drift.
+    Returns `(index, used_strip)` or raises PATCH_CONTEXT_NOT_FOUND /
+    PATCH_CONTEXT_NOT_UNIQUE."""
     blen = len(expected)
     limit = len(lines) - blen
     if limit < 0:
@@ -386,12 +508,23 @@ def _find_unique(lines: list[str], expected: list[str],
             "file is shorter than the patch context — read_file the current "
             "state and regenerate the patch")
     hint = min(max(hint, 0), limit)
-    if lines[hint:hint + blen] == expected:
-        # hinted hit: verify uniqueness with the full scan anyway (a block
-        # that appears twice must be refused even when one hit is at hint)
-        pass
+    used_strip = False
     matches = [p for p in range(limit + 1)
                if lines[p:p + blen] == expected]
+    if not matches and any(l.strip() for l in expected):
+        exp_r = [l.rstrip() for l in expected]
+        lines_r = [l.rstrip() for l in lines]
+        matches = [p for p in range(limit + 1)
+                   if lines_r[p:p + blen] == exp_r]
+    if not matches and any(l.strip() for l in expected) and (
+        blen >= 2 or len(expected[0].strip()) >= 10
+    ):
+        exp_s = [l.strip() for l in expected]
+        lines_s = [l.strip() for l in lines]
+        matches = [p for p in range(limit + 1)
+                   if lines_s[p:p + blen] == exp_s]
+        if matches:
+            used_strip = True
     if len(matches) > 1:
         raise PatchError(
             "PATCH_CONTEXT_NOT_UNIQUE",
@@ -400,6 +533,6 @@ def _find_unique(lines: list[str], expected: list[str],
     if not matches:
         raise PatchError(
             "PATCH_CONTEXT_NOT_FOUND",
-            "patch context not found in the file (exact match required) — "
+            "patch context not found in the file — "
             "read_file the current state and regenerate the patch")
-    return matches[0]
+    return matches[0], used_strip

@@ -39,7 +39,9 @@ class SchedulerManager:
         self._fire_tasks: set[asyncio.Task] = set()
         self._active_run_id = ""
         self._last_ask_preview = ""
+        self._last_sent_files: list[dict[str, str]] = []
         self._fire_lock = asyncio.Lock()
+        self._in_flight_jobs: set[str] = set()
 
     # -- lifecycle --------------------------------------------------------
     async def start(self) -> None:
@@ -79,6 +81,7 @@ class SchedulerManager:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=httpx.Timeout(600.0, connect=10.0),
+                trust_env=False,
             )
         return self._client
 
@@ -110,7 +113,7 @@ class SchedulerManager:
         # A queued fire waits for the lane; one slot per job.
         pending = [j for j in jobs
                    if j.get("pending_fire") and j.get("enabled", True)]
-        if pending and not self.lane_busy():
+        if pending and not self.lane_busy() and not self._in_flight_jobs and not self._fire_lock.locked():
             job = min(pending, key=lambda j: float(
                 (j.get("pending_fire") or {}).get("due_ts") or 0))
             p = job.get("pending_fire") or {}
@@ -135,6 +138,9 @@ class SchedulerManager:
                 continue
             if job.get("pending_fire"):
                 continue  # already waiting for the lane; not skipped_busy
+            _jid = str(job.get("id") or "")
+            if _jid and _jid in self._in_flight_jobs:
+                continue
             schedule = job.get("schedule") or {}
             # ZOMBIE-ONCE (2026-11-05 audit): a once job whose slot was
             # missed while the engine was down has next_ts=None forever.
@@ -172,7 +178,7 @@ class SchedulerManager:
                     self.store.append_history({
                         "job_id": job.get("id"), "status": "skipped_busy",
                         "ts": now})
-                return
+                continue
             self._spawn_fire(job, now, reason="due")
             return
 
@@ -181,35 +187,66 @@ class SchedulerManager:
         job = self.store.get(job_id)
         if job is None:
             return False, "not found"
-        if self.lane_busy():
+        if self.lane_busy() or self._in_flight_jobs or self._fire_lock.locked():
             return False, "busy: another run is active"
+        self._in_flight_jobs.add(str(job_id))
         # SPAWN-HELPER (2026-11-05 audit): raw create_task loses the only
         # strong reference when this method returns - utils.bg_tasks.spawn
         # exists for exactly that. Fire in the background: a run can take
         # minutes and the HTTP caller (UI button) must not block on it.
         from utils.bg_tasks import spawn
-        spawn(self._fire(job, _now(), reason="manual"),
-              name=f"automation-{job_id}")
+        _spawned = False
+        try:
+            t = spawn(self._fire(job, _now(), reason="manual"),
+                      name=f"automation-{job_id}")
+            _spawned = True
+        finally:
+            if not _spawned:
+                self._in_flight_jobs.discard(str(job_id))
+        self._fire_tasks.add(t)
+        t.add_done_callback(self._fire_tasks.discard)
         return True, "started"
 
     # -- firing -----------------------------------------------------------
     def _spawn_fire(self, job: dict, now: float, reason: str) -> None:
+        jid = str(job.get("id") or "")
+        if jid:
+            self._in_flight_jobs.add(jid)
         from utils.bg_tasks import spawn
-        t = spawn(self._fire(job, now, reason=reason),
-                  name=f"automation-{job.get('id')}")
+        _spawned = False
+        try:
+            t = spawn(self._fire(job, now, reason=reason),
+                      name=f"automation-{jid}")
+            _spawned = True
+        finally:
+            if not _spawned and jid:
+                self._in_flight_jobs.discard(jid)
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
 
     async def _fire(self, job: dict, now: float, reason: str) -> None:
-        async with self._fire_lock:
+        job_id = str(job.get("id") or "")
+        try:
+            async with self._fire_lock:
+                await self._fire_locked(job, now, reason)
+        finally:
+            if job_id:
+                self._in_flight_jobs.discard(job_id)
+
+    async def _fire_locked(self, job: dict, now: float, reason: str) -> None:
             if self.lane_busy():
-                # Lost the race (run_now vs tick): say so instead of a
-                # silent drop.
-                self.store.update(job.get("id"), {
-                    "last_status": "skipped_busy"})
-                self.store.append_history({
-                    "job_id": job.get("id"), "status": "skipped_busy",
-                    "ts": now, "reason": reason})
+                # Lost the race (run_now vs tick): re-queue if it came from pending_fire,
+                # otherwise record skipped_busy instead of silently dropping.
+                if reason == "queued" and job.get("pending_fire"):
+                    self.store.update(job.get("id"), {
+                        "pending_fire": job.get("pending_fire"),
+                        "last_status": "queued"})
+                else:
+                    self.store.update(job.get("id"), {
+                        "last_status": "skipped_busy"})
+                    self.store.append_history({
+                        "job_id": job.get("id"), "status": "skipped_busy",
+                        "ts": now, "reason": reason})
                 return
             job_id = str(job.get("id") or "")
             schedule = job.get("schedule") or {}
@@ -231,18 +268,75 @@ class SchedulerManager:
                 "last_fired_ts": started,
                 "next_ts": nxt})
             self._active_run_id = ""
+            self._last_ask_preview = ""
+            self._last_sent_files = []
+            raw_mode = str(job.get("mode") or "simple").strip().lower()
+            tier = str(job.get("tools_tier") or "readonly").strip().lower()
+            notify_tg = bool(job.get("notify_telegram", False))
+
+            if tier in ("mcp", "full") or raw_mode == "auto":
+                try:
+                    from infra import mcp_client as _mc
+                    if _mc.enabled() and getattr(_mc.get_client(), "_defs", None) is None:
+                        await asyncio.wait_for(_mc.refresh(), timeout=15.0)
+                except (ImportError, AttributeError, RuntimeError, OSError, asyncio.TimeoutError) as _mcp_err:
+                    logger.debug("[AUTOMATION] lazy MCP warmup skipped: %s", _mcp_err)
+
+            if raw_mode in ("agentic", "code_duo"):
+                stream_mode = "code_duo"
+                duo_agentic: bool | None = True
+                agentic_force = True
+            elif raw_mode == "code_critic":
+                stream_mode = "code_duo"
+                duo_agentic = False
+                agentic_force = False
+            elif raw_mode in ("direct", "simple"):
+                stream_mode = "simple"
+                duo_agentic = None
+                agentic_force = False
+            else:
+                stream_mode = raw_mode
+                duo_agentic = True if raw_mode == "auto" else None
+                agentic_force = False
+
+            direct_tier = ("full" if tier == "full" else (
+                tier if tier in ("off", "readonly", "research", "mcp", "python") else "readonly"))
+            duo_coder_tier = (
+                "full" if tier == "full" else
+                "mcp" if tier == "mcp" else
+                "readonly" if tier in ("off", "readonly", "research") else
+                "core"
+            )
+
             body: dict[str, Any] = {
                 "q": prompt,
                 "chat_id": chat_id,
-                "mode": str(job.get("mode") or "simple"),
-                "direct_tools_enabled": str(job.get("tools_tier") or "readonly") != "off",
-                "direct_tools_tier": str(job.get("tools_tier") or "readonly"),
+                "mode": stream_mode,
+                "direct_tools_enabled": tier != "off",
+                "direct_tools_tier": direct_tier,
+                "duo_coder_tool_tier": duo_coder_tier,
+                "duo_websearch_enabled": tier != "off",
             }
+            if tier == "off":
+                body["duo_tool_rounds"] = 0
+                body["duo_pre_explore"] = False
+            if duo_agentic is not None:
+                body["duo_agentic_mode"] = duo_agentic
+            if agentic_force:
+                body["agentic_force"] = True
+                if tier != "off":
+                    body["duo_tool_rounds"] = 1
+                body["iters"] = 1
+            elif raw_mode == "code_critic" and tier != "off":
+                body["duo_tool_rounds"] = 1
+            if notify_tg:
+                body["source"] = "telegram"
             ws = str(job.get("workspace") or "")
             if ws:
                 body["workspace"] = ws
             answer, stop_reason, run_id = await self._run_stream(
                 body, int(float(job.get("max_runtime_s") or DEFAULT_RUNTIME_S)))
+            sent_files = list(self._last_sent_files)
             self._active_run_id = ""
             if answer:
                 await self._append_turn(chat_id, "assistant", answer, job)
@@ -257,6 +351,10 @@ class SchedulerManager:
                 # The run paused on a question/card at least once - the
                 # honest outcome is needs_input, not a bare failed.
                 status = "needs_input"
+            if notify_tg:
+                await self._deliver_telegram(
+                    job, answer, status, stop_reason, sent_files)
+            duration_s = round(max(0.0, _now() - started), 1)
             # RE-FETCH (2026-11-05 audit): `job` may be a stale dict if the
             # user edited/deleted the job during a long run. Mutate through
             # the store, and decide once-deletion from the STORED schedule.
@@ -265,13 +363,16 @@ class SchedulerManager:
                 self.store.append_history({
                     "job_id": job_id, "run_id": run_id, "chat_id": chat_id,
                     "status": status, "stop_reason": stop_reason,
+                    "duration_s": duration_s,
                     "started": started, "finished": _now(),
                     "reason": reason})
                 return
-            self.store.update(job_id, {"last_status": status})
+            self.store.update(job_id, {
+                "last_status": status, "last_duration_s": duration_s})
             self.store.append_history({
                 "job_id": job_id, "run_id": run_id, "chat_id": chat_id,
                 "status": status, "stop_reason": stop_reason,
+                "duration_s": duration_s,
                 "started": started, "finished": _now(),
                 "reason": reason})
             if (str((current.get("schedule") or {}).get("kind") or "")
@@ -302,6 +403,12 @@ class SchedulerManager:
                         self._active_run_id = run_id
                     elif etype == "token":
                         answer_parts.append(str(ev.get("content") or ""))
+                    elif etype == "send_file" and ev.get("path"):
+                        self._last_sent_files.append({
+                            "path": str(ev.get("path") or ""),
+                            "caption": str(ev.get("caption") or ""),
+                            "workspace": str(ev.get("workspace") or body.get("workspace") or ""),
+                        })
                     elif etype in ("agent_asking", "approval_request"):
                         # NEEDS-INPUT (2026-11-05): an unattended run paused
                         # on a question/card - surface it instead of letting
@@ -338,6 +445,86 @@ class SchedulerManager:
             logger.warning("[AUTOMATION] stream failed: %s", exc)
             stop_reason = "engine_error"
         return "".join(answer_parts).strip(), stop_reason or "engine_error", run_id
+
+    async def _deliver_telegram(
+        self,
+        job: dict[str, Any],
+        answer: str,
+        status: str,
+        stop_reason: str,
+        sent_files: list[dict[str, str]] | None = None,
+    ) -> None:
+        """Push automation output (+ any send_file attachments) to paired owner."""
+        try:
+            from hivemind_gateway.main import resolve_token, StartupError
+            from hivemind_gateway.state import GatewayState
+            from hivemind_gateway.telegram_api import TelegramApi, TelegramApiError
+            from hivemind_gateway import render, send as gw_send
+            from core.send_files import SendFileError, read_sendable
+        except ImportError as exc:
+            logger.warning("[AUTOMATION] Telegram delivery unavailable for %s: %s", job.get("id"), exc)
+            return
+
+        def _load_tg_creds() -> tuple[str, int | str | None]:
+            try:
+                tok = resolve_token()
+            except StartupError:
+                tok = ""
+            return tok, GatewayState().owner_telegram_id
+
+        try:
+            token, owner_id = await asyncio.to_thread(_load_tg_creds)
+            if not token or not owner_id:
+                logger.info(
+                    "[AUTOMATION] %s notify_telegram=True skipped: Telegram token or owner not configured",
+                    job.get("id"),
+                )
+                return
+            api = TelegramApi(token)
+            try:
+                icon = "✅" if status == "ok" else ("❓" if status == "needs_input" else "⚠️")
+                header = f"⏰ **{job.get('name') or 'Automation'}** ({icon} {status})\n\n"
+                if answer:
+                    body_md = answer.strip()
+                elif status == "needs_input" and self._last_ask_preview:
+                    body_md = f"(Automation paused — {self._last_ask_preview})"
+                else:
+                    body_md = f"(No text output — {stop_reason or status})"
+                for chunk in render.split_message(header + body_md):
+                    html_chunk = render.md_to_telegram_html(chunk)
+                    try:
+                        await gw_send.send(
+                            api, owner_id, owner_id,
+                            text=html_chunk, parse_mode="HTML",
+                        )
+                    except TelegramApiError as exc:
+                        ra = getattr(exc, "retry_after", None)
+                        if ra:
+                            await asyncio.sleep(int(ra) + 1)
+                        await gw_send.send(api, owner_id, owner_id, text=chunk)
+                job_ws = str(job.get("workspace") or "")
+                for sf in (sent_files or []):
+                    raw_path = str(sf.get("path") or "")
+                    ws = str(sf.get("workspace") or job_ws)
+                    if not raw_path:
+                        continue
+                    try:
+                        data, fname = await asyncio.to_thread(read_sendable, ws, raw_path)
+                    except (SendFileError, OSError) as sf_exc:
+                        logger.warning("[AUTOMATION] send_file skipped for %s: %s", raw_path, sf_exc)
+                        continue
+                    try:
+                        await gw_send.send(
+                            api, owner_id, owner_id,
+                            document_bytes=data,
+                            filename=fname,
+                        )
+                    except (TelegramApiError, OSError, ValueError, RuntimeError, httpx.HTTPError) as sf_send_exc:
+                        logger.warning("[AUTOMATION] send_file delivery failed for %s: %s", raw_path, sf_send_exc)
+            finally:
+                await api.close()
+        except (OSError, ValueError, RuntimeError, httpx.HTTPError, TelegramApiError) as exc:
+            logger.warning("[AUTOMATION] Telegram delivery failed for %s: %s", job.get("id"), exc)
 
     # -- chat persistence -------------------------------------------------
     async def _ensure_chat(self, job: dict) -> str:

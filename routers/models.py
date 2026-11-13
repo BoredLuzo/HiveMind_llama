@@ -1,5 +1,6 @@
 """Models API-Router."""
 import asyncio
+import logging
 
 from fastapi import APIRouter
 
@@ -53,13 +54,31 @@ async def get_models():
         prof_list = [{"name": m, "tags": [], "vram_gb": 4.0, "tool_call": False, "vision": False} for m in models]
 
     for p in prof_list:
-        _mp = _model_profile(p.get("name", ""))
+        _mname = p.get("name", "")
+        _mp = _model_profile(_mname)
         if "thinking" not in p:
             p["thinking"] = _mp.get("thinking", False)
         if "vision" not in p:
             p["vision"] = _mp.get("vision", False)
         if "tool_call" not in p:
             p["tool_call"] = _mp.get("tool_call", False)
+        try:
+            from model_configs.models_registry import (
+                get_profile as _gp,
+                is_mtp as _im,
+                get_load_mode as _glm,
+                get_thinking_budget as _gtb,
+            )
+            _reg_prof = _gp(_mname) or {}
+            p["mtp"] = bool(_im(_mname))
+            p["load_mode"] = _glm(_mname) or _reg_prof.get("load_mode") or "auto"
+            _tb = _gtb(_mname)
+            p["thinking_budget"] = _tb if _tb is not None else _reg_prof.get("thinking_budget")
+        except (ImportError, AttributeError, KeyError, TypeError, ValueError, OSError) as _prof_err:
+            logging.getLogger(__name__).debug("model profile enrichment failed for %s: %s", _mname, _prof_err)
+            p.setdefault("mtp", False)
+            p.setdefault("load_mode", "auto")
+            p.setdefault("thinking_budget", None)
     return {
         "models": models,
         "profiles": prof_list,

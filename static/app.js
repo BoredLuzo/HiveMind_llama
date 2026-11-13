@@ -377,12 +377,55 @@ function commitDuoCtx() {
   return postSettings(_duoCtxPayload());
 }
 
+function toggleWsServerOpts() {
+  S._wsServerOptsOpen = !S._wsServerOptsOpen;
+  updateWebsearchHint();
+}
+
+function onDuoWebsearchToggle(on) {
+  S.duoWebsearch = !!on;
+  postSettings({duo_websearch_enabled: S.duoWebsearch}).then(function() {
+    if (S.duoWebsearch) checkWebsearchStatus();
+  });
+  updateWebsearchHint();
+  updateDuoCoderTierHint();
+  updateDirectToolsTierHint();
+  updateChatToolsBadge();
+}
+
+function onSearxngHostChange(val) {
+  var host = String(val || '').trim() || 'http://localhost:8888';
+  S.searxngHost = host;
+  var inp = document.getElementById('searxng-host-inp');
+  if (inp && inp.value !== host) inp.value = host;
+  postSettings({searxng_host: host}).then(function() {
+    if (S.duoWebsearch) checkWebsearchStatus();
+  });
+  updateWebsearchHint();
+}
+
 function updateWebsearchHint() {
   var h = document.getElementById('duo-websearch-hint');
-  var _wsActive = S.duoWebsearch || S.pipelineWebsearch;
-  if (h) h.style.display = _wsActive ? 'block' : 'none';
+  var _wsActive = !!S.duoWebsearch;
+  if (h) h.style.display = '';
+  var hostEl = document.getElementById('ws-searxng-host');
+  if (hostEl) {
+    hostEl.textContent = (S.searxngHost || 'http://localhost:8888').replace(/^https?:\/\//i, '');
+  }
+  var led = document.getElementById('ws-status-led');
+  var dot = document.getElementById('ws-status-dot');
+  if (!_wsActive) {
+    if (led) led.className = 'tools-led is-off';
+    if (dot && (!dot.textContent || dot.textContent === 'OK' || dot.textContent === 'SearXNG' || dot.textContent === 'OFF')) {
+      dot.textContent = 'OFF';
+      dot.style.color = 'var(--tx3)';
+    }
+  } else if (dot && dot.textContent === 'OFF') {
+    dot.textContent = 'Pending check';
+    dot.style.color = 'var(--tx2)';
+  }
   var to = document.getElementById('ws-timeout-opts');
-  if (to) to.style.display = _wsActive ? 'block' : 'none';
+  if (to) to.style.display = (_wsActive || !!S._wsServerOptsOpen) ? 'block' : 'none';
   var ah = document.getElementById('automap-websearch-hint');
   if (ah) ah.style.display = (S.mode === 'automap' && S.automapPipelineWebsearch) ? 'block' : 'none';
 }
@@ -392,12 +435,78 @@ function updateDirectToolsHint() {
   if (opts) opts.style.display = S.directToolsEnabled ? 'block' : 'none';
 }
 
-// CHAT-TOOLS-SECTION (2026-09-01): section (enabled toggle + tool tier) only in
-// simple/auto — in pipeline/automap/code-duo the agent tools apply.
+// TOOLS-OPTIONALS-CARD (2026-11-12): single card in #chat-tools-section for
+// Direct/Auto, moved into #duo-tools-slot in Code-Duo (Critic-Duo & Agentic).
+// Hidden in Pipeline/AutoMap.
 function updateChatToolsSectionVisibility() {
   var sec = document.getElementById('chat-tools-section');
-  if (!sec) return;
-  sec.style.display = (S.mode === 'simple' || S.mode === 'auto') ? 'block' : 'none';
+  var card = document.getElementById('tools-optionals-card');
+  var duoSlot = document.getElementById('duo-tools-slot');
+  var directBlock = document.getElementById('tools-direct-block');
+  var coderBlock = document.getElementById('tools-coder-block');
+  var optBlock = document.getElementById('tools-optionals-block');
+  var scopeSub = document.getElementById('tools-opt-scope-sub');
+  if (!sec || !card) return;
+
+  var mode = S.mode || 'auto';
+  if (mode === 'simple' || mode === 'auto') {
+    _ctxRestore(card);
+    sec.style.display = 'block';
+    card.style.display = 'block';
+    if (directBlock) directBlock.style.display = 'block';
+    if (coderBlock) coderBlock.style.display = (mode === 'auto') ? 'block' : 'none';
+    if (optBlock) optBlock.style.display = 'block';
+    if (scopeSub) scopeSub.textContent = (mode === 'auto') ? 'Direct + Agentic' : 'Direct';
+  } else if (mode === 'code_duo') {
+    sec.style.display = 'none';
+    if (duoSlot) _ctxMoveTo(card, duoSlot);
+    card.style.display = 'block';
+    if (directBlock) directBlock.style.display = 'none';
+    if (coderBlock) coderBlock.style.display = 'block';
+    if (optBlock) optBlock.style.display = 'block';
+    if (scopeSub) scopeSub.textContent = S.duoAgenticMode ? 'Agentic' : 'Critic-Duo';
+  } else {
+    _ctxRestore(card);
+    sec.style.display = 'none';
+  }
+}
+
+function setDuoCoderToolTier(v) {
+  var tier = (v === 'lean' || v === 'core' || v === 'full') ? v : 'core';
+  S.duoCoderToolTier = tier;
+  var rad = document.getElementById('dct-tier-' + tier);
+  if (rad && !rad.checked) rad.checked = true;
+  postSettings({duo_coder_tool_tier: tier});
+  updateDuoCoderTierHint();
+}
+
+var _CODER_TIER_HINTS = {
+  lean: 'Lean (10) \u2014 Minimal core: files, search, bash, tests.',
+  core: 'Core (18) \u2014 Default: Lean + apply_patch, batch, AST/symbols, diagnostics.',
+  full: 'Full (All) \u2014 All inline, browser, full LSP, scratchpad & MCP tools.',
+};
+
+function _activeOptionalsSuffix(directTier) {
+  if (directTier === 'off') return '';
+  var parts = [];
+  if (S.duoWebsearch) parts.push('+Websearch');
+  if (directTier !== 'readonly' && directTier !== 'mcp'
+      && (typeof isGitToolsEffective === 'function' && isGitToolsEffective())) {
+    parts.push('+Git');
+  }
+  if (directTier !== 'readonly' && directTier !== 'mcp' && S.subagentLite) {
+    parts.push('+Subagent');
+  }
+  return parts.length ? (' [' + parts.join(' ') + ']') : '';
+}
+
+function updateDuoCoderTierHint() {
+  var h = document.getElementById('duo-coder-tool-tier-hint');
+  if (!h) return;
+  var tier = (S.duoCoderToolTier || 'core').toString();
+  if (!_CODER_TIER_HINTS[tier]) tier = 'core';
+  h.textContent = (_CODER_TIER_HINTS[tier] || '') + _activeOptionalsSuffix();
+  h.style.color = tier === 'full' ? 'var(--amber)' : 'var(--tx3)';
 }
 
 // DIRECT-TOOLS-TIER (2026-08-31): segmented control instead of dropdown. sets the
@@ -411,20 +520,21 @@ function setDirectToolsTier(v) {
 
 var _DIRECT_TIER_HINTS = {
   off:      'Off \u2014 pure chat, no tools.',
-  readonly: 'Websearch \u2014 web_search/web_fetch only (no file read).',
-  research: 'Research \u2014 web + read/search tools (no write, no exec).',
+  readonly: 'Basic \u2014 ask_user, task_complete, datetime (+ Websearch if ON).',
+  research: 'Research \u2014 read/search tools (no write, no exec).',
+  mcp:      'MCP \u2014 Read + Websearch + MCP servers + send_file.',
   python:   'Python \u2014 Read + run_python (run code snippets).',
   full:     'Full \u2014 Read/Write/Exec incl. edit_file + run_bash. Needed for real coding requests.',
 };
 
 // TIER-LABEL (2026-09-02): display names for the stored tier values.
-var _TIER_LABEL = { off: 'Off', readonly: 'Websearch', research: 'Research', python: 'Python', full: 'Full' };
+var _TIER_LABEL = { off: 'Off', readonly: 'Basic', research: 'Research', mcp: 'MCP', python: 'Python', full: 'Full' };
 
 function updateDirectToolsTierHint() {
   var h = document.getElementById('direct-tools-tier-hint');
   if (!h) return;
   var tier = (S.directToolsTier || 'readonly').toString();
-  h.textContent = _DIRECT_TIER_HINTS[tier] || '';
+  h.textContent = (_DIRECT_TIER_HINTS[tier] || '') + _activeOptionalsSuffix(tier);
   if (tier === 'full') h.style.color = 'var(--amber)';
   else if (tier === 'off') h.style.color = 'var(--tx3)';
   else h.style.color = 'var(--tx3)';
@@ -549,36 +659,47 @@ function updateCriticToolsHint() {
 function checkWebsearchStatus() {
   var dot = document.getElementById('ws-status-dot');
   var ad = document.getElementById('automap-ws-status-dot');
+  var led = document.getElementById('ws-status-led');
   var _set = function(d, txt, color) {
     if (!d) return;
     d.textContent = txt;
     d.style.textDecoration = 'none';
     d.style.color = color || '';
   };
+  var _setLed = function(cls) {
+    if (led) led.className = 'tools-led ' + (cls || 'is-off');
+  };
   _set(dot, 'Checking...', '');
   _set(ad, 'Checking...', '');
+  _setLed('is-off');
   fetch('/websearch/status').then(r=>r.json()).then(d=>{
     // STATUS-FIX (2026-08-12): the real search-engine config is checked too —
     // the display now distinguishes disabled/unreachable/HTTP-error/ok.
     if (d.ok) {
       _set(dot, 'OK', '#60c080');
       _set(ad, 'Reachable OK', '#60c080');
+      _setLed('is-on');
     } else if (d.reason === 'disabled') {
       _set(dot, 'Disabled — turn on websearch toggle!', '#c0a060');
       _set(ad, 'Disabled', '#c0a060');
+      _setLed('is-warn');
     } else if (d.reason === 'search_http' && d.status === 400) {
       _set(dot, 'ERROR: SearXNG replies 400 - check engine config', '#d05050');
       _set(ad, 'SearXNG 400', '#d05050');
+      _setLed('is-err');
     } else if (d.reason === 'search_error') {
       _set(dot, 'Search error: ' + (d.detail || d.reason), '#d05050');
       _set(ad, 'Search error', '#d05050');
+      _setLed('is-err');
     } else {
       _set(dot, 'Unreachable (' + (S.searxngHost || 'localhost:8888') + ')', '#d05050');
       _set(ad, 'Unreachable', '#d05050');
+      _setLed('is-err');
     }
   }).catch(()=>{
     _set(dot, 'Error — server unreachable?', '#d05050');
     _set(ad, 'Error', '#d05050');
+    _setLed('is-err');
   });
 }
 
@@ -877,9 +998,13 @@ function refreshAllSelects() {
     const agent = sel.dataset.agent;
     const cur   = sel.dataset.cur || sel.value;
     const reg   = (S.currentAssignments[agent] || {}).model || '';
+    const followOpt = agent === 'duo_critic'
+      ? '<option value=""' + (!cur ? ' selected' : '') + '>Follow Duo-Coder</option>'
+      : '';
     if (reg && reg === cur) {
       // automap active: keep the label on top, rebuild the remaining options
-      let opts = '<option value="' + esc(reg) + '" style="color:#4878c0;font-weight:600" selected>'
+      let opts = followOpt
+               + '<option value="' + esc(reg) + '" style="color:#4878c0;font-weight:600" selected>'
                + '⟳ ' + esc(reg) + ' (active)</option>';
       if (S.models.filter(m => m !== reg).length)
         opts += '<option disabled>────────────</option>';
@@ -889,8 +1014,8 @@ function refreshAllSelects() {
       sel.innerHTML = opts;
       sel.value = reg;
     } else {
-      sel.innerHTML = modelOpts(cur);
-      if (cur) sel.value = cur;
+      sel.innerHTML = followOpt + modelOpts(cur);
+      if (cur || agent === 'duo_critic') sel.value = cur;
     }
   });
   // Global model select
@@ -942,7 +1067,8 @@ async function loadSettings() {
     const s = await (await fetch('/settings')).json();
 
     S.iters          = s.max_iterations || 2;
-    S.mode           = (s.mode === 'automap' ? 'auto' : (s.mode || 'auto'));
+    S.mode           = (s.mode === 'automap' ? 'auto'
+                        : (s.mode === 'chat' ? 'simple' : (s.mode || 'auto')));
     S.activePreset   = s.active_preset || '';
     S.constraintMode = s.constraint_mode !== false;
     // OPT-IN (2026-10-18): prefetch is a VRAM gamble on a tight budget, so the
@@ -986,11 +1112,15 @@ async function loadSettings() {
       }
       dtrSel.value = String(S.duoToolRounds);
     }
-    var dcttSel = document.getElementById('duo-coder-tool-tier');
-    if (dcttSel) {
-      S.duoCoderToolTier = (s.duo_coder_tool_tier || 'core').toString();
-      dcttSel.value = S.duoCoderToolTier === 'full' ? 'full' : 'core';
+    S.duoCoderToolTier = (s.duo_coder_tool_tier || 'core').toString();
+    if (S.duoCoderToolTier !== 'lean' && S.duoCoderToolTier !== 'core'
+        && S.duoCoderToolTier !== 'full' && S.duoCoderToolTier !== 'mcp'
+        && S.duoCoderToolTier !== 'readonly') {
+      S.duoCoderToolTier = 'core';
     }
+    var _dctRad = document.getElementById('dct-tier-' + S.duoCoderToolTier);
+    if (_dctRad) _dctRad.checked = true;
+    updateDuoCoderTierHint();
     var dpipeEl = document.getElementById('duo-pipeline-toggle');
     if (dpipeEl) { S.duoUsePipeline = s.duo_use_pipeline || false; dpipeEl.checked = S.duoUsePipeline; }
     var dctEl = document.getElementById('duo-critic-tools-toggle');
@@ -1062,11 +1192,7 @@ async function loadSettings() {
     S.askUserTimeoutSeconds = s.ask_user_timeout_until_finished_seconds || 300;
     S.askUserMaxPer10min = s.ask_user_max_per_10min || 5;
     S.askUserAutoAnswer = s.ask_user_auto_answer || 'Use best judgment, document decision in commit message.';
-    S.askUserAutoProceed = !!s.ask_user_auto_proceed;
-    // W2-3: sync the settings-row checkbox (next to Action Approval) with
-    // the loaded value — the per-card "Auto 30s" toggle reads the same S key.
-    var _aupCb = document.getElementById('ask-user-auto-proceed-cb');
-    if (_aupCb) _aupCb.checked = S.askUserAutoProceed;
+    _syncAskUserAutoProceedUI(!!s.ask_user_auto_proceed);
     // Ensure chunk-dependent toggles are correctly shown/hidden.
     // persist=false: a render must never write derived state back (see
     // onChunkingChange header — this post reverted saved values on reload).
@@ -1075,7 +1201,7 @@ async function loadSettings() {
         // restore chunking state
         onChunkingChange(false);
     updateAgenticCombinedWarn();
-    setDuoSubMode(S.duoAgenticMode ? 'agentic' : 'critic');
+    setDuoSubMode(S.duoAgenticMode ? 'agentic' : 'critic', {persist: false});
     updateComplexityVisibility();
     var dmtrEl = document.getElementById('duo-max-tool-rounds');
     if (dmtrEl) dmtrEl.value = s.duo_max_tool_rounds || 64;
@@ -1305,7 +1431,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     S.directToolsRounds = parseInt(s.direct_tools_max_rounds || 12) || 12;
     var _dtEl = document.getElementById('direct-tools-toggle');
     if (_dtEl) _dtEl.checked = S.directToolsEnabled;
-    var _dtTierRadio = document.getElementById('dt-tier-' + ((S.directToolsTier === 'research' || S.directToolsTier === 'python' || S.directToolsTier === 'full' || S.directToolsTier === 'off') ? S.directToolsTier : 'readonly'));
+    var _dtTierRadio = document.getElementById('dt-tier-' + ((S.directToolsTier === 'research' || S.directToolsTier === 'mcp' || S.directToolsTier === 'python' || S.directToolsTier === 'full' || S.directToolsTier === 'off') ? S.directToolsTier : 'readonly'));
     if (_dtTierRadio) _dtTierRadio.checked = true;
     var _dtR = document.getElementById('direct-tools-rounds');
     var _dtRV = document.getElementById('direct-tools-rounds-v');
@@ -1433,7 +1559,15 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
 
     setModeUI(S.mode);
 
-    // call renderAgentCards - S.models is already filled now
+    // Adopt registry data into currentAssignments BEFORE renderAgentCards so dropdowns reflect active assignments.
+    const reg = s._registry || {};
+    Object.keys(reg).forEach(function(agent) {
+      if (!S.currentAssignments[agent]) S.currentAssignments[agent] = {};
+      S.currentAssignments[agent].model = reg[agent];
+    });
+    if (Object.keys(reg).length) renderAgentMap();
+
+    // call renderAgentCards - S.models & S.currentAssignments are already filled now
     const agents = s.agents || {};
     S.agentsCfg = agents;   // CTX-FIT-WARN: critic model for the ctx estimates
     console.log('[loadSettings] agents keys:', Object.keys(agents), 'S.models:', S.models.length);
@@ -1451,14 +1585,6 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
       g.innerHTML = modelOpts(firstAgent.model);
       g.value = firstAgent.model;
     }
-
-    // Adopt registry data into currentAssignments
-    const reg = s._registry || {};
-    Object.keys(reg).forEach(function(agent) {
-      if (!S.currentAssignments[agent]) S.currentAssignments[agent] = {};
-      S.currentAssignments[agent].model = reg[agent];
-    });
-    if (Object.keys(reg).length) renderAgentMap();
 
     // Fallback: if S.models is still empty (list_available_models found nothing),
     // collect known model names from registry + settings.agents and use them immediately.
@@ -1502,6 +1628,9 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
       if (_vrLbl) _vrLbl.textContent = _vrSec + 's';
       if (_vrVal) _vrVal.textContent = _vrSec + 's';
       setVramRefreshInterval(_vrSec * 1000);
+    }
+    if (typeof loadSpecialAgentsConfig === 'function') {
+      await loadSpecialAgentsConfig(s);
     }
   } catch(e) {
     console.error('loadSettings error:', e);
@@ -1621,6 +1750,20 @@ function updateDuoPairVramHint(budgetGb) {
   } else {
     warn.style.display = 'none';
   }
+}
+
+function _syncAskUserAutoProceedUI(checked) {
+  S.askUserAutoProceed = !!checked;
+  var cb = document.getElementById('ask-user-auto-proceed-cb');
+  if (cb) cb.checked = S.askUserAutoProceed;
+  document.querySelectorAll('.ask-aup-cb').forEach(function(el) {
+    el.checked = S.askUserAutoProceed;
+    var wrap = el.closest && el.closest('label');
+    if (wrap) {
+      var tm = wrap.querySelector('.ask-aup-tm');
+      if (tm) tm.textContent = S.askUserAutoProceed ? 'engine 30s' : '';
+    }
+  });
 }
 
 function _getDuoOverrideModel() {
@@ -2820,7 +2963,8 @@ function updatePassFilesButtons() {
     btn.style.borderColor = active ? 'var(--accent)' : '';
   });
 }
-function setDuoSubMode(mode) {
+function setDuoSubMode(mode, opts) {
+  var persist = !opts || opts.persist !== false;
   var isCritic = mode === 'critic';
   // Badge
   var badge = document.getElementById('duo-mode-badge');
@@ -2851,24 +2995,30 @@ function setDuoSubMode(mode) {
     var _hm = document.getElementById('h-mode');
     if (_hm) _hm.textContent = '\u21C4 ' + (isCritic ? 'duo' : 'coder');
   }
+  var dtrSel = document.getElementById('duo-tool-rounds-sel');
   if (isCritic) {
-    S.duoToolRounds = 0;
-    var _dtrSelC = document.getElementById('duo-tool-rounds-sel');
-    if (_dtrSelC) _dtrSelC.value = '0';
-    postSettings({duo_tool_rounds: 0, max_iterations: S.iters || 2, duo_agentic_mode: false});
+    if (persist) {
+      S.duoToolRounds = 0;
+      postSettings({duo_tool_rounds: 0, max_iterations: S.iters || 2, duo_agentic_mode: false});
+    }
+    if (dtrSel) dtrSel.value = String(persist ? 0 : (S.duoToolRounds || 0));
   } else {
-    S.duoToolRounds = 1;
-    var _dtrSelA = document.getElementById('duo-tool-rounds-sel');
-    if (_dtrSelA) _dtrSelA.value = '1';
-    if (!S._thinkingBeforeChunking) S._thinkingBeforeChunking = S.duoAgenticThinking;
-    postSettings({duo_tool_rounds: 1, max_iterations: 1, duo_agentic_mode: true});
-    S.iters = 1;
-    document.getElementById('iters-in').value = 1;
-    document.getElementById('h-iters-val').textContent = 1;
+    if (persist) {
+      S.duoToolRounds = 1;
+      if (!S._thinkingBeforeChunking) S._thinkingBeforeChunking = S.duoAgenticThinking;
+      postSettings({duo_tool_rounds: 1, max_iterations: 1, duo_agentic_mode: true});
+      S.iters = 1;
+    }
+    if (dtrSel) dtrSel.value = String(S.duoToolRounds != null ? S.duoToolRounds : 1);
+    var _itersIn = document.getElementById('iters-in');
+    if (_itersIn) _itersIn.value = S.iters || 1;
+    var _hItersVal = document.getElementById('h-iters-val');
+    if (_hItersVal) _hItersVal.textContent = S.iters || 1;
     updateAgenticHint();
   }
   updateCtxScopeHint();
   updateComplexityVisibility();
+  updateChatToolsSectionVisibility();
 }
 
 function updateAgenticHint() {
@@ -2904,10 +3054,9 @@ function renderAgentCards(agents) {
     const cfg = entries[i][1];
     const m = AGENT_META[key];
     if (!m) continue;
-    // Duo agents belong to the duo panel, not the agent cards
-    if (key === 'duo_coder' || key === 'duo_critic') continue;
     const color = m.color;
-    const temp = parseFloat(cfg.temperature || 0.3);
+    const hasTempOverride = (cfg.temperature !== null && cfg.temperature !== undefined && cfg.temperature !== '');
+    const temp = hasTempOverride ? parseFloat(cfg.temperature) : 0.6;
     const toks = parseInt(cfg.max_tokens || 400);
 
     const div = document.createElement('div');
@@ -2960,6 +3109,9 @@ function renderAgentCards(agents) {
 
     // Automap suggestion (registryModel) at the top in blue, only if present
     let selOpts = '';
+    if (key === 'duo_critic') {
+      selOpts += '<option value=""' + (!activeModel ? ' selected' : '') + '>Follow Duo-Coder</option>';
+    }
     if (registryModel) {
       selOpts += '<option value="' + esc(registryModel) + '" style="color:#4878c0;font-weight:600"'
                + ' selected>⟳ ' + esc(registryModel) + ' (active)</option>';
@@ -3020,26 +3172,56 @@ function renderAgentCards(agents) {
     tempCell.className = 'acard-cell';
     const tempLbl = document.createElement('div');
     tempLbl.className = 'fl';
-    tempLbl.innerHTML = 'Temperature <span id="' + tvId + '">' + temp.toFixed(2) + '</span>';
+    tempLbl.style.cssText = 'display:flex;align-items:center;gap:6px';
+    const tempLabelTxt = document.createElement('span');
+    tempLabelTxt.innerHTML = 'Temperature <span id="' + tvId + '">' + (hasTempOverride ? temp.toFixed(2) : 'Default') + '</span>';
+    const tempResetBtn = document.createElement('button');
+    tempResetBtn.type = 'button';
+    tempResetBtn.className = 'btn';
+    tempResetBtn.textContent = '\u21BA Default';
+    tempResetBtn.style.cssText = 'margin-left:auto;padding:1px 5px;font-size:8px;line-height:1.2' + (hasTempOverride ? '' : ';opacity:0.45');
+    tempResetBtn.title = 'Clear card override and use Model Default (null)';
+    tempLbl.appendChild(tempLabelTxt);
+    tempLbl.appendChild(tempResetBtn);
     tempCell.appendChild(tempLbl);
     const tempRow = document.createElement('div');
     tempRow.className = 'sl-row';
     const tempSlider = document.createElement('input');
-    tempSlider.type = 'range'; tempSlider.min = '0'; tempSlider.max = '1'; tempSlider.step = '0.05';
-    tempSlider.value = temp;
+    tempSlider.type = 'range'; tempSlider.min = '0'; tempSlider.max = '2'; tempSlider.step = '0.05';
+    tempSlider.value = String(temp);
     tempSlider.dataset.temp = key;
-    tempSlider.addEventListener('input', (function(id) {
-      return function() {
-        const el = document.getElementById(id);
-        if (el) el.textContent = parseFloat(this.value).toFixed(2);
-        const v = document.getElementById(id + '-val');
-        if (v) v.textContent = parseFloat(this.value).toFixed(2);
-      };
-    })(tvId));
+    tempSlider.dataset.isDefault = hasTempOverride ? '0' : '1';
     const tempVal = document.createElement('div');
     tempVal.className = 'sl-val';
     tempVal.id = tvId + '-val';
-    tempVal.textContent = temp.toFixed(2);
+    tempVal.textContent = hasTempOverride ? temp.toFixed(2) : 'Auto';
+    tempSlider.addEventListener('input', (function(id, rst) {
+      return function() {
+        this.dataset.isDefault = '0';
+        rst.style.opacity = '1';
+        const vTxt = parseFloat(this.value).toFixed(2);
+        const el = document.getElementById(id);
+        if (el) el.textContent = vTxt;
+        const v = document.getElementById(id + '-val');
+        if (v) v.textContent = vTxt;
+      };
+    })(tvId, tempResetBtn));
+    tempResetBtn.addEventListener('click', (function(roleKey, sl, id, rst) {
+      return async function() {
+        sl.dataset.isDefault = '1';
+        rst.style.opacity = '0.45';
+        const el = document.getElementById(id);
+        if (el) el.textContent = 'Default';
+        const v = document.getElementById(id + '-val');
+        if (v) v.textContent = 'Auto';
+        try {
+          await fetch('/settings/agent', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({agent: roleKey, temperature: null})
+          });
+        } catch(e) { console.warn('[resetTempDefault]', e); }
+      };
+    })(key, tempSlider, tvId, tempResetBtn));
     tempRow.appendChild(tempSlider);
     tempRow.appendChild(tempVal);
     tempCell.appendChild(tempRow);
@@ -3244,10 +3426,25 @@ function renderAgentCards(agents) {
   if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
 }
 
+function _syncAgentModelState(key, model, sel) {
+  if (sel) sel.dataset.cur = model;
+  if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
+  S.currentAssignments[key].model = model;
+  if (S.agentsCfg && S.agentsCfg[key]) S.agentsCfg[key].model = model;
+  if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
+  if (key === 'duo_coder') {
+    S.duoCoderModel = model;
+    var _dcm = document.getElementById('duo-coder-model-sel');
+    if (_dcm) _dcm.value = model;
+    updateMoeVisibility();
+  }
+  if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
+}
+
 // AGENT-DROPDOWN-SAVE (2026-09-01): save the model in the agent-card dropdown directly
 // (only model — sliders/toggles stay with the Apply button).
 async function saveAgentModelDirect(key, sel) {
-  if (!sel || !sel.value) return;
+  if (!sel || (!sel.value && key !== 'duo_critic')) return;
   const model = sel.value;
   const old = sel.dataset.cur || '';
   if (model === old) return;
@@ -3259,17 +3456,9 @@ async function saveAgentModelDirect(key, sel) {
     });
     const data = await res.json();
     if (data.ok) {
-      sel.dataset.cur = model;
-      if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
-      S.currentAssignments[key].model = model;
-      // ORDER FIX (2026-10-04, user): the UI refresh used to run BEFORE the
-      // assignment was updated - the image hint kept showing the OLD model
-      // until the image was removed and re-attached.
-      if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
+      _syncAgentModelState(key, model, sel);
       sel.style.borderColor = '#22c55e';
       setTimeout(function() { sel.style.borderColor = ''; }, 1200);
-      // VISION-HINT: Bild-Pfad nach Modellwechsel aktualisieren
-      if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
     } else {
       sel.value = old;
       console.warn('[saveAgentModelDirect]', data.error || 'save failed');
@@ -3287,7 +3476,7 @@ async function applyAgent(key, btn) {
   const model = sel ? sel.value : '';
   const tempSlider = card.querySelector('input[type=range][data-temp="' + key + '"]');
   const tokSlider  = card.querySelector('input[type=range][data-tok="' + key + '"]');
-  const temperature = tempSlider ? parseFloat(tempSlider.value) : 0.3;
+  const temperature = (tempSlider && tempSlider.dataset.isDefault === '1') ? null : (tempSlider ? parseFloat(tempSlider.value) : null);
   const max_tokens  = tokSlider ? parseInt(tokSlider.value) : 400;
   // AGENT-THINKING: read the toggle + budget (3rd slider = thinking budget)
   const thkCb = card.querySelector('input[type=checkbox][data-agent="' + key + '"]');
@@ -3298,7 +3487,7 @@ async function applyAgent(key, btn) {
   const ctxSlider = card.querySelector('input[type=range][data-ctx="' + key + '"]');
   const ctx = ctxSlider ? parseInt(ctxSlider.value || '0') : 0;
 
-  if (!model) { btn.textContent = 'No model!'; setTimeout(function(){btn.textContent='Apply';},1800); return; }
+  if (!model && key !== 'duo_critic') { btn.textContent = 'No model!'; setTimeout(function(){btn.textContent='Apply';},1800); return; }
 
   btn.textContent = '...';
   btn.disabled = true;
@@ -3310,15 +3499,12 @@ async function applyAgent(key, btn) {
     });
     const data = await res.json();
     if (data.ok) {
-      btn.textContent = 'OK - ' + model.slice(0,12);
+      btn.textContent = 'OK - ' + (model ? model.slice(0,12) : 'Follow');
       btn.classList.add('ok');
-      if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
-      S.currentAssignments[key].model = model;
+      _syncAgentModelState(key, model, sel);
       if (!S.ctxOverrides) S.ctxOverrides = {};
       if (ctx > 0) S.ctxOverrides[key] = ctx; else delete S.ctxOverrides[key];
       renderAgentMap();
-      // VISION-HINT: update the image path after a model switch
-      if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
     } else {
       btn.textContent = 'Error: ' + (data.error || '?');
     }
@@ -3490,7 +3676,7 @@ function _agentCardsPayload() {
     var entry = {};
     if (sel && sel.value) entry.model = sel.value;
     var t = card.querySelector('input[type=range][data-temp="' + role + '"]');
-    if (t) entry.temperature = parseFloat(t.value);
+    if (t) entry.temperature = (t.dataset.isDefault === '1') ? null : parseFloat(t.value);
     var k = card.querySelector('input[type=range][data-tok="' + role + '"]');
     if (k) entry.max_tokens = parseInt(k.value, 10);
     var b = card.querySelector('input[type=range][data-budget="' + role + '"]');
@@ -5962,8 +6148,8 @@ function _renderApprovalCard(d) {
         var _gone = document.getElementById('approval-request-card');
         if (_gone && _gone.dataset.apLocked === '1') { _apprClearedAt = Date.now(); _gone.remove(); }
       }).catch(function(e) {
-        _c.dataset.apLocked = '';
-        _row.querySelectorAll('button').forEach(function(x) { x.disabled = false; x.style.opacity = ''; });
+        _ap.dataset.apLocked = '';
+        _apRow.querySelectorAll('button').forEach(function(x) { x.disabled = false; x.style.opacity = ''; });
         if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e);
       });
     };
@@ -6024,7 +6210,6 @@ function _renderAskCard(d) {
   var _row = document.createElement('div');
   _row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
   function _sendAnswer(_txt) {
-    _stopTimer();
     _row.querySelectorAll('button').forEach(function(x) { x.disabled = true; x.style.opacity = .45; });
     _inp.disabled = true;
     _c.dataset.apLocked = '1';
@@ -6080,7 +6265,6 @@ function _renderAskCard(d) {
     _wBtn.textContent = '\u23F3 Wait later';
     _wBtn.title = 'Keep the run waiting - answer with text below anytime';
     _wBtn.onclick = function() {
-      _stopTimer();               // no auto-proceed behind the owner's back
       if (_yrow && _yrow.parentNode) _yrow.remove();
     };
     _yrow.appendChild(_yBtn); _yrow.appendChild(_nBtn); _yrow.appendChild(_wBtn);
@@ -6101,10 +6285,12 @@ function _renderAskCard(d) {
   _tg.title = 'Global setting (Settings \u2192 Action Approval gate): the engine auto-answers ask_user after 30 s. until-finished runs keep their configured timeout.';
   var _tgCb = document.createElement('input');
   _tgCb.type = 'checkbox';
+  _tgCb.className = 'ask-aup-cb';
   _tgCb.checked = !!S.askUserAutoProceed;
   var _tgTxt = document.createElement('span');
   _tgTxt.textContent = 'Auto 30s';
   var _tgTm = document.createElement('span');
+  _tgTm.className = 'ask-aup-tm';
   _tgTm.style.cssText = "color:#f0ad4e;font-family:'IBM Plex Mono',monospace";
   _tg.appendChild(_tgCb); _tg.appendChild(_tgTxt); _tg.appendChild(_tgTm);
   // A5 (2026-11-08): the ENGINE governor is the single auto-answer source.
@@ -6115,7 +6301,7 @@ function _renderAskCard(d) {
     _tgTm.textContent = _tgCb.checked ? 'engine 30s' : '';
   }
   _tgCb.onchange = function() {
-    S.askUserAutoProceed = _tgCb.checked;
+    _syncAskUserAutoProceedUI(_tgCb.checked);
     // Persisted as a setting: survives reloads and is part of presets
     // (the preset save snapshots settings.json).
     postSettings({ ask_user_auto_proceed: _tgCb.checked });
@@ -6870,6 +7056,7 @@ async function sendMsg() {
 
     const res = await fetch('/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},
+      signal: S._runAbortCtrl ? S._runAbortCtrl.signal : undefined,
       body: JSON.stringify({
         q: txt,
         flush_ok: _flushOk,
@@ -6881,12 +7068,15 @@ async function sendMsg() {
         force_complexity: S.forcedComplexity !== 'auto' ? S.forcedComplexity : undefined,
         skip_agents:      Object.keys(S.skippedAgents).filter(function(k){return S.skippedAgents[k];}),
         judge_bias:       S.judgeBias,
-        duo_pair:          S.duoPair,
         duo_tool_rounds:   S.duoToolRounds  || 0,
         // TIER-WITH-RUN (2026-11-09): pin the tool tiers with the request so
         // a just-changed dropdown cannot race the async settings.json write.
+        direct_tools_enabled: S.directToolsEnabled !== false,
         direct_tools_tier: S.directToolsTier || 'readonly',
         duo_coder_tool_tier: S.duoCoderToolTier || 'core',
+        duo_websearch_enabled: !!S.duoWebsearch,
+        subagent_lite_enabled: S.subagentLite !== false,
+        git_tools_enabled: S.gitToolsEnabled || 'auto',
         lsp_auto_diagnostics: typeof S.lspAutoDiag === 'boolean' ? S.lspAutoDiag : undefined,
         duo_use_pipeline:  !!S.duoUsePipeline,
         duo_critic_tools:  !!S.duoCriticTools,
@@ -6920,10 +7110,15 @@ async function sendMsg() {
     S._sseBuf = '';
     S._sseFrameSeq = 0;
     S._sawDoneEvent = false;
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      _sseFeedLines(dec.decode(chunk.value, {stream:true}));
+    S._sseReaderActive = true;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        _sseFeedLines(dec.decode(chunk.value, {stream:true}));
+      }
+    } finally {
+      S._sseReaderActive = false;
     }
     // RUN-JOURNAL (2026-09-20): a clean stream end WITHOUT a done event used
     // to leave the bubble on "⟳ Loading" forever. Reattach via the journal.
@@ -9578,7 +9773,7 @@ async function refreshCfgModelList() {
 
 function switchCfgTab(tab, btn) {
   cfgState.currentTab = tab;
-  var tabs = ['base','learned','log'];
+  var tabs = ['base','learned','defaults','log'];
   for (var i = 0; i < tabs.length; i++) {
     var el = document.getElementById('cfgtab-' + tabs[i]);
     if (el) el.classList.toggle('on', tabs[i] === tab);
@@ -9592,9 +9787,207 @@ async function loadModelConfigs() {
   var model = document.getElementById('cfg-model-sel').value;
   cfgState.currentModel = model;
   if (!model) return;
-  if (cfgState.currentTab === 'base')    renderBaseConfigs();
-  if (cfgState.currentTab === 'learned') await renderLearnedConfigs(model);
-  if (cfgState.currentTab === 'log')     await renderLog(model);
+  if (cfgState.currentTab === 'base')     renderBaseConfigs();
+  if (cfgState.currentTab === 'learned')  await renderLearnedConfigs(model);
+  if (cfgState.currentTab === 'defaults') await loadModelDefaults(model);
+  if (cfgState.currentTab === 'log')      await renderLog(model);
+}
+
+function _mdefVal(id) {
+  var el = document.getElementById(id);
+  return el ? String(el.value || '').trim() : '';
+}
+
+function _mdefInt(id) {
+  var s = _mdefVal(id);
+  if (!s) return null;
+  var n = parseInt(s, 10);
+  return isFinite(n) ? n : null;
+}
+
+function _mdefFloat(id) {
+  var s = _mdefVal(id);
+  if (!s) return null;
+  var n = parseFloat(s);
+  return isFinite(n) ? n : null;
+}
+
+function _mdefSet(id, v) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  if (el.type === 'checkbox') el.checked = !!v;
+  else el.value = (v === null || v === undefined) ? '' : String(v);
+}
+
+function populateModelDefaultsForm(prof, gguf, onlyEmpty) {
+  prof = prof || {};
+  gguf = gguf || {};
+  cfgState._lastGgufMeta = gguf;
+  var caps = prof.capabilities || {};
+  var samp = prof.sampling || {};
+  var sthk = samp.thinking || {};
+  var snth = samp.non_thinking || {};
+  var setIf = function(id, v) {
+    if (onlyEmpty) {
+      var el = document.getElementById(id);
+      if (el && el.type !== 'checkbox' && String(el.value || '').trim() !== '') return;
+    }
+    _mdefSet(id, v);
+  };
+  if (!onlyEmpty) {
+    _mdefSet('mdef-cap-thinking', !!caps.thinking);
+    _mdefSet('mdef-cap-vision', !!caps.vision);
+    _mdefSet('mdef-cap-toolcall', caps.tool_call !== undefined ? !!caps.tool_call : false);
+    _mdefSet('mdef-jinja', !!prof.jinja);
+    _mdefSet('mdef-distilled', !!prof.distilled);
+    _mdefSet('mdef-mtp', !!prof.mtp);
+    _mdefSet('mdef-s-thk-cache', sthk.cache_prompt !== false);
+    _mdefSet('mdef-s-nth-cache', snth.cache_prompt !== false);
+  }
+  setIf('mdef-reasoning', prof.reasoning || '');
+  setIf('mdef-thinking-budget', prof.thinking_budget);
+  setIf('mdef-num-ctx', prof.num_ctx);
+  setIf('mdef-num-ctx-coder', prof.num_ctx_duo_coder);
+  setIf('mdef-num-ctx-analyst', prof.num_ctx_analyst);
+  setIf('mdef-num-ctx-vision', prof.num_ctx_vision);
+  setIf('mdef-moe', prof.moe === true ? 'true' : prof.moe === false ? 'false' : '');
+  setIf('mdef-moe-cpu', prof.moe_cpu_experts);
+  setIf('mdef-gpu-layers', prof.gpu_layers);
+  setIf('mdef-kv-type', prof.kv_cache_type || '');
+  setIf('mdef-load-mode', prof.load_mode || '');
+  setIf('mdef-vram-ov', prof.vram_gb_override);
+  setIf('mdef-kv-bpt', prof.kv_bytes_per_token);
+  setIf('mdef-mmproj', prof.mmproj_filename || '');
+  setIf('mdef-chat-template', prof.chat_template || '');
+  setIf('mdef-extra-args', Array.isArray(prof.extra_args) ? prof.extra_args.join(' ') : (prof.extra_args || ''));
+  var mapSampling = function(prefix, blk) {
+    setIf(prefix + '-temp', blk.temperature);
+    setIf(prefix + '-top-p', blk.top_p);
+    setIf(prefix + '-top-k', blk.top_k);
+    setIf(prefix + '-min-p', blk.min_p);
+    setIf(prefix + '-pres', blk.presence_penalty);
+    setIf(prefix + '-rep', blk.repetition_penalty);
+  };
+  mapSampling('mdef-s-thk', sthk);
+  mapSampling('mdef-s-nth', snth);
+}
+
+async function loadModelDefaults(model) {
+  var infoEl = document.getElementById('mdef-gguf-info');
+  var stEl = document.getElementById('mdef-status');
+  if (!model) return;
+  if (stEl) stEl.textContent = 'Loading...';
+  try {
+    var d = await (await fetch('/model-profile?model=' + encodeURIComponent(model))).json();
+    var prof = d.profile || {};
+    var gguf = d.gguf || {};
+    populateModelDefaultsForm(prof, gguf, false);
+    if (infoEl) {
+      var parts = [];
+      if (d.file) parts.push('File: ' + d.file);
+      else parts.push('No JSON file yet (auto/GGUF fallback active)');
+      if (gguf.architecture) parts.push('Arch: ' + gguf.architecture);
+      if (gguf.context_length) parts.push('GGUF ctx: ' + gguf.context_length);
+      if (gguf.expert_count) parts.push('Experts: ' + gguf.expert_count + (gguf.expert_used_count ? '/' + gguf.expert_used_count : ''));
+      if (gguf.kv_bytes_per_token_q4) parts.push('KV q4: ' + Math.round(gguf.kv_bytes_per_token_q4) + ' B/tok');
+      if (gguf.file_size_gb) parts.push('Size: ' + gguf.file_size_gb + ' GB');
+      infoEl.textContent = parts.join(' · ');
+    }
+    if (stEl) stEl.textContent = '';
+  } catch (e) {
+    if (stEl) stEl.textContent = 'Load failed: ' + e.message;
+  }
+}
+
+async function seedModelDefaultsFromGguf() {
+  var model = cfgState.currentModel;
+  var stEl = document.getElementById('mdef-status');
+  if (!model) return;
+  try {
+    var res = await fetch('/gguf-meta?model=' + encodeURIComponent(model));
+    var d = await res.json();
+    var meta = (d && d.meta) || {};
+    if (!meta || !Object.keys(meta).length) {
+      if (stEl) stEl.textContent = 'No GGUF metadata found on disk for ' + model;
+      return;
+    }
+    _mdefSet('mdef-cap-thinking', !!meta.has_thinking);
+    _mdefSet('mdef-cap-vision', !!meta.has_vision);
+    _mdefSet('mdef-cap-toolcall', !!meta.has_chat_template);
+    _mdefSet('mdef-jinja', !!meta.has_chat_template);
+    _mdefSet('mdef-reasoning', meta.has_thinking ? 'on' : 'off');
+    _mdefSet('mdef-moe', meta.is_moe ? 'true' : 'false');
+    if (meta.context_length) _mdefSet('mdef-num-ctx', Math.min(meta.context_length, 32768));
+    if (meta.kv_bytes_per_token_q4) _mdefSet('mdef-kv-bpt', Math.round(meta.kv_bytes_per_token_q4));
+    if (stEl) stEl.textContent = 'Populated from GGUF header (click Save Model Defaults to persist).';
+  } catch (e) {
+    if (stEl) stEl.textContent = 'GGUF probe failed: ' + e.message;
+  }
+}
+
+async function saveModelDefaults() {
+  var model = cfgState.currentModel;
+  var stEl = document.getElementById('mdef-status');
+  if (!model) return;
+  var readSampling = function(prefix, cacheId) {
+    var blk = { cache_prompt: !!document.getElementById(cacheId).checked };
+    blk.temperature = _mdefFloat(prefix + '-temp');
+    blk.top_p = _mdefFloat(prefix + '-top-p');
+    blk.top_k = _mdefInt(prefix + '-top-k');
+    blk.min_p = _mdefFloat(prefix + '-min-p');
+    blk.presence_penalty = _mdefFloat(prefix + '-pres');
+    blk.repetition_penalty = _mdefFloat(prefix + '-rep');
+    return blk;
+  };
+  var moeVal = _mdefVal('mdef-moe');
+  var extraRaw = _mdefVal('mdef-extra-args');
+  var patch = {
+    capabilities: {
+      thinking: !!document.getElementById('mdef-cap-thinking').checked,
+      vision: !!document.getElementById('mdef-cap-vision').checked,
+      tool_call: !!document.getElementById('mdef-cap-toolcall').checked,
+    },
+    jinja: !!document.getElementById('mdef-jinja').checked,
+    distilled: !!document.getElementById('mdef-distilled').checked,
+    mtp: !!document.getElementById('mdef-mtp').checked,
+    reasoning: _mdefVal('mdef-reasoning') || null,
+    thinking_budget: _mdefInt('mdef-thinking-budget'),
+    num_ctx: _mdefInt('mdef-num-ctx'),
+    num_ctx_duo_coder: _mdefInt('mdef-num-ctx-coder'),
+    num_ctx_analyst: _mdefInt('mdef-num-ctx-analyst'),
+    num_ctx_vision: _mdefInt('mdef-num-ctx-vision'),
+    moe: moeVal === 'true' ? true : moeVal === 'false' ? false : null,
+    moe_cpu_experts: _mdefInt('mdef-moe-cpu'),
+    gpu_layers: _mdefInt('mdef-gpu-layers'),
+    kv_cache_type: _mdefVal('mdef-kv-type') || null,
+    load_mode: _mdefVal('mdef-load-mode') || null,
+    vram_gb_override: _mdefFloat('mdef-vram-ov'),
+    kv_bytes_per_token: _mdefInt('mdef-kv-bpt'),
+    mmproj_filename: _mdefVal('mdef-mmproj') || null,
+    chat_template: _mdefVal('mdef-chat-template') || null,
+    extra_args: extraRaw ? extraRaw.split(/\s+/).filter(Boolean) : [],
+    sampling: {
+      thinking: readSampling('mdef-s-thk', 'mdef-s-thk-cache'),
+      non_thinking: readSampling('mdef-s-nth', 'mdef-s-nth-cache'),
+    },
+  };
+  if (stEl) stEl.textContent = 'Saving...';
+  try {
+    var res = await fetch('/model-profile', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: model, patch: patch})
+    });
+    var d = await res.json();
+    if (res.ok && d.ok) {
+      if (stEl) stEl.textContent = 'Saved defaults (' + (d.file || model) + ').';
+      if (typeof loadSettings === 'function') await loadSettings();
+      await loadModelDefaults(model);
+    } else {
+      if (stEl) stEl.textContent = 'Save failed: ' + ((d && d.error) || res.status);
+    }
+  } catch (e) {
+    if (stEl) stEl.textContent = 'Save error: ' + e.message;
+  }
 }
 
 async function renderBaseConfigs() {
@@ -10162,19 +10555,26 @@ function updateMlockHint() {
 }
 
 function _isMoeModel(m) {
-  m = String(m || '').trim().toLowerCase();
+  var raw = String(m || '').trim();
+  m = raw.toLowerCase();
   if (!m) return false;
-  if (S.moeExpertDefaults && S.moeExpertDefaults[m]) return true;
+  var pk = _moeKey(raw).toLowerCase();
+  if (S.moePins) {
+    if (pk && S.moePins[pk] != null) return !!S.moePins[pk];
+    if (S.moePins[m] != null) return !!S.moePins[m];
+    if (S.moePins[raw] != null) return !!S.moePins[raw];
+  }
+  if (S.moeExpertDefaults && (S.moeExpertDefaults[m] || (pk && S.moeExpertDefaults[pk]))) return true;
   if (/moe/.test(m)) return true;
-  return /(^|[-._:])a\d+b([-._]|$)/.test(m);
+  return /(^|[-._:])(a\d+(?:\.\d+)?b|\d+x\d+(?:\.\d+)?b)([-._:]|$)/.test(m);
 }
 
 // Backend-compatible per-model key — mirrors manager_load._moe_model_key
-// (slot-alias "#N" and the "-ud" suffix are stripped before the override /
+// (slot-alias "#N" and trailing "-ud" suffix are stripped before the override /
 // table lookup). Storing overrides under this key guarantees they match at
 // model-load time, also for -ud variants of the same base model.
 function _moeKey(model) {
-  return String(model || '').trim().replace(/#\d+$/, '').replace(/-ud/i, '');
+  return String(model || '').trim().replace(/#\d+$/, '').replace(/-ud$/i, '');
 }
 
 function _moeOverride(model) {
@@ -10262,7 +10662,7 @@ function onMoePinChange(val) {
     if (moe === null) { if (key) delete S.moePins[key]; delete S.moePins[model]; }
     else S.moePins[key || model] = moe;
   }
-  fetch('/config/moe-pin', {
+  fetch('/moe-pin', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({model: model, moe: moe})
@@ -10975,9 +11375,9 @@ async function handlePauseClick() {
         if (!resp2.ok) { showInfo('\u26A0 Resume failed'); return; }
         setPauseBtnState('running');
         // RESUME-REATTACH (audit 2026-11-03): /resume returns JSON, no
-        // stream. Without a journal tail the resumed run rendered nothing
-        // and S.streaming stayed true forever.
-        if (S.currentRunId) _journalStartTail(S.currentRunId);
+        // stream. When the tab still holds an open /stream SSE reader, events
+        // continue arriving directly (starting a journal tail would duplicate them).
+        if (S.currentRunId && !S._sseReaderActive) _journalStartTail(S.currentRunId);
         showInfo('\u25B6 Run resumed');
       } catch(e) { showInfo('\u26A0 Network error: ' + e.message); }
       break;
@@ -11377,13 +11777,13 @@ function updateCtxScopeHint() {
   var plannerUseCoder = S.duoPlannerUseCoderCtx !== false; // default true
   
   var _slot = document.getElementById('code-ctx-slot');
+  var _card = document.getElementById('ctx-agentic-card');
   if (!isAgentic) {
     if (_card) { _ctxRestore(_card); _card.style.display = 'none'; }
     _ctxRestore(agWrap);
     if (plTog) _ctxRestore(plTog);
     if (plWrap) _ctxRestore(plWrap);
   }
-  var _card = document.getElementById('ctx-agentic-card');
   if (isAgentic) {
     // agentic mode: eine Karte mit Kopfzeile, nicht drei lose Bloecke
     if (_card) _card.style.display = 'block';
@@ -12112,18 +12512,155 @@ async function loadChatHistory() {
 // -- Automations ------------------------------------------------
 var _autoJobs = [];
 var _autoEditingId = null;
+var _autoCapabilities = {};
 
 function _autoScheduleLabel(s) {
   s = s || {};
-  if (s.kind === 'daily') return 'daily ' + (s.at_hm || '09:00');
+  if (s.kind === 'daily') {
+    var ds = Array.isArray(s.days) && s.days.length ? ' (' + s.days.map(function(d){ return ['Mo','Tu','We','Th','Fr','Sa','Su'][d] || d; }).join(',') + ')' : '';
+    return 'daily ' + (s.at_hm || '09:00') + ds;
+  }
   if (s.kind === 'once') return 'once in ' + Math.round((s.interval_s || 0) / 60) + 'm';
   return 'every ' + Math.round((s.interval_s || 0) / 60) + 'm';
 }
 
+function _autoCountdown(ts) {
+  if (!ts) return 'never';
+  var diff = Math.round(Number(ts) - Date.now() / 1000);
+  if (diff <= 0) return 'due now';
+  if (diff < 60) return 'in ' + diff + 's';
+  if (diff < 3600) return 'in ' + Math.round(diff / 60) + 'm';
+  var h = Math.floor(diff / 3600);
+  var m = Math.round((diff % 3600) / 60);
+  return 'in ' + h + 'h' + (m > 0 ? ' ' + m + 'm' : '');
+}
+
 function _autoNextLabel(ts) {
   if (!ts) return 'never';
-  try { return new Date(Number(ts) * 1000).toLocaleString(); }
-  catch (e) { return '?'; }
+  try {
+    return new Date(Number(ts) * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) + ' (' + _autoCountdown(ts) + ')';
+  } catch (e) { return '?'; }
+}
+
+function _autoModeBadgeInfo(mode) {
+  var m = String(mode || 'simple').toLowerCase();
+  if (m === 'agentic' || m === 'code_duo') return {label: '\u26A1 Agentic', cls: 'mode-agentic'};
+  if (m === 'code_critic') return {label: '\u21C4 Code+Critic', cls: 'mode-critic'};
+  if (m === 'pipeline') return {label: '\uD83D\uDD17 Pipeline', cls: ''};
+  if (m === 'auto') return {label: '\uD83E\uDDED Auto', cls: ''};
+  return {label: '\uD83D\uDCAC Direct', cls: 'mode-direct'};
+}
+
+function _autoTierBadgeInfo(tier) {
+  var t = String(tier || 'readonly').toLowerCase();
+  if (t === 'mcp') return {label: '\uD83D\uDD0C MCP + Web', cls: 'tier-mcp'};
+  if (t === 'full') return {label: '\uD83D\uDD27 Full + MCP', cls: 'tier-full'};
+  if (t === 'python') return {label: '\uD83D\uDC0D Python', cls: ''};
+  if (t === 'research') return {label: '\uD83D\uDD0D Research', cls: ''};
+  if (t === 'off') return {label: '\uD83D\uDEAB No Tools', cls: ''};
+  return {label: '\uD83C\uDF10 Web Only', cls: ''};
+}
+
+function _renderAutoCapBar(caps) {
+  caps = caps || {};
+  var mcpEl = document.getElementById('auto-cap-mcp');
+  var tgEl = document.getElementById('auto-cap-tg');
+  if (mcpEl) {
+    var srvs = Array.isArray(caps.mcp_servers) ? caps.mcp_servers : [];
+    if (caps.mcp_enabled && srvs.length) {
+      mcpEl.className = 'auto-cap-pill ok';
+      mcpEl.textContent = '\uD83D\uDD0C MCP: ' + srvs.length + ' (' + srvs.slice(0, 2).join(', ') + (srvs.length > 2 ? '…' : '') + ')';
+    } else if (caps.mcp_enabled) {
+      mcpEl.className = 'auto-cap-pill warn';
+      mcpEl.textContent = '\uD83D\uDD0C MCP: ON (no ready servers)';
+    } else {
+      mcpEl.className = 'auto-cap-pill';
+      mcpEl.textContent = '\uD83D\uDD0C MCP: OFF';
+    }
+  }
+  if (tgEl) {
+    if (caps.telegram_configured && caps.telegram_paired) {
+      tgEl.className = 'auto-cap-pill ok';
+      tgEl.textContent = '\uD83D\uDCF1 Telegram: Ready';
+    } else if (caps.telegram_configured) {
+      tgEl.className = 'auto-cap-pill warn';
+      tgEl.textContent = '\uD83D\uDCF1 Telegram: Not paired';
+    } else {
+      tgEl.className = 'auto-cap-pill';
+      tgEl.textContent = '\uD83D\uDCF1 Telegram: Not configured';
+    }
+  }
+}
+
+function automationSyncModeHint() {
+  var box = document.getElementById('auto-mode-hint');
+  if (!box) return;
+  var mode = (_autoField('auto-mode') || 'simple').toLowerCase();
+  var tier = (_autoField('auto-tier') || 'mcp').toLowerCase();
+  var modeDesc = mode === 'agentic'
+    ? '\u26A1 Agentic: Autonomous multi-step loop for research, scripts, files & complex MCP workflows.'
+    : mode === 'code_critic'
+      ? '\u21C4 Code+Critic: Coder + Reviewer pair (experimental for automations).'
+      : mode === 'pipeline'
+        ? '\uD83D\uDD17 Pipeline: Multi-model analyst \u2192 refiner \u2192 critic \u2192 synthesizer.'
+        : mode === 'auto'
+          ? '\uD83E\uDDED Auto: Router picks Direct vs Agentic dynamically.'
+          : '\uD83D\uDCAC Direct: Fast single-model turn — ideal for recurring MCP summaries & notifications.';
+  var tierDesc = tier === 'mcp'
+    ? '\uD83D\uDD0C MCP + Web + Read enabled (Mail, Calendar, connected MCP APIs; no shell/write).'
+    : tier === 'full'
+      ? '\uD83D\uDD27 Full access: MCP tools + file edits + Python + bash.'
+      : tier === 'off'
+        ? '\uD83D\uDEAB Tools OFF: pure text generation only.'
+        : tier === 'python'
+          ? '\uD83D\uDC0D Python + workspace read + web (no MCP).'
+          : tier === 'research'
+            ? '\uD83D\uDD0D Read workspace + web search (no MCP).'
+            : '\uD83C\uDF10 Websearch + dialog only (no MCP — switch to MCP/Full for Mail/API tools).';
+  box.textContent = modeDesc + ' ' + tierDesc;
+}
+
+function automationApplyTemplate(tplKey) {
+  automationNew();
+  var tpls = {
+    mail_mcp_tg: {
+      name: 'MCP Mail Summary',
+      kind: 'every', interval: '30',
+      mode: 'simple', tier: 'mcp', notify_tg: true,
+      prompt: 'Check my unread emails from the last 30 minutes using the connected MCP mail tools. Summarize important messages with sender, subject, and concrete action items concisely.'
+    },
+    agentic_mcp_tg: {
+      name: 'Agentic MCP Triage',
+      kind: 'every', interval: '60',
+      mode: 'agentic', tier: 'full', notify_tg: true,
+      prompt: 'Inspect incoming tasks/messages via connected MCP tools, cross-check relevant workspace notes/files, execute any safe follow-up checks, and send a concise status briefing.'
+    },
+    daily_digest_tg: {
+      name: 'Morning Briefing',
+      kind: 'daily', time: '08:00',
+      mode: 'simple', tier: 'mcp', notify_tg: true,
+      prompt: 'Create my morning briefing using MCP calendar/mail tools and web search for today. Highlight urgent deadlines, meetings, and key updates.'
+    },
+    repo_health: {
+      name: 'Daily Repo Health',
+      kind: 'daily', time: '09:00',
+      mode: 'agentic', tier: 'full', notify_tg: false,
+      prompt: 'Run the test suite and check git status/recent logs in the workspace. Summarize any failing tests, regressions, or uncommitted changes.'
+    }
+  };
+  var t = tpls[tplKey];
+  if (!t) return;
+  _autoField('auto-name', t.name);
+  _autoField('auto-prompt', t.prompt);
+  _autoField('auto-kind', t.kind);
+  if (t.interval) _autoField('auto-interval', t.interval);
+  if (t.time) _autoField('auto-time', t.time);
+  _autoField('auto-mode', t.mode);
+  _autoField('auto-tier', t.tier);
+  var tg = document.getElementById('auto-notify-tg');
+  if (tg) tg.checked = !!t.notify_tg;
+  automationScheduleChanged();
+  automationSyncModeHint();
 }
 
 async function loadAutomations() {
@@ -12132,55 +12669,87 @@ async function loadAutomations() {
   try {
     const d = await (await fetch('/automations')).json();
     _autoJobs = d.automations || [];
+    _autoCapabilities = d.capabilities || {};
+    _renderAutoCapBar(_autoCapabilities);
     if (!_autoJobs.length) {
-      list.innerHTML = '<div class="empty">No automations yet.</div>';
+      list.innerHTML = '<div class="empty">No automations yet. Pick a template above or create one below.</div>';
       return;
     }
     list.innerHTML = '';
     _autoJobs.forEach(function(job) {
-      const item = document.createElement('div');
-      item.className = 'chat-hist-item';
-      const dot = document.createElement('div');
-      dot.className = 'chat-hist-dot';
+      const card = document.createElement('div');
+      card.className = 'auto-card' + (job.enabled ? '' : ' paused');
+
+      const head = document.createElement('div');
+      head.className = 'auto-card-head';
+      const dot = document.createElement('span');
+      dot.className = 'auto-status-dot';
       dot.style.background = !job.enabled ? 'var(--tx3)'
         : (job.last_status === 'ok' ? 'var(--green)'
-        : (job.last_status === 'needs_input' ? '#e0a030'
-        : (job.last_status === 'failed' ? '#c05050' : 'var(--tx2)')));
-      const info = document.createElement('div');
-      info.className = 'chat-hist-info';
+        : (job.last_status === 'needs_input' || job.last_status === 'partial' || job.last_status === 'queued' ? '#e0a030'
+        : (job.last_status === 'failed' || job.last_status === 'failed_chat' ? '#c05050' : 'var(--tx2)')));
       const title = document.createElement('div');
-      title.className = 'chat-hist-title';
+      title.className = 'auto-card-title';
       title.textContent = job.name || 'Automation';
+      head.appendChild(dot);
+      head.appendChild(title);
+
       const prev = document.createElement('div');
-      prev.className = 'chat-hist-preview';
+      prev.className = 'auto-card-prompt';
       prev.textContent = job.prompt || '';
+
+      const badges = document.createElement('div');
+      badges.className = 'auto-badges';
+      function addBadge(text, extraCls) {
+        const b = document.createElement('span');
+        b.className = 'auto-badge' + (extraCls ? ' ' + extraCls : '');
+        b.textContent = text;
+        badges.appendChild(b);
+      }
+      var mb = _autoModeBadgeInfo(job.mode);
+      addBadge(mb.label, mb.cls);
+      var tb = _autoTierBadgeInfo(job.tools_tier);
+      addBadge(tb.label, tb.cls);
+      addBadge(job.notify_telegram ? '\uD83D\uDCF1 Telegram' : '\uD83D\uDCAC Local Chat', job.notify_telegram ? 'tg-on' : '');
+      addBadge('\u23F1 ' + _autoScheduleLabel(job.schedule), '');
+      if (job.workspace) {
+        var wsName = String(job.workspace).replace(/\\/g, '/').split('/').filter(Boolean).pop() || job.workspace;
+        addBadge('\uD83D\uDCC1 ' + wsName, '');
+      }
+
       const meta = document.createElement('div');
-      meta.className = 'chat-hist-meta';
-      meta.textContent = _autoScheduleLabel(job.schedule)
-        + ' · next ' + _autoNextLabel(job.next_ts)
-        + (job.last_status ? ' · last ' + job.last_status : '');
-      info.appendChild(title); info.appendChild(prev); info.appendChild(meta);
+      meta.className = 'auto-meta-row';
+      var durTxt = (job.last_duration_s !== null && job.last_duration_s !== undefined) ? (' (' + job.last_duration_s + 's)') : '';
+      var lastTxt = job.last_status ? (' \u00B7 last: ' + job.last_status + durTxt) : '';
+      var firesTxt = job.fires ? (' \u00B7 ' + job.fires + 'x') : '';
+      meta.textContent = (job.enabled ? ('Next: ' + _autoNextLabel(job.next_ts)) : 'Paused') + lastTxt + firesTxt;
+
       const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;gap:4px;margin-top:6px;flex-wrap:wrap';
-      function mk(label, fn, cls) {
+      actions.style.cssText = 'display:flex;gap:4px;margin-top:4px;flex-wrap:wrap';
+      function mk(label, fn, cls, titleTxt) {
         const b = document.createElement('button');
         b.textContent = label;
-        // PANEL BUTTONS (audit 2026-11-05): the bordered mini-button class
-        // the presets/chat panels use - the hand-rolled cssText referenced
-        // an undefined var(--line) and rendered borderless.
         b.className = cls || 'pload';
         b.style.marginRight = '0';
+        if (titleTxt) b.title = titleTxt;
         b.onclick = function(e) { e.stopPropagation(); fn(); };
         actions.appendChild(b);
       }
-      mk('▶ Run', function() { automationRun(job.id); });
-      mk('✎ Edit', function() { automationEdit(job.id); });
+      mk('\u25B6 Run', function() { automationRun(job.id); }, null, 'Run now');
+      if (job.chat_id) {
+        mk('\uD83D\uDCAC Chat', function() { loadChat(job.chat_id); }, null, 'Open automation chat transcript');
+      }
+      mk('\u270E Edit', function() { automationEdit(job.id); });
       mk('Runs', function() { automationShowRuns(job.id); });
-      mk(job.enabled ? '⏸ Pause' : '▶ Enable', function() { automationToggle(job.id); });
-      mk('×', function() { automationDelete(job.id); }, 'pdel');
-      info.appendChild(actions);
-      item.appendChild(dot); item.appendChild(info);
-      list.appendChild(item);
+      mk(job.enabled ? '\u23F8 Pause' : '\u25B6 Enable', function() { automationToggle(job.id); });
+      mk('\u00D7', function() { automationDelete(job.id); }, 'pdel', 'Delete automation');
+
+      card.appendChild(head);
+      card.appendChild(prev);
+      card.appendChild(badges);
+      card.appendChild(meta);
+      card.appendChild(actions);
+      list.appendChild(card);
     });
   } catch (e) {
     list.innerHTML = '<div class="empty">Could not load automations.</div>';
@@ -12267,17 +12836,19 @@ function automationNew() {
   _autoField('auto-name', '');
   _autoField('auto-prompt', '');
   _autoField('auto-kind', 'every');
-  _autoField('auto-interval', '60');
+  _autoField('auto-interval', '30');
   _autoField('auto-time', '09:00');
   _autoDays = [];
   _autoField('auto-mode', 'simple');
-  _autoField('auto-tier', 'readonly');
+  _autoField('auto-tier', 'mcp');
+  var tg = document.getElementById('auto-notify-tg'); if (tg) tg.checked = false;
   _autoField('auto-workspace', '');
   _autoField('auto-policy', 'skip');
   const en = document.getElementById('auto-enabled'); if (en) en.checked = true;
   const title = document.getElementById('automation-editor-title');
   if (title) title.textContent = 'New automation';
   automationScheduleChanged();
+  automationSyncModeHint();
   _autoShowEditor(true);
 }
 
@@ -12292,14 +12863,19 @@ function automationEdit(jobId) {
   _autoField('auto-interval', String(Math.max(1, Math.round((s.interval_s || 3600) / 60))));
   _autoField('auto-time', s.at_hm || '09:00');
   _autoDays = Array.isArray(s.days) ? s.days.slice() : [];
-  _autoField('auto-mode', job.mode || 'simple');
+  var m = String(job.mode || 'simple').toLowerCase();
+  if (m === 'code_duo') m = 'agentic';
+  if (m === 'direct') m = 'simple';
+  _autoField('auto-mode', m);
   _autoField('auto-tier', job.tools_tier || 'readonly');
+  var tg = document.getElementById('auto-notify-tg'); if (tg) tg.checked = !!job.notify_telegram;
   _autoField('auto-workspace', job.workspace || '');
   _autoField('auto-policy', job.policy || 'skip');
   const en = document.getElementById('auto-enabled'); if (en) en.checked = !!job.enabled;
   const title = document.getElementById('automation-editor-title');
   if (title) title.textContent = 'Edit automation';
   automationScheduleChanged();
+  automationSyncModeHint();
   _autoShowEditor(true);
 }
 
@@ -12325,7 +12901,8 @@ async function automationSave() {
     prompt: prompt,
     schedule: schedule,
     mode: _autoField('auto-mode') || 'simple',
-    tools_tier: _autoField('auto-tier') || 'readonly',
+    tools_tier: _autoField('auto-tier') || 'mcp',
+    notify_telegram: !!(document.getElementById('auto-notify-tg') || {}).checked,
     workspace: _autoField('auto-workspace') || '',
     policy: _autoField('auto-policy') || 'skip',
     enabled: !!(document.getElementById('auto-enabled') || {}).checked,
@@ -12379,6 +12956,8 @@ async function automationDelete(jobId) {
       return;
     }
     showStatus('Automation deleted.');
+    const _runsBox = document.getElementById('automation-runs');
+    if (_runsBox) _runsBox.innerHTML = '';
     loadAutomations();
   } catch (e) { showStatus('Delete failed: ' + e.message); }
 }
@@ -12394,10 +12973,14 @@ async function automationShowRuns(jobId) {
     runs.slice().reverse().forEach(function(run) {
       const row = document.createElement('div');
       row.className = 'chat-hist-meta';
-      row.style.marginBottom = '3px';
-      row.textContent = (run.status || '?') + ' · '
-        + (run.stop_reason || '') + ' · '
-        + new Date(Number(run.started || 0) * 1000).toLocaleString();
+      row.style.marginBottom = '4px';
+      var icon = run.status === 'ok' ? '\u2705' : (run.status === 'needs_input' ? '\u2753' : '\u26A0');
+      var dur = (run.duration_s !== undefined && run.duration_s !== null)
+        ? (' (' + run.duration_s + 's)')
+        : (run.finished && run.started ? (' (' + (Number(run.finished) - Number(run.started)).toFixed(1) + 's)') : '');
+      row.textContent = icon + ' ' + (run.status || '?') + dur + ' \u00B7 '
+        + (run.stop_reason || '') + ' \u00B7 '
+        + new Date(Number(run.started || run.ts || 0) * 1000).toLocaleString();
       box.appendChild(row);
     });
   } catch (e) { box.innerHTML = '<div class="empty">Could not load runs.</div>'; }
@@ -12524,7 +13107,7 @@ function _updateSpecialAgentChips() {
     chip.textContent = 'INTENT';
     c.appendChild(chip);
   }
-  if (S.soulEvolveEnabled && S.soulEvolveModel) {
+  if (S.soulEvolveEnabled) {
     const chip = document.createElement('span');
     chip.style.cssText = 'display:inline-flex;align-items:center;background:rgba(136,88,192,.12);border:1px solid rgba(136,88,192,.35);border-radius:3px;padding:2px 7px;font-family:IBM Plex Mono,monospace;font-size:9px;color:#8858c0;text-transform:uppercase;letter-spacing:.06em';
     chip.textContent = 'SOUL-EVO';
@@ -12570,7 +13153,7 @@ async function loadSpecialAgentsConfig(cachedSettings) {
     const sesel = document.getElementById('soul-evolve-model-sel');
     if (sesel) {
       sesel.innerHTML = (function() {
-        const rec = ['gemma-4:e4b-it-obliterated','google-gemma-3:4b-it','qwen3.5:9b-ud'].find(m => S.models.includes(m));
+        const rec = ['qwen3.5:4b-mtp','qwen3.5:2b','lfm2.5:2.6b'].find(m => S.models.includes(m));
           let o = '<option value="">-- No model (Soul Engine fallback) --</option>';
         if (rec && rec !== S.soulEvolveModel) {
           o += '<option value="' + esc(rec) + '" style="color:#8858c0;font-weight:600">★ ' + esc(rec) + ' (Recommended)</option>';
@@ -12599,7 +13182,7 @@ async function loadSpecialAgentsConfig(cachedSettings) {
 
     // Soul Skill Distillation + Skill Writing toggles
     const sdtog = document.getElementById('soul-distillation-toggle');
-    if (sdtog) sdtog.checked = s.soul_skill_distillation !== false;
+    if (sdtog) sdtog.checked = s.soul_skill_distillation === true;
     const sswtog = document.getElementById('soul-skill-writing-toggle');
     if (sswtog) sswtog.checked = s.soul_skill_writing === true;
     const dpratog = document.getElementById('duo-peer-ratings-agentic-toggle');
@@ -12646,6 +13229,7 @@ async function applySpecialAgent(key, btn) {
     // exploration is now handled via applyExplorationWorkers() — fallback
     return applyExplorationWorkers(btn);
   } else {
+    model      = (document.getElementById('soul-evolve-model-sel') || {}).value || '';
     temp       = parseFloat(document.getElementById('soul-evolve-temp-sl').value);
     toks       = parseInt(document.getElementById('soul-evolve-tok-sl').value);
     enabled    = document.getElementById('soul-evolve-agent-enabled').checked;
@@ -13984,30 +14568,82 @@ function updateApprovalUI() {
 
 // -- Git Integration ------------------------------------------------
 function updateGitIntegrationUI() {
-  var branchOpts = document.getElementById('git-branch-options');
-  var autocommitToggle = document.getElementById('duo-git-autocommit-toggle');
   var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
-  // UI-SYNC (2026-11-04): the same setting has a toggle in EXECUTION and in
-  // the Git card; flipping one left the other stale until a settings reload.
   if (cfgToggle) cfgToggle.checked = !!S.duoGitAutocommit;
-  if (autocommitToggle) autocommitToggle.checked = !!S.duoGitAutocommit;
-  if (branchOpts) {
-    branchOpts.style.display = (S.duoGitAutocommit || (autocommitToggle && autocommitToggle.checked)) ? 'block' : 'none';
-  }
   updateGitAuthStatus();
+}
+
+function hasGitCreds() {
+  return !!((S.gitRepoUrl || '').trim()
+    || (S.gitUsername || '').trim()
+    || (S.gitEmail || '').trim()
+    || S.gitTokenSaved
+    || (S.gitToken || '').trim());
+}
+
+function isGitToolsToggleOn() {
+  var raw = String(S.gitToolsEnabled || 'auto').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off' || raw === 'no' || raw === 'never') {
+    return false;
+  }
+  if (raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes' || raw === 'always') {
+    return true;
+  }
+  return hasGitCreds();
+}
+
+function isGitToolsEffective() {
+  return hasGitCreds() && isGitToolsToggleOn();
+}
+
+function updateGitToolsUI() {
+  var tog = document.getElementById('git-tools-toggle');
+  var pill = document.getElementById('git-tools-cred-light');
+  var led = document.getElementById('git-tools-led');
+  var txt = document.getElementById('git-tools-cred-text');
+  var link = document.getElementById('git-tools-cfg-link');
+  var creds = hasGitCreds();
+  var on = isGitToolsToggleOn();
+  if (tog) tog.checked = on;
+
+  if (creds) {
+    if (pill) {
+      pill.classList.remove('is-warn');
+      pill.classList.toggle('is-ok', on);
+    }
+    if (led) led.className = 'tools-led ' + (on ? 'is-on' : 'is-off');
+    if (txt) txt.textContent = on ? 'Credentials OK \u00B7 Git tools ON' : 'Credentials OK \u00B7 Git tools OFF';
+    if (link) link.style.display = 'none';
+  } else if (on) {
+    if (pill) {
+      pill.classList.remove('is-ok');
+      pill.classList.add('is-warn');
+    }
+    if (led) led.className = 'tools-led is-warn';
+    if (txt) txt.textContent = 'No credentials \u2014 effective: OFF';
+    if (link) link.style.display = '';
+  } else {
+    if (pill) pill.classList.remove('is-ok', 'is-warn');
+    if (led) led.className = 'tools-led is-off';
+    if (txt) txt.textContent = 'No credentials \u00B7 OFF';
+    if (link) link.style.display = '';
+  }
+}
+
+function onGitToolsToggle(on) {
+  S.gitToolsEnabled = on ? 'true' : 'false';
+  postSettings({git_tools_enabled: S.gitToolsEnabled});
+  updateGitToolsUI();
+  updateDuoCoderTierHint();
+  updateDirectToolsTierHint();
+  updateChatToolsBadge();
 }
 
 function updateGitAuthStatus() {
   updateAgentGitLine();
-  var el = document.getElementById('git-auth-status');
-  if (!el) return;
-  if (S.gitRepoUrl || S.gitUsername) {
-    el.innerHTML = '&#x2713; Git konfiguriert';
-    el.style.color = 'var(--green)';
-  } else {
-    el.innerHTML = '&#x26A0; No git configured';
-    el.style.color = 'var(--amber)';
-  }
+  updateGitToolsUI();
+  if (typeof updateDuoCoderTierHint === 'function') updateDuoCoderTierHint();
+  if (typeof updateDirectToolsTierHint === 'function') updateDirectToolsTierHint();
 }
 
 // SUBAGENT-LITE (2026-08-24): Body ausblenden wenn deaktiviert —
@@ -14016,14 +14652,11 @@ function syncSubagentUI() {
   var tgl = document.getElementById('subagent-lite-toggle');
   var body = document.getElementById('subagent-lite-body');
   if (tgl && body) body.style.display = tgl.checked ? '' : 'none';
+  if (typeof updateDuoCoderTierHint === 'function') updateDuoCoderTierHint();
+  if (typeof updateDirectToolsTierHint === 'function') updateDirectToolsTierHint();
 }
 
 function syncGitToggles() {
-  var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
-  var duoToggle = document.getElementById('duo-git-autocommit-toggle');
-  if (cfgToggle && duoToggle) {
-    duoToggle.checked = cfgToggle.checked;
-  }
   updateGitIntegrationUI();
 }
 
@@ -14076,36 +14709,7 @@ async function testGitConfig() {
   if (btn) btn.textContent = 'Test connection';
 }
 function updateAgentGitLine() {
-  var el = document.getElementById('agent-git-state');
-  if (!el) return;
-  if (!S.gitRepoUrl && !S.gitUsername) {
-    el.innerHTML = '⚠ no git configured';
-    el.style.color = '#f5c451';
-    return;
-  }
-  var r = S._gitRemote;
-  if (!r) {
-    el.innerHTML = '• configured - press Test connection in the config for the remote check';
-    el.style.color = 'var(--tx2)';
-    return;
-  }
-  if (r.state === 'ok') {
-    el.innerHTML = '✓ ' + (r.branch ? (r.branch + ' · remote OK') : 'remote OK');
-    el.style.color = 'var(--green)';
-  } else if (r.state === 'missing_or_invisible') {
-    el.innerHTML = '⚠ repo missing or token cannot see it - Create repo / check token';
-    el.style.color = '#e0a030';
-  } else if (r.state === 'token_invalid' || r.state === 'no_access') {
-    // TEXTNODE FIX (2026-10-25 audit): r.msg embeds httpx exception text
-    // (user's own repo URL) - build the message part as a text node instead
-    // of innerHTML (self-XSS only, but still markup injection).
-    el.textContent = '';
-    el.appendChild(document.createTextNode('\u2717 token problem: ' + (r.msg || r.state)));
-    el.style.color = 'var(--red)';
-  } else {
-    el.innerHTML = '• ' + (r.msg || r.state || 'state unknown');
-    el.style.color = 'var(--tx2)';
-  }
+  // Status element lives only in removed legacy block; keep stub for callers.
 }
 
 function jumpToGitConfig() {
@@ -14286,12 +14890,12 @@ async function loadGitConfig(s) {
   S.duoGitAutocommit = s.duo_git_autocommit || false;
   S.gitRepoUrl = s.git_repo_url || '';
   S.gitUsername = s.git_username || '';
+  S.gitEmail = s.git_email || '';
   S.gitToken = '';
   S.gitTokenSaved = !!s.git_token_saved;
   S.gitBranch = s.git_default_branch || s.git_branch || 'main';
-  // GIT-TOOLS-GATE (2026-10-17): the git tools follow the credentials; this
-  // select is the explicit override (auto | true | false). JSON booleans and
-  // strings both occur, so normalise before syncing the select.
+  // GIT-TOOLS-GATE (2026-10-17 / 2026-11-12): toggle + credential check-light.
+  // JSON booleans and strings both occur, so normalise before syncing the toggle.
   if (s.git_tools_enabled === undefined || s.git_tools_enabled === null) {
     S.gitToolsEnabled = 'auto';
   } else if (typeof s.git_tools_enabled === 'boolean') {
@@ -14300,13 +14904,7 @@ async function loadGitConfig(s) {
     S.gitToolsEnabled = String(s.git_tools_enabled);
   }
   // Sync toggles
-  var duoToggle = document.getElementById('duo-git-autocommit-toggle');
-  if (duoToggle) duoToggle.checked = S.duoGitAutocommit;
-  var _gtmEl = document.getElementById('git-tools-mode-sel');
-  if (_gtmEl) {
-    _gtmEl.value = ['auto', 'true', 'false'].indexOf(S.gitToolsEnabled) >= 0
-      ? S.gitToolsEnabled : 'auto';
-  }
+  updateGitToolsUI();
   var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
   if (cfgToggle) cfgToggle.checked = S.duoGitAutocommit;
   var cpToggle = document.getElementById('git-checkpoints-cfg-toggle');
@@ -14406,29 +15004,8 @@ async function loadGitConfig(s) {
   S.searxngHost = s.searxng_host || 'http://localhost:8888';
   var _wsHostEl = document.getElementById('ws-searxng-host');
   if (_wsHostEl) _wsHostEl.textContent = S.searxngHost.replace(/^https?:\/\//i, '');
-  var brSel = document.getElementById('git-branch-sel');
-  if (brSel) { brSel.value = S.gitBranch || 'main'; }
   updateGitIntegrationUI();
-  // load the branch list from the server (for the dropdown in the duo panel)
-  try {
-    var brRes = await (await fetch('/git/branches?workspace=' + encodeURIComponent(_gitWs()))).json();
-    if (brRes.branches && brRes.branches.length && brSel) {
-      brSel.innerHTML = '';
-      brRes.branches.forEach(function(b) {
-        var opt = document.createElement('option');
-        opt.value = b; opt.textContent = b;
-        if (b === S.gitBranch) opt.selected = true;
-        brSel.appendChild(opt);
-      });
-      // custom option in case the branch does not exist yet
-      if (!brRes.branches.includes(S.gitBranch)) {
-        var customOpt = document.createElement('option');
-        customOpt.value = S.gitBranch; customOpt.textContent = S.gitBranch + ' (new)';
-        customOpt.selected = true;
-        brSel.appendChild(customOpt);
-      }
-    }
-  } catch(e) {}
+  updateWebsearchHint();
 }
 
 
@@ -14639,6 +15216,20 @@ function _updateDuoRoleStatus(elId, label, model) {
       'duo_run_timeout_seconds duo_run_timeout_critical_seconds critical timeout wall budget 420 900');
     _push('agents', 'Compression tail cap', null, 'Compression', null,
       'duo_compress_tail_tool_max_chars tail tool output 8000 compression');
+    _push('agents', 'Tools & Optionals', document.getElementById('tools-optionals-card'), 'Tools & Optionals', null,
+      'tools optionals direct coder toolset websearch git');
+    _push('agents', 'Coder Toolset (lean / core / full)', document.getElementById('duo-coder-tool-tier'), 'Tools & Optionals', null,
+      'duo_coder_tool_tier coder toolset lean core full');
+    _push('agents', 'Direct Chat Tools', document.getElementById('tools-direct-block'), 'Tools & Optionals', null,
+      'direct_tools_enabled direct_tools_tier direct_tools_max_rounds off basic research python full');
+    _push('agents', 'Websearch (SearXNG)', document.getElementById('duo-websearch-toggle'), 'Tools & Optionals', null,
+      'duo_websearch_enabled duo_websearch_timeout_seconds searxng_host websearch check host');
+    _push('agents', 'Git Tools', document.getElementById('git-tools-toggle'), 'Tools & Optionals', null,
+      'git_tools_enabled git_status git_commit credentials');
+    _push('agents', 'Research subagent', document.getElementById('subagent-lite-toggle'), 'Tools & Optionals', null,
+      'subagent research delegate model ladder ctx subagent_lite_enabled');
+    _push('agents', 'Sandbox tool spawns', document.getElementById('tool-sandbox-toggle'), 'Tools & Optionals', null,
+      'sandbox tool spawns job objects duo_tool_sandbox run_bash run_python background');
     _push('configs', 'MCP client timeout', null, 'MCP', null,
       'mcp_client_timeout_s timeout seconds server call');
     _push('configs', 'Git default branch', null, 'Git', null,

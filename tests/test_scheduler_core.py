@@ -208,6 +208,165 @@ def main() -> int:
           "automations_router" in srv and "init_manager" in srv
           and "scheduler started" in srv)
 
+    # ── Agentic/MCP/Telegram routing & UI checks (2026-11-13) ───────────
+    import tools.definitions as TD
+    check("direct_mcp unlocks MCP tools while direct keeps them out",
+          TD.mcp_allowed_in_mode("direct_mcp")
+          and not TD.mcp_allowed_in_mode("direct"))
+    from routers.automations import _validate as _val_auto
+    j_ag, err_ag = _val_auto({
+        "name": "Mail TG",
+        "prompt": "Summarize mails",
+        "schedule": {"kind": "every", "interval_s": 1800},
+        "mode": "agentic",
+        "tools_tier": "mcp",
+        "notify_telegram": True,
+    })
+    check("automations validator accepts agentic + mcp + notify_telegram",
+          j_ag is not None and not err_ag
+          and j_ag.get("mode") == "agentic"
+          and j_ag.get("tools_tier") == "mcp"
+          and j_ag.get("notify_telegram") is True, f"({j_ag}/{err_ag})")
+
+    with tempfile.TemporaryDirectory() as td2:
+        import asyncio
+        fm = SchedulerManager(Path(td2) / "fire.json", "http://127.0.0.1:1")
+        fjob = fm.store.add({
+            "name": "Agentic MCP", "prompt": "check mail",
+            "schedule": {"kind": "every", "interval_s": 1800},
+            "mode": "agentic", "tools_tier": "mcp",
+            "notify_telegram": True, "next_ts": time.time() - 1,
+        })
+        captured = {}
+        tg_delivered = []
+        async def _fake_chat(j): return "chat-auto-1"
+        async def _fake_append(c, r, t, j): pass
+        async def _fake_stream(body, max_rt):
+            captured["body"] = dict(body)
+            return ("Mail summary ready", "completed", "run-1")
+        async def _fake_tg(j, ans, st, sr, files=None):
+            tg_delivered.append((j["id"], ans, st))
+        fm._ensure_chat = _fake_chat
+        fm._append_turn = _fake_append
+        fm._run_stream = _fake_stream
+        fm._deliver_telegram = _fake_tg
+        asyncio.run(fm._fire(fjob, time.time(), "due"))
+        b = captured.get("body", {})
+        check("SchedulerManager routes agentic+mcp+tg with mcp coder tier & source=telegram",
+              b.get("mode") == "code_duo"
+              and b.get("duo_agentic_mode") is True
+              and b.get("agentic_force") is True
+              and b.get("duo_coder_tool_tier") == "mcp"
+              and b.get("direct_tools_tier") == "mcp"
+              and b.get("source") == "telegram"
+              and len(tg_delivered) == 1
+              and tg_delivered[0][1] == "Mail summary ready", f"({b} / {tg_delivered})")
+
+        # Tier matrix + stale _last_ask_preview reset
+        tier_cases = {}
+        for tname in ("off", "readonly", "research", "python", "full"):
+            tjob = fm.store.add({
+                "name": f"Tier {tname}", "prompt": "check",
+                "schedule": {"kind": "every", "interval_s": 1800},
+                "mode": "agentic", "tools_tier": tname,
+                "next_ts": time.time() - 1,
+            })
+            captured.clear()
+            fm._last_ask_preview = "stale question from earlier run"
+            async def _empty_ok_stream(body, max_rt):
+                captured["body"] = dict(body)
+                return ("", "completed", "run-tier")
+            fm._run_stream = _empty_ok_stream
+            asyncio.run(fm._fire(tjob, time.time(), "due"))
+            tier_cases[tname] = (dict(captured["body"]), fm._last_ask_preview,
+                                 fm.store.get(tjob["id"]).get("last_status"))
+        check("tier matrix maps off/readonly/research->readonly, python->core, full->full & sets tool_rounds=0 for off",
+              tier_cases["off"][0].get("duo_coder_tool_tier") == "readonly"
+              and tier_cases["off"][0].get("duo_tool_rounds") == 0
+              and tier_cases["off"][0].get("duo_pre_explore") is False
+              and tier_cases["readonly"][0].get("duo_coder_tool_tier") == "readonly"
+              and tier_cases["research"][0].get("duo_coder_tool_tier") == "readonly"
+              and tier_cases["python"][0].get("duo_coder_tool_tier") == "core"
+              and tier_cases["full"][0].get("duo_coder_tool_tier") == "full",
+              f"({tier_cases})")
+        check("_last_ask_preview is reset at start of _fire so empty ok run stays ok",
+              tier_cases["full"][1] == "" and tier_cases["full"][2] == "ok",
+              f"({tier_cases['full']})")
+
+        # _deliver_telegram: split Markdown before HTML + send_file attachment
+        from unittest import mock as _mock
+        from hivemind_gateway import main as _gw_main, send as _gw_send, state as _gw_state
+        ws_att = Path(td2) / "ws"
+        ws_att.mkdir()
+        (ws_att / "report.txt").write_text("hello report", encoding="utf-8")
+        long_md = ("**bold item**\n" + ("word " * 30) + "\n") * 80
+        sent_calls = []
+
+        async def _fake_send(api, owner_chat_id, chat_id, **kw):
+            sent_calls.append(dict(kw))
+            return {}
+
+        class _DummyApi:
+            def __init__(self, tok): pass
+            async def close(self): pass
+
+        with _mock.patch.object(_gw_main, "resolve_token", side_effect=_gw_main.StartupError("no token")):
+            from routers.automations import _automation_capabilities
+            from infra import mcp_client as _mc
+            with _mock.patch.object(_mc, "enabled", return_value=True), \
+                 _mock.patch.object(_mc, "status", return_value=[{"name": "mail", "ok": True}]):
+                caps = _automation_capabilities()
+        check("_automation_capabilities handles list mcp status & StartupError token",
+              caps.get("mcp_enabled") is True
+              and caps.get("mcp_servers") == ["mail"]
+              and caps.get("telegram_configured") is False, f"({caps})")
+
+        class _FakeGwState:
+            owner_telegram_id = "123456"
+
+        fm_tg = SchedulerManager(Path(td2) / "tg_real.json", "http://127.0.0.1:1")
+        with _mock.patch.object(_gw_main, "resolve_token", return_value="123:tok"), \
+             _mock.patch.object(_gw_state, "GatewayState", _FakeGwState), \
+             _mock.patch("hivemind_gateway.telegram_api.TelegramApi", _DummyApi), \
+             _mock.patch.object(_gw_send, "send", _fake_send):
+            asyncio.run(fm_tg._deliver_telegram(
+                {"id": "j1", "name": "Digest", "workspace": str(ws_att)},
+                long_md, "ok", "completed",
+                [{"path": "report.txt", "workspace": str(ws_att)}],
+            ))
+        text_chunks = [c for c in sent_calls if c.get("text")]
+        doc_calls = [c for c in sent_calls if c.get("document_bytes")]
+        check("_deliver_telegram splits Markdown before HTML conversion and attaches send_file",
+              len(text_chunks) >= 2
+              and all(c.get("parse_mode") == "HTML" and "<b>bold item</b>" in c["text"] for c in text_chunks)
+              and len(doc_calls) == 1
+              and doc_calls[0].get("filename") == "report.txt"
+              and doc_calls[0].get("document_bytes") == b"hello report",
+              f"(chunks={len(text_chunks)}, docs={len(doc_calls)})")
+
+        # PUT /automations/{job_id} preserves last_status, last_duration_s & pending_fire
+        import routers.automations as _ra
+        j_put = fm.store.add({
+            "name": "Put Keep", "prompt": "hi",
+            "schedule": {"kind": "every", "interval_s": 600},
+            "last_status": "ok", "last_duration_s": 4.2, "pending_fire": True,
+        })
+        class _FakeReq:
+            def __init__(self, d): self._d = d
+            async def json(self): return self._d
+        with _mock.patch.object(_ra, "_mgr", return_value=fm):
+            upd = asyncio.run(_ra.update_automation(j_put["id"], _FakeReq({"name": "Put Renamed"})))
+        check("PUT preserves last_status, last_duration_s & pending_fire",
+              upd.get("name") == "Put Renamed"
+              and upd.get("last_status") == "ok"
+              and upd.get("last_duration_s") == 4.2
+              and upd.get("pending_fire") is True, f"({upd})")
+
+    check("Automations UI exposes MCP tier, Telegram push & Agentic naming",
+          'value="agentic"' in html and 'value="mcp"' in html
+          and 'id="auto-notify-tg"' in html
+          and 'automationApplyTemplate' in js and 'Code+Critic' in js)
+
     return _h.finish("scheduler_core")
 
 

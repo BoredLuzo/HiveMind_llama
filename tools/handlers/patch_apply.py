@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 
 from tools.errors import tool_error_response as _tool_error_response
+from tools.patch_2_fuzzy_edit import best_match_location
 from tools.patch_diff import (
     PatchError,
     apply_hunks_to_text,
@@ -42,7 +43,8 @@ _MAX_LINT_FILES = 4
 _MAX_AUTO_TEST_PATHS = 6
 
 _ARG_FRAGMENTS = ("<parameter=", "<<<<<<<", ">>>>>>>",
-                  "applied diff:", "content not in context anymore")
+                  "[applied diff:", "[applied write:", "[applied edit:",
+                  "content not in context anymore")
 
 _PLAN_NOTE = (
     "\nOrdering guarantee: file sections are applied in patch order, "
@@ -52,6 +54,38 @@ _PLAN_NOTE = (
 
 def _err(code: str, message: str) -> str:
     return _tool_error_response(code, message, tool="apply_patch")
+
+
+def _build_patch_mismatch_anchor(rel: str, current_lf: str, hunks: list) -> str:
+    """Return a 15-20 line current-file snippet near the first failing hunk."""
+    cur_lines = current_lf.splitlines()
+    if not cur_lines:
+        return ""
+    center = 1
+    ctx_len = 1
+    for h in hunks or ():
+        old_lines = h.old_lines() if hasattr(h, "old_lines") else []
+        if old_lines:
+            expected_txt = "\n".join(old_lines)
+            ctx_len = len(old_lines)
+            try:
+                loc = best_match_location(current_lf, expected_txt)
+            except (ValueError, TypeError, AttributeError):
+                loc = None
+            if loc and loc[0] is not None and int(loc[0]) >= 0:
+                center = int(loc[0]) + 1
+            else:
+                center = max(1, int(getattr(h, "old_start", 1) or 1))
+            break
+    lo = max(0, center - 1 - 9)
+    hi = min(len(cur_lines), center - 1 + max(ctx_len, 1) + 9)
+    snippet = "\n".join(cur_lines[lo:hi])
+    if len(snippet) > 1400:
+        snippet = snippet[:1400] + "\n... [truncated]"
+    return (
+        f"\n\n[CURRENT CONTENT of '{Path(rel).name}' lines {lo + 1}-{hi} — "
+        f"build your next patch or edit_file from EXACTLY this:]\n{snippet}"
+    )
 
 
 async def _inline_tool_apply_patch(args: dict, workspace: Path,
@@ -64,7 +98,7 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
             "/ @@ sections). For single-passage edits use edit_file.")
     for frag in _ARG_FRAGMENTS:
         if frag in text:
-            if "applied diff:" in frag or "context anymore" in frag:
+            if "[applied " in frag or "context anymore" in frag:
                 # STUB-ECHO: the model echoed one of OUR history compaction
                 # stubs back as patch content — never write that to disk.
                 return _err(
@@ -91,7 +125,8 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
 
     # ── Phase A: validate + compute every file's new content in memory ──
     # A failure anywhere in this loop aborts the whole call with no write.
-    planned: list[dict] = []
+    plan_by_target: dict[Path, dict] = {}
+    plan_order: list[Path] = []
     for fp in patches:
         rel = fp.target
         try:
@@ -100,7 +135,32 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
             return _err(
                 "APPLY_PATCH_PATH_INVALID",
                 f"patch path rejected: {e.message} NOTHING was written.")
-        exists = target.exists()
+        # Security: re-check symlink/junction containment BEFORE touching disk.
+        _chk_pre = _recheck_workspace_before_replace(
+            target, workspace_lock, "apply_patch")
+        if _chk_pre:
+            return _chk_pre
+        prev = plan_by_target.get(target)
+        if prev is not None:
+            exists = not prev["is_delete"]
+            disk_original = prev["original"]
+            disk_existed_before = prev["existed_before"]
+            current_content = "" if prev["is_delete"] else prev["final"]
+        else:
+            exists = target.exists()
+            disk_existed_before = exists
+            if exists:
+                try:
+                    disk_original = await asyncio.to_thread(
+                        target.read_text, encoding="utf-8", errors="replace",
+                        newline="")
+                except OSError as e:
+                    return _err(
+                        "APPLY_PATCH_READ_FAILED",
+                        f"failed to read '{rel}': {e} NOTHING was written.")
+            else:
+                disk_original = ""
+            current_content = disk_original
         if fp.is_new_file and exists:
             return _err(
                 "APPLY_PATCH_TARGET_CONFLICT",
@@ -111,37 +171,45 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
                 "APPLY_PATCH_NO_TARGET",
                 f"patch targets '{rel}' which does not exist (new files need "
                 "'--- /dev/null' + '+++ b/<path>'). NOTHING was written.")
-        if exists:
-            try:
-                original = await asyncio.to_thread(
-                    target.read_text, encoding="utf-8", errors="replace",
-                    newline="")
-            except OSError as e:
-                return _err(
-                    "APPLY_PATCH_READ_FAILED",
-                    f"failed to read '{rel}': {e} NOTHING was written.")
-        else:
-            original = ""
-        has_crlf = "\r\n" in original
+        has_crlf = "\r\n" in current_content
         try:
             new_lf = apply_hunks_to_text(
-                original.replace("\r\n", "\n"), fp.hunks,
+                current_content.replace("\r\n", "\n"), fp.hunks,
                 is_new_file=fp.is_new_file, is_delete=fp.is_delete)
         except PatchError as e:
+            _anchor = (
+                _build_patch_mismatch_anchor(
+                    rel, current_content.replace("\r\n", "\n"), fp.hunks
+                )
+                if e.code == "PATCH_CONTEXT_NOT_FOUND"
+                else ""
+            )
             return _err(
                 "APPLY_PATCH_FAILED",
                 f"patch for '{rel}' not applicable ({e.code}): {e.message} "
-                "NOTHING was written.")
+                f"NOTHING was written.{_anchor}")
         final = new_lf.replace("\n", "\r\n") if has_crlf else new_lf
-        planned.append({
-            "rel": rel, "path": target, "original": original,
-            "final": final, "is_new": fp.is_new_file, "is_delete": fp.is_delete,
-            "added": fp.added(), "removed": fp.removed(),
-        })
+        if prev is None:
+            plan_order.append(target)
+            plan_by_target[target] = {
+                "rel": rel, "path": target,
+                "existed_before": disk_existed_before,
+                "original": disk_original, "final": final,
+                "is_new": fp.is_new_file or not disk_existed_before,
+                "is_delete": fp.is_delete,
+                "added": fp.added(), "removed": fp.removed(),
+            }
+        else:
+            prev["final"] = final
+            prev["is_delete"] = fp.is_delete
+            prev["is_new"] = not disk_existed_before
+            prev["added"] += fp.added()
+            prev["removed"] += fp.removed()
+    planned = [plan_by_target[t] for t in plan_order]
 
     # DETERMINISTIC ORDER: patch order for writes, deletions last.
     writes = [p for p in planned if not p["is_delete"]]
-    deletes = [p for p in planned if p["is_delete"]]
+    deletes = [p for p in planned if p["is_delete"] and p["existed_before"]]
     ordered = writes + deletes
     for p in ordered:
         get_transaction().capture_before(p["path"])
@@ -153,8 +221,7 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
             p["path"], workspace_lock, "apply_patch")
         if chk:
             _rb = await _rollback(workspace, done)
-            return (chk + _rb_note(_rb)) if _rb else chk + (
-                "\n[rollback: nothing had been written yet]")
+            return chk + (_rb_note(_rb) or "\n[rollback: nothing had been written yet]")
         try:
             if p["is_delete"]:
                 await asyncio.to_thread(os.unlink, str(p["path"]))
@@ -180,9 +247,11 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
     changed = [p for p in writes]  # new + edited (deletions are not test targets)
     try:
         from tools.auto_test import auto_test_note
+        from tools.runner import _run_settings_snapshot
         note = await auto_test_note(
             [str(p["path"]) for p in changed[:_MAX_AUTO_TEST_PATHS]],
-            workspace, workspace_lock)
+            workspace, workspace_lock,
+            settings=_run_settings_snapshot.get(None))
     except (ImportError, OSError, AttributeError, TypeError, ValueError):
         note = ""  # auto_test_note never raises by design; belt-and-braces
 
@@ -195,10 +264,11 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
         else:
             parts.append(
                 f"  - {p['rel']} (+{p['added']}/-{p['removed']} lines)")
+    _note_sep = ("\n" + note) if (note and not note.startswith("\n")) else note
     return (f"[apply_patch: {len(planned)} file(s) patched "
             f"(+{sum(p['added'] for p in planned)}/"
             f"-{sum(p['removed'] for p in planned)} lines)]\n"
-            + "\n".join(parts) + _PLAN_NOTE + _lint + note)
+            + "\n".join(parts) + _PLAN_NOTE + _lint + _note_sep)
 
 
 def _rb_note(rb: dict) -> str:
@@ -213,7 +283,7 @@ async def _rollback(workspace: Path, done: list[dict],
     failed_rb: list[str] = []
     for p in reversed(done):
         try:
-            if p["is_new"]:
+            if p["is_new"] or not p.get("existed_before", True):
                 if p["path"].exists():
                     await asyncio.to_thread(os.unlink, str(p["path"]))
             else:

@@ -233,9 +233,44 @@ try:
         _settings.pop("duo_auto_test_timeout", None)
         auto_test.reset_run_state("")
 
-    # ── 12. settings cleanup: key off again ──
+    # ── 12. source-edit hash bust: editing app.py invalidates signature ──
+    fake = _FakeSuite()
+    ws = _mkws()
+    _sh._run_test_suite = _wire(fake, _FakeResult())
+    try:
+        auto_test.reset_run_state("")
+        out_s1 = asyncio.run(_note(ws))
+        (ws / "app.py").write_text("VALUE = 999\n", encoding="utf-8")
+        out_s2 = asyncio.run(_note(ws))
+        check("editing source file busts fresh signature even when test file is unchanged",
+              out_s1 != "" and out_s2 != "" and len(fake.calls) == 2,
+              f" (calls={len(fake.calls)})")
+    finally:
+        _sh._run_test_suite = _ORIG_SUITE
+        auto_test.reset_run_state("")
+
+    # ── 13. settings cleanup: key off again ──
     _settings.pop("duo_auto_test_on_edit", None)
     check("cleanup removed the setting", "duo_auto_test_on_edit" not in _settings)
+
+    # ── 14. per-run _run_settings_snapshot overrides global core.state.settings ──
+    from tools.runner import _run_settings_snapshot as _snap_var
+    _settings["duo_auto_test_on_edit"] = False
+    _tok = _snap_var.set({"duo_auto_test_on_edit": True})
+    fake = _FakeSuite()
+    ws = _mkws()
+    _sh._run_test_suite = _wire(fake, _FakeResult())
+    try:
+        auto_test.reset_run_state("")
+        out_snap = asyncio.run(_note(ws))
+        check("per-run snapshot enables auto_test even when global setting is False",
+              "[AUTO-TEST" in out_snap and len(fake.calls) == 1,
+              f" ({out_snap!r}, calls={len(fake.calls)})")
+    finally:
+        _snap_var.reset(_tok)
+        _sh._run_test_suite = _ORIG_SUITE
+        _settings.pop("duo_auto_test_on_edit", None)
+        auto_test.reset_run_state("")
 finally:
     _sh._run_test_suite = _ORIG_SUITE
 

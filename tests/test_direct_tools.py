@@ -228,6 +228,55 @@ try:
         _run_direct_tools_collect(_ctx, "m:9b", [{"role": "user", "content": "hi"}], "direct")
     )
     check("max_rounds capped at 300", _captured_configs[-1].max_rounds == 300)
+
+    # 7) Optionals gating (2026-11-12): direct respects duo_websearch_enabled ONLY
+    #    (not pipeline_websearch_enabled), and git_tools_enabled + credentials.
+    _ctx.settings = {
+        "direct_tools_max_rounds": 3,
+        "duo_llm_slow_timeout_s": 300,
+        "duo_websearch_enabled": False,
+        "pipeline_websearch_enabled": True,
+        "git_tools_enabled": "false",
+    }
+    asyncio.run(
+        _run_direct_tools_collect(_ctx, "m:9b", [{"role": "user", "content": "hi"}], "direct")
+    )
+    check("direct ignores pipeline_websearch_enabled when duo_websearch_enabled=False",
+          _captured_configs[-1].include_websearch is False
+          and _captured_configs[-1].include_git is False)
+    _basic_off = {
+        t["function"]["name"] for t in _defs._get_inline_tools(
+            include_websearch=False, mode="direct", include_git=False)
+    }
+    check("direct basic tier keeps ask_user/task_complete/get_datetime without websearch",
+          {"ask_user", "task_complete", "get_datetime"} <= _basic_off
+          and not ({"web_search", "web_fetch"} & _basic_off))
+
+    _ctx.settings = {
+        "direct_tools_max_rounds": 3,
+        "duo_llm_slow_timeout_s": 300,
+        "duo_websearch_enabled": True,
+        "git_tools_enabled": "true",
+        "git_repo_url": "https://example.com/repo.git",
+    }
+    asyncio.run(
+        _run_direct_tools_collect(_ctx, "m:9b", [{"role": "user", "content": "hi"}], "direct_full")
+    )
+    check("direct_full enables websearch + git when toggle ON + creds",
+          _captured_configs[-1].include_websearch is True
+          and _captured_configs[-1].include_git is True)
+    _full_on = {
+        t["function"]["name"] for t in _defs._get_inline_tools(
+            include_websearch=True, mode="direct_full", include_git=True)
+    }
+    _res_on = {
+        t["function"]["name"] for t in _defs._get_inline_tools(
+            include_websearch=True, mode="direct_research", include_git=True)
+    }
+    check("direct_full with web+git exposes web_search, git_status, git_commit",
+          {"web_search", "web_fetch", "git_status", "git_commit"} <= _full_on)
+    check("direct_research with web+git exposes web_search & git_status (no git_commit)",
+          {"web_search", "git_status"} <= _res_on and "git_commit" not in _res_on)
 finally:
     _lc.manager = _orig_mgr
     _tl.ToolLoop = _orig_loop

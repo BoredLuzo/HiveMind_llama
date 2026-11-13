@@ -101,5 +101,26 @@ check("no absolute inline margins on the moved wrappers",
       'id="wrapper-ctx-agentic" style="margin-bottom:10px' not in HTML)
 check("no inline purple label style left",
       'font-size:11px;color:#9a74dc;cursor:pointer' not in HTML)
+check("unified Tools & Optionals card exists and has all three blocks",
+      'id="tools-optionals-card"' in HTML
+      and 'id="tools-direct-block"' in HTML
+      and 'id="tools-coder-block"' in HTML
+      and 'id="tools-optionals-block"' in HTML
+      and 'id="duo-tools-slot"' in HTML)
+check("updateChatToolsSectionVisibility moves Tools card into duo-tools-slot in code_duo",
+      "var card = document.getElementById('tools-optionals-card');" in JS
+      and "_ctxMoveTo(card, duoSlot)" in JS
+      and "_ctxRestore(card)" in JS)
+check("setDuoSubMode refreshes Tools & Optionals scope label",
+      "updateChatToolsSectionVisibility();" in JS[JS.index("function setDuoSubMode("):JS.index("function updateAgenticHint(")])
+
+_opt_start = HTML.index('id="tools-optionals-block"')
+_opt_end = HTML.index('id="automap-adv-panel"')
+_opt_slice = HTML[_opt_start:_opt_end]
+check("Research subagent + Tool sandbox live once inside Tools & Optionals",
+      'id="subagent-lite-toggle"' in _opt_slice
+      and 'id="tool-sandbox-toggle"' in _opt_slice
+      and HTML.count('id="subagent-lite-toggle"') == 1
+      and HTML.count('id="tool-sandbox-toggle"') == 1)
 
 sys.exit(h.finish("ui_context_card"))

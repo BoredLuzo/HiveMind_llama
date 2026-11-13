@@ -99,6 +99,22 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     check("not-found later edit aborts the whole batch",
           "EDIT_FILE_OLD_TEXT_NOT_FOUND" in out and _read(ws) == _BODY,
           f"({out.strip()[:120]})")
+    check("batch mismatch error includes current file context anchor",
+          "[CURRENT CONTENT of 'app.py'" in out,
+          f"({out.strip()[:160]})")
+
+    # 4b: trailing-whitespace drift tolerated when unique in batch edit
+    asyncio.run(_setup(ws, "def alpha():  \n    return 1\n\ndef beta():\n    return 2\n", name="ws.py"))
+    out_ws = asyncio.run(_inline_tool_edit_file({
+        "path": "ws.py",
+        "edits": [
+            {"old_text": "def alpha():\n    return 1", "new_text": "def alpha():\n    return 10"},
+            {"old_text": "    return 2", "new_text": "    return 20"},
+        ],
+    }, ws, str(ws)))
+    check("batch edit tolerates trailing-whitespace drift when unique",
+          "applied 2 edits" in out_ws and "return 10" in _read(ws, "ws.py") and "return 20" in _read(ws, "ws.py"),
+          f"({out_ws.strip()[:120]})")
 
 # 5: symbol-loss guard fires across the batch.
 with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -150,5 +166,31 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
               for o in (out_str, out_empty, out_entry, out_cap))
           and _read(ws) == _BODY,
           f"(str={out_str.strip()[:60]} cap={out_cap.strip()[:60]})")
+
+# 7: empty new_text deletion inside multi-edit batch + write_file_append exists guard
+from tools.handlers.file_ops import _inline_tool_write_file_append  # noqa: E402
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    asyncio.run(_setup(ws, "ALPHA = 1\n# remove-me\nBETA = 2\n", name="del.py"))
+    out_del = asyncio.run(_inline_tool_edit_file({
+        "path": "del.py",
+        "edits": [
+            {"old_text": "# remove-me\n", "new_text": ""},
+            {"old_text": "BETA = 2", "new_text": "BETA = 3"},
+        ],
+    }, ws, str(ws)))
+    del_body = _read(ws, "del.py")
+    check("multi-edit accepts empty string new_text as deletion",
+          "applied 2 edits" in out_del and "# remove-me" not in del_body and "BETA = 3" in del_body,
+          f"({out_del.strip()[:100]})")
+
+    out_app_missing = asyncio.run(_inline_tool_write_file_append({
+        "path": "does_not_exist.py",
+        "content": "hello\n",
+    }, ws, str(ws)))
+    check("write_file_append requires an existing file (FILE_NOT_FOUND)",
+          "FILE_NOT_FOUND" in out_app_missing and not (ws / "does_not_exist.py").exists(),
+          f"({out_app_missing.strip()[:100]})")
 
 sys.exit(h.finish("multi_edit"))

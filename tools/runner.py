@@ -1,5 +1,6 @@
 """Tool runner and path utilities (extracted from server.py)."""
 from __future__ import annotations
+import asyncio
 import contextvars as _contextvars
 import json
 import os
@@ -1536,7 +1537,8 @@ async def _run_inline_tool(
     workspace_lock: str | None = None,
     *,
     tool_mode: str | None = None,
-    include_websearch: bool = False) -> str:
+    include_websearch: bool = False,
+    include_git: bool | None = None) -> str:
     """Primary inline-tool dispatch using the unified handler map."""
     workspace = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
 
@@ -1564,27 +1566,49 @@ async def _run_inline_tool(
         _written_set = set()
         _files_written_in_run.set(_written_set)
 
+    # Phone restriction (2026-10-05 UI toggle telegram_phone_restricted):
+    # ONE choke point for every mode/phase — anything outside the safe set
+    # (read-only + web + dialog) is rejected before mode/MCP/read-guard checks.
+    if _tools_restricted_run.get() and name not in _PHONE_SAFE_TOOLS:
+        return _tool_error_response(
+            "PHONE_RESTRICTED",
+            f"Tool '{name}' is blocked: phone runs are restricted to web "
+            "+ read-only tools (UI toggle 'Restrict phone runs').",
+            tool=name,
+            mode=str(tool_mode or ""),
+            details={"allowed_tools": sorted(_PHONE_SAFE_TOOLS)})
+    if (tool_mode and bool(name) and name.startswith("mcp_")
+            and not _mcp_allowed_in_mode(tool_mode)):
+        return _tool_error_response(
+            "TOOL_NOT_ALLOWED",
+            f"Tool '{name}' is an MCP tool and mode '{tool_mode}' has no MCP "
+            f"access. Modes with MCP access: {', '.join(sorted(_MCP_TOOL_MODES))}.",
+            tool=name, mode=tool_mode)
+    if tool_mode and not (bool(name) and name.startswith("mcp_")):
+        _eff_git = include_git
+        _eff_sub = None
+        _snap_opt = _run_settings_snapshot.get(None)
+        _snap_dict = _snap_opt if isinstance(_snap_opt, dict) and _snap_opt else None
+        try:
+            from tools.definitions import git_tools_enabled as _gte, subagent_tools_enabled as _ste
+            if _eff_git is None:
+                _eff_git = _gte(_snap_dict)
+            _eff_sub = _ste(_snap_dict)
+        except (ImportError, AttributeError, TypeError):
+            _eff_sub = None
+        _allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch,
+                                        include_git=_eff_git, include_subagent=_eff_sub)
+        if name not in _allowed:
+            return _tool_error_response(
+                "TOOL_NOT_ALLOWED",
+                f"Tool '{name}' is not allowed in mode '{tool_mode}'.",
+                tool=name,
+                mode=tool_mode ,
+                details={"allowed_tools": sorted(_allowed)})
+
     _resolve_hint = ""     # fuzzy path resolution hint for edit tools
 
-    if name == "read_file" and "path" in args:
-        _rp_str = _normalize_tool_path(args["path"], workspace)
-        _any_read_set.add(_rp_str)
-        _ctx_set = _files_in_context.get(None)
-        if _ctx_set and _rp_str in _ctx_set:
-            import logging as _logging
-            _logging.getLogger("hivemind.tools").debug(
-                "[HINT-LOG] file=%s in_pre_explore_context=True read_allowed=True",
-                _rp_str
-            )
-        if _rp_str in _read_set and not args.get("start_line") and not args.get("end_line"):
-            return _normalize_meta_paths(
-                f"[SKIP: '{args.get('path')}' already read in this session. "
-                f"The full content is in your context above. "
-                f"Do NOT call read_file on this path again. "
-                f"Use edit_file or write_file directly.]"
-            )
-
-    elif name in ("edit_file", "patch_file", "write_file", "write_file_append", "replace_lines") and "path" in args:
+    if name in ("edit_file", "patch_file", "write_file", "write_file_append", "replace_lines") and "path" in args:
         raw_path = args["path"]
         _resolved_path = raw_path
         # T5 (audit r2): build the probe via the SAME MSYS-stripping
@@ -1657,30 +1681,54 @@ async def _run_inline_tool(
                 f"Reason: The file already exists and was not read in this session "
                 f"(only a symbol index may have been in context — not its content).\n"
                 f"Fix: Call read_file('{raw_path}') first, then modify it with "
-                f"edit_file/patch_file (SEARCH/REPLACE).\n"
+                f"edit_file(path, old_text, new_text) or apply_patch.\n"
                 f"Note: write_file with full content is only for creating NEW files.\n"
                 f"      To disable this guard set duo_write_guard_enabled=false."
             )
-    if (tool_mode and bool(name) and name.startswith("mcp_")
-            and not _mcp_allowed_in_mode(tool_mode)):
-        return _tool_error_response(
-            "TOOL_NOT_ALLOWED",
-            f"Tool '{name}' is an MCP tool and mode '{tool_mode}' has no MCP "
-            f"access. Modes with MCP access: {', '.join(sorted(_MCP_TOOL_MODES))}.",
-            tool=name, mode=tool_mode)
-    if tool_mode and not (bool(name) and name.startswith("mcp_")):
-        _allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch)
-        if name not in _allowed:
-            return _tool_error_response(
-                "TOOL_NOT_ALLOWED",
-                f"Tool '{name}' is not allowed in mode '{tool_mode}'.",
-                tool=name,
-                mode=tool_mode ,
-                details={"allowed_tools": sorted(_allowed)})
+    elif name == "apply_patch" and (args.get("patch") or args.get("diff")):
+        _guard_active_ap = (not _is_external_dispatch() and _read_guard_enabled()
+                            and (tool_mode or "") not in ("duo_full", "duo_core", "duo_lean"))
+        if _guard_active_ap:
+            from tools.patch_diff import patch_targets as _patch_targets_guard
+            _ctx_set_ap = _files_in_context.get(None)
+            _ap_guard_txt = str(args.get("patch") or args.get("diff") or "")
+            for _ap_raw in _patch_targets_guard(_ap_guard_txt, include_new=False):
+                _ap_fp = Path(_inline_resolve_path(workspace, _ap_raw))
+                try:
+                    _ap_fp = _ap_fp.resolve()
+                except (OSError, RuntimeError, ValueError):
+                    _ap_fp = _ap_fp
+                _ap_target = _normalize_tool_path(str(_ap_fp), workspace)
+                _ap_in_ctx = bool(_ctx_set_ap and _ap_target in _ctx_set_ap)
+                if (_ap_fp.exists() and _ap_target not in _read_set
+                        and _ap_target not in _any_read_set
+                        and _ap_target not in _written_set
+                        and not _ap_in_ctx):
+                    return _normalize_meta_paths(
+                        f"[TOOL_ERROR: READ_REQUIRED]\n"
+                        f"Action: apply_patch BLOCKED on '{_ap_raw}'\n"
+                        f"Reason: File has not been read in this session.\n"
+                        f"Fix: Call read_file('{_ap_raw}') first, then retry apply_patch."
+                    )
 
-    # Phone restriction (2026-10-05 UI toggle telegram_phone_restricted):
-    # ONE choke point for every mode/phase — anything outside the safe set
-    # (read-only + web + dialog) is rejected before its handler exists.
+    if name == "read_file" and "path" in args:
+        _rp_str = _normalize_tool_path(args["path"], workspace)
+        _any_read_set.add(_rp_str)
+        _ctx_set = _files_in_context.get(None)
+        if _ctx_set and _rp_str in _ctx_set:
+            import logging as _logging
+            _logging.getLogger("hivemind.tools").debug(
+                "[HINT-LOG] file=%s in_pre_explore_context=True read_allowed=True",
+                _rp_str
+            )
+        if _rp_str in _read_set and not args.get("start_line") and not args.get("end_line"):
+            return _normalize_meta_paths(
+                f"[SKIP: '{args.get('path')}' already read in this session. "
+                f"The full content is in your context above. "
+                f"Do NOT call read_file on this path again. "
+                f"Use edit_file or write_file directly.]"
+            )
+
     # DEAD-NAME GUARD (audit 2026-10-17): a handler that exists but is offered by
     # NO mode (today: patch_file) was still reachable in the duo path - the model
     # only has to name it. Reject names outside every mode's allowlist, so a
@@ -1712,14 +1760,6 @@ async def _run_inline_tool(
             f"Unknown tool '{name}'. Use one of the tools that are available in "
             f"this run.",
             tool=name, mode=str(tool_mode or ""))
-    if _tools_restricted_run.get() and name not in _PHONE_SAFE_TOOLS:
-        return _tool_error_response(
-            "PHONE_RESTRICTED",
-            f"Tool '{name}' is blocked: phone runs are restricted to web "
-            "+ read-only tools (UI toggle 'Restrict phone runs').",
-            tool=name,
-            mode=str(tool_mode or ""),
-            details={"allowed_tools": sorted(_PHONE_SAFE_TOOLS)})
     _path_based_tools = {"read_file", "get_signatures", "patch_file", "edit_file", "write_file", "replace_lines", "search_code"}
     _WRITE_TOOLS_NO_FUZZY = {"patch_file", "edit_file", "write_file", "write_file_append", "replace_lines"}
     if name in _path_based_tools and "path" in args:
@@ -1913,40 +1953,51 @@ async def _run_inline_tool(
 
         # WRITTEN-SET (2026-08-21, extended 2026-11-04): every successful
         # file mutation counts as run-written, not only write_file/append.
-        if name in ("write_file", "write_file_append", "edit_file",
-                    "patch_file", "replace_lines", "edit_ast"):
-            if not _result.startswith("[TOOL_ERROR") and args.get("path"):
-                _w_raw = args["path"]
-                _w_res = _fuzzy_resolve_path(_w_raw, str(workspace)) or _w_raw
-                _w_fp = Path(_w_res)
-                if not _w_fp.is_absolute():
-                    _w_fp = workspace / _w_fp
-                try:
-                    _w_fp = _w_fp.resolve()
-                except Exception:
-                    pass
-                # Register in the one canonical spelling core.send_files
-                # compares against, so send_file matches no matter how the
-                # model spelled the path (separators, drive case, /C:/...).
-                # core.send_files is stdlib-only; the import stays lazy to
-                # keep this module's import graph unchanged.
-                try:
-                    from core.send_files import (
-                        canonical_workspace_path as _canon_ws)
-                    _w_key = _canon_ws(str(_w_fp), workspace)
-                except (ImportError, OSError, RuntimeError, ValueError):
-                    _w_key = ""
-                if not _w_key:
-                    # Old spelling as fallback - same rules, fewer fixes.
-                    _w_key = _normalize_tool_path(str(_w_fp), workspace)
-                if _w_key:
-                    _written_set.add(_w_key)
-                    _rid_w = str(_current_run_id.get(None) or "")
-                    if _rid_w:
-                        _files_written_by_run.setdefault(
-                            _rid_w, set()).add(_w_key)
+        def _record_written_path(_w_raw: str) -> None:
+            _w_res = _fuzzy_resolve_path(_w_raw, str(workspace)) or _w_raw
+            _w_fp = Path(_w_res)
+            if not _w_fp.is_absolute():
+                _w_fp = workspace / _w_fp
+            try:
+                _w_fp = _w_fp.resolve()
+            except Exception:
+                pass
+            # Register in the one canonical spelling core.send_files
+            # compares against, so send_file matches no matter how the
+            # model spelled the path (separators, drive case, /C:/...).
+            # core.send_files is stdlib-only; the import stays lazy to
+            # keep this module's import graph unchanged.
+            try:
+                from core.send_files import (
+                    canonical_workspace_path as _canon_ws)
+                _w_key = _canon_ws(str(_w_fp), workspace)
+            except (ImportError, OSError, RuntimeError, ValueError):
+                _w_key = ""
+            if not _w_key:
+                # Old spelling as fallback - same rules, fewer fixes.
+                _w_key = _normalize_tool_path(str(_w_fp), workspace)
+            if _w_key:
+                _written_set.add(_w_key)
+                _rid_w = str(_current_run_id.get(None) or "")
+                if _rid_w:
+                    _files_written_by_run.setdefault(
+                        _rid_w, set()).add(_w_key)
 
-        if name in ("write_file", "edit_file", "patch_file", "replace_lines", "write_file_append"):
+        _ap_targets: list[str] = []
+        _ap_live_targets: list[str] = []
+        if not _result.startswith("[TOOL_ERROR"):
+            if name in ("write_file", "write_file_append", "edit_file",
+                        "patch_file", "replace_lines", "edit_ast", "lsp_format") and args.get("path"):
+                _record_written_path(str(args["path"]))
+            elif name == "apply_patch" and (args.get("patch") or args.get("diff")):
+                from tools.patch_diff import patch_targets as _patch_targets_post
+                _ap_patch_txt = str(args.get("patch") or args.get("diff") or "")
+                _ap_targets = _patch_targets_post(_ap_patch_txt)
+                _ap_live_targets = _patch_targets_post(_ap_patch_txt, include_delete=False)
+                for _ap_fp_str in _ap_live_targets:
+                    _record_written_path(_ap_fp_str)
+
+        if name in ("write_file", "edit_file", "patch_file", "replace_lines", "write_file_append", "lsp_format"):
             if not _result.startswith("[TOOL_ERROR") and args.get("path"):
                 try:
                     import json as _json_call
@@ -1961,45 +2012,82 @@ async def _run_inline_tool(
                 # otherwise the file_ops lint block stays as the fallback.
                 # Silent by design - a broken/missing server must never turn
                 # a successful write into a tool error.
-                try:
-                    from tools.handlers.lsp import (
-                        auto_diagnostics_block as _lsp_auto,
-                        merge_post_write_diagnostics as _lsp_merge,
-                    )
-                    _lsp_note, _lsp_handled = await _lsp_auto(
-                        workspace, args["path"], return_status=True)
-                    _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
-                    from tools.handlers.lsp import notify_watched_change as _lsp_watch
-                    _lsp_watch(workspace, [args["path"]])
-                except (ImportError, OSError, RuntimeError, ValueError,
-                        AttributeError, TypeError):
-                    pass
+                if name != "lsp_format":
+                    try:
+                        from tools.handlers.lsp import (
+                            auto_diagnostics_block as _lsp_auto,
+                            merge_post_write_diagnostics as _lsp_merge,
+                        )
+                        _lsp_note, _lsp_handled = await _lsp_auto(
+                            workspace, args["path"], return_status=True)
+                        _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
+                        from tools.handlers.lsp import notify_watched_change as _lsp_watch
+                        _lsp_watch(workspace, [args["path"]])
+                    except (ImportError, OSError, RuntimeError, ValueError,
+                            AttributeError, TypeError):
+                        pass
                 # AUTO-TEST-ON-EDIT (G#2 lever, 2026-11-11): opt-in
                 # (duo_auto_test_on_edit, default False) same-turn run of the
                 # testmap-mapped tests for the edited file. Bounded (timeout +
                 # per-run cap + signature dedup) and silent on any wiring
                 # problem; write_file_append is excluded (mid-sequence writes
                 # must not trigger a half-written-file test run).
-                if name != "write_file_append":
+                if name not in ("write_file_append", "lsp_format"):
                     try:
                         from tools.auto_test import auto_test_note as _at_note
                         _auto = await _at_note(
-                            [str(args.get("path"))], workspace, workspace_lock)
+                            [str(args.get("path"))], workspace, workspace_lock,
+                            settings=_run_settings_snapshot.get(None))
                         if _auto:
                             _result += "\n" + _auto
                     except (ImportError, OSError, AttributeError, TypeError,
                             ValueError):
                         pass  # auto_test_note never raises by design
+        elif name == "apply_patch" and not _result.startswith("[TOOL_ERROR") and _ap_targets:
+            try:
+                import json as _json_call_ap
+                _call_chars_ap = len(_json_call_ap.dumps(args, ensure_ascii=False))
+                _ap_diffs = [
+                    _d for _ap_fp in _ap_targets
+                    for _d in [get_transaction().diff_for(_ap_fp, call_chars=_call_chars_ap)]
+                    if _d
+                ]
+                if _ap_diffs:
+                    _result += "\n\n[Diff — what changed]\n```diff\n" + "\n".join(_ap_diffs) + "\n```"
+            except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+                _ap_diffs = []
+            if _ap_live_targets:
+                try:
+                    from tools.handlers.lsp import (
+                        auto_diagnostics_block as _lsp_auto,
+                        merge_post_write_diagnostics as _lsp_merge,
+                        notify_watched_change as _lsp_watch,
+                    )
+                    _lsp_watch(workspace, _ap_live_targets)
+                    _ap_lsp_results = await asyncio.gather(*(
+                        _lsp_auto(workspace, _ap_live, return_status=True)
+                        for _ap_live in _ap_live_targets[:4]
+                    ))
+                    for _lsp_note, _lsp_handled in _ap_lsp_results:
+                        if _lsp_note or _lsp_handled:
+                            _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
+                except (ImportError, OSError, RuntimeError, ValueError,
+                        AttributeError, TypeError):
+                    pass
 
         # ── ProjectState: record build steps ──
         _ps = _current_project_state.get()
-        if _ps is not None and name in ("write_file", "edit_file", "run_bash", "run_tests", "task_complete"):
+        if _ps is not None and name in ("write_file", "edit_file", "apply_patch", "run_bash", "run_tests", "task_complete"):
             _path = args.get("path", "")
             _is_success = not _result.startswith("[TOOL_ERROR")
             if name in ("write_file", "edit_file"):
                 _action = "create" if name == "write_file" else "edit"
                 _ps.add_build_step(_action, _path, _is_success,
                                    f"{'Erstellt' if _action == 'create' else 'Bearbeitet'}: {Path(_path).name}")
+            elif name == "apply_patch":
+                for _pt_step in (_ap_targets or ["patch"]):
+                    _ps.add_build_step("edit", _pt_step, _is_success,
+                                       f"Bearbeitet: {Path(_pt_step).name}")
             elif name == "run_bash":
                 _cmd = args.get("cmd", "") or args.get("command", "")
                 _action = "test" if any(kw in str(_cmd).lower() for kw in ("test", "pytest", "npm test", "cargo test", "go test")) else "verify"

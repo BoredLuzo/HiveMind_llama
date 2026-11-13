@@ -5,16 +5,18 @@ schema when git is configured for this install, so a fresh setup does not
 spend schema budget on tools that cannot do anything useful.
 
   settings git_tools_enabled: "auto" (default) | true | false
-  "auto" = at least one of git_repo_url / git_username / git_email / git_token
-           is non-empty.
+  "auto" / "true" = enabled ONLY when at least one of
+                    git_repo_url / git_username / git_email / git_token is non-empty.
+  No credentials => ALWAYS False (even when the UI toggle is ON).
 
 Pins:
-  (a) the predicate itself for every mode of the setting
-  (b) _filter_tools_for_mode drops exactly the two git tools
-  (c) the mode allow-lists are NOT changed (the tools stay "known")
+  (a) the predicate itself for every mode of the setting (incl. no-creds override)
+  (b) _filter_tools_for_mode drops exactly the two git tools & additive opt-in modes work
+  (c) the mode allow-lists stay intact when include_git is default None
   (d) settings.py ships the key with "auto" and docs/settings.md documents it
   (e) a settings read failure keeps the tools (never the reason a tool
       silently vanishes)
+  (f) UI exposes the ON/OFF toggle + credentials check-light in Tools & Optionals
 
 Run: python tests/test_git_tool_gating.py
 """
@@ -47,8 +49,12 @@ _cases = [
      "forced off wins over credentials"),
     ({"git_tools_enabled": False, "git_repo_url": "https://x/y.git"}, False,
      "forced off (bool) wins"),
-    ({"git_tools_enabled": "true"}, True, "forced on without credentials"),
-    ({"git_tools_enabled": "always"}, True, "forced on (alias)"),
+    ({"git_tools_enabled": "true"}, False, "forced on without credentials stays OFF"),
+    ({"git_tools_enabled": "always"}, False, "forced on (alias) without credentials stays OFF"),
+    ({"git_tools_enabled": "true", "git_repo_url": "https://x/y.git"}, True,
+     "forced on + credentials"),
+    ({"git_tools_enabled": "always", "git_token": "ghp_x"}, True,
+     "forced on (alias) + token"),
     ({"git_tools_enabled": "never", "git_token": "ghp_x"}, False,
      "forced off (alias) wins"),
     ({"git_tools_enabled": "garbage", "git_token": "ghp_x"}, True,
@@ -79,13 +85,24 @@ check("gate off keeps every other tool",
       _names_off <= _names_on2 and len(_names_on2) - len(_names_off) == 2)
 check("gate on keeps both git tools", {"git_status", "git_commit"} <= _names_on2)
 
-# ── (c) allow-lists untouched (the tools stay known to the mode system) ─────
+# ── (c) allow-lists & additive git opt-in ───────────────────────────────────
 for _m in ("duo_full", "tool_agent", "direct_full", "critic_verify"):
     _allow = D._tool_names_for_mode(_m, include_websearch=False)
     _expect = "critic_verify" not in _m
     check(f"allow-list {_m} unchanged",
           ("git_status" in _allow) is _expect,
           f" (git_status in allow: {'git_status' in _allow})")
+
+for _m in ("duo_lean", "duo_core", "duo_full", "direct_full"):
+    _with = D._tool_names_for_mode(_m, include_websearch=False, include_git=True)
+    _without = D._tool_names_for_mode(_m, include_websearch=False, include_git=False)
+    check(f"additive git opt-in works for {_m}",
+          {"git_status", "git_commit"} <= _with
+          and not ({"git_status", "git_commit"} & _without))
+
+_res_with_git = D._tool_names_for_mode("direct_research", include_websearch=False, include_git=True)
+check("direct_research gets git_status (read-only) when git enabled, not git_commit",
+      "git_status" in _res_with_git and "git_commit" not in _res_with_git)
 
 # ── (d) setting + docs ─────────────────────────────────────────────────────
 from settings import DEFAULT_SETTINGS                          # noqa: E402
@@ -117,29 +134,33 @@ finally:
 # ── (f) UI exposure (owner rule: settings belong in the frontend) ───────────
 _html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 _js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
-check("index.html has the git-tools select", 'id="git-tools-mode-sel"' in _html)
-check("the select posts the real setting",
-      "postSettings({git_tools_enabled:this.value})" in _html)
-check("all three modes are offered",
-      all(f'<option value="{v}"' in _html for v in ("auto", "true", "false")))
-# PLACEMENT (2026-10-17): the select first sat inside #git-branch-options, which
-# is display:none until auto-commit is switched on - so it was invisible for
-# exactly the case it exists for (git tools without auto-commit). It now sits
-# above that block, directly under the Git Integration toggle.
-check("the select is OUTSIDE the collapsed branch block (always visible)",
-      _html.index("git-tools-mode-sel") < _html.index('id="git-branch-options"')
-      and _html.index("git-tools-mode-sel") > _html.index("duo-git-autocommit-toggle"))
-check("only one git-tools select exists", _html.count("git-tools-mode-sel") == 1)
+check("index.html has the git-tools toggle", 'id="git-tools-toggle"' in _html)
+check("old git-tools-mode-sel select removed", 'id="git-tools-mode-sel"' not in _html)
+check("the toggle calls onGitToolsToggle(this.checked)",
+      "onGitToolsToggle(this.checked)" in _html)
+check("index.html has the credentials check-light",
+      'id="git-tools-cred-light"' in _html and 'id="git-tools-led"' in _html)
+check("Tools & Optionals card slots into duo after agentic opts",
+      _html.index('id="tools-optionals-card"') < _html.index('id="duo-tools-slot"')
+      and _html.index('id="duo-tools-slot"') > _html.index('id="dmo-agent-opts"'))
+check("duplicate Git Integration block in Agentic panel is removed",
+      'id="duo-git-autocommit-toggle"' not in _html
+      and 'id="agent-git-line"' not in _html)
+check("only one git-tools toggle exists", _html.count('id="git-tools-toggle"') == 1)
 check("app.js normalises bool and string forms",
       "typeof s.git_tools_enabled === 'boolean'" in _js
       and "S.gitToolsEnabled = 'auto'" in _js)
-check("app.js syncs the select",
-      "_gtmEl.value = ['auto', 'true', 'false'].indexOf(S.gitToolsEnabled) >= 0" in _js)
-check("the Branch row was not displaced by the new one",
-      'id="git-branch-sel"' in _html and "opt-name\">Branch" in _html)
+check("app.js syncs the toggle and shows no-credentials warning",
+      "function updateGitToolsUI(" in _js
+      and "function hasGitCreds(" in _js
+      and "function onGitToolsToggle(" in _js
+      and "No credentials \\u2014 effective: OFF" in _js
+      and "updateGitToolsUI();" in _js)
+check("Config tab Git Integration card stays intact",
+      'id="git-autocommit-cfg-toggle"' in _html and 'id="git-branch-inp"' in _html)
 import re as _re                                                   # noqa: E402
 _m = _re.search(r'app\.js\?v=(\d{8})-(\d+)', _html)
-check("app.js cache buster bumped", _m is not None and (_m.group(1), int(_m.group(2))) >= ("20261017", 2),
+check("app.js cache buster bumped", _m is not None and (_m.group(1), int(_m.group(2))) >= ("20261112", 1),
       f" ({_m.group(0) if _m else '?'})")
 
 sys.exit(h.finish("git_tool_gating"))

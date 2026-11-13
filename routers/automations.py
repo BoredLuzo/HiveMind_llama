@@ -11,16 +11,17 @@ from scheduler.manager import get_manager
 
 router = APIRouter(prefix="/automations", tags=["automations"])
 
-_ALLOWED_MODES = {"auto", "simple", "pipeline", "code_duo"}
-_ALLOWED_TIERS = {"off", "readonly", "python", "full"}
+_ALLOWED_MODES = {"auto", "simple", "direct", "agentic", "pipeline",
+                  "code_duo", "code_critic"}
+_ALLOWED_TIERS = {"off", "readonly", "research", "mcp", "python", "full"}
 _ALLOWED_POLICY = {"skip", "queue"}
 
 # UPDATE-WHITELIST (2026-11-05 audit): PUT must not be able to rewrite
 # bookkeeping (fires/next_ts/chat_id/pending_fire) - that was both a
 # correctness hole and a way to wedge the scheduler with junk values.
 _PATCHABLE = {"name", "prompt", "schedule", "timezone", "mode",
-              "tools_tier", "workspace", "policy", "enabled",
-              "max_runtime_s"}
+              "tools_tier", "notify_telegram", "workspace", "policy",
+              "enabled", "max_runtime_s"}
 
 
 def _mgr():
@@ -94,6 +95,7 @@ def _validate(body: dict) -> tuple[dict | None, str]:
         "timezone": str(body.get("timezone") or ""),
         "mode": mode,
         "tools_tier": tier,
+        "notify_telegram": bool(body.get("notify_telegram", False)),
         "workspace": str(body.get("workspace") or ""),
         "policy": policy,
         "enabled": bool(body.get("enabled", True)),
@@ -106,12 +108,51 @@ def _validate(body: dict) -> tuple[dict | None, str]:
     return job, ""
 
 
+def _automation_capabilities() -> dict:
+    """Return live MCP & Telegram readiness for the Automations UI pills."""
+    mcp_enabled = False
+    mcp_servers: list[str] = []
+    try:
+        from infra import mcp_client as _mc
+        mcp_enabled = bool(_mc.enabled())
+        st = _mc.status() if hasattr(_mc, "status") else []
+        rows = st if isinstance(st, list) else (
+            st.get("servers") or [] if isinstance(st, dict) else []
+        )
+        for s in rows:
+            if isinstance(s, dict) and s.get("ok") and s.get("name"):
+                mcp_servers.append(str(s["name"]))
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError, OSError):
+        pass
+    tg_configured = False
+    tg_paired = False
+    try:
+        from hivemind_gateway.main import resolve_token as _resolve_tg_tok
+        tg_configured = bool(_resolve_tg_tok())
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError, OSError):
+        tg_configured = False
+    try:
+        from hivemind_gateway.state import GatewayState as _GwState
+        tg_paired = bool(_GwState().owner_telegram_id)
+    except (ImportError, AttributeError, TypeError, ValueError, RuntimeError, OSError):
+        tg_paired = False
+    return {
+        "mcp_enabled": mcp_enabled,
+        "mcp_servers": mcp_servers,
+        "telegram_configured": tg_configured,
+        "telegram_paired": tg_paired,
+    }
+
+
 @router.get("")
 async def list_automations():
     mgr = _mgr()
     if mgr is None:
         return _err("scheduler not running", 503)
-    return {"automations": mgr.store.jobs()}
+    return {
+        "automations": mgr.store.jobs(),
+        "capabilities": _automation_capabilities(),
+    }
 
 
 @router.post("")
@@ -171,6 +212,10 @@ async def update_automation(job_id: str, req: Request):
     job["created_at"] = current.get("created_at")
     job["fires"] = current.get("fires") or 0
     job["last_fired_ts"] = current.get("last_fired_ts")
+    job["last_status"] = current.get("last_status") or ""
+    job["last_duration_s"] = current.get("last_duration_s")
+    if current.get("pending_fire"):
+        job["pending_fire"] = current["pending_fire"]
     updated = mgr.store.update(job_id, job)
     return updated if updated is not None else _err("Not found", 404)
 

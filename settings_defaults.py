@@ -476,9 +476,9 @@ DEFAULT_SETTINGS = {
     "git_default_branch":      "main",
     "git_commit_prefix":       "hivemind:",
     "git_auto_push":           False,
-    # GIT-TOOLS-GATE (2026-10-17): git_status/git_commit only ship in a mode's
-    # tool schema when git is set up. "auto" = one of git_repo_url /
-    # git_username / git_email / git_token is filled in; true/false force it.
+    # GIT-TOOLS-GATE (2026-11-12): git_status/git_commit require configured
+    # git credentials (repo_url / username / email / token) AND not being
+    # toggled off ("false"). Without credentials they remain effectively off.
     "git_tools_enabled":       "auto",
 
     # ════════════════════════════════════════════════════════════════════════
@@ -486,7 +486,7 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
     # --- Voice: speech-to-text (1.4, English only) -----------------------
-    # Scope for 1.4 (docs/plan_1.4_voice.md): English only, one
+    # Scope for 1.4 (see docs/voice_setup.md): English only, one
     # CLI call per request, model tier chosen by RAM unless set explicitly.
     "stt_enabled":              False,
     "stt_model":                "",      # "" = RAM default (parakeet q4_k >= 8 GB)

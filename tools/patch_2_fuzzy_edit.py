@@ -131,6 +131,6 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
     keepends = content.splitlines(True)
     if best_start >= len(keepends):
         return None
-    new_body = new_str if new_str.endswith("\n") else new_str + "\n"
+    new_body = "" if new_str == "" else (new_str if new_str.endswith("\n") else new_str + "\n")
     result = "".join(keepends[:best_start]) + new_body + "".join(keepends[best_start + o_len:])
     return result if result != content else None

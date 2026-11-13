@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import logging
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
@@ -130,7 +131,12 @@ def _sync_pipeline_agents() -> int:
             continue
         for field, cast in (("model", str), ("temperature", float),
                             ("max_tokens", int), ("thinking_budget", int)):
-            if field not in cfg or cfg[field] is None:
+            if field not in cfg:
+                continue
+            if cfg[field] is None:
+                if field == "temperature":
+                    ag.temperature = None
+                    applied += 1
                 continue
             try:
                 setattr(ag, field, cast(cfg[field]))
@@ -138,7 +144,7 @@ def _sync_pipeline_agents() -> int:
             except (TypeError, ValueError):
                 continue
         if "thinking" in cfg:
-            ag.thinking = bool(cfg["thinking"])
+            ag.thinking = None if cfg["thinking"] is None else bool(cfg["thinking"])
             applied += 1
     return applied
 
@@ -450,7 +456,7 @@ async def get_settings():
             if isinstance(_ag, dict) and _ag.get("model"):
                 _cands.add(str(_ag["model"]))
         for _c in _cands:
-            _key = str(_c).replace("-ud", "")
+            _key = str(_c).removesuffix("-ud")
             if not _moe_check(_key):
                 continue
             _n = _moe_detect(_key)
@@ -466,7 +472,7 @@ async def get_settings():
             from model_configs.models_registry import get_moe_pin as _moe_pin_of
             _pins: dict[str, bool] = {}
             for _c in _cands:
-                _pk = str(_c).replace("-ud", "")
+                _pk = str(_c).removesuffix("-ud")
                 _pv = _moe_pin_of(_pk)
                 if _pv is not None:
                     _pins[_pk] = _pv
@@ -566,6 +572,12 @@ _GET_ONLY_SETTINGS = frozenset({
 })
 
 
+_RUNTIME_UNDERSCORE_SETTINGS = frozenset({
+    "_model_sampling_overrides",
+    "_model_profiles",
+})
+
+
 def _strip_get_only_settings(data: dict) -> dict:
     """B6 (audit 2026-11-03): never persist keys that GET /settings injects.
 
@@ -577,7 +589,11 @@ def _strip_get_only_settings(data: dict) -> dict:
             if k not in _GET_ONLY_SETTINGS
             # A real setting may be underscore-prefixed
             # (_thinking_before_chunking is read/written by the UI).
-            and (not str(k).startswith("_") or k in DEFAULT_SETTINGS)}
+            and (
+                not str(k).startswith("_")
+                or k in DEFAULT_SETTINGS
+                or k in _RUNTIME_UNDERSCORE_SETTINGS
+            )}
 
 
 @router.post("/settings")
@@ -643,10 +659,11 @@ async def post_settings(req: Request):
                     _model_choice[_ak] = str(_av["model"]).strip()
                     _model_changed_roles.append(_ak)
                 if isinstance(_av, dict) and "temperature" in _av:
-                    # explicit card sampling edit -> user value wins over any
-                    # model recommendation (see _sync_recommended_sampling).
                     _sc_list = _sampling_choice.setdefault(_ak, [])
-                    if "temperature" not in _sc_list:
+                    if _av.get("temperature") is None:
+                        if "temperature" in _sc_list:
+                            _sc_list.remove("temperature")
+                    elif "temperature" not in _sc_list:
                         _sc_list.append("temperature")
         _sa = settings.setdefault("agents", {})
         if isinstance(_incoming_agents, dict):
@@ -689,7 +706,7 @@ async def post_settings(req: Request):
             _existing = settings.setdefault(_dmk, {})
             if isinstance(_incoming, dict) and isinstance(_existing, dict):
                 for _dk, _dv in _incoming.items():
-                    if _dk == "model" and _dv == "" and _existing.get("model"):
+                    if _dmk != "soul_evolve_agent" and _dk == "model" and _dv == "" and _existing.get("model"):
                         _inc_enabled = _incoming.get("enabled")
                         if _inc_enabled is not False:
                             continue
@@ -709,6 +726,8 @@ async def post_settings(req: Request):
         # mask echo or empty field: never destroy the stored credential
         data.pop("git_token", None)
     data = _strip_get_only_settings(data)
+    if "direct" in _model_changed_roles and "direct_model" not in data:
+        settings.pop("direct_model", None)
     settings.update(data)
     # UI-SAVE-FLAG-SYNC (2026-10-31, audit F6): a ubatch/cache/checkpoint
     # change through POST /settings used to wait for a restart while the same
@@ -794,21 +813,39 @@ async def set_agent(req: Request):
         if _model:
             registry_set(key, _model)
             settings.setdefault("agents", {}).setdefault(key, {})["model"] = _model
+            if key == "direct":
+                settings.pop("direct_model", None)
             _mc = settings.setdefault("agents_user_model_choice", {})
             if isinstance(_mc, dict):
                 _mc[key] = _model
             _excluded = settings.setdefault("automap_excluded", [])
             if key not in _excluded:
                 _excluded.append(key)
+        elif key == "duo_critic" and "model" in d:
+            registry_set(key, "")
+            settings.setdefault("agents", {}).setdefault(key, {})["model"] = ""
+            _mc = settings.get("agents_user_model_choice")
+            if isinstance(_mc, dict):
+                _mc.pop(key, None)
         if "temperature" in d:
             _sc = settings.setdefault("agents_user_sampling_choice", {})
-            if isinstance(_sc, dict):
-                _sc_list = _sc.setdefault(key, [])
-                if "temperature" not in _sc_list:
+            _sc_list = _sc.setdefault(key, []) if isinstance(_sc, dict) else []
+            if d["temperature"] is None:
+                if "temperature" in _sc_list:
+                    _sc_list.remove("temperature")
+                _state.pipeline.agents[key].temperature = None
+                settings.setdefault("agents", {}).setdefault(key, {})["temperature"] = None
+            else:
+                if isinstance(_sc, dict) and "temperature" not in _sc_list:
                     _sc_list.append("temperature")
-            v = float(d["temperature"])
-            _state.pipeline.agents[key].temperature = v
-            settings.setdefault("agents", {}).setdefault(key, {})["temperature"] = v
+                v = float(d["temperature"])
+                _state.pipeline.agents[key].temperature = v
+                settings.setdefault("agents", {}).setdefault(key, {})["temperature"] = v
+        elif _model:
+            _sync_recommended_sampling(settings, [key])
+            _synced_t = (settings.get("agents", {}).get(key) or {}).get("temperature")
+            if _synced_t is not None:
+                _state.pipeline.agents[key].temperature = float(_synced_t)
         if "max_tokens" in d:
             if d["max_tokens"] is None:
                 raise ValueError("max_tokens missing")
@@ -816,7 +853,7 @@ async def set_agent(req: Request):
             _state.pipeline.agents[key].max_tokens = v
             settings.setdefault("agents", {}).setdefault(key, {})["max_tokens"] = v
         if "thinking" in d:
-            _t = bool(d["thinking"])
+            _t = None if d["thinking"] is None else bool(d["thinking"])
             _state.pipeline.agents[key].thinking = _t
             settings.setdefault("agents", {}).setdefault(key, {})["thinking"] = _t
         if "thinking_budget" in d:
@@ -856,8 +893,14 @@ async def set_all_model(req: Request):
     if _state.pipeline:
         for key in list(_state.pipeline.agents.keys()):
             registry_set(key, m)
+    _mc = settings.setdefault("agents_user_model_choice", {})
+    settings.pop("direct_model", None)
     for key in settings["agents"]:
         settings["agents"][key]["model"] = m
+        if isinstance(_mc, dict):
+            _mc[key] = m
+    _sync_recommended_sampling(settings, list(settings.get("agents", {}).keys()))
+    _sync_pipeline_agents()
     try:
         await asyncio.to_thread(save_settings, copy.deepcopy(settings))
     except Exception as e:
@@ -891,6 +934,250 @@ async def set_moe_pin(req: Request):
              "error": f"no model profile found for '{m}' — open its model config once so the profile JSON exists"},
             status_code=404)
     return {"ok": True, "model": m, "moe": moe}
+
+
+_MODEL_PROFILE_KEY_SCHEMA: dict[str, str] = {
+    **dict.fromkeys(("moe", "jinja", "distilled", "mtp", "vision_preprocessing"), "bool"),
+    **dict.fromkeys((
+        "num_ctx", "num_ctx_analyst", "num_ctx_duo_coder", "num_ctx_vision",
+        "moe_cpu_experts", "gpu_layers", "ubatch", "thinking_budget",
+        "kv_bytes_per_token", "dspark_draft_n_max", "mtp_draft_n_max",
+    ), "int"),
+    **dict.fromkeys(("vram_gb_override", "mtp_draft_p_min"), "float"),
+    **dict.fromkeys((
+        "chat_template", "mmproj_filename", "dspark_draft_filename",
+        "kv_cache_type", "load_mode",
+    ), "str"),
+    "reasoning": "reasoning",
+    "capabilities": "dict",
+    "sampling": "dict",
+    "extra_args": "str_list",
+}
+
+_SAMPLING_NUMERIC_BOUNDS: dict[str, tuple[float, float, bool]] = {
+    "temperature": (0.0, 2.0, False),
+    "top_p": (0.0, 1.0, False),
+    "top_k": (0.0, 1000.0, True),
+    "min_p": (0.0, 1.0, False),
+    "presence_penalty": (-2.0, 2.0, False),
+    "repetition_penalty": (0.5, 2.0, False),
+    "repeat_penalty": (0.5, 2.0, False),
+    "seed": (-1.0, 2147483647.0, True),
+    "thinking_budget": (0.0, 131072.0, True),
+}
+_SAMPLING_BOOL_KEYS = frozenset({"preserve_thinking", "cache_prompt"})
+
+
+def _validate_sampling_block(block: dict, prefix: str = "sampling") -> str | None:
+    for k, v in block.items():
+        if v is None:
+            continue
+        if k in _SAMPLING_BOOL_KEYS:
+            if not isinstance(v, bool):
+                return f"{prefix}.{k} requires boolean or null"
+        elif k in _SAMPLING_NUMERIC_BOUNDS:
+            lo, hi, is_int = _SAMPLING_NUMERIC_BOUNDS[k]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+                return f"{prefix}.{k} requires finite number or null"
+            if is_int and not isinstance(v, int):
+                return f"{prefix}.{k} requires integer or null"
+            if float(v) < lo or float(v) > hi:
+                return f"{prefix}.{k} must be between {lo:g} and {hi:g}"
+        elif isinstance(v, dict):
+            err = _validate_sampling_block(v, f"{prefix}.{k}")
+            if err:
+                return err
+        else:
+            return f"unsupported sampling key '{prefix}.{k}'"
+    return None
+
+
+def _validate_model_profile_key(key: str, val) -> str | None:
+    """Validate key against _MODEL_PROFILE_KEY_SCHEMA; return error string or None."""
+    if key == "model":
+        return "cannot overwrite reserved identity key 'model'"
+    expected = _MODEL_PROFILE_KEY_SCHEMA.get(key)
+    if expected is None:
+        return f"unsupported profile key '{key}'"
+    if val is None:
+        return None
+    if expected == "bool" and not isinstance(val, bool):
+        return f"key '{key}' requires a boolean or null"
+    if expected == "int" and (isinstance(val, bool) or not isinstance(val, int)):
+        return f"key '{key}' requires an integer or null"
+    if expected == "float" and (
+        isinstance(val, bool)
+        or not isinstance(val, (int, float))
+        or not math.isfinite(float(val))
+    ):
+        return f"key '{key}' requires a finite number or null"
+    if expected == "str":
+        if not isinstance(val, str):
+            return f"key '{key}' requires a string or null"
+        if key in ("mmproj_filename", "dspark_draft_filename"):
+            if "/" in val or "\\" in val or ".." in val:
+                return f"key '{key}' must be a filename, not a path"
+        if key == "load_mode" and val not in ("auto", "none", "mmap", "mmap+mlock", ""):
+            return "key 'load_mode' must be 'auto', 'none', 'mmap', 'mmap+mlock', or null"
+    if expected == "str_list":
+        toks = val.split() if isinstance(val, str) else val
+        if not isinstance(toks, list) or not all(isinstance(x, str) for x in toks):
+            return f"key '{key}' requires a list of strings, string, or null"
+        if any("\n" in x or "\r" in x for x in toks):
+            return f"key '{key}' items cannot contain newlines"
+    if expected == "reasoning" and val not in ("on", "off"):
+        return "key 'reasoning' must be 'on', 'off', or null"
+    if expected == "dict":
+        if not isinstance(val, dict):
+            return f"key '{key}' requires an object or null"
+        if key == "capabilities":
+            for ck, cv in val.items():
+                if ck not in ("thinking", "vision", "tool_call"):
+                    return f"unsupported capability '{ck}'"
+                if cv is not None and not isinstance(cv, bool):
+                    return f"capabilities.{ck} requires boolean or null"
+        elif key == "sampling":
+            return _validate_sampling_block(val)
+    return None
+
+
+@router.post("/model-profile/key")
+async def set_model_profile_key_endpoint(req: Request):
+    """Patch or remove an allowed key in model_configs/models/<name>.json."""
+    d = await req.json()
+    m = str(d.get("model", "")).strip()
+    key = str(d.get("key", "")).strip()
+    if not m or not key:
+        return JSONResponse({"ok": False, "error": "model and key required"}, status_code=400)
+    val = d.get("value")
+    err = _validate_model_profile_key(key, val)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    try:
+        from model_configs.models_registry import set_profile_key
+        _path = await asyncio.to_thread(set_profile_key, m, key, val)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as e:
+        logger.warning("[config/model-profile/key] failed for %s (%s): %s", m, key, e, exc_info=True)
+        return JSONResponse({"ok": False, "error": str(e)[:120]}, status_code=500)
+    if _path is None:
+        return JSONResponse({"ok": False, "error": f"no profile found for '{m}'"}, status_code=404)
+    return {"ok": True, "model": m, "key": key, "value": val}
+
+
+def _public_gguf_meta(model: str) -> dict:
+    try:
+        from backend.gguf_meta import read_gguf_metadata
+        meta = dict(read_gguf_metadata(model) or {})
+        meta.pop("chat_template", None)
+        return meta
+    except (ImportError, OSError, ValueError, TypeError) as exc:
+        logger.debug("[config/gguf-meta] failed for %s: %s", model, exc)
+        return {}
+
+
+def _gguf_seed_defaults(meta: dict) -> dict:
+    if not meta:
+        return {}
+    seed: dict = {
+        "capabilities": {
+            "thinking": bool(meta.get("has_thinking")),
+            "vision": bool(meta.get("has_vision")),
+            "tool_call": bool(meta.get("has_chat_template")),
+        },
+        "jinja": bool(meta.get("has_chat_template")),
+        "reasoning": "on" if meta.get("has_thinking") else "off",
+        "moe": bool(meta.get("is_moe")),
+    }
+    ctx_len = meta.get("context_length")
+    if isinstance(ctx_len, int) and ctx_len > 0:
+        seed["num_ctx"] = min(ctx_len, 32768)
+    if meta.get("kv_bytes_per_token_q4"):
+        seed["kv_bytes_per_token"] = int(meta["kv_bytes_per_token_q4"])
+    return seed
+
+
+@router.get("/gguf-meta")
+async def get_gguf_meta_endpoint(model: str = ""):
+    m = (model or "").strip()
+    if not m:
+        return JSONResponse({"ok": False, "error": "model parameter required"}, status_code=400)
+    meta = await asyncio.to_thread(_public_gguf_meta, m)
+    return {"ok": True, "model": m, "meta": meta}
+
+
+def _build_model_profile_payload(model: str) -> dict:
+    from model_configs.models_registry import find_profile_file, get_profile
+    path = find_profile_file(model)
+    prof = get_profile(model)
+    gguf = _public_gguf_meta(model)
+    return {
+        "ok": True,
+        "model": model,
+        "exists": path is not None,
+        "file": path.name if path else None,
+        "profile": prof,
+        "gguf": gguf,
+    }
+
+
+@router.get("/model-profile")
+async def get_model_profile_query(model: str = ""):
+    m = (model or "").strip()
+    if not m:
+        from model_configs.models_registry import refresh, _ensure_cache
+        refresh()
+        return {"ok": True, "models": _ensure_cache()}
+    return await asyncio.to_thread(_build_model_profile_payload, m)
+
+
+@router.get("/model-profile/{model:path}")
+async def get_model_profile_path(model: str):
+    m = (model or "").strip()
+    if not m:
+        return JSONResponse({"ok": False, "error": "model required"}, status_code=400)
+    return await asyncio.to_thread(_build_model_profile_payload, m)
+
+
+@router.post("/model-profile")
+async def upsert_model_profile_endpoint(req: Request):
+    """Create or update a per-model defaults JSON file (model_configs/models/<name>.json)."""
+    d = await req.json()
+    m = str(d.get("model", "")).strip()
+    if not m:
+        return JSONResponse({"ok": False, "error": "model required"}, status_code=400)
+    raw_patch = d.get("patch") if isinstance(d.get("patch"), dict) else {
+        k: v for k, v in d.items() if k not in ("model", "seed_from_gguf")
+    }
+    if not isinstance(raw_patch, dict):
+        return JSONResponse({"ok": False, "error": "patch object required"}, status_code=400)
+    clean_patch: dict = {}
+    for k, v in raw_patch.items():
+        err = _validate_model_profile_key(str(k), v)
+        if err:
+            return JSONResponse({"ok": False, "error": err}, status_code=400)
+        if k == "extra_args" and isinstance(v, str):
+            clean_patch[k] = [tok for tok in v.split() if tok]
+        else:
+            clean_patch[k] = v
+    try:
+        from model_configs.models_registry import find_profile_file, get_profile, upsert_profile
+        existing = find_profile_file(m)
+        final_patch = clean_patch
+        if existing is None and bool(d.get("seed_from_gguf", False)):
+            meta = await asyncio.to_thread(_public_gguf_meta, m)
+            seeded = _gguf_seed_defaults(meta)
+            seeded.update(clean_patch)
+            final_patch = seeded
+        p = await asyncio.to_thread(upsert_profile, m, final_patch)
+        return {
+            "ok": True,
+            "model": m,
+            "file": p.name,
+            "profile": get_profile(m),
+        }
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as e:
+        logger.warning("[config/model-profile] failed for %s: %s", m, e, exc_info=True)
+        return JSONResponse({"ok": False, "error": str(e)[:120]}, status_code=500)
 
 
 @router.get("/registry")

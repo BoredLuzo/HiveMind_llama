@@ -102,8 +102,8 @@ check("the fetcher has a check mode", "--check" in fetch and "def check(" in fet
 check("the fetcher refuses wrong-size downloads", "MIN_MODEL_BYTES" in fetch and "MIN_BINARY_BYTES" in fetch)
 
 # ── docs ────────────────────────────────────────────────────────────────────
-check("the plan documents the English-only decision",
-      "English only" in src("docs/plan_1.4_voice.md"))
+check("the voice setup doc documents the English-only decision",
+      "English only" in src("docs/voice_setup.md"))
 check("docs/settings.md knows the new keys",
       "stt_enabled" in src("docs/settings.md") and "stt_preload" in src("docs/settings.md"))
 

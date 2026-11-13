@@ -278,6 +278,7 @@ SUITES = [
     ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          60),
     ("ws_guards_chats_skills", "tests/test_ws_guards_chats_skills.py",         60),
     ("tts_start_decay",        "tests/test_tts_start_decay_pin.py",            30),
+    ("audit_architecture_fixes", "tests/test_audit_architecture_fixes.py",     40),
     ("manager_lock",            "tests/test_manager_lock.py",                  30),
     ("find_loaded_race",        "tests/test_find_loaded_race.py",              30),
     ("git_clone_cleanup",       "tests/test_git_clone_cleanup.py",              30),
@@ -340,7 +341,7 @@ SUITES = [
     ("mcp_secret_guard",        "tests/test_mcp_secret_guard.py",            60),
     ("approval_no_run_id",      "tests/test_approval_no_run_id.py",          20),
     ("git_consolidate_scope",   "tests/test_git_consolidate_scope.py",       60),
-    ("git_commit_scope",        "tests/test_git_commit_scope.py",            40),
+    ("git_commit_scope",        "tests/test_git_commit_scope.py",            60),
     ("settings_ui",             "tests/test_settings_ui.py",                 20),
     ("settings_split",          "tests/test_settings_split.py",              10),
     ("tool_args_nonobject",     "tests/test_tool_args_nonobject.py",         20),
@@ -427,9 +428,13 @@ SUITES = [
     ("deep_retrieval",           "tests/test_deep_retrieval.py",             30),
     ("multi_edit",               "tests/test_multi_edit.py",                 30),
     # D3 patch-native editing + G#2/#3 levers (2026-11-11)
-    ("apply_patch",              "tests/test_apply_patch.py",                30),
+    ("apply_patch",              "tests/test_apply_patch.py",                60),
     ("auto_test_on_edit",        "tests/test_auto_test_on_edit.py",          30),
     ("edit_history_compact",     "tests/test_edit_history_compact.py",       30),
+    ("audit_behavior_batch",     "tests/test_audit_behavior_batch.py",     45),
+    ("gguf_dropin_and_profile_api", "tests/test_gguf_dropin_and_profile_api.py", 45),
+    ("llm_transport",              "tests/test_llm_transport.py",              45),
+    ("direct_agent_card",          "tests/test_direct_agent_card.py",          30),
 
 ]
 

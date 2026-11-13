@@ -913,6 +913,7 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
     # PATH — without a workspace venv it installs into HIVEMIND'S OWN venv and
     # can break the running server. Require a workspace-local interpreter.
     _ws_s = str(workspace or "")
+    _venv_py = None
     if manager == "pip":
         _venv_py = None
         for _cand in (Path(_ws_s) / ".venv" / "Scripts" / "python.exe",
@@ -966,7 +967,7 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
     # The same hint now also fires for a pip install run through run_bash (see
     # _pip_source_build_hint below): install_package is tier 99 and drops out at
     # small windows, and then run_bash is the only path the model has.
-    if any(_p in _res for _p in _PIP_SOURCE_BUILD_MARKERS):
+    if _venv_py is not None and any(_p in _res for _p in _PIP_SOURCE_BUILD_MARKERS):
         _res += _pip_source_build_hint(packages, str(_venv_py))
     return _res
 

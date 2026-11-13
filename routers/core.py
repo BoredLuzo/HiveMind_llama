@@ -8,8 +8,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from infra.run_control import (
-    _get_abort_event, _step_skip_event, _abort_event,
-    set_user_answer, get_decision_id,
+    _step_skip_event, _abort_event,
+    abort_chat_run, set_user_answer, get_decision_id,
     request_graceful_stop, _run_abort_registry,
     request_pause_after_chunk, signal_resume, signal_abort_during_pause, pause_abort_signal_pending,
     is_pause_pending,
@@ -41,8 +41,7 @@ async def abort_stream(req: Request):
     if not chat_id:
         return JSONResponse({"error": "chat_id missing"}, status_code=400)
 
-    ev = await _get_abort_event(chat_id)
-    ev.set()
+    await abort_chat_run(chat_id)
 
     logger.info("[abort] chat=%s silent=%s", chat_id, silent)
 
@@ -355,6 +354,8 @@ async def internal_tool_exec(req: Request):
         "include_websearch",
         bool(settings.get("duo_websearch_enabled", False)) and bool(_state._WEBSEARCH_AVAILABLE),
     ))
+    from tools.definitions import git_tools_enabled as _gte_core
+    include_git = bool(body["include_git"]) if "include_git" in body else _gte_core(settings)
     # SECURITY: workspace_lock NEVER comes from the request body. It is
     # derived server-side from the active configuration, so an attacker
     # cannot weaken the workspace-containment checks of the tools.
@@ -385,6 +386,7 @@ async def internal_tool_exec(req: Request):
                 workspace_lock=workspace_lock,
                 tool_mode=tool_mode,
                 include_websearch=include_websearch,
+                include_git=include_git,
             )
         finally:
             _ext_cv.reset(_ext_token)
@@ -403,7 +405,6 @@ async def internal_tool_exec(req: Request):
                     f"{type(e).__name__}: {str(e)[:220]}",
                     tool=name,
                     mode=tool_mode,
-                    retryable=False,
                 ),
             },
             status_code=500,

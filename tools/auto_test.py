@@ -36,28 +36,40 @@ _MAX_TRACKED_RUNS = 64
 _FAIL_SNIPPET_CHARS = 600
 
 
-def _settings() -> dict:
+def _settings(override: dict | None = None) -> dict:
+    base: dict = {}
     try:
         from core.state import settings as _s
-        return _s or {}
+        if isinstance(_s, dict) and _s:
+            base.update(_s)
     except (ImportError, AttributeError):
-        return {}
-
-
-def _enabled() -> bool:
-    return bool(_settings().get("duo_auto_test_on_edit", False))
-
-
-def _cap() -> int:
+        pass
     try:
-        return max(0, min(10, int(_settings().get("duo_auto_test_max_per_run", 2))))
+        from tools.runner import _run_settings_snapshot
+        snap = _run_settings_snapshot.get(None)
+        if isinstance(snap, dict) and snap:
+            base.update(snap)
+    except (ImportError, AttributeError):
+        pass
+    if isinstance(override, dict) and override:
+        base.update(override)
+    return base
+
+
+def _enabled(settings: dict | None = None) -> bool:
+    return bool(_settings(settings).get("duo_auto_test_on_edit", False))
+
+
+def _cap(settings: dict | None = None) -> int:
+    try:
+        return max(0, min(10, int(_settings(settings).get("duo_auto_test_max_per_run", 2))))
     except (TypeError, ValueError):
         return 2
 
 
-def _timeout() -> int:
+def _timeout(settings: dict | None = None) -> int:
     try:
-        return max(10, min(180, int(_settings().get("duo_auto_test_timeout", 60))))
+        return max(10, min(180, int(_settings(settings).get("duo_auto_test_timeout", 60))))
     except (TypeError, ValueError):
         return 60
 
@@ -99,12 +111,13 @@ def _note_for(result, mapped: list[str]) -> str:
 
 
 async def auto_test_note(paths: list[str], workspace: Path,
-                         workspace_lock: str | None) -> str:
+                         workspace_lock: str | None,
+                         settings: dict | None = None) -> str:
     """Return the [AUTO-TEST] note for the just-edited paths, or "".
 
     Called from the write-tool post-processing (tools/runner) and from the
     apply_patch handler with the patch's written files. Never raises."""
-    if not paths or not _enabled():
+    if not paths or not _enabled(settings):
         return ""
     ws = Path(workspace_lock) if workspace_lock else Path(workspace)
     ws_str = str(ws)
@@ -141,14 +154,26 @@ async def auto_test_note(paths: list[str], workspace: Path,
     if len(_state) > _MAX_TRACKED_RUNS:
         for k in list(_state.keys())[:-_MAX_TRACKED_RUNS]:
             _state.pop(k, None)
-    if st["count"] >= _cap():
+    if st["count"] >= _cap(settings):
         return ""
-    # signature gate: unchanged files are not re-tested (loop protection)
+    # signature gate: hash BOTH mapped test files AND edited source paths
+    # so subsequent edits to the same source file still trigger a re-test.
     fresh: dict[str, tuple[int, int]] = {}
     for rel in mapped:
         sig = _sig_of(ws / rel)
         if sig is not None:
             fresh[rel] = sig
+    for ep in paths:
+        ep_p = Path(str(ep))
+        if not ep_p.is_absolute():
+            ep_p = ws / ep_p
+        try:
+            key_rel = ep_p.resolve().relative_to(ws.resolve()).as_posix()
+        except (OSError, ValueError):
+            key_rel = str(ep).replace("\\", "/")
+        sig = _sig_of(ep_p)
+        if sig is not None:
+            fresh.setdefault(f"src:{key_rel}", sig)
     if fresh and all(fresh.get(rel) == st["sigs"].get(rel) for rel in fresh) \
             and set(fresh) <= set(st["sigs"]):
         return ""
@@ -162,7 +187,7 @@ async def auto_test_note(paths: list[str], workspace: Path,
     try:
         result = await _run_test_suite(
             workspace=str(ws.resolve()),
-            timeout=_timeout(),
+            timeout=_timeout(settings),
             chat_id=run_id,
             paths=mapped,
         )

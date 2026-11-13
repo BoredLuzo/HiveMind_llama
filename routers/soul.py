@@ -3,11 +3,12 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from hive_functions.soul_engine import (
     load_soul, save_soul, reset_soul, get_soul_summary,
-    maybe_evolve_soul, _skills_dir, MIN_RUNS_FOR_EVOLUTION,
-    EVOLUTION_INTERVAL_RUNS,
+    maybe_evolve_soul, resolve_reflection_model, _skills_dir,
+    MIN_RUNS_FOR_EVOLUTION, EVOLUTION_INTERVAL_RUNS,
 )
 from hive_functions.prompts import HIVEMIND_SOUL
 from settings import load_settings
@@ -129,11 +130,14 @@ async def trigger_soul_evolution_ep(req: Request):
     settings = load_settings()
     run_count = _load_run_counter()
 
-    _sea_manual = settings.get("soul_evolve_agent", "direct")
-    if isinstance(_sea_manual, dict) and _sea_manual.get("enabled") and (_sea_manual.get("model") or "").strip():
-        reflection_model = _sea_manual["model"].strip()
-    else:
-        reflection_model = _state.registry_get("direct")
+    reflection_model = resolve_reflection_model(
+        settings, _state.registry_get("direct"), require_enabled=False
+    )
+    if not reflection_model:
+        return JSONResponse(
+            {"ok": False, "error": "No direct or evolve reflection model configured."},
+            status_code=400,
+        )
 
     effective_runs = max(run_count, MIN_RUNS_FOR_EVOLUTION * 10) if force else max(run_count, MIN_RUNS_FOR_EVOLUTION)
 

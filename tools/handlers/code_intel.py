@@ -178,19 +178,19 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
     # applied here.
     cmds: list[list[str]] = []
     if shutil.which("rg"):
-        cmds.append(["rg", "--no-heading", "-n", pattern, path])
+        cmds.append(["rg", "--no-heading", "-n", "--", pattern, path])
     if _is_win:
         if not _HAS_REGEX_META.search(pattern):
             if _is_dir:
-                cmds.append(["findstr", "/s", "/n", "/i", _safe_pat,
+                cmds.append(["findstr", "/s", "/n", "/i", "/L", f"/C:{_safe_pat}",
                              _safe_path.rstrip("\\") + "\\*"])
             else:
-                cmds.append(["findstr", "/n", "/i", _safe_pat, _safe_path])
+                cmds.append(["findstr", "/n", "/i", "/L", f"/C:{_safe_pat}", _safe_path])
     else:
         if _is_dir:
-            cmds.append(["grep", "-rn", _safe_pat, path])
+            cmds.append(["grep", "-rn", "--", _safe_pat, path])
         else:
-            cmds.append(["grep", "-n", _safe_pat, path])
+            cmds.append(["grep", "-n", "--", _safe_pat, path])
 
     _any_executed = False
     _LINE_CAP = 50

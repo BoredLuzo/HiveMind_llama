@@ -326,19 +326,7 @@ def _sync_backend_runtime_config() -> None:
                 )
             _gb = ""
         if _gb in ("vulkan", "cuda", "rocm", "cpu"):
-            _lc_init.GPU_BACKEND = _gb
-            _lsm_init.GPU_BACKEND = _gb
-            # GPU-BACKEND-IMPORT-COPY-FIX (2026-09-08): manager_load reads the
-            # import-time copy for its cpu gates / --device block — sync it too
-            # (same trap the CACHE_REUSE fix covered).
-            try:
-                import backend.manager_load as _ml_gb
-                _ml_gb.GPU_BACKEND = _gb
-            except Exception:
-                pass
-            # LLAMA-BIN-RE-RESOLVE (2026-08-27, CUDA-VERSION-FIX): Auto-Discovery
-            _lc_init.LLAMA_BIN = _lc_init._find_llama_server()
-            _lsm_init.LLAMA_BIN = _lc_init.LLAMA_BIN
+            _lc_init.sync_runtime_backend(_gb)
         # CACHE-REUSE-FIX (2026-09-04): server.py hat nur _lsm_init.CACHE_REUSE
 # set; but read back from the constant copied at import time in
 # backend.manager_load (and backend.llama_config as the source). All three
@@ -960,7 +948,11 @@ def apply_learned_configs_for_run():
         model_name = registry_get(agent_key)
         cfg = get_effective_config(THIS_FILE, model_name, agent_key, use_learned=True)
         if "temperature" in cfg:
-            pipeline.agents[agent_key].temperature = float(cfg["temperature"])
+            _lt = cfg["temperature"]
+            pipeline.agents[agent_key].temperature = None if _lt is None else float(_lt)
+        if "thinking" in cfg:
+            _lth = cfg["thinking"]
+            pipeline.agents[agent_key].thinking = None if _lth is None else bool(_lth)
         if "max_tokens" in cfg:
             pipeline.agents[agent_key].max_tokens  = int(cfg["max_tokens"])
 def get_effective_prompt_with_override(agent_key, preset_name, use_learned):
@@ -995,11 +987,13 @@ async def _run_inline_tool(
     *,
     tool_mode: str | None = None,
     include_websearch: bool = False,
+    include_git: bool | None = None,
 ) -> str:
     """Delegates to tools.runner._run_inline_tool (single dispatch path)."""
     return await _run_inline_tool_runner(
         name, args, workspace_lock,
         tool_mode=tool_mode, include_websearch=include_websearch,
+        include_git=include_git,
     )
 
 
@@ -1302,7 +1296,7 @@ async def stream(req: Request):
     # the run use the UI value even if the settings.json write lagged/failed —
     # no more "16k despite having set 32k".
     for _ctx_key in ("duo_coder_ctx_agentic", "duo_coder_ctx_normal",
-                     "duo_planner_ctx_target"):
+                     "duo_planner_ctx_target", "direct_ctx_target"):
         _cv = body.get(_ctx_key)
         if _cv is not None:
             try:
@@ -1328,7 +1322,7 @@ async def stream(req: Request):
     # invalid values are ignored so an old gateway cannot widen the tools.
     if "direct_tools_tier" in body:
         _dt_tier = str(body.get("direct_tools_tier") or "").strip().lower()
-        if _dt_tier in ("off", "readonly", "research", "python", "full"):
+        if _dt_tier in ("off", "readonly", "research", "mcp", "python", "full"):
             _model_overrides["direct_tools_tier"] = _dt_tier
         elif _dt_tier in ("websearch", "web"):
             _model_overrides["direct_tools_tier"] = "readonly"
@@ -1338,8 +1332,27 @@ async def stream(req: Request):
     # invalid values are ignored (never widen the tool set by accident).
     if "duo_coder_tool_tier" in body:
         _dct_tier = str(body.get("duo_coder_tool_tier") or "").strip().lower()
-        if _dct_tier in ("core", "full"):
+        if _dct_tier in ("core", "full", "lean", "mcp", "readonly"):
             _model_overrides["duo_coder_tool_tier"] = _dct_tier
+
+    if "duo_websearch_enabled" in body:
+        _model_overrides["duo_websearch_enabled"] = _as_bool(
+            body.get("duo_websearch_enabled"))
+    if "subagent_lite_enabled" in body:
+        _model_overrides["subagent_lite_enabled"] = _as_bool(
+            body.get("subagent_lite_enabled"))
+    if "git_tools_enabled" in body:
+        _gt_raw = body.get("git_tools_enabled")
+        if isinstance(_gt_raw, bool):
+            _model_overrides["git_tools_enabled"] = "true" if _gt_raw else "false"
+        else:
+            _gt_s = str(_gt_raw or "").strip().lower()
+            if _gt_s in ("auto", "true", "false"):
+                _model_overrides["git_tools_enabled"] = _gt_s
+            elif _gt_s in ("1", "on", "yes", "always"):
+                _model_overrides["git_tools_enabled"] = "true"
+            elif _gt_s in ("0", "off", "no", "never"):
+                _model_overrides["git_tools_enabled"] = "false"
 
     # LSP-RUN-PIN (F10, 2026-11-08): benchmarks/gateways pin the post-write
     # LSP behavior per request. The keys ride model_overrides into the run
@@ -1441,6 +1454,11 @@ async def stream(req: Request):
         "important_task",
         body.get("critical_task", False),
     ))
+    if "duo_critic_tools" in body:
+        _model_overrides["duo_critic_tools"] = _as_bool(
+            body.get("duo_critic_tools"),
+            default=bool(settings.get("duo_critic_tools", False)),
+        )
 
     # AGENTIC-FORCE (2026-10-21): explicit "run agentic" from the gateway. The
     # persisted duo_agentic_mode no longer hijacks mode="auto" while the decider
@@ -1754,8 +1772,12 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
         S_models_cache[0] if S_models_cache else "qwen3.5:9b-ud"
     )
 
+    from tools.definitions import git_tools_enabled as _gte_openai
     _OPENAI_WS_ENABLED = bool(settings.get("duo_websearch_enabled", False)) and _WEBSEARCH_AVAILABLE
-    _CODING_TOOLS = _get_inline_tools(include_websearch=_OPENAI_WS_ENABLED, mode="openai_agent")
+    _OPENAI_GIT_ENABLED = _gte_openai(settings)
+    _CODING_TOOLS = _get_inline_tools(
+        include_websearch=_OPENAI_WS_ENABLED, mode="openai_agent",
+        include_git=_OPENAI_GIT_ENABLED, settings=settings)
     # H-audit: derive the lock like /internal/tool/exec does - ignoring the
     # configured workspace let agent tools run against the install dir.
     # WS-ORDER (2026-10-16): the UI-configured project wins over the
@@ -1802,7 +1824,8 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
             try:
                 return await _run_inline_tool(name, _tool_args,
                     workspace_lock=_OPENAI_WORKSPACE_LOCK,
-                    tool_mode="openai_agent", include_websearch=_OPENAI_WS_ENABLED)
+                    tool_mode="openai_agent", include_websearch=_OPENAI_WS_ENABLED,
+                    include_git=_OPENAI_GIT_ENABLED)
             finally:
                 _ext_cv_ag.reset(_ext_tok_ag)
         except Exception as e:
