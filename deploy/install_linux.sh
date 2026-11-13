@@ -108,7 +108,11 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude '/models.json' --exclude '/memory.json' --exclude '/vision_model.json' \
       --exclude '/routing_weights.json' --exclude '/gateway_state.json' \
       --exclude '/gateway_audit.jsonl' --exclude '/gateway.disabled' \
+      --exclude '/runtime_models.json' --exclude '/token_stats.json' \
+      --exclude '/run_counter.json' --exclude '/.env' \
       --exclude '/custom_prompts' --exclude '/.hive_uploads' --exclude '/learning_logs' \
+      --exclude '/bench/results' --exclude '/bench/.work' \
+      --exclude '/_update_tmp' --exclude '/update_backup_*' \
       --exclude 'BUILD_INFO.txt' \
       "$SCRIPT_DIR"/ "$INSTALL_DIR"/
   else
@@ -123,7 +127,11 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude='./models.json' --exclude='./memory.json' --exclude='./vision_model.json' \
       --exclude='./routing_weights.json' --exclude='./gateway_state.json' \
       --exclude='./gateway_audit.jsonl' --exclude='./gateway.disabled' \
+      --exclude='./runtime_models.json' --exclude='./token_stats.json' \
+      --exclude='./run_counter.json' --exclude='./.env' \
       --exclude='./custom_prompts' --exclude='./.hive_uploads' --exclude='./learning_logs' \
+      --exclude='./bench/results' --exclude='./bench/.work' \
+      --exclude='./_update_tmp' --exclude='./update_backup_*' \
       --exclude='./BUILD_INFO.txt' \
       -cf - . | tar -C "$INSTALL_DIR" -xf -
   fi

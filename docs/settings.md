@@ -177,7 +177,7 @@ its comment) in either file, then re-run the generator.
 | `git_email` | str | `` | yes |  |
 | `git_repo_url` | str | `` | yes |  |
 | `git_token` | str | `` | yes |  |
-| `git_tools_enabled` | str | `auto` | yes | GIT-TOOLS-GATE : git_status/git_commit only ship in a mode's tool schema when git is set up. "auto" = one of git_repo_url / git_username / git_email / git_token is filled in; true/false force it. |
+| `git_tools_enabled` | str | `auto` | yes | GIT-TOOLS-GATE : git_status/git_commit require configured git credentials (repo_url / username / email / token) AND not being toggled off ("false"). Without credentials they remain effectively off. |
 | `git_username` | str | `` | yes |  |
 | `gpu_backend` | str | `` | - |  |
 | `image_desc_full_pipeline` | bool | `False` | yes |  |
@@ -250,7 +250,7 @@ its comment) in either file, then re-run the generator.
 | `soul_skill_distillation` | bool | `False` | yes | DEFAULT OFF: the distiller spends one extra LLM call after a run. It is useful, but a fresh install should not grow background model work nobody asked for - switch it on in the SOUL tab. |
 | `soul_skill_writing` | bool | `False` | yes |  |
 | `startup_preload_enabled` | bool | `False` | yes |  |
-| `stt_enabled` | bool | `False` | yes | Scope for 1.4 (docs/plan_1.4_voice.md): English only, one CLI call per request, model tier chosen by RAM unless set explicitly. |
+| `stt_enabled` | bool | `False` | yes | Scope for 1.4 (see docs/voice_setup.md): English only, one CLI call per request, model tier chosen by RAM unless set explicitly. |
 | `stt_language` | str | `en` | yes | 1.4 ships en only |
 | `stt_log_transcripts` | bool | `False` | - |  |
 | `stt_max_seconds` | int | `300` | yes |  |

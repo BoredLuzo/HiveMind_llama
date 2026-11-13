@@ -57,16 +57,18 @@ $dirty = (git status --porcelain)
 Check "a) git status clean" ([string]::IsNullOrWhiteSpace($dirty)) `
     ($(if ($dirty) { ($dirty -split "`n" | Select-Object -First 3) -join " | " } else { "" }))
 
-# -- b) version consistent across server.py, pyproject, CHANGELOG -------------
+# -- b) version consistent across version.py, server anchor, pyproject, CHANGELOG
 # Last match: the module docstring carries the "<major.minor.patch>" example,
 # the real assignment is at the end of the file (2026-11-12 audit).
 $srv = (Select-String -Path core/version.py -Pattern 'HIVEMIND_VERSION = "([^"]+)"' |
         Select-Object -Last 1).Matches[0].Groups[1].Value
+$srvAnchorMatch = Select-String -Path server.py -Pattern '^#\s*HIVEMIND_VERSION = "([^"]+)"' | Select-Object -Last 1
+$srvAnchor = if ($srvAnchorMatch) { $srvAnchorMatch.Matches[0].Groups[1].Value } else { "" }
 $pyp = (Select-String -Path pyproject.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
 $chal = (Select-String -Path CHANGELOG.md -Pattern '^## \[([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?)\]' |
          Select-Object -First 1).Matches[0].Groups[1].Value
-Check "b) version server.py == pyproject == CHANGELOG" `
-    ($srv -eq $pyp -and $srv -eq $chal) "server=$srv pyproject=$pyp changelog=$chal"
+Check "b) version core/version.py == server.py anchor == pyproject == CHANGELOG" `
+    ($srv -eq $srvAnchor -and $srv -eq $pyp -and $srv -eq $chal) "version_py=$srv server_anchor=$srvAnchor pyproject=$pyp changelog=$chal"
 
 # -- c) changelog has a block for the current version ------------------------
 Check "c) CHANGELOG block exists for $srv" `
@@ -125,6 +127,28 @@ if (Test-Path $notesFile) {
         ("$notesFile, {0} chars" -f $notesBody.Length)
 } else {
     Check "m) release notes for $srv (optional)" $true "none, changelog only"
+}
+
+# -- n) pyright baseline -----------------------------------------------------
+& $py deploy\pyright_baseline.py *> $null
+Check "n) pyright baseline" ($LASTEXITCODE -eq 0)
+
+# -- n2) static/app.js syntax & bench/*.sh LF endings ------------------------
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    & node --check static/app.js *> $null
+    Check "n2) static/app.js syntax (node --check)" ($LASTEXITCODE -eq 0)
+}
+$crlfSh = @(git ls-files "*.sh" | ForEach-Object {
+    if ((Test-Path $_) -and ([System.IO.File]::ReadAllText($_).Contains("`r`n"))) { $_ }
+})
+Check "n3) shell scripts LF line endings" ($crlfSh.Count -eq 0) ($crlfSh -join ", ")
+
+# -- o) uv.lock up to date ---------------------------------------------------
+if (Get-Command uv -ErrorAction SilentlyContinue) {
+    & uv lock --check *> $null
+    Check "o) uv.lock up to date" ($LASTEXITCODE -eq 0)
+} else {
+    Check "o) uv.lock up to date (uv not found)" $false "uv executable missing"
 }
 
 Write-Host "=========================================================="

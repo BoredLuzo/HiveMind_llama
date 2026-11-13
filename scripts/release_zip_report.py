@@ -14,7 +14,10 @@ import sys
 import zipfile
 
 DEV_HINTS = ("audit_", "RELEASE_NOTES_", "scripts/hooks", "ruff.toml",
-             ".gitignore", ".gitattributes", "plan_", "roadmap_", "backlog")
+             ".gitignore", ".gitattributes", ".github/", "docs/plan_",
+             "docs/roadmap_", "backlog", "package_release.bat", "bump_version.py",
+             "gen_settings_docs.py", "pyright_baseline", "settings_ui_",
+             "docs/integrations.md")
 
 
 def main(path: str) -> int:

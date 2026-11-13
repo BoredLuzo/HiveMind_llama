@@ -3,7 +3,7 @@
 [![release](https://img.shields.io/github/v/release/BoredLuzo/HiveMind_llama?label=release&color=2ea44f)](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
 [![downloads](https://img.shields.io/github/downloads/BoredLuzo/HiveMind_llama/total?label=downloads)](https://github.com/BoredLuzo/HiveMind_llama/releases)
 [![license](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.14-3776ab)](pyproject.toml)
+[![python](https://img.shields.io/badge/python-3.12--3.14-3776ab)](pyproject.toml)
 
 Local multi-agent coding assistant on top of llama.cpp. Several local LLM
 "agents" (Analyst, Coder, Critic, Explorer, Judge, ...) run through structured
@@ -20,8 +20,7 @@ Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
 commercial use needs a license from the author; no resale or hosted service.
 HiveMind becomes MIT on 2030-09-01.
 
-<!-- Screenshot placeholder: replace with a real capture of the web UI, e.g.
-![HiveMind web UI](docs/screenshot.png) -->
+![HiveMind web UI — Simple/Direct with web search and Models panel](docs/screenshot.png)
 
 **What can leave the machine** — HiveMind makes no hidden calls. The full
 table is in [docs/privacy.md](docs/privacy.md); the rows that matter most:
@@ -55,7 +54,7 @@ send a message. There is no default workspace; the first run needs one.
 
 ```bash
 # one-shot installer: uv + Python 3.14, venv, llama.cpp, systemd -> /opt/hivemind
-sudo deploy/install_linux.sh                    # HIVEMIND_GPU_BACKEND=vulkan|cpu|rocm
+sudo deploy/install_linux.sh                    # HIVEMIND_GPU_BACKEND=vulkan|cuda|rocm|cpu
 
 # or manually:
 uv python install 3.14
@@ -74,10 +73,12 @@ notes and the first-run smoke test:
 ## Hardware
 
 - Windows 10/11 or Linux.
-- **Python 3.14** — an explicit requirement: older interpreters are refused by
-  the dependency metadata in `pyproject.toml`; the setup auto-installs it.
-- **8 GB+ VRAM GPU** recommended (AMD/Intel via Vulkan, NVIDIA via CUDA);
-  ~30 GB disk for the recommended model set.
+- **Python 3.12–3.14** (Python 3.14 is auto-installed by the setup via `uv`).
+- **8 GB+ VRAM GPU** recommended for single-model / **Code Duo** sequential runs
+  (one active model slot at a time, e.g. 4B–9B or Q4 MoE models; AMD/Intel via
+  Vulkan, NVIDIA via CUDA); **16 GB+ VRAM** (or CPU/hybrid offload) is
+  recommended for **Smart Preload**, multiple simultaneously loaded models, or
+  100k+ context runs. ~30 GB disk for the recommended model set.
 - uv (auto-installed); Git (optional), Docker Desktop (optional, SearXNG web
   search), Windows Core Utils (recommended on Windows). Full list and notes:
   [docs/guide.md](docs/guide.md#requirements).
@@ -98,6 +99,8 @@ multi-agent Pipeline are there when you want them — not needed for daily
 work. Mode tables, tool tiers, approval gate and the Duo internals:
 [docs/guide.md](docs/guide.md#run-modes). How the components fit together:
 [docs/architecture.md](docs/architecture.md).
+
+![HiveMind Agentic Mode — Planner, Coder and Agentic options](docs/screenshot_agentic.png)
 
 ## Extras (all optional)
 

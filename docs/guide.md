@@ -9,9 +9,9 @@ quick start, hardware minimums and the extras list see the
 ## Requirements
 
 - Windows 10/11 or Linux
-- Python 3.14 (auto-installed by the setup; older interpreters are refused by the dependency metadata in `pyproject.toml`)
+- Python 3.12–3.14 (Python 3.14 is auto-installed by the setup)
 - uv (auto-installed)
-- 8 GB+ VRAM GPU recommended (AMD/Intel via Vulkan, NVIDIA via CUDA). Smart Preload (model prefetch) is off by default - turn it on when the card has headroom
+- 8 GB+ VRAM GPU recommended for single-model / sequential **Code Duo** runs (one active model slot at a time; AMD/Intel via Vulkan, NVIDIA via CUDA). **Smart Preload**, multiple simultaneously loaded models, or large 100k+ context runs need more headroom (16 GB+ VRAM or CPU/hybrid offload) — Smart Preload is off by default
 - ~30 GB disk for the recommended model set
 - Git (optional, autocommit/diff integration)
 - Docker Desktop (optional, SearXNG web search)
@@ -47,9 +47,9 @@ Then run `start_hivemind.bat` and open http://localhost:8001.
 
 Manual installation:
 
-1. Python 3.14 with "Add python.exe to PATH".
+1. Python 3.12–3.14 (3.14 recommended) with "Add python.exe to PATH".
 2. Install uv.
-3. `uv venv -p 3.14 .venv` and `uv pip install -r requirements.txt`.
+3. `uv venv -p 3.14 .venv` (or `-p 3.12` / `-p 3.13`) and `uv pip install -r requirements.txt`.
 4. Extract a llama.cpp build (`win-vulkan-x64.zip` / `win-cuda-x64.zip`) into
    `llama\` (highest build wins), or set `HIVEMIND_LLAMA_BIN`.
 5. GGUFs into `models\` or `HIVEMIND_MODELS_DIR` (easiest via
@@ -128,10 +128,11 @@ In Simple/Direct chat the model can use tools through a tier
 | Tier | Value | Tools |
 |------|-------|-------|
 | Off | `off` | pure chat |
-| Websearch | `readonly` | `web_search`, `web_fetch` only |
-| Research | `research` | read/search tools + web (no write/exec) |
-| Python | `python` | read tools + web + `run_python` |
-| Full | `full` | read/write/exec: `edit_file`, `run_bash`, background, git, ... |
+| Basic | `readonly` | `ask_user`, `task_complete`, `get_datetime` (+ web when Websearch optional is on) |
+| Research | `research` | read/search tools + optional web/subagent (no write/exec) |
+| Python | `python` | read tools + optional web/subagent + `run_python` |
+| MCP | `mcp` | connected `mcp_*` tools (+ `task_complete`, `ask_user`, `get_datetime`) |
+| Full | `full` | read/write/exec: `edit_file`, `run_bash`, background, optionals, ... |
 
 The tier only escalates what the model may call; `full` is what you want for
 real edit/build requests. Without the web-search module the Websearch tier
@@ -199,19 +200,20 @@ Mode-scoped toolset (`tools/definitions.py`):
 
 | Area | Tools |
 |------|-------|
-| Explore | `read_file`, `get_signatures`, `find_references`, `list_dir`, `find_files`, `search_code`, `subagent_research` |
-| Write | `write_file`, `write_file_append`, `edit_file`, `replace_lines`, `edit_ast`, `undo_last` |
+| Explore | `read_file`, `get_signatures`, `find_references`, `list_dir`, `find_files`, `search_code` (+ optional `subagent_research`) |
+| Write | `write_file`, `write_file_append`, `edit_file`, `replace_lines`, `edit_ast`, `apply_patch`, `undo_last` |
 | Run | `run_bash`, `run_python`, `install_package`, `start_background`, `get_background_output`, `stop_background` |
 | Test | `run_tests` (auto-detects pytest/npm/vitest/jest/cargo/go/maven/dotnet) |
-| Git | `git_status`, `git_commit` |
+| Git | `git_status`, `git_commit` (optional `+Git`) |
 | Task | `task_complete`, `ask_user` (pause + resume) |
 | Browser | `browser` (headless Chromium: navigate, snapshot, screenshot, click, type, evaluate, console, close) |
 | Misc | `get_datetime`, `remember` (durable key/value memory), `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
-| Web | `web_search`, `web_fetch` (SearXNG, added when available) |
+| Web | `web_search`, `web_fetch` (SearXNG, optional `+Websearch` when available) |
 
-Tool scoping per phase: `duo_core` (the default coder set),
-`duo_full`, `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
-`mcp_agent`, `openai_agent`.
+Tool scoping per phase: `duo_core` (the default coder set: 18 base + `+Subagent` optional = 19),
+`duo_lean`, `duo_full`, `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
+`mcp_agent`, `openai_agent`. Optional toggles (`+Websearch`, `+Git`, `+Subagent`) live under
+**Tools & Optionals** in the sidebar.
 
 ### Language servers (LSP)
 
@@ -547,6 +549,7 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB + 0.2 GB mmproj |
 | `lfm3-omni:2b` | LiquidAI/LFM3-Omni-2B-GGUF | subagent / vision worker (needs b12001+) | 1.0 GB + 0.3 GB mmproj |
 | `lfm3:1.7b-qad` | LiquidAI/LFM3-1.7B-GGUF | tool-calling subagent (lowest latency tier, needs b12001+) | 1.0 GB |
+| `lfm3:1.7b-uncensored-ad` | AtomicChat/LFM3-1.7B-Uncensored-GGUF | uncensored subagent / helper (Q4_K_M or Q6_K fallback, needs b12001+) | 1.1 GB |
 | `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
 | `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast direct helper (dense 4B) | 3.0 GB |
 | `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
