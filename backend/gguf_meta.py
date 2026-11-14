@@ -184,13 +184,15 @@ def _sibling_has_mmproj(path: Path) -> bool:
             continue
         # Generic projector (e.g. mmproj-F16.gguf): only match when this dir holds a single model.
         try:
+            from backend.llama_models import is_non_model_gguf
             other_models = [
                 p for p in path.parent.glob("*.gguf")
                 if "mmproj" not in p.name.lower()
                 and not p.name.lower().startswith("mtp-")
+                and not is_non_model_gguf(p.name)
                 and _SPLIT_SHARD_RE.sub(r'\g<base>', p.stem) != _SPLIT_SHARD_RE.sub(r'\g<base>', path.stem)
             ]
-        except OSError:
+        except (OSError, ImportError):
             other_models = []
         if not other_models:
             return True

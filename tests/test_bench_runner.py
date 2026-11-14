@@ -321,6 +321,25 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           and (1, "t1", "aider") not in _rf_keys,
           f" ({_rf_rows}/{_rf_keys})")
 
+    _scoped_out = root / "scoped_resume.json"
+    _scoped_rows = [
+        {"run": 1, "task": "t1", "condition": "hivemind_duo", "model": "m", "ok": True, "seconds": 10.0, "tokens": 500},
+        {"run": 1, "task": "t1", "condition": "aider", "model": "m", "ok": False, "seconds": 12.0, "tokens": 300},
+        {"run": 2, "task": "t2", "condition": "aider", "model": "m", "ok": False, "seconds": 15.0, "tokens": 200},
+    ]
+    _persist(_scoped_out, _scoped_rows, _sync_cfg, ["hivemind_duo", "aider"], "2026-11-12T00:00:00+00:00")
+    _sc_rows, _sc_keys, _ = _load_resume_state(
+        _scoped_out, None, "m", 131072,
+        resume_failed=True,
+        planned_keys={(1, "t1", "aider")},
+    )
+    check("resume-failed scoped: preserves failed rows outside planned_keys and drops planned failure",
+          len(_sc_rows) == 2
+          and (1, "t1", "hivemind_duo") in _sc_keys
+          and (2, "t2", "aider") in _sc_keys
+          and (1, "t1", "aider") not in _sc_keys,
+          f" ({_sc_rows}/{_sc_keys})")
+
     # ── HiveMind SSE & Aider token accounting + conftest tamper guard ───────
     _sse_lines = [
         "data: " + json.dumps({"type": "usage_meta", "prompt_tokens": 1000, "completion_tokens": 120, "cached_tokens": 400}),
@@ -380,6 +399,16 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     _cf_ok, _cf_out = run_check(_cf_task, _cf_work)
     check("hidden: agent-planted untracked conftest.py is removed while repo fixture conftest.py stays",
           _cf_ok is True, f" ({_cf_out!r})")
+    (_cf_work / "keep" / "conftest.py").write_text("POISON = 1\n", encoding="utf-8")
+    (_cf_work / "sitecustomize.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    (_cf_work / "pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+    _cf2_ok, _cf2_out = run_check(_cf_task, _cf_work)
+    check("hidden: modified repo fixture conftest.py is restored and sitecustomize/pytest.ini removed",
+          _cf2_ok is True
+          and (_cf_work / "keep" / "conftest.py").read_text(encoding="utf-8") == "KEEP = 1\n"
+          and not (_cf_work / "sitecustomize.py").exists()
+          and not (_cf_work / "pytest.ini").exists(),
+          f" ({_cf2_out!r})")
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,
@@ -630,6 +659,12 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           and "6.00x" in out, f" ({out[-400:]!r})")
     check("report: category deltas printed",
           "bugfix" in out and "feature" in out, f" ({out[-400:]!r})")
+
+    from bench.relative import category as _rel_category
+    check("relative: hard/polyglot/deepswe prefixes map to distinct categories",
+          _rel_category("hard_bug") == "hard"
+          and _rel_category("polyglot_foo") == "polyglot"
+          and _rel_category("deepswe_repo") == "deepswe")
 
 # ── shipped starter corpus ─────────────────────────────────────────────────
 corpus = load_tasks(ROOT / "bench" / "tasks")

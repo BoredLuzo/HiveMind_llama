@@ -191,7 +191,8 @@ def _mapping_lock():
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
-def register_workspace(workspace: Path, container: str) -> None:
+def register_workspace(workspace: Path, container: str,
+                       ttl_s: float = 86400.0) -> None:
     with _mapping_lock():
         path = mapping_path()
         try:
@@ -200,11 +201,14 @@ def register_workspace(workspace: Path, container: str) -> None:
                 data = {}
         except (OSError, ValueError):
             data = {}
-        data[str(workspace.resolve())] = {
+        entry = {
             "container": container,
             "cwd": "/testbed",
             "activate": VERIFIER_ACTIVATE,
         }
+        if ttl_s is not None:
+            entry["expires_at"] = round(time.time() + float(ttl_s), 3)
+        data[str(workspace.resolve())] = entry
         _write_mapping(data)
 
 
@@ -245,6 +249,11 @@ def hivemind_body(instance: Instance, workspace: Path, model: str,
         "duo_chunking": False,
         "duo_tool_rounds": int(tool_rounds),
         "duo_coder_tool_tier": "core",
+        "duo_websearch_enabled": False,
+        "git_tools_enabled": "false",
+        "duo_git_autocommit": False,
+        "lsp_auto_diagnostics": False,
+        "lsp_auto_warm_on_write": False,
         "duo_test_feedback_chunk": False,
         "duo_test_feedback_final": False,
         "duo_coder_ctx_agentic": int(ctx),
@@ -260,13 +269,18 @@ def run_hivemind(base_url: str, body: dict, timeout: int,
                  *, label: str = "", quiet: bool = False) -> dict:
     done: dict = {}
     tokens_in = tokens_out = cached = 0
+    saw_usage_meta = False
     error = ""
     last_note = 0.0
+    deadline = (time.monotonic() + float(timeout)) if timeout and timeout > 0 else None
     with httpx.stream("POST", base_url.rstrip("/") + "/stream", json=body,
                       timeout=httpx.Timeout(connect=10, read=timeout,
                                             write=30, pool=10)) as r:
         r.raise_for_status()
         for line in r.iter_lines():
+            if deadline is not None and time.monotonic() > deadline:
+                error = f"wall timeout after {timeout}s"
+                break
             if not line.startswith("data: "):
                 continue
             try:
@@ -277,9 +291,12 @@ def run_hivemind(base_url: str, body: dict, timeout: int,
             if typ == "done":
                 done = ev
             elif typ == "usage_meta":
-                tokens_in += int(ev.get("prompt_tokens") or 0)
-                tokens_out += int(ev.get("completion_tokens") or 0)
-                cached += int(ev.get("cached_tokens") or 0)
+                saw_usage_meta = True
+                p_tok = max(0, int(ev.get("prompt_tokens") or 0))
+                c_raw = max(0, int(ev.get("cached_tokens") or 0))
+                tokens_in += p_tok
+                tokens_out += max(0, int(ev.get("completion_tokens") or 0))
+                cached += min(c_raw, p_tok)
                 now = time.monotonic()
                 if not quiet and now - last_note >= 15:
                     last_note = now
@@ -287,9 +304,15 @@ def run_hivemind(base_url: str, body: dict, timeout: int,
                           f"cached={cached}", flush=True)
             elif typ == "error":
                 error = str(ev.get("content") or ev)[:800]
+    if not saw_usage_meta and isinstance(done, dict) and done:
+        p_tok = max(0, int(done.get("prompt_tokens_total") or 0))
+        c_raw = max(0, int(done.get("cached_tokens_total") or 0))
+        tokens_in = p_tok
+        tokens_out = max(0, int(done.get("tokens_generated") or 0))
+        cached = min(c_raw, p_tok)
     return {
         "done": done,
-        "stop_reason": done.get("stop_reason", ""),
+        "stop_reason": done.get("stop_reason") or ("timeout" if "wall timeout" in error else ""),
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cached": cached,

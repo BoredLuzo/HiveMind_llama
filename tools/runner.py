@@ -332,7 +332,7 @@ def _approval_call_key(name: str, args: dict) -> str:
     precisely this call — writes per FILE, commands per exact 1:1 arguments
     (a new command with different content asks again). Legacy tool-level
     entries are ignored."""
-    if name in ("write_file", "edit_file", "write_file_append"):
+    if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
         return "file:" + _norm_write_path(args)
     import hashlib as _hl
     _raw = json.dumps(
@@ -543,7 +543,14 @@ def _pending_approval_info(run_id: str) -> dict | None:
 
 def _norm_write_path(args: dict) -> str:
     try:
-        return os.path.normpath(str((args or {}).get("path", ""))).lower()
+        if str((args or {}).get("path", "")).strip():
+            return os.path.normpath(str((args or {}).get("path", ""))).lower()
+        _patch_txt = str((args or {}).get("patch") or (args or {}).get("diff") or "").strip()
+        if _patch_txt:
+            from tools.patch_diff import patch_targets
+            _tgts = sorted({os.path.normpath(t).lower() for t in patch_targets(_patch_txt) if t})
+            return "|".join(_tgts)
+        return ""
     except (OSError, TypeError, ValueError):
         return ""
 def _approval_gate_on() -> bool:
@@ -603,7 +610,7 @@ async def stage_approval_card(run_id, name: str, emit) -> None:
     if not scope or _card_staged.get(scope):
         return
     if (_approval_free_pass.get(scope) == "write"
-            and name in ("write_file", "edit_file", "write_file_append")):
+            and name in ("write_file", "edit_file", "write_file_append", "apply_patch")):
         return
     if _approval_pre_decisions.get(scope):
         return  # already decided while generating
@@ -631,7 +638,7 @@ def _approval_preview(args: dict) -> str:
     # install_package carries "packages" - the old tuple missed both, so
     # the card fell through to the 60-char generic join while the full
     # command executed (approve sees X, runs Y).
-    for _k in ("cmd", "command", "code", "packages", "package", "url", "path"):
+    for _k in ("cmd", "command", "code", "packages", "package", "url", "path", "patch", "diff"):
         _v = args.get(_k)
         if isinstance(_v, str) and _v.strip():
             _v = _redact_secret_text(_v.strip())
@@ -729,13 +736,13 @@ async def _check_action_approval(name: str, args: dict, workspace,
                     decision, run_id, name, _note[:80])
         if decision == "repo":
             _remember_repo_approval(workspace, name, args or {})
-            if name in ("write_file", "edit_file", "write_file_append"):
+            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
                 _approval_free_pass[str(run_id)] = "write"
             if _note:
                 return ("NOTE", _note)
             return None
         if decision == "once":
-            if name in ("write_file", "edit_file", "write_file_append"):
+            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
                 _wpp = _workspace_approval_key(workspace) + "::" + _norm_write_path(args)
                 if _wpp:
                     _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp)
@@ -758,7 +765,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
     _wpath = _norm_write_path(args)
     if _wpath:
         _wpath = _workspace_approval_key(workspace) + "::" + _wpath
-    if (name in ("write_file", "edit_file", "write_file_append")
+    if (name in ("write_file", "edit_file", "write_file_append", "apply_patch")
             and _wpath and _wpath in _approval_once_paths.get(_scope, set())):
         _lg.info("[APPROVAL] skip: %s on %s already approved in this chat", name, _wpath)
         _pending_approvals.pop(str(run_id), None)
@@ -804,11 +811,11 @@ async def _check_action_approval(name: str, args: dict, workspace,
                     _dec_l, run_id, name, str(_note_l)[:80])
         if _dec_l == "repo":
             _remember_repo_approval(workspace, name, args or {})
-            if name in ("write_file", "edit_file", "write_file_append"):
+            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
                 _approval_free_pass[str(run_id)] = "write"
             return (("NOTE", _note_l) if _note_l else None)
         if _dec_l == "once":
-            if name in ("write_file", "edit_file", "write_file_append"):
+            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
                 _wpp_l = _workspace_approval_key(workspace) + "::" + _norm_write_path(args)
                 if _wpp_l:
                     _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp_l)
@@ -949,7 +956,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
                 decision, run_id, name, _note[:80], str(answer)[:60])
     if decision == "repo":
         _remember_repo_approval(workspace, name, args or {})
-        if name in ("write_file", "edit_file", "write_file_append"):
+        if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
             _approval_free_pass[str(run_id)] = "write"
         if _note:
             return ("NOTE", _note)
@@ -959,7 +966,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
         # the model as the call's outcome so it can adjust and retry.
         return ("INPUT_ONLY", _note or "(empty)")
     if decision == "once":
-        if name in ("write_file", "edit_file", "write_file_append") and _wpath:
+        if name in ("write_file", "edit_file", "write_file_append", "apply_patch") and _wpath:
             _approval_once_paths.setdefault(_scope, set()).add(_wpath)
             if len(_approval_once_paths) > 64:
                 _approval_once_paths.clear()
@@ -2068,9 +2075,12 @@ async def _run_inline_tool(
                         _lsp_auto(workspace, _ap_live, return_status=True)
                         for _ap_live in _ap_live_targets[:4]
                     ))
-                    for _lsp_note, _lsp_handled in _ap_lsp_results:
-                        if _lsp_note or _lsp_handled:
-                            _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
+                    _all_lsp_handled = bool(_ap_lsp_results) and all(_h for _, _h in _ap_lsp_results)
+                    _lsp_notes = "\n\n".join(_n for _n, _ in _ap_lsp_results if _n)
+                    if _all_lsp_handled:
+                        _result = _lsp_merge(_result, _lsp_notes, True)
+                    elif _lsp_notes:
+                        _result = _result.rstrip() + "\n\n" + _lsp_notes
                 except (ImportError, OSError, RuntimeError, ValueError,
                         AttributeError, TypeError):
                     pass

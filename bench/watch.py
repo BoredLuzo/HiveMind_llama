@@ -35,19 +35,25 @@ def get_gpu_status() -> str:
 
 
 def is_benchmark_running() -> bool:
-    try:
-        r = subprocess.run(["tmux", "has-session", "-t", "hmbench"],
-                           capture_output=True, timeout=2)
-        return r.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+    for cmd in (["tmux", "has-session", "-t", "hmbench"],
+                ["pgrep", "-f", r"bench/runner\.py"]):
+        try:
+            if subprocess.run(cmd, capture_output=True, timeout=2).returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
 
 
 def get_latest_results_file() -> Path | None:
     results_dir = ROOT / "bench" / "results"
     if not results_dir.is_dir():
         return None
-    jsons = sorted(results_dir.glob("run-*.json"), key=os.path.getmtime, reverse=True)
+    jsons = sorted(
+        [p for p in results_dir.glob("*.json") if not p.name.startswith("_")],
+        key=os.path.getmtime,
+        reverse=True,
+    )
     return jsons[0] if jsons else None
 
 

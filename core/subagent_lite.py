@@ -56,7 +56,9 @@ def _gguf_size_gb(model: str) -> float | None:
         from backend.llama_server_manager import resolve_model_path
         p = resolve_model_path(model)
         if p and Path(p).exists():
-            return Path(p).stat().st_size / (1024 ** 3)
+            from backend.gguf_meta import _total_gguf_size_bytes
+            _gp = Path(p)
+            return _total_gguf_size_bytes(_gp, _gp.stat().st_size) / (1024 ** 3)
     except Exception:
         pass
     return None

@@ -129,8 +129,9 @@ class SchedulerManager:
                     "job_id": job.get("id"), "status": "skipped_stale",
                     "queued_ts": p.get("queued_ts"), "ts": now})
             else:
+                _job_snap = {**job, "pending_fire": dict(p)}
                 self.store.update(job.get("id"), {"pending_fire": None})
-                self._spawn_fire(job, now, reason="queued")
+                self._spawn_fire(_job_snap, now, reason="queued")
             return
 
         for job in jobs:

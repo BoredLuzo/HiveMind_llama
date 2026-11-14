@@ -104,6 +104,18 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     check("unregister removes the mapping",
           str(ws.resolve()) not in json.loads(map_file.read_text(encoding="utf-8")))
 
+    from tools.bench_container import container_info
+    sw.register_workspace(ws, "hm-live", ttl_s=60.0)
+    live_data = json.loads(map_file.read_text(encoding="utf-8"))
+    check("register_workspace writes expires_at and active mapping resolves",
+          isinstance(live_data[str(ws.resolve())].get("expires_at"), (int, float))
+          and (container_info(ws) or {}).get("container") == "hm-live",
+          f" ({live_data})")
+    sw.register_workspace(ws, "hm-stale", ttl_s=-10.0)
+    check("expired container mapping is ignored by container_info",
+          container_info(ws) is None)
+    sw.unregister_workspace(ws)
+
     check("docker requirement has an explicit error path",
           callable(sw.docker_available))
 

@@ -57,14 +57,16 @@ def gguf_size_gb(model: str) -> float:
     path - the bench scripts pass paths, the loader passes aliases.
     FAIL-CLOSED (2026-10-30): 0.0 makes ram_guard_blocks BLOCK - an unknown
     model cannot be size-checked, so it must not start."""
+    from backend.gguf_meta import _total_gguf_size_bytes
     _p = Path(model)
     if _p.suffix.lower() == ".gguf" and _p.exists():
-        return _p.stat().st_size / (1024 ** 3)
+        return _total_gguf_size_bytes(_p, _p.stat().st_size) / (1024 ** 3)
     try:
         from backend.llama_models import resolve_model_path as _rmp
         _ggf = _rmp(model)
         if _ggf:
-            return Path(_ggf).stat().st_size / (1024 ** 3)
+            _gp = Path(_ggf)
+            return _total_gguf_size_bytes(_gp, _gp.stat().st_size) / (1024 ** 3)
     except (ImportError, OSError):
         pass
     return 0.0

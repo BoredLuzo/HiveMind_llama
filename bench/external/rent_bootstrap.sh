@@ -223,25 +223,25 @@ setup() {
 
 detect_llama_url() {
   local _base_port=$(( PORT + 100 ))
+  local _fallback_url="${HM_LLAMA_URL:-http://127.0.0.1:$_base_port}"
+  HM_LLAMA_URL=""
   for _p in "$_base_port" $(( _base_port + 1 )) 8101 8102 8103 8080; do
     if curl --max-time 2 -fsS "http://127.0.0.1:$_p/health" >/dev/null 2>&1; then
       HM_LLAMA_URL="http://127.0.0.1:$_p"; return
     fi
   done
-  HM_LLAMA_URL="${HM_LLAMA_URL:-http://127.0.0.1:$_base_port}"
+  HM_LLAMA_URL="$_fallback_url"
 }
 
 serve() {
   [ -x "$PY" ] || die "run setup first"
   mkdir -p "$MODELS_DIR"
 
-  # Check if engine AND llama-server are already up with this exact model and context
-  local _prev_ctx=""
+  # Check if engine AND llama-server are already up with this exact model and context.
+  # Never overwrite .active_model/.active_ctx until loading actually succeeds.
+  local _prev_model="" _prev_ctx=""
+  _prev_model="$(cat "$HM_DIR/.active_model" 2>/dev/null | tr -d '[:space:]' || true)"
   _prev_ctx="$(cat "$HM_DIR/.active_ctx" 2>/dev/null | tr -d '[:space:]' || true)"
-
-  # Persist active model & ctx immediately so any subsequent script/smoke call knows what was selected
-  echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
-  echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
 
   detect_llama_url
   local _already_loaded=0
@@ -249,12 +249,14 @@ serve() {
      [ -n "$HM_LLAMA_URL" ] && curl --max-time 2 -fsS "$HM_LLAMA_URL/health" >/dev/null 2>&1; then
     local _ps_out
     _ps_out=$(curl --max-time 2 -fsS "http://127.0.0.1:$PORT/vram/ps" 2>/dev/null || true)
-    if echo "$_ps_out" | grep -q "\"name\":\"$HM_MODEL\"" && [ "$_prev_ctx" = "$HM_CTX" ]; then
+    if echo "$_ps_out" | grep -q "\"name\":\"$HM_MODEL\"" && [ "$_prev_model" = "$HM_MODEL" ] && [ "$_prev_ctx" = "$HM_CTX" ]; then
       _already_loaded=1
     fi
   fi
 
   if [ "$_already_loaded" -eq 1 ]; then
+    echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
+    echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
     log "Model '$HM_MODEL' (ctx $HM_CTX) is ALREADY loaded in VRAM and healthy ($HM_LLAMA_URL) — skipping reload."
     return 0
   fi
@@ -454,6 +456,7 @@ run_bench() {  # $@ = extra args (optional)
       *) _suite="$(basename "$HM_TASKS")" ;;
     esac
     case "$HM_MODEL" in
+      *hermes*35b*|*35b*mtp*|*35B*MTP*) _mtag="35b_mtp" ;;
       *4b*|*4B*) _mtag="4b" ;;
       *35b*|*35B*) _mtag="35b" ;;
       *) _mtag="$(printf '%s' "$HM_MODEL" | tr ':/ ' '___')" ;;
@@ -555,7 +558,7 @@ full() {
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HIVEMIND_PORT='$PORT' HIVEMIND_MODELS_DIR='$MODELS_DIR' HM_LLAMA_URL='$HM_LLAMA_URL' AIDER_VENV='$AIDER_VENV' HERMES_VENV='$HERMES_VENV' HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' \
+    "cd '$HM_DIR' && HIVEMIND_PORT='$PORT' HIVEMIND_MODELS_DIR='$MODELS_DIR' HM_LLAMA_URL='$HM_LLAMA_URL' AIDER_VENV='$AIDER_VENV' HERMES_VENV='$HERMES_VENV' HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_ONLY='${HM_ONLY:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' HM_RESUME_FAILED='${HM_RESUME_FAILED:-0}' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 

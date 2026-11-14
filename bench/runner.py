@@ -225,6 +225,16 @@ def prepare_workspace(task: Task, base: Path) -> Path:
     return work
 
 
+_TAMPER_CONFIG_NAMES = (
+    "conftest.py",
+    "sitecustomize.py",
+    "usercustomize.py",
+    "pytest.ini",
+    ".pytest.ini",
+    "tox.ini",
+)
+
+
 def install_hidden_tests(task: Task, work: Path) -> None:
     """Copy tests/ over the workspace, replacing files AND directories.
 
@@ -234,12 +244,23 @@ def install_hidden_tests(task: Task, work: Path) -> None:
     destination explicitly before every file.
     """
     if work.is_dir():
-        for cf in list(work.rglob("conftest.py")):
-            rel = cf.relative_to(work)
-            in_repo = task.repo is not None and (task.repo / rel).is_file()
-            in_tests = task.tests is not None and (task.tests / rel).is_file()
-            if not in_repo and not in_tests:
-                cf.unlink(missing_ok=True)
+        for _cfg_name in _TAMPER_CONFIG_NAMES:
+            for cf in list(work.rglob(_cfg_name)):
+                rel = cf.relative_to(work)
+                in_repo = task.repo is not None and (task.repo / rel).is_file()
+                in_tests = task.tests is not None and (task.tests / rel).is_file()
+                if in_tests:
+                    continue
+                if in_repo:
+                    assert task.repo is not None
+                    if cf.is_dir():
+                        shutil.rmtree(cf, ignore_errors=True)
+                    cf.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(task.repo / rel, cf)
+                elif cf.is_dir():
+                    shutil.rmtree(cf, ignore_errors=True)
+                else:
+                    cf.unlink(missing_ok=True)
     if task.tests is None:
         return
     for src in task.tests.rglob("*"):
@@ -1127,13 +1148,17 @@ def print_summary(summary: dict, relative: dict | None = None) -> None:
 def _payload(rows: list[dict], cfg: Config, conditions: list[str],
              started_at: str) -> dict:
     now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+    max_run = max([
+        cfg.runs + getattr(cfg, "run_offset", 0),
+        *(int(r.get("run") or 1) for r in rows if isinstance(r, dict)),
+    ])
     return {
         "started_at": started_at,
         "updated_at": now_iso,
         "model": cfg.model,
         "num_ctx": getattr(cfg, "ctx_tokens", 32768),
         "tasks_dir": str(cfg.tasks_dir.as_posix()),
-        "runs": cfg.runs,
+        "runs": max_run,
         "run_offset": getattr(cfg, "run_offset", 0),
         "gpu": getattr(cfg, "gpu_info", {}),
         "conditions": conditions,
@@ -1197,6 +1222,7 @@ def _load_resume_state(
     ctx_tokens: int,
     *,
     resume_failed: bool = False,
+    planned_keys: set[tuple[int, str, str]] | None = None,
 ) -> tuple[list[dict], set[tuple[int, str, str]], str]:
     """Pull newer/larger checkpoint from sync_dir -> out and return done keys."""
     local_data, local_rows = _read_checkpoint_rows(out)
@@ -1228,14 +1254,16 @@ def _load_resume_state(
             continue
         if r.get("model") and str(r["model"]) != model:
             continue
-        if resume_failed and not r.get("ok"):
-            continue
-        kept_rows.append(r)
         run_no = int(r.get("run") or 1)
         task_id = str(r.get("task") or "")
         cond = str(r.get("condition") or "")
+        key = (run_no, task_id, cond)
+        if resume_failed and not r.get("ok"):
+            if planned_keys is None or key in planned_keys:
+                continue
+        kept_rows.append(r)
         if task_id and cond:
-            done_keys.add((run_no, task_id, cond))
+            done_keys.add(key)
     started_at = str(local_data.get("started_at") or "")
     return kept_rows, done_keys, started_at
 
@@ -1356,16 +1384,6 @@ def main() -> int:
         resume_failed=bool(args.resume_failed),
     )
 
-    rows: list[dict] = []
-    done_keys: set[tuple[int, str, str]] = set()
-    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
-    if cfg.resume:
-        rows, done_keys, saved_start = _load_resume_state(
-            out, sync_dir, cfg.model, cfg.ctx_tokens,
-            resume_failed=cfg.resume_failed)
-        if saved_start:
-            started_at = saved_start
-
     total_runs = cfg.runs + cfg.run_offset
     planned = [
         (run_idx + 1 + cfg.run_offset, task, cond)
@@ -1373,6 +1391,19 @@ def main() -> int:
         for task in tasks
         for cond in conditions
     ]
+    planned_keys = {(r, t.id, c) for (r, t, c) in planned}
+
+    rows: list[dict] = []
+    done_keys: set[tuple[int, str, str]] = set()
+    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    if cfg.resume:
+        rows, done_keys, saved_start = _load_resume_state(
+            out, sync_dir, cfg.model, cfg.ctx_tokens,
+            resume_failed=cfg.resume_failed,
+            planned_keys=planned_keys)
+        if saved_start:
+            started_at = saved_start
+
     pending = [(r, t, c) for (r, t, c) in planned if (r, t.id, c) not in done_keys]
 
     gpu_s = f"{gpu_info.get('name', 'CPU')} ({gpu_info.get('vram_total', '')})"

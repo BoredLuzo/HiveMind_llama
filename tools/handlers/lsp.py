@@ -709,7 +709,7 @@ def merge_post_write_diagnostics(result: str, lsp_note: str,
     """
     if not lsp_handled:
         return result
-    _tail_markers = ("\n[AUTO-TEST]", "\n\n[Diff \u2014 what changed]")
+    _tail_markers = ("\n[USER NOTE]:", "\n[AUTO-TEST]", "\n\n[Diff \u2014 what changed]")
     while (_lint_at := result.find("\n[lint/")) != -1:
         _ends = [idx for m in _tail_markers if (idx := result.find(m, _lint_at + 1)) != -1]
         if _ends:

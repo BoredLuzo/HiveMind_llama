@@ -169,10 +169,12 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                     tools=_active_tools, tool_mode="tool_agent",
                     include_websearch=_tool_ws,
                     include_git=_tool_git,
+                    settings=settings,
                     read_timeout_s=_tool_read_timeout_s,
                 ),
                 http_client=_tc, port=_tool_port,
                 workspace=_ws_str,
+                run_id=run_id,
                 abort_check=_aborted,
                 on_after_round=_repeat_guard(),
             )
@@ -180,6 +182,14 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                 if _ev["type"] == "token":
                     _tool_out_parts.append(_ev["content"])
                 yield await emit(_ev)
+            if _loop.state.completion_tokens or _loop.state.prompt_tokens:
+                yield await emit({
+                    "type": "usage_meta",
+                    "phase": "tool_agent",
+                    "completion_tokens": int(_loop.state.completion_tokens),
+                    "prompt_tokens": int(_loop.state.prompt_tokens),
+                    "cached_tokens": int(_loop.state.cached_tokens),
+                })
             _tool_stop_reason = _loop.state.stop_reason
             _tool_calls = bool(_loop.state.tool_calls_made)
     except httpx.TimeoutException as _te:

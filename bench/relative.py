@@ -22,7 +22,9 @@ BASELINES = ("raw", "raw_files")
 REFERENCE_CONDITION = "aider"
 
 CATEGORY_PREFIXES = (("fix_", "bugfix"), ("feature_", "feature"),
-                     ("refactor_", "refactor"), ("multi_", "multi-file"))
+                     ("refactor_", "refactor"), ("multi_", "multi-file"),
+                     ("hard_", "hard"), ("polyglot_", "polyglot"),
+                     ("deepswe_", "deepswe"))
 
 
 def category(task: str) -> str:

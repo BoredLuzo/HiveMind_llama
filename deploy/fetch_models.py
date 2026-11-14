@@ -880,8 +880,8 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
         # writer — the private copy here missed 'projector'/'vision_encoder'.
         if is_non_model_gguf(g.name):
             continue
-        _sm_shard = _SPLIT_SHARD_RE.match(g.stem)
-        if _sm_shard and int(_sm_shard.group("shard")) > 1:
+        _sm_shard = _SPLIT_SHARD_RE.search(g.stem)
+        if _sm_shard and int(_sm_shard.group(1)) > 1:
             continue
         # TAG-PIN (2026-09-12): a spec tag is authoritative — the filename
         # parser over-normalizes (unsloth names their MTP quants WITHOUT

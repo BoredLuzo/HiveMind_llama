@@ -1396,8 +1396,13 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         logger.info(f"CMD: {' '.join(cmd)}")
         try:
             import os as _os_diag
-            _gguf_gb = (_os_diag.path.getsize(gguf_path) / (1024 ** 3)) if gguf_path and _os_diag.path.exists(gguf_path) else -1.0
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+            from pathlib import Path as _Path_diag
+            from backend.gguf_meta import _total_gguf_size_bytes as _tgsb
+            _gguf_gb = (
+                _tgsb(_Path_diag(gguf_path), _os_diag.path.getsize(gguf_path)) / (1024 ** 3)
+                if gguf_path and _os_diag.path.exists(gguf_path) else -1.0
+            )
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
             _gguf_gb = -1.0
         # 2026-11-01: this logged the HiveMind MLOCK_MODEL setting, which
         # is NOT what the server does — the effective switch is the
