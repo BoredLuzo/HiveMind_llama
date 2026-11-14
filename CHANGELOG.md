@@ -1,8 +1,10 @@
-## [1.6.0-beta] - 2026-11-13
+## [1.6.0-beta] - 2026-11-14
 
 Pre-benchmark beta release unifying local model discovery, Direct/Duo/Agentic
-transport & tool gating, scheduler hardening, and Linux/Colab benchmark parity.
+transport & tool gating, security & runtime containment, scheduler hardening,
+and Linux/Colab benchmark parity.
 
+### Added & Improved
 - **GGUF drop-in discovery & catalog hardening:** Extracted
   `backend/gguf_meta.py` to inspect GGUF metadata, multi-part shards
   (`-NNNNN-of-NNNNN`), and paired `mmproj` projectors safely across shared model
@@ -19,11 +21,39 @@ transport & tool gating, scheduler hardening, and Linux/Colab benchmark parity.
   `+Subagent` = 19 default), fixed `apply_patch` EOF/newline parsing and
   `auto_test_note` settings propagation, and closed `SchedulerManager` spawn/fire
   race conditions.
-- **Colab autopilot & packaging:** Removed `.approaches` solution spoilers from
-  Polyglot tasks, lowered `requires-python` to `>=3.12,<3.15` for Linux/Colab
-  compatibility, added clean-reset + 4B (100k ctx) / 35B-MTP (120k ctx) stages in
-  `bench/external/hivemind_bench_colab_autopilot.ipynb`, and fixed `rent_bootstrap.sh`
-  build-id parsing. Covered by 385/385 regression suites.
+
+### Security & Privacy
+- **Native secret-path denylist & workspace containment:** Enforced the shared
+  secret-file denylist (`.env`, SSH/TLS keys, credentials, cloud/token configs)
+  across native `read_file`, `list_files`, `find_by_name`, and `search_code`
+  tools (`utils/file.py`, `tools/handlers/file_tools.py`,
+  `tools/handlers/search_tools.py`), and validated `run_tests` `paths`/`targets`
+  arguments via `os.path.commonpath` against workspace escape
+  (`tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`).
+- **Supply-chain & model-store hardening:** Switched `deploy/updater.py` release
+  digest checks to fail-closed (`sha256:` required unless `HM_ALLOW_UNVERIFIED_UPDATE=1`
+  or unsigned release dev escape hatch), pinned `llama.cpp` release tag `b12001`
+  in `deploy/llama_build_pin.txt` (with `--tag` / `--latest` overrides), and
+  validated `model_configs` agent/model identifiers against path traversal.
+
+### Fixed
+- Guarded `_phase_claim` peer-slot eviction in `backend/llama_start_phases.py`
+  to skip `_loading` peer slots (preventing concurrent weight-load thrash) and
+  initialized `complexity` before the Stats closure in `core/chat_run.py` so
+  intent-agent early exits complete cleanly without `UnboundLocalError`.
+- Bounded `context/compression.py` message-merging with a `not _partial` guard so
+  truncated/partial user turns are not coalesced unexpectedly.
+
+### Benchmark Harness & Tests
+- **Colab autopilot & external suites (3×3 per-run cells):** Removed `.approaches`
+  solution spoilers from Polyglot tasks, lowered `requires-python` to
+  `>=3.12,<3.15` for Linux/Colab compatibility, fixed `rent_bootstrap.sh`
+  build-id parsing, and expanded `bench/external/hivemind_bench_colab_autopilot.ipynb`
+  with dedicated per-run cells across **3 Suites × 3 Runs** (Core 23 tasks,
+  Aider Polyglot 34 tasks, DeepSWE 3 real-world repo tasks on 4B & 35B-MTP),
+  live 45s heartbeat/`[progress]` status, `STATUS_OVERVIEW.txt` deadlock age
+  checks, and clean post-save pipe exit. Covered by **386/386** standalone
+  regression suites.
 
 ## [1.5.6] - 2026-11-12
 
