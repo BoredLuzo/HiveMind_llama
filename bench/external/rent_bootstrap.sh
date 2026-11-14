@@ -218,6 +218,15 @@ setup() {
     log "WARN: pi install skipped/failed (Node >= 22 required)"
   fi
 
+  uv pip install --python "$PY" -q hypothesis trio attrs pytest pytest-asyncio anyio trustme cryptography httpcore certifi idna sniffio 2>/dev/null || \
+    "$PY" -m pip install -q hypothesis trio attrs pytest pytest-asyncio anyio trustme cryptography httpcore certifi idna sniffio 2>/dev/null || true
+
+  local _poly_sample="$HM_DIR/bench/tasks_polyglot/polyglot_dot_dsl/task.json"
+  if [ -f "$_poly_sample" ] && ! grep -q '\[Test suite API contract\]' "$_poly_sample" 2>/dev/null; then
+    log "Refreshing Polyglot task contracts ([Test suite API contract])..."
+    HM_POLYGLOT_NAMES=all polyglot || log "WARN: Polyglot contract refresh failed"
+  fi
+
   log "ALL SETUP STEPS FINISHED SUCCESSFULLY! Next: choose model (Zelle 4a oder 4b) and serve."
 }
 
@@ -237,11 +246,19 @@ serve() {
   [ -x "$PY" ] || die "run setup first"
   mkdir -p "$MODELS_DIR"
 
-  # Check if engine AND llama-server are already up with this exact model and context.
-  # Never overwrite .active_model/.active_ctx until loading actually succeeds.
-  local _prev_model="" _prev_ctx=""
+  # Check if engine AND llama-server are already up with this exact model, context, and commit.
+  # Never overwrite .active_model/.active_ctx/.active_commit until loading actually succeeds.
+  local _prev_model="" _prev_ctx="" _prev_commit="" _cur_commit=""
   _prev_model="$(cat "$HM_DIR/.active_model" 2>/dev/null | tr -d '[:space:]' || true)"
   _prev_ctx="$(cat "$HM_DIR/.active_ctx" 2>/dev/null | tr -d '[:space:]' || true)"
+  _prev_commit="$(cat "$HM_DIR/.active_commit" 2>/dev/null | tr -d '[:space:]' || true)"
+  _cur_commit="$(git -C "$HM_DIR" rev-parse --short HEAD 2>/dev/null | tr -d '[:space:]' || true)"
+
+  if [ -n "$_cur_commit" ] && [ "$_prev_commit" != "$_cur_commit" ] && \
+     curl --max-time 2 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+    log "Repo commit changed (${_prev_commit:-unknown} -> $_cur_commit) while engine running — restarting engine to load updated code."
+    stop
+  fi
 
   detect_llama_url
   local _already_loaded=0
@@ -257,6 +274,7 @@ serve() {
   if [ "$_already_loaded" -eq 1 ]; then
     echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
     echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
+    [ -n "$_cur_commit" ] && echo "$_cur_commit" > "$HM_DIR/.active_commit" 2>/dev/null || true
     log "Model '$HM_MODEL' (ctx $HM_CTX) is ALREADY loaded in VRAM and healthy ($HM_LLAMA_URL) — skipping reload."
     return 0
   fi
@@ -434,6 +452,7 @@ PY
   log "benchmark llama endpoint: $HM_LLAMA_URL"
   echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
   echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
+  [ -n "$_cur_commit" ] && echo "$_cur_commit" > "$HM_DIR/.active_commit" 2>/dev/null || true
   log "Engine and model ($HM_MODEL @ ctx $HM_CTX) fully ready for benchmarks!"
 }
 
