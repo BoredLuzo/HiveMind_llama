@@ -6088,6 +6088,7 @@ function _renderApprovalCard(d) {
       var _preUp = _apOld.querySelector('[data-ap-preview]');
       if (_lblUp) _lblUp.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run. Your approval is needed';
       if (_preUp && _preUp.textContent !== (d.preview || '')) _preUp.textContent = d.preview || '';
+      if (d.decision_id) _apOld.dataset.decisionId = d.decision_id;
       _apOld.dataset.apStaged = '';  // real preview known — the arg feed stops
       _apAutoBox(_apOld, d);  // pause emit carries auto_timeout_s — start countdown
       return;
@@ -6140,7 +6141,7 @@ function _renderApprovalCard(d) {
       fetch('/approval/decide/' + encodeURIComponent(d.run_id || S.currentRunId || ''), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer: _ans, decision_id: (d.decision_id || '') })
+        body: JSON.stringify({ answer: _ans, decision_id: (_ap.dataset.decisionId || d.decision_id || '') })
       }).then(function() {
         // INSTANT-CLEAR (2026-09-19): die Entscheidung ist registriert — die
         // Card fliegt sofort, nicht erst wenn agent_resumed/poll dazu kommen
@@ -6455,7 +6456,7 @@ function rmEl(id) {
   if (e) e.parentNode.removeChild(e);
 }
 
-function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 // CHAT-STRUCTURE-FIX (2026-08-07): clean saved chat HTML before it is
 // inserted into the DOM on load — strip active script/embed content and event handlers.
@@ -13612,7 +13613,7 @@ async function refreshVram() {
           var col    = _getModelColor(m.name);
           var segPct = TOTAL > 0 ? Math.min(100, m.vram_gb/TOTAL*100).toFixed(2) : 0;
           var short  = m.name.replace(':latest','');
-          return '<div title="'+short+': ~'+m.vram_gb.toFixed(1)+' GB (inkl. KV-Cache)" style="'
+          return '<div title="'+esc(short)+': ~'+m.vram_gb.toFixed(1)+' GB (inkl. KV-Cache)" style="'
             +'height:100%;width:'+segPct+'%;background:'+col+';min-width:3px;'
             +'border-right:1px solid rgba(0,0,0,.4);box-sizing:border-box;'
             +'transition:width .4s;flex-shrink:0"></div>';

@@ -257,6 +257,7 @@ async def run_stream(
         }.get(str(phase or ""), "coder_loop")
 
     _ledger = RunTokenLedger()
+    complexity: str = ""
 
     async def emit(data: dict) -> str:
         # Track generated output tokens from content events (all token types)

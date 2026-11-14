@@ -36,8 +36,73 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LLAMA_DIR = ROOT / "llama"
+PIN_FILE = Path(__file__).resolve().parent / "llama_build_pin.txt"
 
 API_LATEST = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+
+
+def _read_pinned_tag(pin_file: Path | None = None) -> str:
+    """Return the pinned llama.cpp release tag from `deploy/llama_build_pin.txt`, or ''."""
+    pf = pin_file or PIN_FILE
+    if not pf.is_file():
+        return ""
+    try:
+        for line in pf.read_text(encoding="utf-8").splitlines():
+            clean = line.strip()
+            if clean and not clean.startswith("#"):
+                return clean
+    except OSError:
+        return ""
+    return ""
+
+
+def _resolve_releases(
+    backend: str,
+    rx,
+    *,
+    tag: str = "",
+    use_latest: bool = False,
+) -> list[dict]:
+    """Resolve release metadata: pinned tag first (unless `use_latest`), else newest nightly/latest."""
+    want_tag = "" if use_latest else (tag or os.environ.get("HIVEMIND_LLAMA_TAG", "") or _read_pinned_tag()).strip()
+    if want_tag:
+        try:
+            pin_rel = http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{want_tag}")
+            if any(rx.match(str(a.get("name", "") or "")) for a in (pin_rel.get("assets") or [])):
+                print(f"       Using pinned llama.cpp release: {want_tag} (pass --latest for newest nightly)")
+                return [pin_rel]
+            print(f"       [INFO] Pinned release '{want_tag}' has no {backend} asset for {_OS_TAG} - falling back to newest nightly")
+        except (OSError, ValueError) as e:
+            print(f"       [INFO] Pinned release '{want_tag}' unavailable ({e}) - falling back to newest nightly")
+
+    releases: list[dict] = []
+    try:
+        _rels = http_json("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100")
+        for _rel in _rels:
+            _tag = str(_rel.get("tag_name") or "")
+            if not re.fullmatch(r"b\d{4,}", _tag):
+                continue
+            if any(rx.match(str(a.get("name", "") or "")) for a in (_rel.get("assets") or [])):
+                releases = [_rel]
+                break
+        if releases:
+            print(f"       Newest nightly with {backend} asset: {releases[0].get('tag_name')}")
+    except Exception as e:
+        print(f"       [WARNING] Nightly list could not be fetched: {e}")
+    if not releases:
+        main_rel = http_json(API_LATEST)
+        nt = next((a for a in main_rel.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
+        if nt:
+            try:
+                _tag = http_text(nt["browser_download_url"]).strip()
+                if _tag:
+                    releases = [http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{_tag}")]
+                    print(f"       Nightly release resolved (stable pointer): {_tag}")
+            except Exception as e:
+                print(f"       [WARNING] Nightly tag could not be resolved: {e}")
+        if not releases:
+            releases = [main_rel]
+    return releases
 
 _IS_WIN = platform.system() == "Windows"
 _OS_TAG = "win" if _IS_WIN else "ubuntu"
@@ -337,6 +402,8 @@ def main() -> int:
                     help="Pick the CUDA runtime exactly (e.g. 12.4 or 13.3). Default: "
                          "driver version via nvidia-smi, otherwise the newest available.")
     ap.add_argument("--force", action="store_true", help="Re-download even if a build already exists")
+    ap.add_argument("--tag", default="", help="Override release tag (default: deploy/llama_build_pin.txt)")
+    ap.add_argument("--latest", action="store_true", help="Ignore pinned build tag and install newest nightly")
     args = ap.parse_args()
 
     have = existing_build()
@@ -345,41 +412,9 @@ def main() -> int:
         print("     (use --force to re-download)")
         return 0
 
-    print(f"[1/3] Fetching latest llama.cpp release info ({args.backend})...")
+    print(f"[1/3] Fetching llama.cpp release info ({args.backend})...")
     rx = ASSET_REGEX[args.backend]
-
-    # NIGHTLY-NEWEST (2026-09-02): llama.cpp publishes a fresh bXXXX nightly
-    # very frequently. The stable release's 'nightly-tag.txt' pointer lags
-    # ~100 builds behind the newest nightly, so resolve the NEWEST nightly
-    # directly from the releases list (newest first). The stable pointer is
-    # only a fallback.
-    releases: list[dict] = []
-    try:
-        _rels = http_json("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100")
-        for _rel in _rels:
-            _tag = str(_rel.get("tag_name") or "")
-            if not re.fullmatch(r"b\d{4,}", _tag):
-                continue
-            if any(rx.match(str(a.get("name", "") or "")) for a in (_rel.get("assets") or [])):
-                releases = [_rel]
-                break
-        if releases:
-            print(f"       Newest nightly with {args.backend} asset: {releases[0].get('tag_name')}")
-    except Exception as e:
-        print(f"       [WARNING] Nightly list could not be fetched: {e}")
-    if not releases:
-        main_rel = http_json(API_LATEST)
-        nt = next((a for a in main_rel.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
-        if nt:
-            try:
-                _tag = http_text(nt["browser_download_url"]).strip()
-                if _tag:
-                    releases = [http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{_tag}")]
-                    print(f"       Nightly release resolved (stable pointer): {_tag}")
-            except Exception as e:
-                print(f"       [WARNING] Nightly tag could not be resolved: {e}")
-        if not releases:
-            releases = [main_rel]
+    releases = _resolve_releases(args.backend, rx, tag=args.tag, use_latest=args.latest)
 
     # CUDA-VERSION-SELECTION (2026-08-27, FIX): prefer exactly the driver
     # version (nvidia-smi), otherwise the newest available CUDA runtime.

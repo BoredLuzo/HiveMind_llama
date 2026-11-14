@@ -26,7 +26,7 @@ Safety invariants (pinned by tests/test_update_flow_audit.py):
   - the running update.bat is never overwritten mid-run (staged self-swap
     done by the shim's last line, see stage_new_bat)
   - a downloaded zip must match the release API sha256 digest before it is
-    extracted (case-insensitive; no digest in metadata skips the check)
+    extracted (case-insensitive; missing digest aborts remote download)
   - a watchdog that was running when the update started is stopped for the
     apply and re-armed only after every post-apply step; a FAILED verify
     leaves it off on purpose
@@ -662,7 +662,9 @@ def main(argv: list[str] | None = None) -> int:
             print("         The download was tampered with or corrupted. Backup is in", bk)
             return 1
         if ok is None:
-            print("    (no digest in release metadata - skipping hash check)")
+            print("  [ERROR] Release metadata carries no sha256 digest - refusing unverified download.")
+            print("         Nothing was changed. Backup is in", bk)
+            return 1
     info("6 done: release zip downloaded + verified.")
 
     # -- 7. Extract (zip carries a version root folder) ----------------------

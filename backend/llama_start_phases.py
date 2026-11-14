@@ -124,8 +124,15 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
             # with an active round. Same rule as _evict_lru: never kill
             # a slot whose round is running (age-aware).
             _unpinned = [s for s in running_slots
-                         if not s.pinned and not _slot_in_flight(s)]
-            if not _unpinned:
+                         if not s.pinned and not _slot_in_flight(s) and not getattr(s, "_loading", False)]
+            if not _unpinned and any(
+                not s.pinned and getattr(s, "_loading", False) for s in running_slots
+            ):
+                logger.info(
+                    "_start_process [%s]: eviction deferred — peer slot is currently loading",
+                    model,
+                )
+            elif not _unpinned:
                 logger.warning(
                     f"_start_process [{model}]: all running peers "
                     f"({[s.model for s in running_slots]}) are pinned — "
@@ -193,7 +200,14 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
 
             if _should_evict:
                 _to_kill = [s for s in running_slots
-                            if not s.pinned and not _slot_in_flight(s)]
+                            if not s.pinned and not _slot_in_flight(s) and not getattr(s, "_loading", False)]
+                if not _to_kill and any(
+                    not s.pinned and getattr(s, "_loading", False) for s in running_slots
+                ):
+                    logger.info(
+                        "Vulkan: live VRAM pressure eviction deferred for %s — peer loading",
+                        model,
+                    )
                 if _to_kill:
                     _evicted_here = True
                 for rs in _to_kill:
@@ -1460,36 +1474,42 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             slot._n_parallel = n_parallel
             slot._jinja      = "--jinja" in cmd
 
-            ready = await slot.wait_ready(
-                timeout=LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
-                http_client=self._get_shared_http_client(),
-            )
-
-            # AMD-VULKAN-COMMIT-FIX:
-            if ready:
-                _peers_active = [
-                    s for s in self._slots
-                    if s.slot_id != slot.slot_id and (s.is_running or s._loading)
-                ]
-                # B1 (queue-aware): sleep only when a successor exists —
-                # another ensure_loaded entered behind this lock (seq bump)
-                # or a prefetch is queued; unknown seq keeps always-wait.
-                # The AMD collision retry (exit=-1) remains the safety net.
-                _entry_seq = getattr(slot, "_entry_load_seq", None)
-                _successor_pending = (
-                    bool(getattr(self, "_pending_prefetch", []))
-                    or _entry_seq is None
-                    or self._load_seq != _entry_seq
+            _wait_done = False
+            try:
+                ready = await slot.wait_ready(
+                    timeout=LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
+                    http_client=self._get_shared_http_client(),
                 )
-                if _peers_active and _successor_pending:
-                    # Formel: ctx=4096 → 2.0s | ctx=8192 → 4.0s | ctx=12800 → 6.0s (cap)
-                    _vk_commit_s = round(min(6.0, max(2.0, 2.0 * (num_ctx / 4096))), 1)
-                    logger.info(
-                        f"AMD Vulkan commit wait: {model} loaded, waiting {_vk_commit_s}s "
-                        f"for VRAM visibility for the next slot "
-                        f"(ctx={num_ctx}, {len(_peers_active)} other slot(s) active)"
+
+                # AMD-VULKAN-COMMIT-FIX:
+                if ready:
+                    _peers_active = [
+                        s for s in self._slots
+                        if s.slot_id != slot.slot_id and (s.is_running or s._loading)
+                    ]
+                    # B1 (queue-aware): sleep only when a successor exists —
+                    # another ensure_loaded entered behind this lock (seq bump)
+                    # or a prefetch is queued; unknown seq keeps always-wait.
+                    # The AMD collision retry (exit=-1) remains the safety net.
+                    _entry_seq = getattr(slot, "_entry_load_seq", None)
+                    _successor_pending = (
+                        bool(getattr(self, "_pending_prefetch", []))
+                        or _entry_seq is None
+                        or self._load_seq != _entry_seq
                     )
-                    await asyncio.sleep(_vk_commit_s)
+                    if _peers_active and _successor_pending:
+                        # Formel: ctx=4096 → 2.0s | ctx=8192 → 4.0s | ctx=12800 → 6.0s (cap)
+                        _vk_commit_s = round(min(6.0, max(2.0, 2.0 * (num_ctx / 4096))), 1)
+                        logger.info(
+                            f"AMD Vulkan commit wait: {model} loaded, waiting {_vk_commit_s}s "
+                            f"for VRAM visibility for the next slot "
+                            f"(ctx={num_ctx}, {len(_peers_active)} other slot(s) active)"
+                        )
+                        await asyncio.sleep(_vk_commit_s)
+                _wait_done = True
+            finally:
+                if not _wait_done:
+                    await _kill_slot_async(slot)
         slot._loading = False
         if not ready:
             _exit = slot.process.poll() if slot.process else -1
@@ -1632,6 +1652,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 AttributeError, IndexError, httpx.HTTPError):
             slot.swa_window = 0
     finally:
+        slot._loading = False
         if not _log_file_closed:
             try:
                 _log_file.close()

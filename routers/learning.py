@@ -1,4 +1,5 @@
 """Learning / Model-Configs API-Router."""
+from functools import wraps
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -17,12 +18,24 @@ router = APIRouter(prefix="/model_configs", tags=["Learning"])
 _BASE_FILE = Path(__file__).parent.parent / "server.py"
 
 
+def _guard_config_id(fn):
+    """Map invalid model/agent identifier ValueError to HTTP 400."""
+    @wraps(fn)
+    async def _wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+    return _wrapper
+
+
 @router.get("/base")
 async def get_base_configs():
     return list_base_configs(_BASE_FILE)
 
 
 @router.get("/base/{agent}")
+@_guard_config_id
 async def get_base_config_ep(agent: str):
     return get_base_config(_BASE_FILE, agent)
 
@@ -37,11 +50,13 @@ async def get_learned_models_ep():
 
 
 @router.get("/learned/{model_name}")
+@_guard_config_id
 async def get_learned_model_configs(model_name: str):
     return {"model": model_name, "configs": list_learned_configs(_BASE_FILE, model_name)}
 
 
 @router.get("/learned/{model_name}/{agent}")
+@_guard_config_id
 async def get_learned_agent_config(model_name: str, agent: str):
     learned = get_learned_config(_BASE_FILE, model_name, agent)
     base = get_base_config(_BASE_FILE, agent)
@@ -55,6 +70,7 @@ async def get_learned_agent_config(model_name: str, agent: str):
 
 
 @router.post("/learned/{model_name}/{agent}")
+@_guard_config_id
 async def save_learned_agent_config(model_name: str, agent: str, req: Request):
     data = await req.json()
     allowed = {"temperature", "max_tokens", "system_prompt_override", "notes"}
@@ -71,30 +87,35 @@ async def save_learned_agent_config(model_name: str, agent: str, req: Request):
 
 
 @router.delete("/learned/{model_name}/{agent}")
+@_guard_config_id
 async def delete_learned_agent_config(model_name: str, agent: str):
     deleted = delete_learned_config(_BASE_FILE, model_name, agent)
     return {"ok": True, "deleted": deleted}
 
 
 @router.delete("/learned/{model_name}")
+@_guard_config_id
 async def reset_learned_model_ep(model_name: str):
     reset_learned_configs(_BASE_FILE, model_name)
     return {"ok": True}
 
 
 @router.get("/effective/{model_name}/{agent}")
+@_guard_config_id
 async def get_effective_agent_config(model_name: str, agent: str, use_learned: bool = True):
     config = get_effective_config(_BASE_FILE, model_name, agent, use_learned)
     return {"model": model_name, "agent": agent, "config": config, "use_learned": use_learned}
 
 
 @router.get("/log/{model_name}")
+@_guard_config_id
 async def get_learning_log(model_name: str, limit: int = 50):
     entries = read_learning_log(_BASE_FILE, model_name, limit)
     return {"model": model_name, "entries": entries, "count": len(entries)}
 
 
 @router.get("/ratings/{model_name}")
+@_guard_config_id
 async def get_ratings_summary(model_name: str):
     log = read_learning_log(_BASE_FILE, model_name, limit=200)
     ratings = [e for e in log if e.get("event") == "peer_rating"]
@@ -118,6 +139,7 @@ async def get_ratings_summary(model_name: str):
 
 
 @router.post("/log/{model_name}")
+@_guard_config_id
 async def add_learning_log_entry(model_name: str, req: Request):
     data = await req.json()
     append_learning_log(_BASE_FILE, model_name, data)
@@ -125,6 +147,7 @@ async def add_learning_log_entry(model_name: str, req: Request):
 
 
 @router.delete("/log/{model_name}")
+@_guard_config_id
 async def delete_learning_log_ep(model_name: str):
     clear_learning_log(_BASE_FILE, model_name)
     return {"ok": True}

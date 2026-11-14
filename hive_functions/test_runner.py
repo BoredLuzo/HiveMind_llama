@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import os
+from pathlib import Path
 import asyncio
 import logging
 from dataclasses import dataclass
@@ -136,13 +137,17 @@ _MAX_SCOPED_PATHS = 8
 
 def _quote_path(p: str, workspace: str) -> str:
     """Workspace-relative, forward-slash, cmd.exe-safe (double quotes when
-    needed — single quotes are not quoting on Windows shells). Quote on any
-    cmd metacharacter too, not only whitespace (audit F5 2026-10-24: `&`,
-    `^`, `%`, parens in a test filename would otherwise inject)."""
-    if os.path.isabs(p):
-        p = os.path.relpath(p, workspace)
-    p = p.replace("\\", "/")
-    return f'"{p}"' if re.search(r"[\s&^%!()]", p) else p
+    needed — single quotes are not quoting on Windows shells). Rejects any
+    path that resolves outside the workspace."""
+    ws_root = Path(workspace).resolve()
+    cand = (ws_root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
+    try:
+        rel = cand.relative_to(ws_root).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"Test target '{p}' resolves outside workspace '{ws_root}'") from exc
+    if not rel:
+        rel = "."
+    return f'"{rel}"' if re.search(r"[\s&^%!()]", rel) else rel
 
 
 async def run_tests(

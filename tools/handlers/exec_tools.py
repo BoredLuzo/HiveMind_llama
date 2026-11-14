@@ -827,12 +827,27 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
     # testmap maps written source/test paths and the full suite stays the
     # fallback when nothing maps. Opt out with duo_selective_tests=false.
     _scoped_paths: list[str] = []
+    _ws_root = Path(_ws_str).resolve()
     try:
         _raw_targets = args.get("paths") or args.get("targets")
         if isinstance(_raw_targets, str):
             _raw_targets = [p for p in re.split(r"[,\s]+", _raw_targets) if p]
         if isinstance(_raw_targets, list) and _raw_targets:
-            _scoped_paths = [str(p) for p in _raw_targets][:40]
+            for _raw_p in _raw_targets[:40]:
+                _p_str = str(_raw_p or "").strip()
+                if not _p_str:
+                    continue
+                try:
+                    _cand = (_ws_root / _p_str).resolve()
+                    _rel = _cand.relative_to(_ws_root).as_posix()
+                except ValueError:
+                    return _tool_error_response(
+                        "PATH_OUTSIDE_WORKSPACE",
+                        f"Test target '{_p_str}' resolves outside workspace '{_ws_root}'.",
+                        tool="run_tests",
+                        details={"path": _p_str, "workspace": str(_ws_root)},
+                    )
+                _scoped_paths.append(_rel or ".")
         else:
             try:
                 from core.state import settings as _hs_settings

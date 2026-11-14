@@ -34,6 +34,49 @@ _PROTECTED_ROOT_FILES = frozenset({
 })
 _PROTECTED_SUFFIXES = (".py", ".pyc", ".bat", ".sh", ".ps1", ".service")
 
+_SECRET_PATH_RE = re.compile(
+    r"(^|/)("
+    r"\.env(\..+)?|settings\.json|gateway\.toml|"
+    r"\.git-credentials|\.netrc|\.npmrc|\.pypirc|\.kube/config|"
+    r".*\.kdbx|.*\.pem|.*\.key|id_rsa.*|id_ed25519.*|id_ecdsa.*|"
+    r"credentials.*|secrets?\..*"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def is_secret_path(p: Path | str, workspace_lock: Path | str | None = None) -> bool:
+    """Return True if *p* matches the secret/credential denylist (.env, keys, credentials, etc.)."""
+    try:
+        path_obj = Path(p)
+        rel = path_obj.as_posix().replace("\\", "/")
+        if workspace_lock:
+            try:
+                rel = path_obj.resolve().relative_to(Path(workspace_lock).resolve()).as_posix()
+            except (OSError, ValueError):
+                rel = path_obj.as_posix().replace("\\", "/")
+    except (TypeError, ValueError):
+        rel = str(p).replace("\\", "/")
+    _rel_parts = [part.lower() for part in Path(rel).parts]
+    if any(part in {"sessions", "chats"} for part in _rel_parts):
+        return True
+    if _SECRET_PATH_RE.search(rel):
+        return True
+    return bool(_SECRET_PATH_RE.search(Path(str(p)).name))
+
+
+def filter_secret_search_rows(output: str) -> str:
+    """Drop grep/rg/findstr result lines whose file path matches `is_secret_path`."""
+    if not output:
+        return output
+    kept: list[str] = []
+    for line in output.splitlines():
+        m = re.match(r"^([A-Za-z]:[^\r\n:]+|[^\r\n:]+?):(?:\d+:|$)", line)
+        if m and is_secret_path(m.group(1)):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
 
 def _is_protected_path(p: Path) -> bool:
     """Check if a path targets a HiveMind internal file that must not be modified."""
@@ -154,6 +197,14 @@ def _inline_check_workspace(p: Path, workspace_lock, tool_name=""):
             f"modified by the coder.",
             tool=tool_name,
             details={"path": str(p.resolve())},
+        )
+    if is_secret_path(p, workspace_lock):
+        from tools.errors import tool_error_response as _tool_error_response
+        return _tool_error_response(
+            "SECRET_PATH_DENIED",
+            f"Access to protected secret/credential file '{p.name}' is denied.",
+            tool=tool_name,
+            details={"path": str(p)},
         )
     # Junction check — prevent sandbox escape via Windows directory junctions
     _check_p = p

@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from utils.file import _inline_resolve_path, _inline_check_workspace
+from utils.file import (
+    _inline_resolve_path,
+    _inline_check_workspace,
+    is_secret_path,
+    filter_secret_search_rows,
+)
 from tools.errors import tool_error_response as _tool_error_response
 import asyncio
 import re
@@ -122,7 +127,7 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
         return err
     try:
         matches = await asyncio.to_thread(lambda: sorted(base.glob(pattern)))
-        files = [m for m in matches if m.is_file()]
+        files = [m for m in matches if m.is_file() and not is_secret_path(m, base)]
         if not files:
             return f"(no matches for '{pattern}' in {base})"
         lines = []
@@ -206,6 +211,7 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
             _any_executed = True
             result = "\n".join(
                 out.decode(errors="replace").splitlines()[:_LINE_CAP]).strip()
+            result = filter_secret_search_rows(result).strip()
             if result:
                 return result
         except Exception:
@@ -258,6 +264,8 @@ def _python_content_search(
             if not p.is_file():
                 continue
             if any(part in _skip_dirs for part in p.parts[:-1]):
+                continue
+            if is_secret_path(p, root):
                 continue
             try:
                 if p.stat().st_size > max_file_bytes:

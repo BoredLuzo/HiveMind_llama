@@ -1,6 +1,6 @@
 """Orchestrator — refactored run_stream() delegating to extracted runners."""
 
-import asyncio
+from utils.bg_tasks import spawn
 
 
 async def run_stream_orchestrated(ctx):
@@ -16,7 +16,8 @@ async def run_stream_orchestrated(ctx):
 
     # Shared preamble for direct/pipeline modes
     yield await ctx.emit({"type": "complexity", "content": ctx.complexity, "source": ctx.complexity_source})
-    asyncio.create_task(ctx.auto_memory_from_input(ctx.user_input)) if ctx.auto_memory_from_input else None
+    if ctx.auto_memory_from_input:
+        spawn(ctx.auto_memory_from_input(ctx.user_input), name="auto_memory")
 
     if ctx.complexity in ("trivial", "simple"):
         async for event in run_direct(ctx):

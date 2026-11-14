@@ -523,19 +523,28 @@ class ToolLoop:
             _tool_messages.append(_msg)
             _known_tool_names = {t.get("function", {}).get("name", "") for t in self.cfg.tools}
             _unknown_tool_abort = False
-            for _tc in _tool_calls:
+            for _tc_idx, _tc in enumerate(_tool_calls):
                 _fn = _tc.get("function", {})
                 _name = _fn.get("name", "")
 
-                # K2: unknown tool name → feedback + retry
+                # K2: unknown tool name → pair remaining tool_calls with tool error,
+                # then inject user feedback + retry
                 if _name and _name not in _known_tool_names:
+                    for _tc_u in _tool_calls[_tc_idx:]:
+                        _u_name = (_tc_u.get("function") or {}).get("name", "")
+                        _tool_messages.append({
+                            "role": "tool",
+                            "content": f"[TOOL_ERROR:UNKNOWN_TOOL] Unknown tool '{_u_name}'.",
+                            "tool_call_id": _tc_u.get("id", _u_name),
+                            "name": _u_name,
+                        })
                     if _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
                         _inject_retry_feedback(
                             _tool_messages,
                             error_type="unknown_tool",
-                            bad_content=_name,
+                            bad_content="",
                             tool_names=sorted(_known_tool_names),
-                        model=getattr(self.cfg, "model", ""),
+                            model=getattr(self.cfg, "model", ""),
                         )
                         _feedback_injected_count += 1
                     state.tool_errors += 1

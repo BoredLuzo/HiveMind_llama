@@ -435,6 +435,7 @@ SUITES = [
     ("gguf_dropin_and_profile_api", "tests/test_gguf_dropin_and_profile_api.py", 45),
     ("llm_transport",              "tests/test_llm_transport.py",              45),
     ("direct_agent_card",          "tests/test_direct_agent_card.py",          30),
+    ("glm_deep_audit_wave2",       "tests/test_glm_deep_audit_wave2.py",       45),
 
 ]
 

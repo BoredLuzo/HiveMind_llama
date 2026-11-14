@@ -852,6 +852,25 @@ async def _compress_tool_context(
                 "[CTX-COMPRESS] whole-tail-drop: removed %d message(s) to reach %d tokens",
                 _dropped_tail, int(target_tokens),
             )
+    if (
+        not _partial
+        and len(_compressed) > 2
+        and _compressed[1].get("role") == "user"
+        and _compressed[2].get("role") == "user"
+    ):
+        _c1 = str(_compressed[1].get("content") or "")
+        _c2 = _compressed[2].get("content")
+        if isinstance(_c2, list):
+            _compressed[1] = {
+                **_compressed[2],
+                "content": ([{"type": "text", "text": _c1 + "\n\n"}] if _c1 else []) + list(_c2),
+            }
+        else:
+            _compressed[1] = {
+                **_compressed[2],
+                "content": (_c1 + "\n\n" + str(_c2 or "")).strip(),
+            }
+        del _compressed[2]
     return _compressed, _condensed_files, _compress_usage
 
 

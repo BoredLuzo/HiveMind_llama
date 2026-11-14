@@ -249,6 +249,14 @@ async def _duo_coder_round_input(ctx, ps):
                 f"\n\n[YOUR EXECUTION PLAN — IMPLEMENT THIS, DO NOT RE-PLAN]:\n{_brief_txt}"
             )
 
+    # ── Inject pre-explore touched-file contents for all chunks (was only chunk 1) ──
+    if _touched_block_persisted and _di > 0:
+        _coder_input = (
+            "[Pre-Explore File Contents]\n"
+            + _touched_block_persisted
+            + "\n\n" + _coder_input
+        )
+
     _sess_budgeted: list = []
     if _di == 0:
         # fixed 600/1200-char truncation.
@@ -320,13 +328,6 @@ async def _duo_coder_round_input(ctx, ps):
     _prompt_prev = (_coder_input or "")[:500].replace("\n", " ").strip()
     if len(_coder_input or "") > 500:
         _prompt_prev += "…"
-    # ── Inject pre-explore touched-file contents for all chunks (was only chunk 1) ──
-    if _touched_block_persisted and _di > 0:
-        _coder_input = (
-            "[Pre-Explore File Contents]\n"
-            + _touched_block_persisted
-            + "\n\n" + _coder_input
-        )
     # IMAGES-IN-REQUEST (2026-10-04): per-round trace - ALSO
     # at 0 once images are attached to the task, so "the image
     # stopped being sent" is measurable instead of looking like a

@@ -1,0 +1,3 @@
+# Known-good llama.cpp release tag used by deploy/fetch_llamacpp.py by default.
+# Pass --latest (or set HIVEMIND_LLAMA_TAG) to override or pull the newest nightly.
+b12001

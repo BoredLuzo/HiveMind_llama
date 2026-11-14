@@ -1303,6 +1303,42 @@ async def _preflight(cfg: Config, conditions: list[str]) -> str:
     return ""
 
 
+async def _run_cell_with_heartbeat(
+    coro,
+    *,
+    timeout_s: float,
+    label: str,
+    interval_s: float = 45.0,
+) -> dict:
+    """Await a single benchmark cell while emitting periodic progress heartbeats."""
+    from contextlib import suppress
+    task = asyncio.create_task(coro)
+    t0 = time.monotonic()
+    try:
+        while True:
+            remaining = timeout_s - (time.monotonic() - t0)
+            if remaining <= 0:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                raise asyncio.TimeoutError()
+            done, _ = await asyncio.wait({task}, timeout=min(interval_s, remaining))
+            if task in done:
+                return task.result()
+            elapsed_s = int(time.monotonic() - t0)
+            now_h = datetime.now().strftime("%H:%M:%S")
+            print(
+                f"[{now_h}]   ... still running {label} "
+                f"({elapsed_s}s elapsed, cap {int(timeout_s)}s)",
+                flush=True,
+            )
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", default=str(Path(__file__).parent / "tasks"))
@@ -1439,19 +1475,24 @@ def main() -> int:
         tmp = tempfile.mkdtemp(prefix="hm_bench_")
         base = Path(tmp)
     try:
+        bench_t0 = time.monotonic()
+        session_cells_done = 0
         for run_idx in range(cfg.runs):
             actual_run = run_idx + 1 + cfg.run_offset
-            for task in tasks:
+            for task_idx, task in enumerate(tasks, 1):
                 for cond in conditions:
                     if (actual_run, task.id, cond) in done_keys:
                         print(f"[SKIP]   [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} (checkpoint)")
                         continue
+                    done_count = sum(1 for k in planned_keys if k in done_keys) + 1
                     # START line before a cell: a slow harness can keep one
                     # cell busy for minutes, and the completion line alone
                     # looks like a hang in a streaming Colab cell.
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                          f"[run {actual_run}/{total_runs}] {task.id:<22} "
-                          f"{cond:<16} ...", flush=True)
+                          f"[run {actual_run}/{total_runs}] "
+                          f"[task {task_idx}/{len(tasks)}] "
+                          f"[{done_count}/{len(planned)}] "
+                          f"{task.id:<22} {cond:<16} ...", flush=True)
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
                     cell = base / f"run{actual_run}" / cond
@@ -1462,9 +1503,11 @@ def main() -> int:
                     _cell_cap = max(float(cfg.cell_timeout_s),
                                     _agent_timeout_s(task, cfg) + _check_budget + 30.0)
                     try:
-                        row = asyncio.run(asyncio.wait_for(
+                        row = asyncio.run(_run_cell_with_heartbeat(
                             _one_run(cond, task, cfg, cell),
-                            timeout=_cell_cap))
+                            timeout_s=_cell_cap,
+                            label=f"{task.id} / {cond}",
+                        ))
                     except asyncio.TimeoutError:
                         row = {
                             "task": task.id, "condition": cond, "model": cfg.model,
@@ -1481,12 +1524,34 @@ def main() -> int:
                     row["run"] = actual_run
                     rows.append(row)
                     done_keys.add((actual_run, task.id, cond))
+                    session_cells_done += 1
                     _persist(out, rows, cfg, conditions, started_at)
                     now_str = datetime.now().strftime("%H:%M:%S")
                     tps = row.get("tok_per_sec", 0.0)
                     tps_str = f"({tps:>5.1f} tok/s)" if tps > 0 else " " * 13
                     print(f"[{now_str}] [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} "
-                          f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s {tps_str}")
+                          f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s {tps_str}",
+                          flush=True)
+                # End-of-task scoreboard for quick inter-task feedback & ETA
+                run_rows = [r for r in rows if int(r.get("run") or 1) == actual_run]
+                done_tasks_in_run = len({r.get("task") for r in run_rows if r.get("task")})
+                if session_cells_done > 0:
+                    elapsed_s = time.monotonic() - bench_t0
+                    rem_cells = sum(1 for k in planned_keys if k not in done_keys)
+                    eta_m = (rem_cells * (elapsed_s / session_cells_done)) / 60.0
+                    cond_parts = []
+                    for c_name in conditions:
+                        c_rows = [r for r in run_rows if r.get("condition") == c_name]
+                        if c_rows:
+                            c_ok = sum(1 for r in c_rows if r.get("ok"))
+                            cond_parts.append(f"{c_name} {c_ok}/{len(c_rows)}")
+                    print(
+                        f"[progress] task {task_idx}/{len(tasks)} ({task.id}) | "
+                        f"run {actual_run}: {done_tasks_in_run}/{len(tasks)} tasks | "
+                        f"elapsed {elapsed_s / 60.0:.1f}m | ETA ~{eta_m:.1f}m"
+                        + (" | " + ", ".join(cond_parts) if cond_parts else ""),
+                        flush=True,
+                    )
     finally:
         if tmp is not None:
             # Windows: aider/servers can still hold a handle for a moment;

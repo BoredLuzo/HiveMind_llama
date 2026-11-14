@@ -93,19 +93,55 @@ _BASE_DEFAULTS: dict[str, dict] = {
 _initialized: bool = False
 
 
+def _configs_root(base_path: Path) -> Path:
+    """Return root directory holding learned configs and learning logs."""
+    return Path(base_path).parent / "model_configs"
+
+
+def _safe_segment(val: str, *, allow_colon_replace: bool = False) -> str:
+    """Validate and sanitize a model or agent path segment against traversal."""
+    raw = str(val or "").strip()
+    if allow_colon_replace:
+        raw = raw.replace(":", "_")
+    if (
+        not raw
+        or raw in (".", "..")
+        or "/" in raw
+        or "\\" in raw
+        or ".." in raw
+        or "\x00" in raw
+    ):
+        raise ValueError(f"Invalid config identifier: {val!r}")
+    return raw
+
+
+def _assert_within_configs(base_path: Path, target: Path) -> Path:
+    """Verify resolved target stays inside model_configs/."""
+    root = _configs_root(base_path).resolve()
+    resolved = target.resolve()
+    resolved.relative_to(root)
+    return resolved
+
+
 def _learned_dir(base_path: Path, model_name: str) -> Path:
     """Return path to learned configs dir for a specific model."""
-    return Path(base_path).parent / "model_configs" / "learned" / model_name.replace(":", "_")
+    safe_model = _safe_segment(model_name, allow_colon_replace=True)
+    target = _configs_root(base_path) / "learned" / safe_model
+    _assert_within_configs(base_path, target)
+    return target
 
 
 def _log_dir(base_path: Path) -> Path:
     """Return path to learning logs directory."""
-    return Path(base_path).parent / "model_configs" / "learning_logs"
+    return _configs_root(base_path) / "learning_logs"
 
 
 def _log_path(base_path: Path, model_name: str) -> Path:
     """Return path to the JSONL log file for a model."""
-    return _log_dir(base_path) / f"{model_name.replace(':', '_')}.jsonl"
+    safe_model = _safe_segment(model_name, allow_colon_replace=True)
+    target = _log_dir(base_path) / f"{safe_model}.jsonl"
+    _assert_within_configs(base_path, target)
+    return target
 
 
 def _ensure_dirs(base_path: Path, model_name: str = "") -> None:
@@ -130,7 +166,8 @@ def init_base_configs(base_path: Path) -> None:
 
 def get_base_config(base_path: Path, agent: str) -> dict:
     """Return the base config for an agent type. Returns empty dict if unknown."""
-    cfg = _BASE_DEFAULTS.get(agent)
+    safe_agent = _safe_segment(agent)
+    cfg = _BASE_DEFAULTS.get(safe_agent)
     if cfg is None:
         return {}
     return copy.deepcopy(cfg)
@@ -143,8 +180,10 @@ def list_base_configs(base_path: Path) -> dict:
 
 def get_learned_config(base_path: Path, model_name: str, agent: str) -> Optional[dict]:
     """Load a learned config for a model+agent combination. Returns None if not found."""
+    safe_agent = _safe_segment(agent)
     _ensure_dirs(base_path, model_name)
-    p = _learned_dir(base_path, model_name) / f"{agent}.json"
+    p = _learned_dir(base_path, model_name) / f"{safe_agent}.json"
+    _assert_within_configs(base_path, p)
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
@@ -155,8 +194,10 @@ def get_learned_config(base_path: Path, model_name: str, agent: str) -> Optional
 
 def save_learned_config(base_path: Path, model_name: str, agent: str, config: dict) -> None:
     """Persist a learned config for a model+agent combination."""
+    safe_agent = _safe_segment(agent)
     _ensure_dirs(base_path, model_name)
-    p = _learned_dir(base_path, model_name) / f"{agent}.json"
+    p = _learned_dir(base_path, model_name) / f"{safe_agent}.json"
+    _assert_within_configs(base_path, p)
     # Atomic write via tmp + replace
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -197,7 +238,9 @@ def list_learned_configs(base_path: Path, model_name: str) -> list[str]:
 
 def delete_learned_config(base_path: Path, model_name: str, agent: str) -> bool:
     """Delete a learned config. Returns True if it existed and was deleted."""
-    p = _learned_dir(base_path, model_name) / f"{agent}.json"
+    safe_agent = _safe_segment(agent)
+    p = _learned_dir(base_path, model_name) / f"{safe_agent}.json"
+    _assert_within_configs(base_path, p)
     if p.exists():
         p.unlink()
         return True
