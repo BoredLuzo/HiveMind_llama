@@ -1037,6 +1037,25 @@ async def execute_tool_round(
                                     r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
                                     _content,
                                 ))
+                    elif _tname == "run_python":
+                        _content = str(_m.get("content") or "")
+                        _last_bash_idx = _idx
+                        _ec_matches = re.findall(r'\[exit code:\s*(\d+)\]', _content)
+                        if _ec_matches and int(_ec_matches[-1]) != 0:
+                            _last_bash_failed = True
+                            _last_bash_verified = False
+                        elif _tool_call_failed(_content, "run_python"):
+                            _last_bash_failed = True
+                            _last_bash_verified = False
+                        else:
+                            _last_bash_failed = False
+                            _last_bash_verified = bool(
+                                _ec_matches and int(_ec_matches[-1]) == 0
+                                and re.search(
+                                    r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
+                                    r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
+                                    _content,
+                                ))
                     elif _tname == "run_tests":
                         _content = str(_m.get("content") or "")
                         _last_bash_idx = _idx

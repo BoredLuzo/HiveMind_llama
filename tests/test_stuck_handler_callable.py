@@ -39,6 +39,9 @@ class _Ctrl:
     def reset_stuck_detection(self):
         self.resets += 1
 
+    def note_verify_result(self, failed: bool, output: str = "") -> int:
+        return 0
+
     def abort(self, reason):
         self.aborted = reason
 

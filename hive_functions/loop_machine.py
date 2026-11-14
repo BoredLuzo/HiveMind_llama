@@ -52,6 +52,8 @@ class ExecutionController:
         self.max_repeats = max_repeats_stuck
         self._last_outputs: list[str] = []
         self._last_semantic: list[set[str]] = []
+        self.verify_fail_streak: int = 0
+        self.verify_fail_sig: str = ""
         self.history: list[dict] = []
 
     def transition(self, next_state: AgentState):
@@ -105,6 +107,38 @@ class ExecutionController:
 
         self._last_outputs.clear()
         self._last_semantic.clear()
+
+    def note_verify_result(self, failed: bool, output: str = "") -> int:
+        """Track consecutive failing verification runs across interleaved edits.
+
+        Unlike ``reset_stuck_detection()`` (which clears identical-output history
+        after each file edit), ``verify_fail_streak`` only resets when a
+        verification run succeeds.
+        """
+        if not failed:
+            self.verify_fail_streak = 0
+            self.verify_fail_sig = ""
+            return 0
+        cleaned = re.sub(r"\n\[cmd\]\s*[^\n]*\s*$", "", (output or "").strip())
+        sig = self._normalize(cleaned)[:300]
+        if not sig:
+            return self.verify_fail_streak
+        same = (
+            sig == self.verify_fail_sig
+            or (
+                bool(self.verify_fail_sig)
+                and self._jaccard(
+                    self._semantic_signature(self.verify_fail_sig),
+                    self._semantic_signature(sig),
+                ) >= 0.88
+            )
+        )
+        if same:
+            self.verify_fail_streak += 1
+        else:
+            self.verify_fail_streak = 1
+            self.verify_fail_sig = sig
+        return self.verify_fail_streak
 
     def _normalize(self, text: str) -> str:
         s = text.strip().lower()

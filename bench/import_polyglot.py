@@ -9,6 +9,7 @@ hidden test file.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import shutil
 from pathlib import Path
@@ -39,6 +40,80 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if _is_skipped_name(n)}
 
 
+def _extract_test_contract(tests: list[Path], slug: str) -> str:
+    """Extract imported symbols and expected exception message patterns via AST.
+
+    Keeps individual test cases/inputs hidden while surfacing exact API names
+    (constants, custom exception classes, and required error message strings) so
+    single-shot evaluation does not fail on blind guessing.
+    """
+    mod = slug.replace("-", "_")
+    imported_names: list[str] = []
+    seen_imports: set[str] = set()
+    error_messages: list[str] = []
+    seen_errors: set[str] = set()
+
+    def _add_import(name: str) -> None:
+        if name and name != "*" and name not in seen_imports:
+            seen_imports.add(name)
+            imported_names.append(name)
+
+    def _add_error(msg: str) -> None:
+        cleaned = msg.strip()
+        if cleaned and cleaned not in seen_errors:
+            seen_errors.add(cleaned)
+            error_messages.append(cleaned)
+
+    def _call_name(node: ast.expr) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        return ""
+
+    for t_file in tests:
+        try:
+            tree = ast.parse(t_file.read_text(encoding="utf-8", errors="replace"), filename=str(t_file))
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module == mod or node.module.startswith(mod + "."):
+                    for alias in node.names:
+                        _add_import(alias.name)
+            elif isinstance(node, ast.Call):
+                cname = _call_name(node.func)
+                for kw in node.keywords:
+                    if (
+                        kw.arg == "match"
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, str)
+                    ):
+                        _add_error(kw.value.value)
+                if cname in ("assertRaisesWithMessage", "assertRaisesRegex", "assertRaisesRegexp"):
+                    if (
+                        len(node.args) >= 2
+                        and isinstance(node.args[1], ast.Constant)
+                        and isinstance(node.args[1].value, str)
+                    ):
+                        _add_error(node.args[1].value)
+                elif cname == "assertEqual" and len(node.args) >= 2:
+                    lhs_src = ast.unparse(node.args[0]) if hasattr(ast, "unparse") else ""
+                    if "exception.args" in lhs_src or "str(err" in lhs_src:
+                        if isinstance(node.args[1], ast.Constant) and isinstance(node.args[1].value, str):
+                            _add_error(node.args[1].value)
+
+    if not imported_names and not error_messages:
+        return ""
+    lines = ["[Test suite API contract]"]
+    if imported_names:
+        lines.append(f"- Imported from `{mod}`: {', '.join(imported_names)}")
+    if error_messages:
+        quoted = ", ".join(repr(m) for m in error_messages[:12])
+        lines.append(f"- Expected exception message patterns: {quoted}")
+    return "\n".join(lines)
+
+
 def import_exercise(src: Path, out: Path, slug: str) -> dict:
     ex = src / slug
     impl = sorted(p for p in ex.glob("*.py") if not p.name.endswith("_test.py"))
@@ -59,11 +134,17 @@ def import_exercise(src: Path, out: Path, slug: str) -> dict:
             shutil.copy2(p, dst / "repo" / p.name)
     for p in tests:
         shutil.copy2(p, dst / "tests" / p.name)
+    mod = slug.replace("-", "_")
+    files_list = ", ".join(p.name for p in impl)
+    contract = _extract_test_contract(tests, slug)
+    contract_block = f"\n\n{contract}" if contract else ""
     prompt = _read_instructions(ex)
     prompt += (
-        "\n\nImplement the missing function(s) in the existing Python file(s). "
-        "Run the tests you can infer from the instructions. Do not modify or "
-        "create test files."
+        f"{contract_block}\n\n"
+        f"Implement the solution in `{files_list}` (starter stub is already in the workspace). "
+        f"Verify your implementation before completing by importing `{mod}` and running "
+        f"assertions on the examples and edge cases (e.g. via `python -c` or `run_python`). "
+        f"Do not modify or create test files."
     )
     check = "python -m pytest -q " + " ".join(t.name for t in tests)
     data = {"id": f"polyglot_{slug.replace('-', '_')}", "prompt": prompt,

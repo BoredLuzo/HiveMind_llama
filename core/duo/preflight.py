@@ -929,9 +929,15 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
             str(tr) + "\n[cmd] " + str((ta or {}).get("cmd", ""))[:200],
             tool_name="run_bash",
         )
-        if ctx.exec_ctrl.is_stuck():
-            await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same test output {ctx.exec_ctrl.max_repeats}× — no progress. Declaring blocker and stopping.\n"})
-            ld_setter(2604); loop_detected = True
+        from utils.tool import run_bash_failed as _run_bash_failed
+        _bash_failed = _run_bash_failed(str(tr))
+        _note_vf = getattr(ctx.exec_ctrl, "note_verify_result", None)
+        _vf_streak = _note_vf(_bash_failed, str(tr)) if callable(_note_vf) else 0
+        if ctx.exec_ctrl.is_stuck() or _vf_streak >= ctx.exec_ctrl.max_repeats:
+            _repeat_n = _vf_streak if _vf_streak >= ctx.exec_ctrl.max_repeats else ctx.exec_ctrl.max_repeats
+            await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same test output {_repeat_n}× — no progress. Declaring blocker and stopping.\n"})
+            ld_setter(2610 if _vf_streak >= ctx.exec_ctrl.max_repeats and not ctx.exec_ctrl.is_stuck() else 2604)
+            loop_detected = True
             ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
             return True, loop_detected, last_write_round, round_wrote_file
     elif tn in ("patch_file", "edit_file"):
@@ -988,8 +994,19 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
         # 06:34): green verification = progress — invalidates
         # calls in between get.
         from tools.errors import tool_call_failed as _tcf_stuck3
+        _note_vf = getattr(ctx.exec_ctrl, "note_verify_result", None)
         if not _tcf_stuck3(tr, tn):
             ctx.exec_ctrl.reset_stuck_detection()
+            if "[TEST-RESULT] ✅" in str(tr) and callable(_note_vf):
+                _note_vf(False, "")
+        elif "[TEST-RESULT] ❌" in str(tr) and callable(_note_vf):
+            _vf_rt = _note_vf(True, str(tr))
+            if _vf_rt >= ctx.exec_ctrl.max_repeats:
+                await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same test failure {_vf_rt}× across edits — stopping.\n"})
+                ld_setter(2610)
+                loop_detected = True
+                ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
+                return True, loop_detected, last_write_round, round_wrote_file
     return False, loop_detected, last_write_round, round_wrote_file
 
 _VERIFY_VETO_BUDGET = 3

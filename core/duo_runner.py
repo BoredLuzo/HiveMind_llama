@@ -3424,6 +3424,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _no_write_rounds: int = 0           # consecutive rounds WITHOUT any file write (diagnose-flailing guard)
                     _round_wrote_file: bool = False     # did the current round successfully write/edit a file?
                     _no_write_nudged: bool = False      # nudge already injected once for this streak
+                    _verify_streak_nudged: bool = False # cross-edit verify failure streak nudge
                     _seen_explore_paths: set = set()
                     _total_edit_lines: int = 0
                     _ctx_pressure_warned = False
@@ -4382,6 +4383,20 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _dtool_msgs.append({"role": "user", "content": _nudge})
                             yield await ctx.emit({"type": "status",
                                 "content": f"⚠ {_no_write_rounds} rounds without file changes — hint injected."})
+                        _vf_streak_cur = int(getattr(ctx.exec_ctrl, "verify_fail_streak", 0) or 0)
+                        if _vf_streak_cur == 0:
+                            _verify_streak_nudged = False
+                        elif _vf_streak_cur >= 3 and not _verify_streak_nudged:
+                            _verify_streak_nudged = True
+                            _dtool_msgs.append({
+                                "role": "user",
+                                "content": (
+                                    "[VERIFY-STREAK] The same verification failure has repeated 3 times "
+                                    "across edits. Stop tweaking the same lines — re-read the full error "
+                                    "output and problem specification, check your data structures/constants, "
+                                    "or use `undo_last` and take a different approach."
+                                ),
+                            })
                         ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
                         if not _limit_warned and not ctx.duo_config.until_finished:
                             _rounds_left = _max_tool_rounds - _total_tool_rounds

@@ -252,6 +252,13 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         # raises UnicodeEncodeError inside the snippet — the code crashed on
         # a cosmetic character, not on its logic.
         _env = _tool_env_with_python()
+        _ws_path = Path(workspace)
+        _py_parts = [str(_ws_path)]
+        if (_ws_path / "src").is_dir():
+            _py_parts.insert(0, str(_ws_path / "src"))
+        if _env.get("PYTHONPATH"):
+            _py_parts.append(_env["PYTHONPATH"])
+        _env["PYTHONPATH"] = os.pathsep.join(_py_parts)
         from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
         if bench_cmd:
             r = await asyncio.create_subprocess_exec(
@@ -302,7 +309,12 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         # a non-zero exit entirely — the verify gates saw success. Append the
         # same marker run_bash uses, as the LAST line.
         if result:
-            return result[:4000] + f"\n[exit code: {r.returncode}]"
+            _capped = (
+                result[:2200] + "\n...[truncated]...\n" + result[-1700:]
+                if len(result) > 4000
+                else result
+            )
+            return _capped + f"\n[exit code: {r.returncode}]"
         if r.returncode == 0:
             return "[run_python: executed successfully — no output produced]"
         return _tool_error_response(

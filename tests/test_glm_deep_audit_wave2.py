@@ -301,4 +301,124 @@ _runner_src = (ROOT / "bench" / "runner.py").read_text(encoding="utf-8")
 check("NB3 bench/runner.py emits heartbeat and inter-task scoreboard",
       "_run_cell_with_heartbeat" in _runner_src and "[progress] task" in _runner_src)
 
+
+# ── Wave 3 (3-Agent Master Audit P0-1..P0-4, P1-1..P1-3) ────────────────────
+import types as _types  # noqa: E402
+import core.duo_task_complete_gate as _tcg  # noqa: E402
+from core.tool_exec_helpers import _run_bash_fail_fix_pass_insight  # noqa: E402
+from hive_functions.loop_machine import ExecutionController  # noqa: E402
+from hive_functions.test_runner import TestResult as _TR, _parse_failures  # noqa: E402
+from bench.import_polyglot import _extract_test_contract  # noqa: E402
+from bench.runner import _workspace_pythonpath, _run_with_tree_kill  # noqa: E402
+
+# W3 P0-1a: run_python exit 0 bumps verify_last_ok_serial, error run_python does not
+_r_ok = _types.SimpleNamespace(verify_mutation_serial=2, verify_last_ok_serial=0)
+asyncio.run(_run_bash_fail_fix_pass_insight("run_python", {}, "[TOOL_ERROR:RUN_PYTHON_EXEC_ERROR] boom", _r_ok, None, None, 0))
+check("W3 P0-1a failed run_python does not bump verify_last_ok_serial", _r_ok.verify_last_ok_serial == 0)
+asyncio.run(_run_bash_fail_fix_pass_insight("run_python", {}, "ok\n[exit code: 0]", _r_ok, None, None, 0))
+check("W3 P0-1a exit-0 run_python bumps verify_last_ok_serial", _r_ok.verify_last_ok_serial == 2)
+
+# W3 P0-1b: _duo_task_complete_gate nudges ONCE for smoke check when NO_TESTS_RE
+with tempfile.TemporaryDirectory(prefix="hm_w3_p01_") as _td:
+    (_td_py := Path(_td) / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    _orig_rt = _tcg._run_test_suite
+    async def _fake_no_tests(**_kw):
+        return _TR(success=False, language="python", command="pytest",
+                   failure_count=0, error_lines=[], raw_output="collected 0 items / 0 errors",
+                   inject_msg="")
+    _tcg._run_test_suite = _fake_no_tests
+    async def _fake_emit(ev):
+        return f"data: {json.dumps(ev)}\n\n"
+    _fake_ctx = _types.SimpleNamespace(
+        duo_config=_types.SimpleNamespace(agentic_mode=True),
+        chat_id="c1",
+        emit=_fake_emit,
+    )
+    _st: dict = {}
+    _dmsgs: list = []
+    _ex1 = _types.SimpleNamespace(task_complete_called=True)
+    _ps1 = _tcg._DuoTaskCompleteGateState(
+        exec_result=_ex1, written_files=["mod.py"], dtool_msgs=_dmsgs, ws_str=_td,
+        verify_mutation_serial=1, state=_st, verify_warned=False,
+        verify_last_ok_serial=0, verify_gate_blocks=0, duo_deadline_at=1e18,
+    )
+    async def _drain(ps):
+        async for _ in _tcg._duo_task_complete_gate(_fake_ctx, ps):
+            pass
+    try:
+        asyncio.run(_drain(_ps1))
+        check("W3 P0-1b first no-suite task_complete vetoes with SMOKE CHECK REQUIRED",
+              not _ex1.task_complete_called and _st.get("_smoke_check_nudged") is True
+              and any("[SMOKE CHECK REQUIRED]" in str(m.get("content", "")) for m in _dmsgs))
+        _ex2 = _types.SimpleNamespace(task_complete_called=True)
+        _ps2 = _tcg._DuoTaskCompleteGateState(
+            exec_result=_ex2, written_files=["mod.py"], dtool_msgs=_dmsgs, ws_str=_td,
+            verify_mutation_serial=1, state=_st, verify_warned=_ps1.verify_warned,
+            verify_last_ok_serial=_ps1.verify_last_ok_serial,
+            verify_gate_blocks=_ps1.verify_gate_blocks, duo_deadline_at=1e18,
+        )
+        asyncio.run(_drain(_ps2))
+        check("W3 P0-1b second call after smoke nudge accepts cleanly without infinite loop",
+              _ex2.task_complete_called and _st.get("verify_status") == "syntax_verified")
+    finally:
+        _tcg._run_test_suite = _orig_rt
+
+# W3 P0-2: cross-edit verify_fail_streak survives reset_stuck_detection
+_ec = ExecutionController(max_iterations=10, max_repeats_stuck=5)
+for _i in range(5):
+    _ec.reset_stuck_detection()
+    _stk = _ec.note_verify_result(True, f'File "mod.py", line {10 + _i}\nAssertionError: 1 != 2\n[exit code: 1]\n[cmd] pytest -k test_{_i}')
+check("W3 P0-2 note_verify_result hits streak 5 despite interleaved edits & reset_stuck_detection", _stk == 5)
+_ec.note_verify_result(False, "[exit code: 0]")
+check("W3 P0-2 passing verify resets verify_fail_streak to 0", _ec.verify_fail_streak == 0)
+
+# W3 P0-3: _extract_test_contract extracts constants & error message patterns
+with tempfile.TemporaryDirectory(prefix="hm_w3_p03_") as _td:
+    _tf = Path(_td) / "dot_dsl_test.py"
+    _tf.write_text(
+        "from dot_dsl import Node, Edge, Graph, NODE, EDGE, ATTR\n"
+        "def test_err(self):\n"
+        "    with self.assertRaisesWithMessage(ValueError, 'Graph item incomplete'):\n"
+        "        Graph([('bad',)])\n",
+        encoding="utf-8",
+    )
+    _contract = _extract_test_contract([_tf], "dot-dsl")
+    check("W3 P0-3 _extract_test_contract extracts imported symbols & exception message",
+          all(s in _contract for s in ("Node", "NODE", "EDGE", "Graph item incomplete")),
+          _contract)
+
+# W3 P0-4 & P1-3: src/ PYTHONPATH + tree kill + DeepSWE trustme dep
+import subprocess as _subprocess  # noqa: E402
+with tempfile.TemporaryDirectory(prefix="hm_w3_p04_") as _td:
+    _ws = Path(_td)
+    (_ws / "src").mkdir()
+    _pp = _workspace_pythonpath(_ws, "")
+    check("W3 P0-4 _workspace_pythonpath includes workspace and workspace/src",
+          str(_ws / "src") in _pp and str(_ws) in _pp, _pp)
+    _timed_out = False
+    try:
+        _run_with_tree_kill([sys.executable, "-c", "import time; time.sleep(10)"], cwd=_ws, env=dict(), timeout=1)
+    except _subprocess.TimeoutExpired:
+        _timed_out = True
+    check("W3 P0-4 _run_with_tree_kill raises TimeoutExpired cleanly", _timed_out)
+check("W3 P1-3 rent_bootstrap & autopilot install trustme cryptography",
+      "trustme" in (ROOT / "bench" / "external" / "rent_bootstrap.sh").read_text(encoding="utf-8")
+      and "trustme" in _nb_raw)
+
+# W3 P1-1 & P1-2: run_python workspace/src import & head+tail cap + _parse_failures E-lines
+from tools.handlers.exec_tools import _inline_tool_run_python  # noqa: E402
+with tempfile.TemporaryDirectory(prefix="hm_w3_p11_") as _td:
+    _ws = Path(_td)
+    (_ws / "src").mkdir()
+    (_ws / "src" / "pkg_demo.py").write_text("VAL = 77\n", encoding="utf-8")
+    _py_res = asyncio.run(_inline_tool_run_python({"code": "import pkg_demo; print(pkg_demo.VAL)"}, _ws, None))
+    check("W3 P1-1 run_python imports module from workspace/src", "77" in _py_res, _py_res)
+    _py_long = asyncio.run(_inline_tool_run_python({"code": "print('HEAD_' + 'x'*5000 + '_TAIL_OK')"}, _ws, None))
+    check("W3 P1-1 run_python preserves head and tail when >4000 chars",
+          "HEAD_" in _py_long and "_TAIL_OK" in _py_long and "[truncated]" in _py_long)
+_, _p_errs = _parse_failures("tests/a_test.py:42: AssertionError\nE   assert 3 == 4\nFAILED tests/a_test.py::test_x\n", "python")
+check("W3 P1-2 _parse_failures keeps pytest E-lines & file:line context",
+      any("assert 3 == 4" in e for e in _p_errs) and any("a_test.py:42:" in e for e in _p_errs),
+      str(_p_errs))
+
 sys.exit(h.finish("glm_deep_audit_wave2"))

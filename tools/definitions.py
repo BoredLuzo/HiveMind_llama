@@ -84,11 +84,9 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_python",
         "description": (
-            "USE WHEN: quick verification of pure-Python logic — calculations, JSON/data "
-            "transformations, checking an expression's result (10s timeout, stdout captured). "
-            "Runs the snippet as a STANDALONE script with the workspace as working directory; "
-            "it does NOT see your conversation context. NOT for importing workspace modules, "
-            "long-running processes, or shell commands — use run_bash or write a real file + run_tests."
+            "USE WHEN: quick Python checks or workspace smoke tests (10s timeout, cwd & PYTHONPATH = workspace). "
+            "Standalone script with no conversation context. NOT for long-running servers or "
+            "shell commands — use run_bash or write a file + run_tests."
         ),
         "parameters": {"type": "object", "properties": {
             "code": {"type": "string", "description": "Python snippet; output from stdout (use print())."}

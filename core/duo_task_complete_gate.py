@@ -245,7 +245,31 @@ async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
                         "[VERIFY-GATE] auto-verify: no tests ran in workspace — running deterministic syntax check")
                     _syn_err = await asyncio.to_thread(
                         _deterministic_syntax_verify, _ws_str, _written_files)
-                    if not _syn_err:
+                    if (
+                        not _syn_err
+                        and needs_test_verification(_written_files)
+                        and _verify_mutation_serial > _verify_last_ok_serial
+                        and not state.get("_smoke_check_nudged")
+                    ):
+                        state["_smoke_check_nudged"] = True
+                        state["verify_status"] = "syntax_verified"
+                        _exec_result.task_complete_called = False
+                        _dtool_msgs.append({"role": "user", "content": (
+                            "[SMOKE CHECK REQUIRED] No test suite exists in this workspace; "
+                            "the harness only checked syntax (status=syntax_verified). "
+                            "Before completing: run ONE functional smoke check via `run_bash` "
+                            "(e.g. `python -c \"import ...; assert ...\"`) or `run_python` "
+                            "with exit code 0 that exercises the key functions and edge cases "
+                            "from the task instructions (do NOT create test files). "
+                            "Once it exits 0, call `task_complete` again."
+                        )})
+                        try:
+                            yield await ctx.emit({"type": "status", "content": (
+                                "🔍 Syntax OK (status=syntax_verified) — requesting 1 functional smoke check before completion"
+                            )})
+                        except (OSError, RuntimeError, TypeError, ValueError) as _av_emit_err:
+                            logger.debug("[VERIFY-GATE] smoke-nudge emit failed: %s", _av_emit_err)
+                    elif not _syn_err:
                         _verify_last_ok_serial = _verify_mutation_serial
                         _verify_gate_blocks = 0
                         _verify_warned = False

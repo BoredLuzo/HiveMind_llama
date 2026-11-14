@@ -65,7 +65,14 @@ def _parse_failures(output: str, language: str) -> tuple[int, list[str]]:
             m = re.search(r"(\d+) failed", line)
             if m:
                 count = max(count, int(m.group(1)))
-            if line.startswith("FAILED") or "AssertionError" in line or "Error:" in line:
+            if (
+                line.startswith("FAILED")
+                or "AssertionError" in line
+                or "Error:" in line
+                or "Exception:" in line
+                or line.lstrip().startswith("E   ")
+                or re.search(r"\b[\w./\\-]+\.py:\d+:", line)
+            ):
                 errors.append(line.strip())
 
     elif language in ("javascript", "typescript", "astro"):
@@ -119,8 +126,8 @@ def _parse_failures(output: str, language: str) -> tuple[int, list[str]]:
                 errors.append(line.strip())
         count = len(errors)
 
-    # limit error lines to relevant ones: max 15, prioritize stacktrace starts
-    errors = [e for e in errors if e][:15]
+    # limit error lines to relevant ones: max 25, prioritize stacktrace & pytest E-lines
+    errors = [e for e in errors if e][:25]
     return count, errors
 
 
@@ -369,7 +376,7 @@ def _build_inject_message(
         errors = "\n".join(f"  {l}" for l in error_lines)
         body = f"Errors:\n{errors}"
     else:
-        body = f"Output (tail):\n{raw[-500:].strip()}"
+        body = f"Output (tail):\n{raw[-1500:].strip()}"
 
     footer = "\n\nFix the above failures. Run tests again after fixing."
     return header + body + footer

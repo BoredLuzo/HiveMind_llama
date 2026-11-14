@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import statistics
 import subprocess
@@ -274,6 +275,65 @@ def install_hidden_tests(task: Task, work: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def _workspace_pythonpath(work: Path, existing: str = "") -> str:
+    """Build PYTHONPATH with workspace (and workspace/src if present) prepended."""
+    parts = [str(work)]
+    src_dir = work / "src"
+    if src_dir.is_dir():
+        parts.insert(0, str(src_dir))
+    if existing:
+        parts.append(existing)
+    return os.pathsep.join(parts)
+
+
+def _run_with_tree_kill(
+    cmd,
+    *,
+    cwd: Path,
+    env: dict,
+    timeout: int,
+    shell: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess in its own process tree/group so timeouts reap children."""
+    proc = subprocess.Popen(
+        cmd,
+        shell=shell,
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=(os.name != "nt"),
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(cmd, proc.returncode or 0, out or "", err or "")
+    except subprocess.TimeoutExpired as exc:
+        if os.name != "nt":
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.kill()
+        else:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except (OSError, subprocess.SubprocessError):
+                proc.kill()
+        try:
+            out, err = proc.communicate(timeout=2)
+            exc.stdout = out
+            exc.stderr = err
+        except (OSError, subprocess.SubprocessError):
+            pass
+        raise
+
+
 def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[bool, str]:
     """Run the task's check command; exit 0 = pass.
 
@@ -291,12 +351,10 @@ def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[boo
     env = dict(os.environ)
     py_bin_dir = str(Path(sys.executable).parent)
     env["PATH"] = f"{py_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    env["PYTHONPATH"] = f"{work}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["PYTHONPATH"] = _workspace_pythonpath(work, env.get("PYTHONPATH", ""))
     try:
-        r = subprocess.run(
-            task.check, shell=True, cwd=str(work), capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=timeout, env=env,
+        r = _run_with_tree_kill(
+            task.check, shell=True, cwd=work, env=env, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return False, f"check timed out after {timeout}s"
@@ -693,11 +751,10 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     ]
     cmd.extend(["--message", task.prompt, *_aider_files(work)])
     env = {**os.environ, "OPENAI_API_KEY": api_key,
-           "OPENAI_API_BASE": api_base}
+           "OPENAI_API_BASE": api_base,
+           "PYTHONPATH": _workspace_pythonpath(work, os.environ.get("PYTHONPATH", ""))}
     try:
-        r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace",
-                           timeout=_agent_timeout_s(task, cfg), env=env)
+        r = _run_with_tree_kill(cmd, cwd=work, env=env, timeout=_agent_timeout_s(task, cfg))
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "stop_reason": "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "", "detail": f"aider failed: {exc}"}
     finally:
@@ -790,13 +847,12 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
     ]
     env = {**os.environ, "HERMES_HOME": str(hermes_home),
            "OPENAI_API_KEY": api_key,
-           "OPENAI_BASE_URL": api_base, "OPENAI_API_BASE": api_base}
+           "OPENAI_BASE_URL": api_base, "OPENAI_API_BASE": api_base,
+           "PYTHONPATH": _workspace_pythonpath(work, os.environ.get("PYTHONPATH", ""))}
     usage: dict = {}
     _agent_to = _agent_timeout_s(task, cfg)
     try:
-        r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace",
-                           timeout=_agent_to, env=env)
+        r = _run_with_tree_kill(cmd, cwd=work, env=env, timeout=_agent_to)
         usage = _read_hermes_state_usage(hermes_home)
     except (OSError, subprocess.SubprocessError) as exc:
         usage = _read_hermes_state_usage(hermes_home)
@@ -981,15 +1037,14 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
     env = {
         **os.environ,
         "PATH": f"{extra_path}{os.pathsep}{cur_path}" if extra_path else cur_path,
+        "PYTHONPATH": _workspace_pythonpath(work, os.environ.get("PYTHONPATH", "")),
         "PI_CODING_AGENT_DIR": str(pi_conf_dir),
         "OPENAI_API_KEY": api_key,
         "OPENAI_BASE_URL": api_base,
     }
     _agent_to = _agent_timeout_s(task, cfg)
     try:
-        r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace",
-                           timeout=_agent_to, env=env)
+        r = _run_with_tree_kill(cmd, cwd=work, env=env, timeout=_agent_to)
         _err = (r.stderr or "").lower()
         # Only a rejected --mode flag may trigger the no-JSON retry. A plain
         # "model" error (bad model id, missing model) used to match the old
@@ -997,10 +1052,8 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
         if r.returncode != 0 and "--mode" in _err and any(
                 marker in _err for marker in
                 ("unknown", "unrecognized", "no such option", "invalid option")):
-            r = subprocess.run([*base_cmd, "-p", task.prompt],
-                               cwd=str(work), capture_output=True, text=True,
-                               encoding="utf-8", errors="replace",
-                               timeout=_agent_to, env=env)
+            r = _run_with_tree_kill([*base_cmd, "-p", task.prompt],
+                                    cwd=work, env=env, timeout=_agent_to)
     except (OSError, subprocess.SubprocessError) as exc:
         raw_out = getattr(exc, "stdout", None) or ""
         if isinstance(raw_out, bytes):

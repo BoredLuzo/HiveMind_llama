@@ -949,6 +949,16 @@ async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hook
                 result.verify_last_ok_serial, result.verify_mutation_serial
             )
         return
+    if _dname == "run_python":
+        _py_str = str(_dresult or "")
+        if (
+            not _tool_call_failed(_py_str, "run_python")
+            and ("[exit code: 0]" in _py_str or "executed successfully" in _py_str)
+        ):
+            result.verify_last_ok_serial = max(
+                result.verify_last_ok_serial, result.verify_mutation_serial
+            )
+        return
     if _dname != "run_bash":
         return
     _rb_failed = _run_bash_failed(_dresult)
