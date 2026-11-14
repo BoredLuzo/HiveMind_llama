@@ -19,8 +19,10 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
-    Config, DEFAULT_CONDITIONS, Task, _agent_timeout_s, _aider_files, _extract_patch,
-    _hivemind_body, _load_resume_state, _parse_file_blocks, _parse_pi_json_output,
+    Config, DEFAULT_CONDITIONS, Task, _accumulate_hivemind_sse,
+    _agent_timeout_s, _aider_files, _extract_patch,
+    _hivemind_body, _load_resume_state, _parse_aider_output_tokens,
+    _parse_file_blocks, _parse_pi_json_output,
     _preflight,
     _parse_token_count, _persist, _read_hermes_state_usage,
     _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
@@ -310,6 +312,74 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     _mismatch_ctx, _, _ = _load_resume_state(_local_out, _sync_dir, "m", 32768)
     check("resume: mismatched ctx_tokens ignores checkpoint",
           _mismatch_ctx == [])
+
+    _rf_rows, _rf_keys, _ = _load_resume_state(
+        _local_out, _sync_dir, "m", 131072, resume_failed=True)
+    check("resume-failed: keeps passing rows and drops failed rows for retry",
+          len(_rf_rows) == 1
+          and (1, "t1", "hivemind_duo") in _rf_keys
+          and (1, "t1", "aider") not in _rf_keys,
+          f" ({_rf_rows}/{_rf_keys})")
+
+    # ── HiveMind SSE & Aider token accounting + conftest tamper guard ───────
+    _sse_lines = [
+        "data: " + json.dumps({"type": "usage_meta", "prompt_tokens": 1000, "completion_tokens": 120, "cached_tokens": 400}),
+        "data: " + json.dumps({"type": "usage_meta", "prompt_tokens": 1200, "completion_tokens": 80, "cached_tokens": 900}),
+        "data: " + json.dumps({"type": "done", "stop_reason": "end_turn", "tokens_generated": 9999}),
+    ]
+    _hm_usage = _accumulate_hivemind_sse(_sse_lines)
+    check("accounting: hivemind SSE accumulates net + cached == total across rounds",
+          _hm_usage["tokens"] == 2400
+          and _hm_usage["cached_tokens"] == 1300
+          and _hm_usage["net_tokens"] == 1100
+          and _hm_usage["net_tokens"] + _hm_usage["cached_tokens"] == _hm_usage["tokens"]
+          and _hm_usage["rounds"] == 2
+          and _hm_usage["stop_reason"] == "end_turn",
+          f" ({_hm_usage})")
+    _hm_clamp = _accumulate_hivemind_sse([
+        "data: " + json.dumps({"type": "usage_meta", "prompt_tokens": 100, "completion_tokens": 50, "cached_tokens": 250}),
+    ])
+    check("accounting: hivemind SSE clamps cached_tokens to keep net + cached == total",
+          _hm_clamp["tokens"] == 150
+          and _hm_clamp["cached_tokens"] == 100
+          and _hm_clamp["net_tokens"] == 50
+          and _hm_clamp["net_tokens"] + _hm_clamp["cached_tokens"] == _hm_clamp["tokens"],
+          f" ({_hm_clamp})")
+    _hm_fallback = _accumulate_hivemind_sse([
+        "data: " + json.dumps({"type": "done", "prompt_tokens_total": 300, "tokens_generated": 45, "stop_reason": "stop"}),
+    ])
+    check("accounting: hivemind SSE falls back to done-event counters",
+          _hm_fallback["tokens"] == 345
+          and _hm_fallback["net_tokens"] == 345
+          and _hm_fallback["cached_tokens"] == 0,
+          f" ({_hm_fallback})")
+
+    _aider_stdout = (
+        "Applied edit to a.py\n"
+        "Tokens: 1.2k sent, 345 received. Cost: $0.00\n"
+        + ("log line\n" * 60)
+        + "Tokens: 800 sent, 100 received.\n"
+    )
+    check("accounting: aider token parser sums multi-turn stdout beyond tail 1k",
+          _parse_aider_output_tokens(_aider_stdout) == 2445,
+          f" ({_parse_aider_output_tokens(_aider_stdout)})")
+
+    _cf_task_dir = root / "cf_task"
+    (_cf_task_dir / "repo").mkdir(parents=True)
+    (_cf_task_dir / "repo" / "keep").mkdir()
+    (_cf_task_dir / "repo" / "keep" / "conftest.py").write_text("KEEP = 1\n", encoding="utf-8")
+    (_cf_task_dir / "tests").mkdir()
+    (_cf_task_dir / "tests" / "test_cf.py").write_text("ok = True\n", encoding="utf-8")
+    _cf_task = Task(
+        "cf_task", "p",
+        "python -c \"import pathlib, sys; sys.exit(0 if (not pathlib.Path('conftest.py').exists() and pathlib.Path('keep/conftest.py').is_file()) else 1)\"",
+        repo=_cf_task_dir / "repo", tests=_cf_task_dir / "tests",
+    )
+    _cf_work = prepare_workspace(_cf_task, root / "cf_work")
+    (_cf_work / "conftest.py").write_text("import sys; sys.exit(0)\n", encoding="utf-8")
+    _cf_ok, _cf_out = run_check(_cf_task, _cf_work)
+    check("hidden: agent-planted untracked conftest.py is removed while repo fixture conftest.py stays",
+          _cf_ok is True, f" ({_cf_out!r})")
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,

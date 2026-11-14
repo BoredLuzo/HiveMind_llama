@@ -122,6 +122,8 @@ class Config:
     sync_dir: Path | None = None
     # Resume an existing --out / --sync-dir checkpoint instead of rerunning done cells.
     resume: bool = False
+    # Retry failed/timed-out checkpoint rows while keeping passing cells.
+    resume_failed: bool = False
 
 def _file_map(root: Path | None) -> dict[str, str]:
     """Relative path -> text for a workspace (skip caches/binary-sized files)."""
@@ -231,6 +233,13 @@ def install_hidden_tests(task: Task, work: Path) -> None:
     could shadow a hidden test by creating that directory. Replace the
     destination explicitly before every file.
     """
+    if work.is_dir():
+        for cf in list(work.rglob("conftest.py")):
+            rel = cf.relative_to(work)
+            in_repo = task.repo is not None and (task.repo / rel).is_file()
+            in_tests = task.tests is not None and (task.tests / rel).is_file()
+            if not in_repo and not in_tests:
+                cf.unlink(missing_ok=True)
     if task.tests is None:
         return
     for src in task.tests.rglob("*"):
@@ -477,19 +486,65 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
     return body
 
 
+def _accumulate_hivemind_sse(lines) -> dict:
+    """Accumulate usage_meta/done/error metrics from HiveMind SSE lines."""
+    done: dict = {}
+    error = ""
+    usage_prompt = usage_completion = usage_cached = usage_rounds = 0
+    for raw_line in lines:
+        line = str(raw_line or "").strip()
+        if not line.startswith("data: "):
+            continue
+        try:
+            ev = json.loads(line[6:])
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        ev_type = ev.get("type")
+        if ev_type == "done":
+            done = ev
+        elif ev_type == "usage_meta":
+            # TOKEN-METRIC (2026-11-08): tool loops report their usage
+            # per phase; the done event only carries the outer ledger.
+            usage_prompt += int(ev.get("prompt_tokens") or 0)
+            usage_completion += int(ev.get("completion_tokens") or 0)
+            usage_cached += int(ev.get("cached_tokens") or 0)
+            usage_rounds += 1
+        elif ev_type == "error":
+            error = str(ev.get("content") or ev)[:500]
+    usage_total = usage_prompt + usage_completion
+    tokens = usage_total or (
+        int(done.get("tokens_generated") or 0)
+        + int(done.get("prompt_tokens_total") or 0)
+    )
+    if usage_total:
+        cached = max(0, min(usage_cached, usage_prompt, tokens))
+        uncached_prompt = max(0, usage_prompt - cached)
+        net_tokens = uncached_prompt + usage_completion
+    else:
+        cached = 0
+        net_tokens = tokens
+    return {
+        "tokens": tokens,
+        "cached_tokens": cached,
+        "net_tokens": net_tokens,
+        "rounds": usage_rounds,
+        "stop_reason": done.get("stop_reason", ""),
+        "detail": error,
+    }
+
+
 async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
                         *, duo_tier: str = "core") -> dict:
     body = _hivemind_body(task, work, duo, cfg.model,
                           duo_planner=cfg.duo_planner, duo_tier=duo_tier,
                           ctx_tokens=cfg.ctx_tokens)
-    done: dict = {}
-    error = ""
-    usage_prompt = usage_completion = usage_cached = usage_rounds = 0
+    sse_lines: list[str] = []
     _agent_to = _agent_timeout_s(task, cfg)
     _chat_id = str(body.get("chat_id") or "")
 
     async def _stream_run() -> None:
-        nonlocal done, error, usage_prompt, usage_completion, usage_cached, usage_rounds
         async with httpx.AsyncClient(
                 timeout=httpx.Timeout(_agent_to + 15.0, connect=10.0)) as client:
             async with client.stream("POST",
@@ -497,41 +552,20 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
                                      json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    try:
-                        ev = json.loads(line[6:])
-                    except ValueError:
-                        continue
-                    if ev.get("type") == "done":
-                        done = ev
-                    elif ev.get("type") == "usage_meta":
-                        # TOKEN-METRIC (2026-11-08): tool loops report their usage
-                        # per phase; the done event only carries the outer ledger.
-                        usage_prompt += int(ev.get("prompt_tokens") or 0)
-                        usage_completion += int(ev.get("completion_tokens") or 0)
-                        usage_cached += int(ev.get("cached_tokens") or 0)
-                        usage_rounds += 1
-                    elif ev.get("type") == "error":
-                        error = str(ev.get("content") or ev)[:500]
+                    sse_lines.append(line)
 
+    timed_out = False
     try:
         await asyncio.wait_for(_stream_run(), timeout=_agent_to)
     except (asyncio.TimeoutError, httpx.TimeoutException):
         await _abort_hivemind(cfg.hivemind_url, _chat_id)
-        done = {"stop_reason": "timeout"}
-        error = f"hivemind timed out after {int(_agent_to)}s"
+        timed_out = True
 
-    _usage_total = usage_prompt + usage_completion
-    tokens = _usage_total or (
-        int(done.get("tokens_generated") or 0)
-        + int(done.get("prompt_tokens_total") or 0))
-    _uncached_prompt = max(0, usage_prompt - usage_cached)
-    _net_tokens = (_uncached_prompt + usage_completion) if _usage_total else tokens
-    return {"tokens": tokens, "cached_tokens": usage_cached,
-            "net_tokens": _net_tokens, "rounds": usage_rounds,
-            "stop_reason": done.get("stop_reason", ""),
-            "detail": error}
+    res = _accumulate_hivemind_sse(sse_lines)
+    if timed_out:
+        res["stop_reason"] = "timeout"
+        res["detail"] = f"hivemind timed out after {int(_agent_to)}s"
+    return res
 
 
 def _parse_token_count(number: str, suffix: str = "") -> int:
@@ -541,6 +575,22 @@ def _parse_token_count(number: str, suffix: str = "") -> int:
     except ValueError:
         return 0
     return int(value * {"k": 1000, "m": 1_000_000}.get((suffix or "").lower(), 1))
+
+
+_AIDER_TOKENS_RE = re.compile(
+    r"Tokens:\s*([\d.,]+)\s*([kKmM]?)\s*sent[^\n]*?"
+    r"([\d.,]+)\s*([kKmM]?)\s*received",
+    re.I,
+)
+
+
+def _parse_aider_output_tokens(text: str) -> int:
+    """Sum all Aider 'Tokens: X sent, Y received' summary lines."""
+    total = 0
+    for m in _AIDER_TOKENS_RE.finditer(text or ""):
+        total += _parse_token_count(m.group(1), m.group(2))
+        total += _parse_token_count(m.group(3), m.group(4))
+    return total
 
 
 def _aider_files(work: Path, limit: int = 40) -> list[str]:
@@ -631,16 +681,10 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
         return {"tokens": 0, "stop_reason": "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "", "detail": f"aider failed: {exc}"}
     finally:
         shutil.rmtree(_meta_dir, ignore_errors=True)
+    full_output = (r.stdout or "") + "\n" + (r.stderr or "")
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
     # "Tokens: 1.2k sent, 345 received" (k/m suffixes are common).
-    match = re.search(
-        r"Tokens:\s*([\d.,]+)\s*([kKmM]?)\s*sent.*?"
-        r"([\d.,]+)\s*([kKmM]?)\s*received",
-        detail, re.S | re.I)
-    tokens = 0
-    if match:
-        tokens = (_parse_token_count(match.group(1), match.group(2))
-                  + _parse_token_count(match.group(3), match.group(4)))
+    tokens = _parse_aider_output_tokens(full_output)
     return {"tokens": tokens, "detail": detail}
 
 
@@ -1151,6 +1195,8 @@ def _load_resume_state(
     sync_dir: Path | None,
     model: str,
     ctx_tokens: int,
+    *,
+    resume_failed: bool = False,
 ) -> tuple[list[dict], set[tuple[int, str, str]], str]:
     """Pull newer/larger checkpoint from sync_dir -> out and return done keys."""
     local_data, local_rows = _read_checkpoint_rows(out)
@@ -1181,6 +1227,8 @@ def _load_resume_state(
         if not isinstance(r, dict):
             continue
         if r.get("model") and str(r["model"]) != model:
+            continue
+        if resume_failed and not r.get("ok"):
             continue
         kept_rows.append(r)
         run_no = int(r.get("run") or 1)
@@ -1264,6 +1312,9 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true",
                         default=(os.environ.get("HM_RESUME", "0").strip() == "1"),
                         help="resume from existing --out / --sync-dir checkpoint, skipping done cells")
+    parser.add_argument("--resume-failed", action="store_true",
+                        default=(os.environ.get("HM_RESUME_FAILED", "0").strip() == "1"),
+                        help="drop failed/timed-out checkpoint rows so they are retried while keeping passes")
     args = parser.parse_args()
 
     tasks = load_tasks(Path(args.tasks))
@@ -1301,7 +1352,8 @@ def main() -> int:
         duo_planner=not args.no_duo_planner,
         ctx_tokens=max(1024, args.num_ctx),
         sync_dir=sync_dir,
-        resume=bool(args.resume),
+        resume=bool(args.resume or args.resume_failed),
+        resume_failed=bool(args.resume_failed),
     )
 
     rows: list[dict] = []
@@ -1309,7 +1361,8 @@ def main() -> int:
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     if cfg.resume:
         rows, done_keys, saved_start = _load_resume_state(
-            out, sync_dir, cfg.model, cfg.ctx_tokens)
+            out, sync_dir, cfg.model, cfg.ctx_tokens,
+            resume_failed=cfg.resume_failed)
         if saved_start:
             started_at = saved_start
 

@@ -492,14 +492,16 @@ def reindent_matched_block(
 
 
 def _find_unique(lines: list[str], expected: list[str],
-                 hint: int) -> tuple[int, bool]:
+                 hint: int | None = None) -> tuple[int, bool]:
     """Find the unique occurrence of `expected` in `lines`.
 
     Uses a 3-stage progressive match ladder (exact -> trailing-whitespace
     `rstrip` -> leading+trailing `strip` on substantial blocks), preserving
-    uniqueness at every stage and tolerance for header line-number drift.
+    uniqueness at every stage and tolerance for header line-number drift
+    (`hint` accepted for caller compatibility and ignored).
     Returns `(index, used_strip)` or raises PATCH_CONTEXT_NOT_FOUND /
     PATCH_CONTEXT_NOT_UNIQUE."""
+    del hint
     blen = len(expected)
     limit = len(lines) - blen
     if limit < 0:
@@ -507,7 +509,6 @@ def _find_unique(lines: list[str], expected: list[str],
             "PATCH_CONTEXT_NOT_FOUND",
             "file is shorter than the patch context — read_file the current "
             "state and regenerate the patch")
-    hint = min(max(hint, 0), limit)
     used_strip = False
     matches = [p for p in range(limit + 1)
                if lines[p:p + blen] == expected]

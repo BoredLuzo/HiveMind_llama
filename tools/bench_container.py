@@ -23,8 +23,12 @@ Mapping shape::
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 def mapping_path() -> Path:
@@ -54,6 +58,14 @@ def container_info(workspace: str | Path) -> dict | None:
     for key in candidates:
         info = data.get(key)
         if isinstance(info, dict) and info.get("container"):
+            exp = info.get("expires_at")
+            if exp is not None:
+                try:
+                    if time.time() > float(exp):
+                        _log.debug("Ignoring expired container mapping for %s", key)
+                        continue
+                except (TypeError, ValueError):
+                    pass
             return info
     return None
 
@@ -75,6 +87,7 @@ def bash_argv(cmd: str, workspace: str | Path) -> list[str] | None:
     activate = str(info.get("activate") or "").strip()
     if activate:
         body = activate.rstrip() + " " + body
+    _log.debug("Routing bench command for %s into container %s", workspace, info["container"])
     return ["docker", "exec", "-w", cwd, str(info["container"]),
             "bash", "-lc", body]
 
@@ -87,5 +100,6 @@ def python_argv(workspace: str | Path) -> list[str] | None:
     cwd = str(info.get("cwd") or "/testbed")
     activate = str(info.get("activate") or "").strip()
     prefix = (activate.rstrip() + " ") if activate else ""
+    _log.debug("Routing bench command for %s into container %s", workspace, info["container"])
     return ["docker", "exec", "-i", "-w", cwd, str(info["container"]),
             "bash", "-lc", prefix + "python3 -"]

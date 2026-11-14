@@ -4,6 +4,16 @@
 
 # Shell scripts need LF endings - CRLF breaks shebangs on Linux
 *.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=lf
+*.ipynb text eol=lf
 
 # Developer-only content stays out of the release zip (git archive).
 # Verified: no runtime code, installer or updater reads these paths.

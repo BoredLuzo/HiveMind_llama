@@ -23,7 +23,7 @@ transport & tool gating, scheduler hardening, and Linux/Colab benchmark parity.
   Polyglot tasks, lowered `requires-python` to `>=3.12,<3.15` for Linux/Colab
   compatibility, added clean-reset + 4B (100k ctx) / 35B-MTP (120k ctx) stages in
   `bench/external/hivemind_bench_colab_autopilot.ipynb`, and fixed `rent_bootstrap.sh`
-  build-id parsing.
+  build-id parsing. Covered by 385/385 regression suites.
 
 ## [1.5.6] - 2026-11-12
 

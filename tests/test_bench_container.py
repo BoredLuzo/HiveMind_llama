@@ -59,4 +59,9 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     mapping.write_text(json.dumps({str(ws): {"container": ""}}), encoding="utf-8")
     check("empty container is ignored", bash_argv("pytest", ws) is None)
 
+    mapping.write_text(json.dumps({
+        str(ws.resolve()): {"container": "hm-stale", "expires_at": 1.0}
+    }), encoding="utf-8")
+    check("expired container mapping is ignored", bash_argv("pytest", ws) is None)
+
 sys.exit(h.finish("bench_container"))

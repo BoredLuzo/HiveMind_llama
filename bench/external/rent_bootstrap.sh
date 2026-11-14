@@ -489,6 +489,7 @@ run_bench() {  # $@ = extra args (optional)
   [ -n "${HM_OUT:-}" ] && _extra_args+=(--out "$HM_OUT")
   [ -n "${HM_SYNC_DIR:-}" ] && _extra_args+=(--sync-dir "$HM_SYNC_DIR")
   [ "${HM_RESUME:-0}" = "1" ] && _extra_args+=(--resume)
+  [ "${HM_RESUME_FAILED:-0}" = "1" ] && _extra_args+=(--resume-failed)
   log "run_bench: model=$HM_MODEL ctx=$HM_CTX tasks=$HM_TASKS runs=$HM_RUNS conds=$HM_CONDITIONS out=${HM_OUT:-auto} sync=${HM_SYNC_DIR:-off} resume=${HM_RESUME:-0}"
   local _rc=0
   # Cap per-cell time so one stuck agent cannot burn the rental budget.

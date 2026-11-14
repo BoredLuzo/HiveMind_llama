@@ -296,15 +296,19 @@ async def recover_slot_port(
     if crash_sleep_s > 0:
         await asyncio.sleep(crash_sleep_s)
 
-    from backend.llama_server_manager import manager as _lsm
+    try:
+        from backend.llama_server_manager import manager as _lsm
 
-    new_port = await _lsm.ensure_loaded(
-        model,
-        num_ctx=int(num_ctx or 4096),
-        n_parallel=int(n_parallel or 1),
-        vision=bool(vision),
-    )
-    return int(new_port), server_alive
+        new_port = await _lsm.ensure_loaded(
+            model,
+            num_ctx=int(num_ctx or 4096),
+            n_parallel=int(n_parallel or 1),
+            vision=bool(vision),
+        )
+        return int(new_port), server_alive
+    except (ImportError, RuntimeError, OSError, httpx.HTTPError) as exc:
+        _log.debug("Slot ensure_loaded failed for %s: %s", model, exc)
+        return int(port or 0), server_alive
 
 
 @dataclass
