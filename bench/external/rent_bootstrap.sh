@@ -485,6 +485,7 @@ run_bench() {  # $@ = extra args (optional)
     _extra_args+=(--pi-bin "$(command -v pi)")
   fi
   [ -n "${HM_TASK_TIMEOUT:-}" ] && _extra_args+=(--task-timeout "$HM_TASK_TIMEOUT")
+  [ -n "${HM_ONLY:-}" ] && _extra_args+=(--only "$HM_ONLY")
   [ -n "${HM_OUT:-}" ] && _extra_args+=(--out "$HM_OUT")
   [ -n "${HM_SYNC_DIR:-}" ] && _extra_args+=(--sync-dir "$HM_SYNC_DIR")
   [ "${HM_RESUME:-0}" = "1" ] && _extra_args+=(--resume)
