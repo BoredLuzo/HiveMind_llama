@@ -98,15 +98,21 @@ async def _decide_route_impl(
     _judge_enabled = _routing_decider.normalise_mode(
         run_settings.get("routing_judge")) != "off"
 
-    async def _judge_async(_text: str):
-        _level = await judge_call_async(_text, judge_bias)
-        return _level, 0.0
+    _judge_cb = None
+    if _judge_enabled and judge_call_async is not None:
+        _jfn = judge_call_async
+
+        async def _judge_async(_text: str):
+            _level = await _jfn(_text, judge_bias)
+            return _level, 0.0
+
+        _judge_cb = _judge_async
 
     try:
         return await _routing_decider.decide_async(
             run_settings, text,
             forced_complexity=force_complexity,
-            judge_call_async=_judge_async if (_judge_enabled and judge_call_async) else None,
+            judge_call_async=_judge_cb,
         )
     except (RuntimeError, ValueError, TypeError, KeyError, LookupError, OSError,
             ImportError, AttributeError, NameError, UnboundLocalError) as _exc:

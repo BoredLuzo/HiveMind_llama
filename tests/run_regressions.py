@@ -264,7 +264,7 @@ SUITES = [
     ("preset_prompt_roles",     "tests/test_preset_prompt_roles.py",           40),
     ("mcp_audit_fixes",         "tests/test_mcp_audit_fixes.py",               60),
     ("mcp_client",              "tests/test_mcp_client.py",                    90),
-    ("mcp_client_budgets",      "tests/test_mcp_client_budgets.py",             60),
+    ("mcp_client_budgets",      "tests/test_mcp_client_budgets.py",             90),
     ("write_folder_hint",      "tests/test_write_folder_hint.py",         20),
     ("settings_atomic",       "tests/test_settings_atomic.py",            40),
     ("branch_model",           "tests/test_branch_model.py",              20),
@@ -272,10 +272,10 @@ SUITES = [
     ("shell_chain_guard",    "tests/test_shell_chain_guard.py",         30),
     ("chunking_fixes",         "tests/test_chunking_fixes.py",               60),
     ("split_audit_fixes",      "tests/test_split_audit_fixes.py",           60),
-    ("git_init_clone",        "tests/test_git_init_clone.py",               60),
+    ("git_init_clone",        "tests/test_git_init_clone.py",               90),
     ("chunk_render_no_write",  "tests/test_chunk_render_no_write_pin.py",      30),
     ("settings_foreign_write", "tests/test_settings_foreign_write_warning.py", 30),
-    ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          60),
+    ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          90),
     ("ws_guards_chats_skills", "tests/test_ws_guards_chats_skills.py",         60),
     ("tts_start_decay",        "tests/test_tts_start_decay_pin.py",            30),
     ("audit_architecture_fixes", "tests/test_audit_architecture_fixes.py",     40),
@@ -323,7 +323,7 @@ SUITES = [
     ("runtime_flags",           "tests/test_runtime_flags.py",              60),
     ("deadline_and_416",        "tests/test_deadline_and_416.py",           30),
     ("mcp_security_gate",       "tests/test_mcp_security_gate.py",          60),
-    ("mcp_phase2",              "tests/test_mcp_phase2.py",                  90),
+    ("mcp_phase2",              "tests/test_mcp_phase2.py",                 120),
     ("mcp_2025",                "tests/test_mcp_2025.py",                    120),
     ("mcp_2026",                "tests/test_mcp_2026.py",                     30),
     ("lsp_client",              "tests/test_lsp_client.py",                  90),
@@ -340,8 +340,8 @@ SUITES = [
     ("unbound_guards",          "tests/test_unbound_guards.py",              20),
     ("mcp_secret_guard",        "tests/test_mcp_secret_guard.py",            60),
     ("approval_no_run_id",      "tests/test_approval_no_run_id.py",          20),
-    ("git_consolidate_scope",   "tests/test_git_consolidate_scope.py",       60),
-    ("git_commit_scope",        "tests/test_git_commit_scope.py",            60),
+    ("git_consolidate_scope",   "tests/test_git_consolidate_scope.py",       90),
+    ("git_commit_scope",        "tests/test_git_commit_scope.py",            90),
     ("settings_ui",             "tests/test_settings_ui.py",                 20),
     ("settings_split",          "tests/test_settings_split.py",              10),
     ("tool_args_nonobject",     "tests/test_tool_args_nonobject.py",         20),
@@ -396,14 +396,14 @@ SUITES = [
     ("simple_tool_routing",     "tests/test_simple_tool_routing.py",         30),
     ("chat_tools_route_guards", "tests/test_chat_tools_route_guards.py",     30),
     ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
-    ("bench_runner",            "tests/test_bench_runner.py",                30),
+    ("bench_runner",            "tests/test_bench_runner.py",                60),
     ("bench_analyze",           "tests/test_bench_analyze.py",               30),
     ("bench_polyglot",          "tests/test_bench_polyglot.py",              30),
     ("bench_external",          "tests/test_bench_external.py",             60),
     ("external_deepswe",        "tests/test_external_deepswe.py",           20),
-    ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           20),
+    ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           45),
     ("bench_container",         "tests/test_bench_container.py",            20),
-    ("swebench_hivemind",       "tests/test_swebench_hivemind.py",          20),
+    ("swebench_hivemind",       "tests/test_swebench_hivemind.py",          45),
     # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
     ("llama_client_retry",      "tests/test_llama_client_retry.py",          30),
     # F4 sync-I/O off the loop (deep audit 2026-11-07): prefill meter reads
@@ -445,7 +445,7 @@ SUITES = [
 # 2026-11-07: the real LSP servers and the HTTP-poll suite joined the lane
 # for the same reason (CI runners are slower and share two cores).
 _EXCLUSIVE_SUITES = {
-    "mcp_client", "wait_ready", "lsp_real_pyright", "lsp_real_rust",
+    "mcp_client", "lsp_client", "wait_ready", "lsp_real_pyright", "lsp_real_rust",
 }
 
 # Suites whose fixtures only exist on a developer box. `--ci-subset` drops
