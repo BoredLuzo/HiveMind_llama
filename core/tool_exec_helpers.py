@@ -951,10 +951,12 @@ async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hook
         return
     if _dname == "run_python":
         _py_str = str(_dresult or "")
-        if (
-            not _tool_call_failed(_py_str, "run_python")
-            and ("[exit code: 0]" in _py_str or "executed successfully" in _py_str)
-        ):
+        _py_ec = re.findall(r"\[exit code:\s*(-?\d+)\]", _py_str)
+        _py_ok = (
+            (bool(_py_ec) and int(_py_ec[-1]) == 0)
+            or _py_str.strip().startswith("[run_python: executed successfully")
+        )
+        if not _tool_call_failed(_py_str, "run_python") and _py_ok:
             result.verify_last_ok_serial = max(
                 result.verify_last_ok_serial, result.verify_mutation_serial
             )

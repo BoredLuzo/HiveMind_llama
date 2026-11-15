@@ -552,7 +552,8 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             "mvn ", "gradle", "npm install", "npm ci", "npm run build",
             "cargo build", "cargo test", "dotnet build", "dotnet restore",
             "pip install", "go build", "go test", "docker build",
-            "docker compose", "docker-compose"))
+            "docker compose", "docker-compose",
+            "pytest", "py.test", "python -m pytest", "python3 -m pytest", "unittest"))
         _build_timeout = 600
         try:
             from core.state import settings as _hs_settings
@@ -672,12 +673,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 "Check logs:   docker compose logs --tail=50"
             )
 
-        if len(result) > 6000:
-            _dropped = len(result) - 5900
-            result = f"[OUTPUT TRUNCATED: hard cap 6000 chars — dropped {_dropped} chars from start]\n" + result[-5900:]
+        if len(result) > 16000:
+            _head = 4000
+            _tail = 12000
+            _dropped = len(result) - (_head + _tail)
+            result = (
+                result[:_head]
+                + f"\n\n[OUTPUT TRUNCATED: hard cap 16000 chars — dropped {_dropped} middle chars]\n\n"
+                + result[-_tail:]
+            )
 
         if returncode != 0:
-            _result_tail = result[-2500:] if result else "(no output)"
+            _result_tail = result[-4000:] if result else "(no output)"
             _err = _tool_error_response(
                 "RUN_BASH_NONZERO",
                 f"run_bash exited with code {returncode} (shell: {_shell_name}).\n{_result_tail}",
@@ -685,8 +692,8 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 details={
                     "cmd": str(cmd)[:400],
                     "exit_code": int(returncode),
-                    "stdout_tail": stdout[-1200:] if stdout else "",
-                    "stderr_tail": stderr[-1200:] if stderr else "",
+                    "stdout_tail": stdout[-2000:] if stdout else "",
+                    "stderr_tail": stderr[-2000:] if stderr else "",
                 })
             # PIP-HINT-IN-RUN_BASH (2026-10-17): the same "no wheel for this
             # Python" guidance must reach the model when IT runs pip itself.

@@ -222,8 +222,8 @@ setup() {
     "$PY" -m pip install -q hypothesis trio attrs pytest pytest-asyncio anyio trustme cryptography httpcore certifi idna sniffio 2>/dev/null || true
 
   local _poly_sample="$HM_DIR/bench/tasks_polyglot/polyglot_dot_dsl/task.json"
-  if [ -f "$_poly_sample" ] && ! grep -q '\[Test suite API contract\]' "$_poly_sample" 2>/dev/null; then
-    log "Refreshing Polyglot task contracts ([Test suite API contract])..."
+  if [ -f "$_poly_sample" ] && ! grep -q 'contract-v2' "$_poly_sample" 2>/dev/null; then
+    log "Refreshing Polyglot task contracts (contract-v2)..."
     HM_POLYGLOT_NAMES=all polyglot || log "WARN: Polyglot contract refresh failed"
   fi
 
@@ -364,6 +364,7 @@ gpu_patch = {
     "startup_preload_enabled": False,
     "duo_ubatch": ubatch,
     "llama_ubatch_size": ubatch,
+    "llama_cache_ram_mib": 2048,
 }
 d.update(gpu_patch)
 p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
@@ -507,11 +508,14 @@ run_bench() {  # $@ = extra args (optional)
     _extra_args+=(--pi-bin "$(command -v pi)")
   fi
   [ -n "${HM_TASK_TIMEOUT:-}" ] && _extra_args+=(--task-timeout "$HM_TASK_TIMEOUT")
+  # Anti-cheat: remove any leaked polyglot-benchmark clone (contains reference solutions + hidden tests).
+  rm -rf "$HOME/polyglot-benchmark" /root/polyglot-benchmark 2>/dev/null || true
   [ -n "${HM_ONLY:-}" ] && _extra_args+=(--only "$HM_ONLY")
   [ -n "${HM_OUT:-}" ] && _extra_args+=(--out "$HM_OUT")
   [ -n "${HM_SYNC_DIR:-}" ] && _extra_args+=(--sync-dir "$HM_SYNC_DIR")
   [ "${HM_RESUME:-0}" = "1" ] && _extra_args+=(--resume)
   [ "${HM_RESUME_FAILED:-0}" = "1" ] && _extra_args+=(--resume-failed)
+  [ "${HM_NO_DUO_PLANNER:-0}" = "1" ] && _extra_args+=(--no-duo-planner)
   log "run_bench: model=$HM_MODEL ctx=$HM_CTX tasks=$HM_TASKS runs=$HM_RUNS conds=$HM_CONDITIONS out=${HM_OUT:-auto} sync=${HM_SYNC_DIR:-off} resume=${HM_RESUME:-0}"
   local _rc=0
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
@@ -558,6 +562,8 @@ polyglot() {
   ( cd "$HM_DIR" && "$PY" -u bench/import_polyglot.py \
       --source "$src/python/exercises/practice" --out bench/tasks_polyglot \
       --names "${HM_POLYGLOT_NAMES:-all}" ${HM_POLYGLOT_LIMIT:+--limit "$HM_POLYGLOT_LIMIT"} )
+  # Anti-cheat: delete upstream repo after import (contains .meta/example.py and *_test.py).
+  rm -rf "$src"
   log "now: HM_TASKS=bench/tasks_polyglot bash $0 full"
 }
 
@@ -577,7 +583,7 @@ full() {
   tmux has-session -t "$name" 2>/dev/null && die "tmux session '$name' already running"
   log "starting detached run in tmux '$name' (attach: tmux attach -t $name)"
   tmux new-session -d -s "$name" \
-    "cd '$HM_DIR' && HIVEMIND_PORT='$PORT' HIVEMIND_MODELS_DIR='$MODELS_DIR' HM_LLAMA_URL='$HM_LLAMA_URL' AIDER_VENV='$AIDER_VENV' HERMES_VENV='$HERMES_VENV' HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_ONLY='${HM_ONLY:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' HM_RESUME_FAILED='${HM_RESUME_FAILED:-0}' \
+    "cd '$HM_DIR' && HIVEMIND_PORT='$PORT' HIVEMIND_MODELS_DIR='$MODELS_DIR' HM_LLAMA_URL='$HM_LLAMA_URL' AIDER_VENV='$AIDER_VENV' HERMES_VENV='$HERMES_VENV' HM_MODEL='$HM_MODEL' HM_RUNS='$HM_RUNS' HM_CONDITIONS='$HM_CONDITIONS' HM_TASKS='$HM_TASKS' HM_CTX='$HM_CTX' HM_RUN_OFFSET='${HM_RUN_OFFSET:-0}' HM_CELL_TIMEOUT='${HM_CELL_TIMEOUT:-900}' HM_TASK_TIMEOUT='${HM_TASK_TIMEOUT:-}' HM_ONLY='${HM_ONLY:-}' HM_OUT='${HM_OUT:-}' HM_SYNC_DIR='${HM_SYNC_DIR:-}' HM_RESUME='${HM_RESUME:-0}' HM_RESUME_FAILED='${HM_RESUME_FAILED:-0}' HM_NO_DUO_PLANNER='${HM_NO_DUO_PLANNER:-0}' \
      bash '$0' _run 2>&1 | tee bench_full.log; echo FINISHED >> bench_full.log"
 }
 

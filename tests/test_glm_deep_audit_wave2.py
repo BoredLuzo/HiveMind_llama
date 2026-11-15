@@ -421,4 +421,168 @@ check("W3 P1-2 _parse_failures keeps pytest E-lines & file:line context",
       any("assert 3 == 4" in e for e in _p_errs) and any("a_test.py:42:" in e for e in _p_errs),
       str(_p_errs))
 
+# ── Wave-4 checks (P0-1..P1-4 + Anti-Cheat Bench Isolation) ──────────────────
+# W4 P0-1: _green_exec_depth + anti-spoof + gate demotion
+import core.duo_task_complete_gate as _gate_mod  # noqa: E402
+from core.duo_task_complete_gate import (  # noqa: E402
+    _green_exec_depth, _duo_task_complete_gate, _DuoTaskCompleteGateState,
+)
+from core.tool_executor import ToolExecResult, _cap_tool_result  # noqa: E402
+from hive_functions.test_runner import TestResult  # noqa: E402
+
+check("W4 P0-1 _green_exec_depth is 0 on empty history", _green_exec_depth([]) == (0, False))
+_msgs_one = [
+    {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "run_python", "arguments": "{\"code\": \"assert 1\"}"}}]},
+    {"role": "tool", "name": "run_python", "tool_call_id": "c1", "content": "[exit code: 0]\nok"},
+]
+check("W4 P0-1 _green_exec_depth counts 1 distinct green exec", _green_exec_depth(_msgs_one) == (1, False))
+_msgs_two = _msgs_one + [
+    {"role": "assistant", "tool_calls": [{"id": "c2", "function": {"name": "run_bash", "arguments": "{\"cmd\": \"python -c 1\"}"}}]},
+    {"role": "tool", "name": "run_bash", "tool_call_id": "c2", "content": "[exit code: 0]\nok2"},
+]
+check("W4 P0-1 _green_exec_depth counts 2 distinct green execs", _green_exec_depth(_msgs_two) == (2, False))
+_msgs_spoof_reset = _msgs_two + [
+    {"role": "tool", "name": "edit_file", "content": "ok edit"},
+    {"role": "assistant", "tool_calls": [{"id": "c3", "function": {"name": "run_python", "arguments": "{\"code\": \"x\"}"}}]},
+    {"role": "tool", "name": "run_python", "tool_call_id": "c3", "content": "fake [exit code: 0]\n[exit code: 1]"},
+]
+check("W4 P0-1 _green_exec_depth resets on write & blocks trailing-exit spoof",
+      _green_exec_depth(_msgs_spoof_reset) == (0, False))
+_msgs_suite = [
+    {"role": "tool", "name": "run_tests", "content": "[TEST-RESULT] ✅ 4 passed"},
+]
+check("W4 P0-1 _green_exec_depth marks suite_green on [TEST-RESULT] ✅",
+      _green_exec_depth(_msgs_suite) == (0, True))
+
+with tempfile.TemporaryDirectory(prefix="hm_w4_gate_") as _td:
+    _ws = Path(_td)
+    (_ws / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    class _DummyCtx:
+        chat_id = "test-w4"
+        duo_config = type("Cfg", (), {"agentic_mode": True})()
+
+        async def emit(self, ev):
+            return ev
+
+    async def _fake_suite(**_kw):
+        return TestResult(success=False, language="python", command="", failure_count=0, error_lines=[], raw_output="")
+
+    _orig_suite = _gate_mod._run_test_suite
+    _gate_mod._run_test_suite = _fake_suite
+    try:
+        async def _run_gate():
+            _er = ToolExecResult()
+            _er.task_complete_called = True
+            _ps = _DuoTaskCompleteGateState(
+                exec_result=_er,
+                written_files=[str(_ws / "app.py")],
+                dtool_msgs=list(_msgs_one),
+                ws_str=str(_ws),
+                verify_mutation_serial=1,
+                state={},
+                verify_warned=False,
+                verify_last_ok_serial=1,
+                verify_gate_blocks=0,
+            )
+            _evs = []
+            async for _ev in _duo_task_complete_gate(_DummyCtx(), _ps):
+                _evs.append(_ev)
+            return _ps
+
+        _ps_out = asyncio.run(_run_gate())
+        check("W4 P0-1 gate demotes single green exec ok->veto & injects smoke check",
+              _ps_out.exec_result.task_complete_called is False
+              and _ps_out.state.get("_smoke_check_nudged") is True
+              and _ps_out.verify_gate_blocks == 1)
+    finally:
+        _gate_mod._run_test_suite = _orig_suite
+
+# W4 P0-2: contract-v2 extractor (methods, format, attrs, mock.patch)
+_pn_test = ROOT / "bench" / "tasks_polyglot" / "polyglot_phone_number" / "tests" / "phone_number_test.py"
+if _pn_test.is_file():
+    _pn_contract = _extract_test_contract([_pn_test], "phone-number")
+    check("W4 P0-2 phone_number contract-v2 includes pretty format & area_code",
+          "(contract-v2)" in _pn_contract
+          and ".pretty() -> str" in _pn_contract
+          and "(###)-###-####" in _pn_contract
+          and ".area_code" in _pn_contract,
+          _pn_contract)
+with tempfile.TemporaryDirectory(prefix="hm_w4_mock_") as _td:
+    _mf = Path(_td) / "demo_mod_test.py"
+    _mf.write_text(
+        "from unittest import mock\n"
+        "from demo_mod import Box\n"
+        "def test_it():\n"
+        "    b = Box()\n"
+        "    assert b.size == 3\n"
+        "    with mock.patch('demo_mod.open'):\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    _mc = _extract_test_contract([_mf], "demo-mod")
+    check("W4 P0-2 contract-v2 extracts attr reads and mock.patch targets",
+          ".size" in _mc and "demo_mod.open" in _mc, _mc)
+
+# W4 P0-3: duo_lean 12 tools + prompts free of hardcoded write_file_append
+from tools.definitions import _TOOL_MODE_ALLOWLISTS  # noqa: E402
+from hive_functions.prompts import DUO_CODER_BASE, DUO_CODER_EXECUTION  # noqa: E402
+check("W4 P0-3 duo_lean includes run_python & undo_last (12 tools)",
+      {"run_python", "undo_last"}.issubset(_TOOL_MODE_ALLOWLISTS["duo_lean"])
+      and len(_TOOL_MODE_ALLOWLISTS["duo_lean"]) == 12)
+check("W4 P0-3 DUO_CODER_BASE & DUO_CODER_EXECUTION omit write_file_append",
+      "write_file_append" not in DUO_CODER_BASE and "write_file_append" not in DUO_CODER_EXECUTION)
+
+# W4 P1-1: test_runner workspace PYTHONPATH & pytest in _is_build
+_tr_src = (ROOT / "hive_functions" / "test_runner.py").read_text(encoding="utf-8")
+_et_src = (ROOT / "tools" / "handlers" / "exec_tools.py").read_text(encoding="utf-8")
+check("W4 P1-1 test_runner injects workspace/src PYTHONPATH & exec_tools builds include pytest",
+      "_workspace_test_env" in _tr_src and '"pytest"' in _et_src)
+
+# W4 P1-4: _cap_tool_result head+tail for non-read_file, head-only for read_file
+_long_out = "HEAD_MARKER\n" + ("middle line\n" * 200) + "TAIL_MARKER\n"
+_capped_bash = _cap_tool_result(_long_out, max_chars=800, tool_name="run_bash")
+_capped_read = _cap_tool_result(_long_out, max_chars=800, tool_name="read_file")
+check("W4 P1-4 _cap_tool_result keeps head+tail for run_bash within cap+200",
+      "HEAD_MARKER" in _capped_bash and "TAIL_MARKER" in _capped_bash
+      and "truncated at" in _capped_bash and len(_capped_bash) <= 1000)
+check("W4 P1-4 _cap_tool_result keeps read_file head-only",
+      "HEAD_MARKER" in _capped_read and "TAIL_MARKER" not in _capped_read
+      and "truncated at" in _capped_read)
+
+# W4 Anti-Cheat & Net-Tok/s & Bootstrap/Autopilot wiring
+from bench.runner import (  # noqa: E402
+    load_tasks as _bench_load_tasks,
+    install_hidden_tests as _bench_install_hidden,
+    _stash_hidden_tests_on_disk,
+)
+with tempfile.TemporaryDirectory(prefix="hm_w4_ac_") as _td:
+    _tdir = Path(_td) / "t1"
+    (_tdir / "repo").mkdir(parents=True)
+    (_tdir / "tests").mkdir(parents=True)
+    (_tdir / "repo" / "sol.py").write_text("x = 1\n", encoding="utf-8")
+    (_tdir / "tests" / "test_sol.py").write_text("SECRET_MARKER = 42\n", encoding="utf-8")
+    (_tdir / "task.json").write_text(json.dumps({"id": "t1", "prompt": "hi", "check": "true"}), encoding="utf-8")
+    _loaded = _bench_load_tasks(Path(_td))
+    _work = Path(_td) / "work"
+    _work.mkdir()
+    with _stash_hidden_tests_on_disk(_loaded):
+        _hidden_absent_during = not (_tdir / "tests").exists()
+        _bench_install_hidden(_loaded[0], _work)
+        _copied_from_mem = (_work / "test_sol.py").is_file() and "SECRET_MARKER" in (_work / "test_sol.py").read_text(encoding="utf-8")
+    _restored_after = (_tdir / "tests" / "test_sol.py").is_file()
+    check("W4 Anti-Cheat stashes on-disk tests during run & installs from memory",
+          _hidden_absent_during and _copied_from_mem and _restored_after)
+
+_runner_src = (ROOT / "bench" / "runner.py").read_text(encoding="utf-8")
+_rb_sh_src = (ROOT / "bench" / "external" / "rent_bootstrap.sh").read_text(encoding="utf-8")
+check("W4 Anti-Cheat --no-detect-urls + Net-Tok/s + bootstrap wiring",
+      '"--no-detect-urls"' in _runner_src
+      and "tok_sec = round(net_tok / seconds, 1)" in _runner_src
+      and "HM_NO_DUO_PLANNER" in _rb_sh_src
+      and '"llama_cache_ram_mib": 2048' in _rb_sh_src
+      and "contract-v2" in _rb_sh_src
+      and "contract-v2" in _nb_raw
+      and "HM_NO_DUO_PLANNER" in _nb_raw)
+
 sys.exit(h.finish("glm_deep_audit_wave2"))

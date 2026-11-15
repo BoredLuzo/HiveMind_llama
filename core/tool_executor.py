@@ -206,30 +206,51 @@ def _cap_tool_result(result: str, max_chars: int | None = None,
     budgets (fraction of n_ctx) — no fixed staffel. Fallback constant only
     for contexts without a run. The cap FIELD is per-tool (_TOOL_CAP_FIELD):
     read_file uses read_char_cap (its handler self-caps with a range hint),
-    everything else uses the prefill-capped tool_result_cap."""
+    everything else uses the prefill-capped tool_result_cap.
+    For non-read_file tools (test/shell outputs), preserve both head (65%) and
+    tail (35%) so failure summaries at the end are not cut off."""
     if max_chars is None:
         max_chars = _cap_for_tool(tool_name)
     if not isinstance(result, str) or len(result) <= max_chars:
         return result
-    cutoff = result.rfind("\n", 0, max_chars)
-    if cutoff < max_chars // 2:
-        cutoff = max_chars
     # TRUNCATION-HONESTY (2026-10-15): the generic tail told the model to
     # "Use read_file" ON a read_file result (circular) and carried no
     # pointer - read as "the write did not complete". read_file gets its
-    # own tail; every other tool keeps the generic one.
+    # own tail; every other tool preserves head + tail when budget allows.
     if str(tool_name or "") == "read_file":
+        cutoff = result.rfind("\n", 0, max_chars)
+        if cutoff < max_chars // 2:
+            cutoff = max_chars
         return (
             result[:cutoff]
             + f"\n\n[read_file output truncated at {max_chars} chars — "
               "the file on disk is COMPLETE; continue with start_line/end_line]"
         )
-    return (
-        result[:cutoff]
-        + "\n\n[...output truncated at "
-        + str(max_chars)
-        + " chars. Use read_file to retrieve full content if needed.]"
+    if max_chars < 400:
+        cutoff = result.rfind("\n", 0, max_chars)
+        if cutoff < max_chars // 2:
+            cutoff = max_chars
+        return (
+            result[:cutoff]
+            + "\n\n[...output truncated at "
+            + str(max_chars)
+            + " chars. Use read_file to retrieve full content if needed.]"
+        )
+    marker = (
+        f"\n\n[...output truncated at {max_chars} chars (middle omitted). "
+        "Use read_file to retrieve full content if needed.]\n\n"
     )
+    keep = max(200, max_chars - len(marker))
+    head_budget = int(keep * 0.65)
+    tail_budget = keep - head_budget
+    head_cut = result.rfind("\n", 0, head_budget)
+    if head_cut < head_budget // 2:
+        head_cut = head_budget
+    tail_start = len(result) - tail_budget
+    tail_nl = result.find("\n", tail_start)
+    if tail_nl != -1 and (tail_nl - tail_start) < tail_budget // 2:
+        tail_start = tail_nl + 1
+    return result[:head_cut] + marker + result[tail_start:]
 
 
 # CONTEXT-COMPACTION (2026-09-04): successfully executed huge

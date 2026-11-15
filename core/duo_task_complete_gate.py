@@ -110,6 +110,65 @@ class _DuoTaskCompleteGateState:
     action: str = "proceed"   # "break" ends the tool-round loop
 
 
+_WRITE_RESET_TOOLS = frozenset({
+    "write_file", "write_file_append", "edit_file",
+    "patch_file", "replace_lines", "apply_patch",
+})
+
+
+def _green_exec_depth(dtool_msgs: list | None) -> tuple[int, bool]:
+    """Count distinct green exec calls after the last successful write and whether run_tests passed."""
+    call_args_by_id: dict[str, str] = {}
+    green_sigs: set[str] = set()
+    suite_green = False
+
+    for idx, msg in enumerate(dtool_msgs or []):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") == "assistant":
+            for tc in (msg.get("tool_calls") or []):
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = str(tc.get("id") or "")
+                fn = tc.get("function") or {}
+                if tc_id and isinstance(fn, dict):
+                    call_args_by_id[tc_id] = str(fn.get("arguments") or "")
+            continue
+
+        if msg.get("role") != "tool" and not msg.get("name"):
+            continue
+
+        tname = str(msg.get("name") or "")
+        content = str(msg.get("content") or "")
+        is_err = content.lstrip().startswith("[TOOL_ERROR:")
+
+        if tname in _WRITE_RESET_TOOLS:
+            if not is_err:
+                green_sigs.clear()
+                suite_green = False
+        elif tname == "run_tests":
+            if not is_err and "[TEST-RESULT] ✅" in content:
+                suite_green = True
+        elif tname in ("run_bash", "run_python"):
+            if is_err:
+                continue
+            ec = re.findall(r"\[exit code:\s*(-?\d+)\]", content)
+            if tname == "run_python":
+                passed = (
+                    (bool(ec) and int(ec[-1]) == 0)
+                    or content.strip().startswith("[run_python: executed successfully")
+                )
+            else:
+                passed = not ec or int(ec[-1]) == 0
+            if not passed:
+                continue
+            tc_id = str(msg.get("tool_call_id") or "")
+            sig = call_args_by_id.get(tc_id, "").strip() or content.strip()[:240] or f"{tname}_{idx}"
+            green_sigs.add(sig)
+
+    return len(green_sigs), suite_green
+
+
 async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
     _exec_result = ps.exec_result
     _written_files = ps.written_files
@@ -132,6 +191,17 @@ async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
                 has_written_files=bool(_written_files),
                 vetoes=_verify_gate_blocks if _verify_warned else 0,
             )
+            if (
+                _verdict == "ok"
+                and bool(_written_files)
+                and needs_test_verification(_written_files)
+                and _verify_mutation_serial > 0
+                and not state.get("_smoke_check_nudged")
+                and _verify_gate_blocks < 3
+            ):
+                _g_depth, _suite_green = _green_exec_depth(_dtool_msgs)
+                if not _suite_green and _g_depth < 2:
+                    _verdict = "veto"
             if _verdict == "unverified":
                 _verify_gate_blocks += 1
                 _completion_unverified = True
@@ -248,7 +318,6 @@ async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
                     if (
                         not _syn_err
                         and needs_test_verification(_written_files)
-                        and _verify_mutation_serial > _verify_last_ok_serial
                         and not state.get("_smoke_check_nudged")
                     ):
                         state["_smoke_check_nudged"] = True
@@ -259,8 +328,11 @@ async def _duo_task_complete_gate(ctx, ps: _DuoTaskCompleteGateState):
                             "the harness only checked syntax (status=syntax_verified). "
                             "Before completing: run ONE functional smoke check via `run_bash` "
                             "(e.g. `python -c \"import ...; assert ...\"`) or `run_python` "
-                            "with exit code 0 that exercises the key functions and edge cases "
-                            "from the task instructions (do NOT create test files). "
+                            "with exit code 0 that exercises the key functions, return types, "
+                            "and edge cases from the task instructions (do NOT create test files). "
+                            "IF the task includes a `[Test suite API contract]` section, your "
+                            "smoke check MUST also verify every listed class/method/attribute "
+                            "name, return type, and expected exception type/message. "
                             "Once it exits 0, call `task_complete` again."
                         )})
                         try:

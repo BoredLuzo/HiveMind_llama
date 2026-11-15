@@ -203,6 +203,13 @@ async def run_tests(
         from tools.sandbox import spawn_kwargs as _spawn_kwargs, kill_tree_and_reap as _kill_reap
         from infra.child_env import tool_env as _tool_env
 
+        def _workspace_test_env(ws: str) -> dict[str, str]:
+            env = _tool_env()
+            pp_parts = [p for p in (os.path.join(ws, "src"), ws, env.get("PYTHONPATH", "")) if p]
+            # Prepend workspace roots so in-repo imports win over site-packages.
+            env["PYTHONPATH"] = os.pathsep.join(pp_parts)
+            return env
+
         async def _spawn_decode(run_cmd: str) -> tuple[str, int]:
             """Run *run_cmd*, return (output, exit code). Raises TimeoutError
             after tree-killing the process group (shared kill path)."""
@@ -211,7 +218,7 @@ async def run_tests(
                 cwd=workspace,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=_tool_env(),
+                env=_workspace_test_env(workspace),
                 **_spawn_kwargs(),
             )
             try:
@@ -296,7 +303,7 @@ async def run_tests(
                         cwd=workspace,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
-                        env=_tool_env(),
+                        env=_workspace_test_env(workspace),
                         **_spawn_kwargs(),
                     )
                     try:

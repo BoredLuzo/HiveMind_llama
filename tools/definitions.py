@@ -597,7 +597,7 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     },
     "duo_lean": {
         "read_file", "edit_file", "write_file",
-        "run_bash", "run_tests",
+        "run_bash", "run_python", "run_tests", "undo_last",
         "search_code", "find_files", "list_dir", "get_signatures",
         "task_complete",
     },

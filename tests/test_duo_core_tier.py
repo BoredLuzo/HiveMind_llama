@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Behavior checks: core coder tier (18 tools), lean tier (10 tools) + research tier (2026-11-09).
+"""Behavior checks: core coder tier (18 tools), lean tier (12 tools) + research tier (2026-11-09).
 
 - duo_core defaults to 18 tools (plus send_file when include_send_file=True);
   2026-11-11 (D3): +apply_patch (patch-native multi-file edits).
-- duo_lean provides the compact 10-tool set without get_datetime/send_file/lsp_*.
+- duo_lean provides the compact 12-tool set (+run_python, +undo_last) without get_datetime/send_file/lsp_*.
 - duo_full opts into git/web/MCP/browser/full-LSP tools.
 - direct_research gets web + read/search (no write/exec).
 """
@@ -49,10 +49,11 @@ check("coder core: every duo_core tool is in _TOOL_PRIORITY",
 
 _lean = _names("duo_lean")
 _expected_lean = {
-    "read_file", "edit_file", "write_file", "run_bash", "run_tests",
+    "read_file", "edit_file", "write_file",
+    "run_bash", "run_python", "run_tests", "undo_last",
     "search_code", "find_files", "list_dir", "get_signatures", "task_complete",
 }
-check("coder lean: exact 10-tool set", _lean == _expected_lean,
+check("coder lean: exact 12-tool set", _lean == _expected_lean,
       f" ({sorted(_lean)})")
 check("coder lean: excludes get_datetime, send_file, and lsp_references",
       not ({"get_datetime", "send_file", "lsp_references", "lsp_diagnostics"}

@@ -42,6 +42,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -70,6 +71,7 @@ class Task:
     timeout_s: int = 600
     repo: Path | None = None
     tests: Path | None = None
+    hidden_tests_files: dict[str, bytes] = field(default_factory=dict)
 
 
 def detect_gpu_info() -> dict:
@@ -205,6 +207,11 @@ def load_tasks(tasks_dir: Path) -> list[Task]:
             raise SystemExit(f"invalid task {spec}: {exc}") from exc
         repo = spec.parent / "repo"
         tests = spec.parent / "tests"
+        hidden_files: dict[str, bytes] = {}
+        if tests.is_dir():
+            for src in sorted(tests.rglob("*")):
+                if src.is_file():
+                    hidden_files[src.relative_to(tests).as_posix()] = src.read_bytes()
         tasks.append(Task(
             id=str(data.get("id") or spec.parent.name),
             prompt=str(data.get("prompt") or ""),
@@ -212,6 +219,7 @@ def load_tasks(tasks_dir: Path) -> list[Task]:
             timeout_s=int(data.get("timeout_s") or 600),
             repo=repo if repo.is_dir() else None,
             tests=tests if tests.is_dir() else None,
+            hidden_tests_files=hidden_files,
         ))
     return tasks
 
@@ -243,13 +251,21 @@ def install_hidden_tests(task: Task, work: Path) -> None:
     directory of the same name (Windows: dst/test.py/test.py), so an agent
     could shadow a hidden test by creating that directory. Replace the
     destination explicitly before every file.
+
+    Prefers the in-memory ``hidden_tests_files`` snapshot loaded before
+    agent execution (available while on-disk ``tests/`` dirs are stashed),
+    falling back to ``task.tests`` on disk when tests construct ``Task``
+    directly without ``load_tasks()``.
     """
     if work.is_dir():
         for _cfg_name in _TAMPER_CONFIG_NAMES:
             for cf in list(work.rglob(_cfg_name)):
                 rel = cf.relative_to(work)
                 in_repo = task.repo is not None and (task.repo / rel).is_file()
-                in_tests = task.tests is not None and (task.tests / rel).is_file()
+                in_tests = (
+                    rel.as_posix() in task.hidden_tests_files
+                    or (task.tests is not None and (task.tests / rel).is_file())
+                )
                 if in_tests:
                     continue
                 if in_repo:
@@ -262,6 +278,14 @@ def install_hidden_tests(task: Task, work: Path) -> None:
                     shutil.rmtree(cf, ignore_errors=True)
                 else:
                     cf.unlink(missing_ok=True)
+    if task.hidden_tests_files:
+        for rel, content in task.hidden_tests_files.items():
+            dst = work / Path(rel)
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(content)
+        return
     if task.tests is None:
         return
     for src in task.tests.rglob("*"):
@@ -273,6 +297,40 @@ def install_hidden_tests(task: Task, work: Path) -> None:
             shutil.rmtree(dst)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+
+
+@contextmanager
+def _stash_hidden_tests_on_disk(tasks: list[Task]):
+    """Temporarily move on-disk hidden ``tests/`` dirs out of the repo tree.
+
+    Tasks have already cached ``hidden_tests_files`` in memory in
+    ``load_tasks()``. Removing the directories during agent execution prevents
+    unrestricted harnesses (pi / hermes / aider) from reading sibling
+    ``bench/tasks_*/<task>/tests/`` directly; ``finally`` restores them.
+    """
+    stash_root = Path(tempfile.mkdtemp(prefix="hm_hidden_tests_stash_"))
+    moved: list[tuple[Path, Path]] = []
+    seen: set[Path] = set()
+    try:
+        for idx, t in enumerate(tasks):
+            if t.tests is not None and t.tests.is_dir():
+                resolved = t.tests.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                dst = stash_root / f"{idx}_{t.id}"
+                shutil.move(str(t.tests), str(dst))
+                moved.append((t.tests, dst))
+        yield
+    finally:
+        for orig, dst in reversed(moved):
+            try:
+                if dst.exists() and not orig.exists():
+                    orig.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(dst), str(orig))
+            except OSError:
+                pass
+        shutil.rmtree(stash_root, ignore_errors=True)
 
 
 def _workspace_pythonpath(work: Path, existing: str = "") -> str:
@@ -742,6 +800,8 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
         # Aider otherwise offers/opens its model-warning docs page in the
         # browser for every unknown local model — one tab per benchmark cell.
         "--no-show-model-warnings",
+        # Anti-cheat / no web scraping during coding benchmarks.
+        "--no-detect-urls",
         "--edit-format", "diff",
         "--model", f"openai/{cfg.model}",
         "--openai-api-base", api_base,
@@ -1115,8 +1175,9 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     _churn = diff_stats(task.repo, work)
     ok, check_out = run_check(task, work, cfg.task_timeout_s)
     tok_total = int(extra.get("tokens") or 0)
-    tok_sec = round(tok_total / seconds, 1) if seconds > 0 and tok_total > 0 else 0.0
     _net_tok = extra.get("net_tokens")
+    net_tok = int(_net_tok) if _net_tok is not None else tok_total
+    tok_sec = round(net_tok / seconds, 1) if seconds > 0 and net_tok > 0 else 0.0
     return {
         "task": task.id,
         "condition": cond,
@@ -1126,7 +1187,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         "seconds": seconds,
         "tokens": tok_total,
         "cached_tokens": int(extra.get("cached_tokens") or 0),
-        "net_tokens": int(_net_tok) if _net_tok is not None else tok_total,
+        "net_tokens": net_tok,
         "tok_per_sec": tok_sec,
         "rounds": int(extra.get("rounds") or 0),
         "stop_reason": extra.get("stop_reason", ""),
@@ -1530,81 +1591,84 @@ def main() -> int:
     try:
         bench_t0 = time.monotonic()
         session_cells_done = 0
-        for run_idx in range(cfg.runs):
-            actual_run = run_idx + 1 + cfg.run_offset
-            for task_idx, task in enumerate(tasks, 1):
-                for cond in conditions:
-                    if (actual_run, task.id, cond) in done_keys:
-                        print(f"[SKIP]   [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} (checkpoint)")
-                        continue
-                    done_count = sum(1 for k in planned_keys if k in done_keys) + 1
-                    # START line before a cell: a slow harness can keep one
-                    # cell busy for minutes, and the completion line alone
-                    # looks like a hang in a streaming Colab cell.
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] "
-                          f"[run {actual_run}/{total_runs}] "
-                          f"[task {task_idx}/{len(tasks)}] "
-                          f"[{done_count}/{len(planned)}] "
-                          f"{task.id:<22} {cond:<16} ...", flush=True)
-                    # Unique workspace per run/condition: a reused task dir
-                    # would accumulate the previous agent's edits.
-                    cell = base / f"run{actual_run}" / cond
-                    # The check command runs AFTER the agent timeout and needs
-                    # real headroom (DeepSWE verifiers can run for minutes);
-                    # a flat +60 s aborted long checks.
-                    _check_budget = max(120.0, min(float(task.timeout_s or 300), 1800.0))
-                    _cell_cap = max(float(cfg.cell_timeout_s),
-                                    _agent_timeout_s(task, cfg) + _check_budget + 30.0)
-                    try:
-                        row = asyncio.run(_run_cell_with_heartbeat(
-                            _one_run(cond, task, cfg, cell),
-                            timeout_s=_cell_cap,
-                            label=f"{task.id} / {cond}",
-                        ))
-                    except asyncio.TimeoutError:
-                        row = {
-                            "task": task.id, "condition": cond, "model": cfg.model,
-                            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
-                            "ok": False,
-                            "seconds": round(_cell_cap, 1), "tokens": 0,
-                            "cached_tokens": 0, "net_tokens": 0, "tok_per_sec": 0.0,
-                            "rounds": 0,
-                            "stop_reason": "cell_timeout",
-                            "detail": f"cell timeout after {int(_cell_cap)}s",
-                            "check_output": "",
-                            **diff_stats(task.repo, cell / task.id),
-                        }
-                    row["run"] = actual_run
-                    rows.append(row)
-                    done_keys.add((actual_run, task.id, cond))
-                    session_cells_done += 1
-                    _persist(out, rows, cfg, conditions, started_at)
-                    now_str = datetime.now().strftime("%H:%M:%S")
-                    tps = row.get("tok_per_sec", 0.0)
-                    tps_str = f"({tps:>5.1f} tok/s)" if tps > 0 else " " * 13
-                    print(f"[{now_str}] [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} "
-                          f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s {tps_str}",
-                          flush=True)
-                # End-of-task scoreboard for quick inter-task feedback & ETA
-                run_rows = [r for r in rows if int(r.get("run") or 1) == actual_run]
-                done_tasks_in_run = len({r.get("task") for r in run_rows if r.get("task")})
-                if session_cells_done > 0:
-                    elapsed_s = time.monotonic() - bench_t0
-                    rem_cells = sum(1 for k in planned_keys if k not in done_keys)
-                    eta_m = (rem_cells * (elapsed_s / session_cells_done)) / 60.0
-                    cond_parts = []
-                    for c_name in conditions:
-                        c_rows = [r for r in run_rows if r.get("condition") == c_name]
-                        if c_rows:
-                            c_ok = sum(1 for r in c_rows if r.get("ok"))
-                            cond_parts.append(f"{c_name} {c_ok}/{len(c_rows)}")
-                    print(
-                        f"[progress] task {task_idx}/{len(tasks)} ({task.id}) | "
-                        f"run {actual_run}: {done_tasks_in_run}/{len(tasks)} tasks | "
-                        f"elapsed {elapsed_s / 60.0:.1f}m | ETA ~{eta_m:.1f}m"
-                        + (" | " + ", ".join(cond_parts) if cond_parts else ""),
-                        flush=True,
-                    )
+        with _stash_hidden_tests_on_disk(tasks):
+            for run_idx in range(cfg.runs):
+                actual_run = run_idx + 1 + cfg.run_offset
+                for task_idx, task in enumerate(tasks, 1):
+                    for cond in conditions:
+                        if (actual_run, task.id, cond) in done_keys:
+                            print(f"[SKIP]   [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} (checkpoint)")
+                            continue
+                        done_count = sum(1 for k in planned_keys if k in done_keys) + 1
+                        # START line before a cell: a slow harness can keep one
+                        # cell busy for minutes, and the completion line alone
+                        # looks like a hang in a streaming Colab cell.
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] "
+                              f"[run {actual_run}/{total_runs}] "
+                              f"[task {task_idx}/{len(tasks)}] "
+                              f"[{done_count}/{len(planned)}] "
+                              f"{task.id:<22} {cond:<16} ...", flush=True)
+                        # Unique workspace per run/condition: a reused task dir
+                        # would accumulate the previous agent's edits.
+                        cell = base / f"run{actual_run}" / cond
+                        # The check command runs AFTER the agent timeout and needs
+                        # real headroom (DeepSWE verifiers can run for minutes);
+                        # a flat +60 s aborted long checks.
+                        _check_budget = max(120.0, min(float(task.timeout_s or 300), 1800.0))
+                        _cell_cap = max(float(cfg.cell_timeout_s),
+                                        _agent_timeout_s(task, cfg) + _check_budget + 30.0)
+                        try:
+                            row = asyncio.run(_run_cell_with_heartbeat(
+                                _one_run(cond, task, cfg, cell),
+                                timeout_s=_cell_cap,
+                                label=f"{task.id} / {cond}",
+                            ))
+                        except asyncio.TimeoutError:
+                            row = {
+                                "task": task.id, "condition": cond, "model": cfg.model,
+                                "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+                                "ok": False,
+                                "seconds": round(_cell_cap, 1), "tokens": 0,
+                                "cached_tokens": 0, "net_tokens": 0, "tok_per_sec": 0.0,
+                                "rounds": 0,
+                                "stop_reason": "cell_timeout",
+                                "detail": f"cell timeout after {int(_cell_cap)}s",
+                                "check_output": "",
+                                **diff_stats(task.repo, cell / task.id),
+                            }
+                        row["run"] = actual_run
+                        rows.append(row)
+                        done_keys.add((actual_run, task.id, cond))
+                        session_cells_done += 1
+                        _persist(out, rows, cfg, conditions, started_at)
+                        if not cfg.keep_work:
+                            shutil.rmtree(cell / task.id, ignore_errors=True)
+                        now_str = datetime.now().strftime("%H:%M:%S")
+                        tps = row.get("tok_per_sec", 0.0)
+                        tps_str = f"({tps:>5.1f} tok/s)" if tps > 0 else " " * 13
+                        print(f"[{now_str}] [run {actual_run}/{total_runs}] {task.id:<22} {cond:<16} "
+                              f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s {tps_str}",
+                              flush=True)
+                    # End-of-task scoreboard for quick inter-task feedback & ETA
+                    run_rows = [r for r in rows if int(r.get("run") or 1) == actual_run]
+                    done_tasks_in_run = len({r.get("task") for r in run_rows if r.get("task")})
+                    if session_cells_done > 0:
+                        elapsed_s = time.monotonic() - bench_t0
+                        rem_cells = sum(1 for k in planned_keys if k not in done_keys)
+                        eta_m = (rem_cells * (elapsed_s / session_cells_done)) / 60.0
+                        cond_parts = []
+                        for c_name in conditions:
+                            c_rows = [r for r in run_rows if r.get("condition") == c_name]
+                            if c_rows:
+                                c_ok = sum(1 for r in c_rows if r.get("ok"))
+                                cond_parts.append(f"{c_name} {c_ok}/{len(c_rows)}")
+                        print(
+                            f"[progress] task {task_idx}/{len(tasks)} ({task.id}) | "
+                            f"run {actual_run}: {done_tasks_in_run}/{len(tasks)} tasks | "
+                            f"elapsed {elapsed_s / 60.0:.1f}m | ETA ~{eta_m:.1f}m"
+                            + (" | " + ", ".join(cond_parts) if cond_parts else ""),
+                            flush=True,
+                        )
     finally:
         if tmp is not None:
             # Windows: aider/servers can still hold a handle for a moment;
