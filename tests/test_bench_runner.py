@@ -680,4 +680,54 @@ check("corpus: hidden tests use the standard check",
       all("test_task" in t.check for t in corpus),
       f" ({[t.id for t in corpus if 'test_task' not in t.check]})")
 
+# ── _one_run runs run_check off the event loop ─────────────────────────────
+with tempfile.TemporaryDirectory(prefix="hm_bench_async_chk_") as _atd:
+    import time as _time
+    import bench.runner as _br
+
+    _aroot = Path(_atd)
+    _task_dir(_aroot, "chk_async", with_repo=True)
+    _atask = load_tasks(_aroot)[0]
+    _acfg = Config(tasks_dir=_aroot, out=_aroot / "out.json", model="m")
+
+    async def _fake_raw(*_args, **_kwargs):
+        return {"tokens": 10, "net_tokens": 10, "rounds": 1}
+
+    def _slow_check(_task, _work, _timeout_s=None):
+        _time.sleep(0.18)
+        return True, "ok"
+
+    _orig_raw, _orig_check = _br._run_raw, _br.run_check
+    _br._run_raw = _fake_raw
+    _br.run_check = _slow_check
+    try:
+        async def _probe_nonblocking_check():
+            ticks = 0
+
+            async def _ticker():
+                nonlocal ticks
+                while True:
+                    await asyncio.sleep(0.03)
+                    ticks += 1
+
+            t_tick = asyncio.create_task(_ticker())
+            try:
+                _row = await _br._one_run("raw", _atask, _acfg, _aroot / "ws")
+            finally:
+                t_tick.cancel()
+                try:
+                    await t_tick
+                except asyncio.CancelledError:
+                    pass
+            return _row, ticks
+
+        _arow, _aticks = asyncio.run(_probe_nonblocking_check())
+    finally:
+        _br._run_raw = _orig_raw
+        _br.run_check = _orig_check
+
+    check("_one_run: blocking run_check runs off the event loop (heartbeat stays live)",
+          _arow["ok"] is True and _aticks >= 2 and _arow.get("check_seconds", 0.0) >= 0.1,
+          f" (ticks={_aticks}, check_seconds={_arow.get('check_seconds')})")
+
 sys.exit(h.finish("bench_runner"))

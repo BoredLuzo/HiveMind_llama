@@ -1173,7 +1173,16 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     seconds = round(time.time() - started, 1)
     # CHURN before hidden tests are installed (agent output only).
     _churn = diff_stats(task.repo, work)
-    ok, check_out = run_check(task, work, cfg.task_timeout_s)
+    # Run blocking verification off the event loop so heartbeat and cell timeout stay live.
+    _check_t0 = time.monotonic()
+    ok, check_out = await asyncio.to_thread(run_check, task, work, cfg.task_timeout_s)
+    check_seconds = round(time.monotonic() - _check_t0, 1)
+    if check_out.startswith("check timeout after "):
+        _now_h = datetime.now().strftime("%H:%M:%S")
+        print(
+            f"[{_now_h}]   WARNING {task.id} {cond}: {check_out.splitlines()[0]}",
+            flush=True,
+        )
     tok_total = int(extra.get("tokens") or 0)
     _net_tok = extra.get("net_tokens")
     net_tok = int(_net_tok) if _net_tok is not None else tok_total
@@ -1185,6 +1194,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
         "ok": bool(ok),
         "seconds": seconds,
+        "check_seconds": check_seconds,
         "tokens": tok_total,
         "cached_tokens": int(extra.get("cached_tokens") or 0),
         "net_tokens": net_tok,

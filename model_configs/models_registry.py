@@ -177,6 +177,19 @@ def _registry_key(reg: dict[str, dict], key: str) -> str | None:
     return None
 
 
+# Trailing quant / variant tokens parsed out of GGUF filenames when a suffix
+# (e.g. "-verbose-heretic") follows the quant tag; arbitrary suffixes such as
+# "caps-probe:35b-a3b-x" must NOT match the shorter tag.
+_QUANT_VARIANT_SEGMENT_RE = re.compile(
+    r"^(?:"
+    r"i?q\d+|mxfp\d+|ptq\d+|bf16|fp?16|fp?32|ud|qat|qad|im|imatrix|"
+    r"[kmsl]|xs|xl|xxl|nl|[01]|"
+    r"verbose|balanced|heretic|abliterated|obliterated|uncensored"
+    r")$",
+    re.IGNORECASE,
+)
+
+
 def get_profile(model_name: str) -> dict:
     """Returns the merged config for a model (canonical → base → {}).
 
@@ -197,6 +210,19 @@ def get_profile(model_name: str) -> dict:
     _canon_key = _registry_key(_reg, canonical)
     _base_key = _registry_key(_reg, base)
     direct = _reg.get(_canon_key) if _canon_key is not None else None
+    if direct is None and ":" in canonical:
+        # Variant/quant suffixes from dropped-in GGUFs (e.g. twil:8b-q4-k-m-verbose-heretic)
+        # walk back toward the catalog tag (twil:8b) before bare family fallback.
+        _fam, _, _tag = canonical.partition(":")
+        _parts = _tag.split("-")
+        for _end in range(len(_parts) - 1, 0, -1):
+            if not _QUANT_VARIANT_SEGMENT_RE.match(_parts[_end]):
+                break
+            _cand_key = _registry_key(_reg, f"{_fam}:{'-'.join(_parts[:_end])}")
+            if _cand_key is not None:
+                direct = _reg.get(_cand_key)
+                if direct is not None:
+                    break
     fallback = _reg.get(_base_key) if _base_key is not None else None
 
     if direct and fallback is not None and direct is not fallback:

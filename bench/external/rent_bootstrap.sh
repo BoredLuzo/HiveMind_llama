@@ -344,11 +344,19 @@ if budget_gb >= 35.0:
 else:
     # qwen3.6:35b-a3b-ud: ~20.2 GB base weights @0 offload (~19.3 GB @2),
     # 4.66 GB @35 (~0.44 GB freed per MoE layer) + KV/compute reserve.
-    reserve_gb = (2.4 if budget_gb < 20.0 else 2.0) + (ctx_tokens / 131072.0) * 1.5
+    # Tight 20-24 GB GPUs (L4) at >=96k ctx need extra headroom + ubatch=512
+    # to avoid CUDA UVM host-paging cliffs under multi-turn KV growth.
+    if budget_gb < 20.0:
+        _base_reserve = 2.4
+    elif budget_gb < 24.0 and ctx_tokens >= 98304:
+        _base_reserve = 2.8
+    else:
+        _base_reserve = 2.0
+    reserve_gb = _base_reserve + (ctx_tokens / 131072.0) * 1.5
     target_model_gb = max(4.66, budget_gb - reserve_gb)
     cpu_experts = min(35, max(2, math.ceil((20.2 - target_model_gb) / 0.44)))
 
-ubatch = 512 if budget_gb < 20.0 else 1024
+ubatch = 512 if (budget_gb < 20.0 or (budget_gb < 24.0 and ctx_tokens >= 98304)) else 1024
 gpu_patch = {
     "moe_cpu_experts": {
         "qwen3.6:35b-a3b": cpu_experts,
@@ -452,6 +460,11 @@ PY
     done
   fi
   log "benchmark llama endpoint: $HM_LLAMA_URL"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    local _nv_stat
+    _nv_stat=$(nvidia-smi --query-gpu=name,memory.used,memory.total,temperature.gpu,clocks.sm,power.draw --format=csv,noheader 2>/dev/null | head -n1 || true)
+    [ -n "$_nv_stat" ] && log "GPU post-load: $_nv_stat"
+  fi
   echo "$HM_MODEL" > "$HM_DIR/.active_model" 2>/dev/null || true
   echo "$HM_CTX" > "$HM_DIR/.active_ctx" 2>/dev/null || true
   [ -n "$_cur_commit" ] && echo "$_cur_commit" > "$HM_DIR/.active_commit" 2>/dev/null || true

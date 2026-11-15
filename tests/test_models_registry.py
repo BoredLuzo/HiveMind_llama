@@ -189,4 +189,17 @@ check("28 tight context below 64 thinking share returns 0 instead of overflowing
           agent_name="duo_coder",
       ) == 0)
 
+# 13) Suffixed GGUF variant tags inherit their catalog tag profile before bare family fallback
+check("29 twil variant resolves twil:8b ctx",
+      get_num_ctx("twil:8b-q4-k-m-verbose-heretic") == 40960)
+check("30 twil variant resolves twil:8b jinja",
+      is_jinja("twil:8b-q4-k-m-verbose-heretic") is True)
+check("31 twil variant resolves twil:8b reasoning",
+      get_reasoning("twil:8b-q4-k-m-verbose-heretic") == "on")
+_twil_var_smp = get_sampling_profile("twil:8b-q4-k-m-verbose-heretic", thinking=True)
+check("32 twil variant resolves twil:8b sampling",
+      _twil_var_smp.get("temperature") == 1.0 and _twil_var_smp.get("top_p") == 0.95)
+check("33 non-quant suffix does not inherit shorter catalog tag",
+      get_num_ctx("twil:8b-customx") is None)
+
 sys.exit(h.finish("models_registry"))
