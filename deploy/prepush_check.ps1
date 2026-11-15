@@ -87,7 +87,7 @@ Check "e) settings docs current" ($LASTEXITCODE -eq 0)
 Check "f) .bat files ascii+crlf" ($LASTEXITCODE -eq 0)
 
 # -- g) full regression suite ------------------------------------------------
-$suiteOut = & $py tests\run_regressions.py 2>&1
+$suiteOut = & $py tests\run_regressions.py --jobs 3 2>&1
 $suiteLine = ($suiteOut | Select-String -Pattern "Suites:" | Select-Object -Last 1)
 Check "g) regression suite" ($LASTEXITCODE -eq 0) $(if ($suiteLine) { $suiteLine.ToString().Trim() } else { "" })
 
