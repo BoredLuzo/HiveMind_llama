@@ -421,6 +421,10 @@ _MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b"] = 35
 # the entry.
 _MOE_EXPERT_COUNTS["lfm2.5:24b-a2b"] = 24
 
+# Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, 128 experts top-8):
+# below the >=30B generic autodetect threshold, so register all 30 blocks explicitly.
+_MOE_EXPERT_COUNTS["air:26b-a4b"] = 30
+
 _HERMES_V7_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact"
 
 _MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
@@ -430,7 +434,9 @@ _MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
 _HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
 _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
-_MOE_KV_CACHE_TYPES: dict[str, str] = {}
+_MOE_KV_CACHE_TYPES: dict[str, str] = {
+    "air:26b-a4b": "q8_0",
+}
 
 
 def _strip_ud_suffix(model_key: str) -> str:

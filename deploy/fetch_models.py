@@ -465,29 +465,36 @@ SPECS: list[dict] = [
         ],
         "mmproj_regex": [],
     },
+    # ── TwIL-8B (webAI-Official, Granite 4.2 8.8B dense reasoning) ─────────
+    # Default balanced variant at the repo root:
+    # TwIL-8B-Q4_K_M-balanced.gguf (~5.35 GB / 4.98 GiB). Text-only (no mmproj).
+    # Profile model_configs/models/twil_8b.json carries the author's
+    # defaults (-c 40960, --jinja, --reasoning on, temp=1.0, top_p=0.95).
     {
-        # APEX-MINI (2026-10-27): replaces the 17 GB "Final MTP-APEX-Compact".
-        # Same architecture (qwen35moe, 262k context, vision), same projector
-        # file name, the bigger quant at 20.2 GB, and the repo ships the chat
-        # template the author tested with - we download it next to the weights
-        # and the profile points at it.
-        "key": "hermes3.6:35b-a3b-uncensored-genesis-apex-mini",
-        "tag": "hermes3.6:35b-a3b-uncensored-genesis-apex-mini",
-        "desc": "Hermes3.6 Genesis APEX-Mini (Coder/Hermes agent, MoE+MTP+Vision, ~20GB download)",
-        "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF",
+        "key": "twil:8b",
+        "tag": "twil:8b",
+        "desc": "TwIL-8B Q4_K_M Balanced (8.8B Granite 4.2 math/code/IF reasoning, ~5.3GB)",
+        "repo": "webAI-Official/TwIL-8B",
         "file_regex": [
-            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-mtp-mxfp4\.gguf$",
-            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-apex-mini\.gguf$",
+            r"(?i)^twil-8b-q4_k_m-balanced\.gguf$",
         ],
-        "mmproj_regex": [
-            r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
-            r"(?i)^mmproj-.*hermes.*f16\.gguf$",
+        "mmproj_regex": [],
+    },
+    # ── Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE reasoning) ────────
+    # 25.2B total / ~4B active per token (128 experts, top-8, 30 blocks).
+    # Text-only per model card; Q8_0 KV cache (-ctk/-ctv q8_0), 128K default ctx.
+    # Profile model_configs/models/air_26b-a4b.json carries the author's
+    # defaults (--jinja -c 131072 -ctk q8_0 -ctv q8_0, temp=1.0, top_p=0.95, top_k=64)
+    # and MoE CPU expert offloading (moe=true, moe_cpu_experts=30).
+    {
+        "key": "air:26b-a4b",
+        "tag": "air:26b-a4b",
+        "desc": "Air-26B-A4B MoE (25.2B/4B active Gemma 4 reasoning, 128K ctx, ~13.5GB)",
+        "repo": "webAI-Official/Air-26B-A4B-gguf",
+        "file_regex": [
+            r"(?i)^air-26b-a4b\.gguf$",
         ],
-        "mmproj_dest": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
-        "extra_files": [
-            {"path": "chat_template.jinja",
-             "dest": "model_configs/hermes36_apex_mini_chat_template.jinja"},
-        ],
+        "mmproj_regex": [],
     },
     # ── Qwen3.5 ladder (subagent-lite smallest tier + MTP pair) ───────────
     # unsloth MTP repos name files WITHOUT "mtp" (verified 2026-09-11) — the

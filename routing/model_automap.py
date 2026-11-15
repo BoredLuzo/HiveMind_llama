@@ -45,6 +45,9 @@ MODEL_PROFILES: dict[str, dict] = {
     "bonsai":      {"thinking": True,  "vision": False, "tool_call": False},
     "magistral":   {"thinking": True,  "vision": False, "tool_call": True},
     "thinker":     {"thinking": True,  "vision": False, "tool_call": False},
+    # ── webAI TwIL & Air (2026-11) ───────────────────────────────────────
+    "twil":        {"thinking": True,  "vision": False, "tool_call": True},
+    "air":         {"thinking": True,  "vision": False, "tool_call": True},
     # ── IBM Granite ──────────────────────────────────────────────────────
     "granite4":    {"thinking": False, "vision": False, "tool_call": True},
     "granite3":    {"thinking": False, "vision": False, "tool_call": True},
@@ -91,7 +94,7 @@ MODEL_PROFILES: dict[str, dict] = {
 
 # ── VRAM-Estimation: Modellname → geschaetzte Parameterzahl (Milliarden) ────
 _SIZE_PATTERNS: list[tuple[str, float]] = [
-    ("1.5b", 1.5), ("70b", 70), ("32b", 32), ("27b", 27),
+    ("1.5b", 1.5), ("70b", 70), ("32b", 32), ("27b", 27), ("26b", 26),
     ("15b", 15), ("14b", 14), ("12b", 12), ("9b", 9),
     ("8b", 8), ("7b", 7), ("5b", 5), ("4b", 4),
     ("3b", 3), ("2b", 2), ("1b", 1),

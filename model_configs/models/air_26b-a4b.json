@@ -1,0 +1,77 @@
+{
+  "model": "air:26b-a4b",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 131072,
+  "num_ctx_analyst": 131072,
+  "num_ctx_duo_coder": 131072,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe": true,
+  "moe_cpu_experts": 30,
+  "kv_cache_type": "q8_0",
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "dspark_draft_filename": null,
+  "dspark_draft_n_max": 0,
+  "sampling": {
+    "sampling_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    }
+  },
+  "_notes": "Air-26B-A4B (webAI-Official/Air-26B-A4B-gguf, from google/gemma-4-26B-A4B-it). MoE: 25.2B total / ~4B active per token, 30 blocks, 128 experts (8 active), 262144 max context, 13.47 GB (12.54 GiB) Q4_K_M. Text-only per model card. Author llama-server defaults: --jinja -c 131072 -fa on -ctk q8_0 -ctv q8_0 --temp 1.0 --top-p 0.95 --top-k 64, Gemma 4 thinking mode on by default (--reasoning on). Default moe_cpu_experts=30 offloads all 30 MoE blocks for 8GB+ GPUs; set lower or 0 on 16-24GB GPUs."
+}

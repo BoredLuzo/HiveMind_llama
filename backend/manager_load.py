@@ -55,7 +55,7 @@ logger = logging.getLogger("llama_manager")
 
 # ── Load-path family sets (module level so tests can pin them) ─────────────
 # --jinja fallback when the registry JSON sets no explicit "jinja" key.
-_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "lfm3", "lfm3-omni", "minicpm-v", "minicpm-v-4.7"}
+_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "lfm3", "lfm3-omni", "minicpm-v", "minicpm-v-4.7", "twil", "air"}
 # Server <think>-Inhalte in reasoning_content → split_thinking +
 # thinking_budget greifen. Fallback when the registry sets no "reasoning".
 # NOTE: "lfm2.5" stays OUT on purpose — the small LFM models are
@@ -63,7 +63,8 @@ _JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder
 _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "minicpm-v", "minicpm-v-4.7",
                          # Spark-X2.x: the chat template enables thinking by default
                          # (model card); per-request off via enable_thinking.
-                         "spark-x2.6", "spark-x2.5"}
+                         "spark-x2.6", "spark-x2.5",
+                         "twil", "air"}
 
 
 def _wants_jinja(model: str, model_base: str) -> bool:

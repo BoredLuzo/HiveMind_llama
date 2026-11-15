@@ -69,6 +69,9 @@ _VRAM_TABLE: dict[str, float] = {
 
     # Qwen3
     "qwen-qwen3:14b-iq4-nl": 7.5,
+
+    # TwIL-8B (Granite 4.2 8.8B dense Q4_K_M: 5.35 GB weights + ~0.25 GB base KV)
+    "twil:8b":           5.6,
 }
 
 # ── MoE (Mixture of Experts) VRAM-Tabelle ──────────────────────────────────────
@@ -146,6 +149,12 @@ _MOE_TABLE: dict[str, dict] = {
         "active_gpu_gb":            5.91,
         "measured_bytes_per_token": 20480,
         "calibrated_n_cpu_moe":     24,
+    },
+    # Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, q8_0 KV ~1.48 GiB @ 128K):
+    "air:26b-a4b": {
+        "active_gpu_gb":            2.6,
+        "measured_bytes_per_token": 12288,
+        "calibrated_n_cpu_moe":     30,
     },
 }
 

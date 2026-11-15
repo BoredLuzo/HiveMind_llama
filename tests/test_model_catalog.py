@@ -221,4 +221,78 @@ if _lfm_u:
         _mr._MODELS_DIR = _orig_models_dir
         _mr.refresh()
 
+# ── Hermes removed from installer catalog (existing profile preserved) ───
+check("hermes3.6:35b-a3b-uncensored-genesis-apex-mini removed from installer catalog",
+      "hermes3.6:35b-a3b-uncensored-genesis-apex-mini" not in specs)
+check("existing hermes apex-mini profile preserved on disk",
+      (ROOT / "model_configs" / "models" / "hermes3.6_35b-a3b-uncensored-genesis-apex-mini.json").exists())
+
+# ── TwIL-8B (webAI-Official, Granite 4.2 8.8B dense reasoning) ───────────
+twil = specs.get("twil:8b")
+check("twil:8b is in the catalog", twil is not None)
+if twil:
+    check("twil repo pinned to webAI-Official/TwIL-8B",
+          twil["repo"] == "webAI-Official/TwIL-8B", f"({twil['repo']})")
+    check("twil regex matches balanced default GGUF",
+          any(re.match(p, "TwIL-8B-Q4_K_M-balanced.gguf") for p in twil["file_regex"]))
+    check("twil regex rejects verbose variant",
+          not any(re.match(p, "TwIL-8B-Q4_K_M-verbose.gguf") for p in twil["file_regex"]))
+    check("twil tag is twil:8b", twil.get("tag") == "twil:8b")
+    twil_prof_p = ROOT / "model_configs" / "models" / "twil_8b.json"
+    check("twil profile exists", twil_prof_p.exists())
+    if twil_prof_p.exists():
+        import json as _json_tw
+        tp = _json_tw.loads(twil_prof_p.read_text(encoding="utf-8"))
+        check("twil profile targets twil:8b", tp.get("model") == "twil:8b")
+        check("twil profile uses recommended 40960 ctx & jinja & reasoning on",
+              tp.get("num_ctx") == 40960
+              and tp.get("jinja") is True
+              and tp.get("reasoning") == "on"
+              and tp.get("moe") is False
+              and int(tp.get("moe_cpu_experts") or 0) == 0)
+        ts = (tp.get("sampling") or {}).get("thinking") or {}
+        check("twil profile sampling matches card (temp=1.0, top_p=0.95)",
+              ts.get("temperature") == 1.0 and ts.get("top_p") == 0.95, f"({ts})")
+
+# ── Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE reasoning) ──────────
+air = specs.get("air:26b-a4b")
+check("air:26b-a4b is in the catalog", air is not None)
+if air:
+    check("air repo pinned to webAI-Official/Air-26B-A4B-gguf",
+          air["repo"] == "webAI-Official/Air-26B-A4B-gguf", f"({air['repo']})")
+    check("air regex matches Air-26B-A4B.gguf",
+          any(re.match(p, "Air-26B-A4B.gguf") for p in air["file_regex"]))
+    check("air regex rejects projector file",
+          not any(re.match(p, "mmproj-Air-26B-A4B-f16.gguf") for p in air["file_regex"]))
+    check("air tag is air:26b-a4b", air.get("tag") == "air:26b-a4b")
+    air_prof_p = ROOT / "model_configs" / "models" / "air_26b-a4b.json"
+    check("air profile exists", air_prof_p.exists())
+    if air_prof_p.exists():
+        import json as _json_air
+        ap = _json_air.loads(air_prof_p.read_text(encoding="utf-8"))
+        check("air profile targets air:26b-a4b", ap.get("model") == "air:26b-a4b")
+        check("air profile sets 131072 ctx, jinja, reasoning on, MoE=30, q8_0 KV",
+              ap.get("num_ctx") == 131072
+              and ap.get("jinja") is True
+              and ap.get("reasoning") == "on"
+              and ap.get("moe") is True
+              and int(ap.get("moe_cpu_experts") or 0) == 30
+              and ap.get("kv_cache_type") == "q8_0")
+        asmp = (ap.get("sampling") or {}).get("thinking") or {}
+        check("air profile sampling matches card (temp=1.0, top_p=0.95, top_k=64)",
+              asmp.get("temperature") == 1.0
+              and asmp.get("top_p") == 0.95
+              and asmp.get("top_k") == 64,
+              f"({asmp})")
+    from backend.llama_config import is_moe_model, moe_kv_cache_types
+    from backend.llama_models import _parse_gguf_filename
+    from backend.llama_vram_table import moe_cfg_for
+    check("air:26b-a4b is recognized as MoE with 30 calibrated experts & q8_0 KV",
+          is_moe_model("air:26b-a4b")
+          and moe_kv_cache_types("air:26b-a4b") == "q8_0"
+          and (moe_cfg_for("air:26b-a4b") or {}).get("calibrated_n_cpu_moe") == 30)
+    check("_parse_gguf_filename maps TwIL & Air GGUFs cleanly",
+          "twil:8b" in _parse_gguf_filename("TwIL-8B-Q4_K_M-balanced.gguf")
+          and _parse_gguf_filename("Air-26B-A4B.gguf")[0] == "air:26b-a4b")
+
 sys.exit(h.finish("model_catalog"))

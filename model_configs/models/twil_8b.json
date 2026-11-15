@@ -1,0 +1,76 @@
+{
+  "model": "twil:8b",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 40960,
+  "num_ctx_analyst": 40960,
+  "num_ctx_duo_coder": 40960,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe": false,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "dspark_draft_filename": null,
+  "dspark_draft_n_max": 0,
+  "sampling": {
+    "sampling_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    }
+  },
+  "_notes": "TwIL-8B (webAI-Official/TwIL-8B, post-trained from ibm-granite/granite-4.2-8b). Balanced default Q4_K_M GGUF (5.35 GB / 4.98 GiB), dense 8.79B transformer (40 layers, hidden 4096, 32 attn / 8 KV heads, max context 131072). Author recommended llama.cpp defaults: -c 40960 (-n 32768), ChatML-style template with <|im_end|> EOS via --jinja, <think>...</think> reasoning on by default (--reasoning on), generation_config.json + GGUF sampling temp=1.0, top_p=0.95. Text-only, dense (no MoE offload, no MTP, no mmproj)."
+}

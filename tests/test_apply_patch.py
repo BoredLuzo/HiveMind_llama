@@ -25,7 +25,6 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from tools.handlers.patch_apply import _inline_tool_apply_patch   # noqa: E402
 from tools.handlers.file_ops import (                             # noqa: E402
     _inline_tool_edit_file,
-    _inline_tool_write_file,
 )
 from tools.patch_diff import parse_unified_diff, PatchError       # noqa: E402
 from tests._harness import Harness                                # noqa: E402
@@ -38,7 +37,10 @@ _BODY_B = "VALUE = 10\n"
 
 
 async def _seed(ws: Path, name: str, body: str) -> None:
-    await _inline_tool_write_file({"path": name, "content": body}, ws, str(ws))
+    p = ws / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
 
 
 def _read(ws: Path, name: str) -> str:

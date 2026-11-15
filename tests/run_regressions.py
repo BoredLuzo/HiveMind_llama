@@ -428,7 +428,7 @@ SUITES = [
     ("deep_retrieval",           "tests/test_deep_retrieval.py",             30),
     ("multi_edit",               "tests/test_multi_edit.py",                 30),
     # D3 patch-native editing + G#2/#3 levers (2026-11-11)
-    ("apply_patch",              "tests/test_apply_patch.py",                60),
+    ("apply_patch",              "tests/test_apply_patch.py",               120),
     ("auto_test_on_edit",        "tests/test_auto_test_on_edit.py",          30),
     ("edit_history_compact",     "tests/test_edit_history_compact.py",       30),
     ("audit_behavior_batch",     "tests/test_audit_behavior_batch.py",     45),

@@ -541,7 +541,8 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `gemma-4:e2b-it-qat` | unsloth/gemma-4-E2B-it-qat-GGUF | small all-rounder / vision (+ MTP drafter) | 2.6 GB + 1.0 GB mmproj |
 | `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
 | `qwen3.6:35b-a3b-ud` | unsloth/Qwen3.6-35B-A3B-GGUF | coder / planner (MoE) | 22.4 GB + 0.9 GB mmproj |
-| `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` | LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF | coder / hermes agent (MoE + MTP + vision) | 20.2 GB + 0.9 GB mmproj |
+| `twil:8b` | webAI-Official/TwIL-8B | dense 8.8B Granite 4.2 reasoning (math/code/IF, balanced Q4_K_M, 40K default ctx) | 5.3 GB |
+| `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | MoE 26B/4B active Gemma 4 reasoning (128K ctx, q8_0 KV, CPU expert offload) | 13.5 GB |
 | `groot:19b-a3b-261023` | GrootTeam/Groot-19B-A3B-261023-GGUF | agent coder, **experimental** (MoE 19B/3B, 128 experts, 128K ctx) | 11.7 GB |
 | `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | heavy duo coder (MTP) | 5.9 GB + 0.9 GB mmproj |
 | `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
@@ -555,7 +556,7 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
 | `minicpm5:2b-sharp-q4` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | same model, smaller/weaker tier (Q4_K_XL) | 1.6 GB |
 
-Text-only models (`minicpm5`, `lfm2.5`, `spark-x2.6`) download a single GGUF; the
+Text-only models (`minicpm5`, `lfm2.5`, `spark-x2.6`, `twil`, `air`) download a single GGUF; the
 vision models pull their projector automatically, and `gemma-4` additionally gets a
 ~60 MB MTP drafter from the same repo. `lfm2.5` 24B-A2B ships a DSpark spec-dec
 drafter as a sidecar - it is never registered as a model.
