@@ -102,6 +102,10 @@ work. Mode tables, tool tiers, approval gate and the Duo internals:
 
 ![HiveMind Agentic Mode — Planner, Coder and Agentic options](docs/screenshot_agentic.png)
 
+## Benchmarks
+
+> **Coming soon** — Standardized multi-run coding benchmark tables (Core coding suite, Aider Polyglot, and SWE-bench / DeepSWE across 4B, 8B, 26B-A4B, and 35B-A3B local GGUF models) are currently being finalized and will be published here shortly. See [bench/README.md](bench/README.md) for the reproducible harness and evaluation methodology.
+
 ## Extras (all optional)
 
 | Extra | What it does | Docs |

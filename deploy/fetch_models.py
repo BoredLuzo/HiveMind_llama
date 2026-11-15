@@ -500,7 +500,7 @@ SPECS: list[dict] = [
     # Text-only per model card; Q8_0 KV cache (-ctk/-ctv q8_0), 128K default ctx.
     # Profile model_configs/models/air_26b-a4b.json carries the author's
     # defaults (--jinja -c 131072 -ctk q8_0 -ctv q8_0, temp=1.0, top_p=0.95, top_k=64)
-    # and MoE CPU expert offloading (moe=true, moe_cpu_experts=30).
+    # and MoE CPU expert offloading (moe=true, moe_cpu_experts=20, keeping 10/30 MoE blocks on GPU).
     {
         "key": "air:26b-a4b",
         "tag": "air:26b-a4b",

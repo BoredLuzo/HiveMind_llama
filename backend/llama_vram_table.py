@@ -155,11 +155,11 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 20480,
         "calibrated_n_cpu_moe":     24,
     },
-    # Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, q8_0 KV ~1.48 GiB @ 128K):
+    # Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, n-cpu-moe 20 keeps 10 blocks on GPU, q8_0 KV ~1.48 GiB @ 128K):
     "air:26b-a4b": {
-        "active_gpu_gb":            2.6,
+        "active_gpu_gb":            5.8,
         "measured_bytes_per_token": 12288,
-        "calibrated_n_cpu_moe":     30,
+        "calibrated_n_cpu_moe":     20,
     },
 }
 

@@ -271,12 +271,12 @@ if air:
         import json as _json_air
         ap = _json_air.loads(air_prof_p.read_text(encoding="utf-8"))
         check("air profile targets air:26b-a4b", ap.get("model") == "air:26b-a4b")
-        check("air profile sets 131072 ctx, jinja, reasoning on, MoE=30, q8_0 KV",
+        check("air profile sets 131072 ctx, jinja, reasoning on, MoE=20, q8_0 KV",
               ap.get("num_ctx") == 131072
               and ap.get("jinja") is True
               and ap.get("reasoning") == "on"
               and ap.get("moe") is True
-              and int(ap.get("moe_cpu_experts") or 0) == 30
+              and int(ap.get("moe_cpu_experts") or 0) == 20
               and ap.get("kv_cache_type") == "q8_0")
         asmp = (ap.get("sampling") or {}).get("thinking") or {}
         check("air profile sampling matches card (temp=1.0, top_p=0.95, top_k=64)",
@@ -287,10 +287,10 @@ if air:
     from backend.llama_config import is_moe_model, moe_kv_cache_types
     from backend.llama_models import _parse_gguf_filename
     from backend.llama_vram_table import moe_cfg_for
-    check("air:26b-a4b is recognized as MoE with 30 calibrated experts & q8_0 KV",
+    check("air:26b-a4b is recognized as MoE with 20 calibrated experts & q8_0 KV",
           is_moe_model("air:26b-a4b")
           and moe_kv_cache_types("air:26b-a4b") == "q8_0"
-          and (moe_cfg_for("air:26b-a4b") or {}).get("calibrated_n_cpu_moe") == 30)
+          and (moe_cfg_for("air:26b-a4b") or {}).get("calibrated_n_cpu_moe") == 20)
     check("_parse_gguf_filename maps TwIL & Air GGUFs cleanly",
           "twil:8b" in _parse_gguf_filename("TwIL-8B-Q4_K_M-balanced.gguf")
           and _parse_gguf_filename("Air-26B-A4B.gguf")[0] == "air:26b-a4b")

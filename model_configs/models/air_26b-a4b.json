@@ -15,7 +15,7 @@
   "reasoning": "on",
   "distilled": false,
   "moe": true,
-  "moe_cpu_experts": 30,
+  "moe_cpu_experts": 20,
   "kv_cache_type": "q8_0",
   "mtp": false,
   "gpu_layers": null,
@@ -73,5 +73,5 @@
       "repetition_penalty": 1.0
     }
   },
-  "_notes": "Air-26B-A4B (webAI-Official/Air-26B-A4B-gguf, from google/gemma-4-26B-A4B-it). MoE: 25.2B total / ~4B active per token, 30 blocks, 128 experts (8 active), 262144 max context, 13.47 GB (12.54 GiB) Q4_K_M. Text-only per model card. Author llama-server defaults: --jinja -c 131072 -fa on -ctk q8_0 -ctv q8_0 --temp 1.0 --top-p 0.95 --top-k 64, Gemma 4 thinking mode on by default (--reasoning on). Default moe_cpu_experts=30 offloads all 30 MoE blocks for 8GB+ GPUs; set lower or 0 on 16-24GB GPUs."
+  "_notes": "Air-26B-A4B (webAI-Official/Air-26B-A4B-gguf, from google/gemma-4-26B-A4B-it). MoE: 25.2B total / ~4B active per token, 30 blocks, 128 experts (8 active), 262144 max context, 13.47 GB (12.54 GiB) Q4_K_M. Text-only per model card. Author llama-server defaults: --jinja -c 131072 -fa on -ctk q8_0 -ctv q8_0 --temp 1.0 --top-p 0.95 --top-k 64, Gemma 4 thinking mode on by default (--reasoning on). Default moe_cpu_experts=20 offloads 20 of the 30 MoE blocks to CPU RAM and keeps 10 MoE blocks + non-MoE weights (~5.8 GB) on GPU for faster generation on 8GB+ GPUs; set lower or 0 on 16-24GB GPUs."
 }

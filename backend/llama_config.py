@@ -423,9 +423,10 @@ _MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b"] = 35
 # the entry.
 _MOE_EXPERT_COUNTS["lfm2.5:24b-a2b"] = 24
 
-# Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, 128 experts top-8):
-# below the >=30B generic autodetect threshold, so register all 30 blocks explicitly.
-_MOE_EXPERT_COUNTS["air:26b-a4b"] = 30
+# Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, 128 experts top-8, ~13.5 GB):
+# below the >=30B generic autodetect threshold; offload 20/30 blocks to CPU so 10 MoE
+# blocks stay on GPU (~5.8 GB active VRAM on 8GB+ GPUs).
+_MOE_EXPERT_COUNTS["air:26b-a4b"] = 20
 
 _HERMES_V7_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact"
 

@@ -1,16 +1,33 @@
-## [1.6.0-beta] - 2026-11-14
+## [1.6.0] - 2026-11-15
 
-Pre-benchmark beta release unifying local model discovery, Direct/Duo/Agentic
-transport & tool gating, security & runtime containment, scheduler hardening,
-and Linux/Colab benchmark parity.
+Dedicated 1.6.0 release unifying local model discovery and catalog updates
+(`twil:8b`, `air:26b-a4b`, `qwen3.6:35b-a3b-mtp`), Direct/Duo/Agentic transport
+& verification-gate hardening, security & runtime containment, scheduler
+hardening, and Linux/Colab benchmark parity.
 
 ### Added & Improved
-- **GGUF drop-in discovery & catalog hardening:** Extracted
+- **GGUF drop-in discovery & catalog updates:** Extracted
   `backend/gguf_meta.py` to inspect GGUF metadata, multi-part shards
   (`-NNNNN-of-NNNNN`), and paired `mmproj` projectors safely across shared model
-  directories; aligned `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` vision
-  projector naming and split-shard manifest generation in `deploy/fetch_models.py`;
-  isolated cached model profiles via `deepcopy` in `model_configs/models_registry.py`.
+  directories; replaced `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` in the
+  installer (`deploy/fetch_models.py`, `docs/guide.md`) with `twil:8b`
+  (`webAI-Official/TwIL-8B`, `TwIL-8B-Q4_K_M-balanced.gguf`, 8.8B Granite 4.2
+  reasoning model, `num_ctx=40960`, `temperature=1.0`, `top_p=0.95`) and
+  `air:26b-a4b` (`webAI-Official/Air-26B-A4B-gguf`, `Air-26B-A4B.gguf`, Gemma 4
+  26B-A4B MoE, `num_ctx=131072`, `q8_0` KV, `moe_cpu_experts=20` keeping 10/30
+  MoE blocks on GPU); added `qwen3.6:35b-a3b-mtp`
+  (`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`, `Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf`,
+  `mtp=true`) alongside `qwen3.6:35b-a3b-ud` with `chat_template_sharp_v22.5.0.jinja`
+  pinned across Qwen3.6-35B-A3B profiles; isolated cached model profiles via
+  `deepcopy` in `model_configs/models_registry.py`.
+- **Duo verification gate & contract extraction:** Added post-edit verification
+  depth gating and smoke-check enforcement (`core/duo_task_complete_gate.py`,
+  `core/duo/preflight.py`, `core/tool_exec_helpers.py`, `core/tool_executor.py`),
+  cross-edit failure streak tracking (`core/duo_runner.py`,
+  `hive_functions/loop_machine.py`), workspace/src `PYTHONPATH` injection in
+  `tools/handlers/exec_tools.py`, head+tail output preservation, and expanded
+  Polyglot contract v2 extraction (`bench/import_polyglot.py`,
+  `bench/runner.py`).
 - **LLM transport & runtime reliability:** Extracted `core/llm_transport.py` for
   shared non-streaming/streaming payload normalization (`cache_prompt`,
   `preserve_thinking`, `thinking_budget`), prompt-only `usage_meta` reporting in
@@ -18,9 +35,10 @@ and Linux/Colab benchmark parity.
   down-grading when RLIMIT/RAM is tight, and `subagent_lite` / UI state sync.
 - **Tools & scheduler:** Made `subagent_research` a toggleable `[+Subagent]`
   optional alongside `[+Websearch]` and `[+Git]` on `duo_core` (18 base +
-  `+Subagent` = 19 default), fixed `apply_patch` EOF/newline parsing and
-  `auto_test_note` settings propagation, and closed `SchedulerManager` spawn/fire
-  race conditions.
+  `+Subagent` = 19 default), gated `duo_lean` prompt hints to advertised tools
+  (`hive_functions/prompts.py`, `tools/definitions.py`), fixed `apply_patch`
+  EOF/newline parsing and `auto_test_note` settings propagation, and closed
+  `SchedulerManager` spawn/fire race conditions.
 
 ### Security & Privacy
 - **Native secret-path denylist & workspace containment:** Enforced the shared
@@ -46,14 +64,15 @@ and Linux/Colab benchmark parity.
 
 ### Benchmark Harness & Tests
 - **Colab autopilot & external suites (3×3 per-run cells):** Removed `.approaches`
-  solution spoilers from Polyglot tasks, lowered `requires-python` to
-  `>=3.12,<3.15` for Linux/Colab compatibility, fixed `rent_bootstrap.sh`
-  build-id parsing, and expanded `bench/external/hivemind_bench_colab_autopilot.ipynb`
-  with dedicated per-run cells across **3 Suites × 3 Runs** (Core 23 tasks,
-  Aider Polyglot 34 tasks, DeepSWE 3 real-world repo tasks on 4B & 35B-MTP),
-  live 45s heartbeat/`[progress]` status, `STATUS_OVERVIEW.txt` deadlock age
-  checks, and clean post-save pipe exit. Covered by **386/386** standalone
-  regression suites.
+  solution spoilers from Polyglot tasks, enforced anti-cheat workspace isolation
+  (`bench/runner.py`), lowered `requires-python` to `>=3.12,<3.15` for
+  Linux/Colab compatibility, added automatic server restart on commit change in
+  `bench/external/rent_bootstrap.sh`, and expanded
+  `bench/external/hivemind_bench_colab_autopilot.ipynb` with dedicated per-run
+  cells across **3 Suites × 3 Runs** (Core 23 tasks, Aider Polyglot 34 tasks,
+  DeepSWE 3 real-world repo tasks on 4B & 35B-MTP), live 45s
+  heartbeat/`[progress]` status, `STATUS_OVERVIEW.txt` deadlock age checks, and
+  clean post-save pipe exit. Covered by **386/386** standalone regression suites.
 
 ## [1.5.6] - 2026-11-12
 
