@@ -35,22 +35,28 @@ hardening, and Linux/Colab benchmark parity.
   down-grading when RLIMIT/RAM is tight, and `subagent_lite` / UI state sync.
 - **Tools & scheduler:** Made `subagent_research` a toggleable `[+Subagent]`
   optional alongside `[+Websearch]` and `[+Git]` on `duo_core` (18 base +
-  `+Subagent` = 19 default), gated `duo_lean` prompt hints to advertised tools
-  (`hive_functions/prompts.py`, `tools/definitions.py`), fixed `apply_patch`
-  EOF/newline parsing and `auto_test_note` settings propagation, and closed
-  `SchedulerManager` spawn/fire race conditions.
+  `+Subagent` = 19 default), expanded `duo_lean` from 10 to 12 tools
+  (`run_python` and `undo_last` added in `tools/definitions.py` so shared
+  verification/recovery prompts match advertised tools in
+  `hive_functions/prompts.py`), extracted target file paths for `apply_patch`
+  `patch`/`diff` headers in `_approval_call_key` / `_norm_write_path`
+  (`tools/runner.py`), fixed `apply_patch` EOF/newline parsing and
+  `auto_test_note` settings propagation, and closed `SchedulerManager`
+  spawn/fire race conditions.
 
 ### Security & Privacy
 - **Native secret-path denylist & workspace containment:** Enforced the shared
   secret-file denylist (`.env`, SSH/TLS keys, credentials, cloud/token configs)
   across native `read_file`, `list_files`, `find_by_name`, and `search_code`
   tools (`utils/file.py`, `tools/handlers/file_tools.py`,
-  `tools/handlers/search_tools.py`), and validated `run_tests` `paths`/`targets`
+  `tools/handlers/search_tools.py`), validated `run_tests` `paths`/`targets`
   arguments via `os.path.commonpath` against workspace escape
-  (`tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`).
+  (`tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`), and
+  stripped unowned `conftest.py` files before installing hidden tests
+  (`bench/runner.py`).
 - **Supply-chain & model-store hardening:** Switched `deploy/updater.py` release
-  digest checks to fail-closed (`sha256:` required unless `HM_ALLOW_UNVERIFIED_UPDATE=1`
-  or unsigned release dev escape hatch), pinned `llama.cpp` release tag `b12001`
+  digest checks to fail-closed (`sha256:` verification required with no override
+  when digests are missing or mismatched), pinned `llama.cpp` release tag `b12001`
   in `deploy/llama_build_pin.txt` (with `--tag` / `--latest` overrides), and
   validated `model_configs` agent/model identifiers against path traversal.
 

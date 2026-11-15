@@ -37,13 +37,13 @@ Then run `start_hivemind.bat` and open http://localhost:8001.
 
 `setup_models.bat [custom models folder]`:
 
-- `[D]` Download: recommended set or single-select (`1,4`), goes to
-  `<repo>\models\`.
+- `[E]` Essential set, `[S]` pick single models (e.g. `1,4`), or `[D]` download
+  everything missing from the catalog (goes to `<repo>\models\`).
 - `[C]` Custom: wizard to add your own model with config (see below).
 - `[R]` Register own folder: scans a folder without network access and
-  registers every GGUF in `models.json`.
-- Vision (mmproj) files download automatically for vision-capable models. MTP
-  variants are not auto-downloaded (identical filenames would mis-register).
+  registers every GGUF in `models.json` (`[A]` aborts).
+- Vision (mmproj) files and MTP drafters download with their model when
+  available in the catalog.
 
 Manual installation:
 

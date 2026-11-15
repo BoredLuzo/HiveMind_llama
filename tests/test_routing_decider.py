@@ -211,4 +211,43 @@ for _forced, _route in (("trivial", "direct"), ("complex", "agentic")):
     check(f"resolve forced {_forced} ignores the encoder",
           _d.source == "force" and _d.route == _route and _enc.calls == 0)
 
+# ── _decide_route_impl crash fallback must respect routing_judge=off ────
+from core.chat_run import _decide_route_impl  # noqa: E402
+
+_orig_decide_async = D.decide_async
+
+
+async def _boom_decide_async(*_args, **_kwargs):
+    raise RuntimeError("boom")
+
+
+_fb_judge_calls = {"n": 0}
+
+
+async def _fb_judge(_text: str, _bias: float = 0.0):
+    _fb_judge_calls["n"] += 1
+    return "complex"
+
+
+D.decide_async = _boom_decide_async
+try:
+    _d_off = asyncio.run(_decide_route_impl(
+        QUESTION, settings(routing_decider="on", routing_judge="off"),
+        judge_call_async=_fb_judge,
+    ))
+    check("crash fallback with routing_judge=off never invokes LLM judge",
+          _fb_judge_calls["n"] == 0 and _d_off.source == "rule-fallback",
+          f"(calls={_fb_judge_calls['n']}, source={_d_off.source})")
+
+    _d_on = asyncio.run(_decide_route_impl(
+        CODE, settings(routing_decider="on", routing_judge="on"),
+        judge_call_async=_fb_judge,
+    ))
+    check("crash fallback with routing_judge=on invokes judge fallback",
+          _fb_judge_calls["n"] == 1 and _d_on.source == "judge-fallback"
+          and _d_on.route == "agentic",
+          f"(calls={_fb_judge_calls['n']}, source={_d_on.source}, route={_d_on.route})")
+finally:
+    D.decide_async = _orig_decide_async
+
 sys.exit(h.finish("routing_decider"))

@@ -86,6 +86,51 @@ def approval_gate_force(model_overrides: dict | None) -> bool:
     return bool((model_overrides or {}).get("duo_action_approval_enabled"))
 
 
+async def _decide_route_impl(
+    text: str,
+    run_settings: dict,
+    *,
+    force_complexity: str | None = None,
+    judge_bias: float = 0.0,
+    judge_call_async=None,
+):
+    """Resolve route/planner with a crash fallback that still honors routing_judge=off."""
+    _judge_enabled = _routing_decider.normalise_mode(
+        run_settings.get("routing_judge")) != "off"
+
+    async def _judge_async(_text: str):
+        _level = await judge_call_async(_text, judge_bias)
+        return _level, 0.0
+
+    try:
+        return await _routing_decider.decide_async(
+            run_settings, text,
+            forced_complexity=force_complexity,
+            judge_call_async=_judge_async if (_judge_enabled and judge_call_async) else None,
+        )
+    except (RuntimeError, ValueError, TypeError, KeyError, LookupError, OSError,
+            ImportError, AttributeError, NameError, UnboundLocalError) as _exc:
+        if _judge_enabled and judge_call_async is not None:
+            logger.exception("[DECIDER] routing failed (%s: %s) - falling back to the judge",
+                             type(_exc).__name__, _exc)
+            _level = await judge_call_async(text, judge_bias)
+            return _routing_decider.Decision(
+                route=("agentic" if _level in ("complex", "code_duo") else "direct"),
+                planner=(_level in ("complex", "code_duo")),
+                source="judge-fallback", reason=f"judge level={_level}",
+            )
+        logger.exception("[DECIDER] routing failed (%s: %s) - judge off, falling back to rules",
+                         type(_exc).__name__, _exc)
+        _rdec = _routing_decider.decide_from_signals(
+            run_settings, text, forced_complexity=force_complexity)
+        return _routing_decider.Decision(
+            route=_rdec.route,
+            planner=_rdec.planner,
+            source="rule-fallback",
+            reason="decide_async error (judge off)",
+        )
+
+
 async def run_stream(
     user_input: str,
     images: list,
@@ -175,30 +220,13 @@ async def run_stream(
 
     async def _decide_route(text: str):
         """Route/Planner ueber den Resolver; der Judge laeuft nur, wenn er gefragt wird."""
-        _judge_enabled = _routing_decider.normalise_mode(
-            _run_settings.get("routing_judge")) != "off"
-
-        async def _judge_async(_text: str):
-            _level = await _check_complexity_with_bias(_text, judge_bias)
-            return _level, 0.0
-
-        try:
-            _d = await _routing_decider.decide_async(
-                _run_settings, text,
-                forced_complexity=force_complexity,
-                judge_call_async=_judge_async if _judge_enabled else None,
-            )
-        except (RuntimeError, ValueError, TypeError, KeyError, LookupError, OSError,
-                ImportError, AttributeError, NameError, UnboundLocalError) as _exc:
-            # nie stumm: Traceback ins Log, dann das bisherige Verhalten
-            logger.exception("[DECIDER] routing failed (%s: %s) - falling back to the judge",
-                             type(_exc).__name__, _exc)
-            _level = await _check_complexity_with_bias(text, judge_bias)
-            _d = _routing_decider.Decision(
-                route=("agentic" if _level in ("complex", "code_duo") else "direct"),
-                planner=(_level in ("complex", "code_duo")),
-                source="judge-fallback", reason=f"judge level={_level}",
-            )
+        _d = await _decide_route_impl(
+            text,
+            _run_settings,
+            force_complexity=force_complexity,
+            judge_bias=judge_bias,
+            judge_call_async=_check_complexity_with_bias,
+        )
         try:
             _d.details["judge_verdict"] = dict(getattr(_state.pipeline, "_last_judge_verdict", {}) or {})
         except (AttributeError, TypeError):

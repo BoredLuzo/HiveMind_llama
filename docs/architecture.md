@@ -204,8 +204,8 @@ A forced compression (`trigger=force`) has three causes:
 
 ### Model selection
 
-First choice is the configured light model (`duo_compress_model`, default
-`lfm2.5:2.6b`). If it does not fit into free VRAM, the coder model runs the
+First choice is the configured light model (`duo_compress_model`, default `""` /
+auto-selected from installed light models). If it does not fit into free VRAM, the coder model runs the
 compression instead. That fallback is the common case on tight VRAM and costs
 about 100 to 140 seconds per compression, measured. The trade-off to know
 about: loading the light model can evict the coder (Vulkan serialization) and

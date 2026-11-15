@@ -66,6 +66,20 @@ def validate(version: str) -> str:
     return v
 
 
+_UV_LOCK_PKG_RE = re.compile(
+    r'(name\s*=\s*"hivemind-llama"\r?\nversion\s*=\s*")([^"]+)(")'
+)
+
+
+def _pep440_version(ver: str) -> str:
+    """Translate semver pre-releases (-alpha/.N, -beta/.N, -rc/.N) to PEP 440."""
+    return re.sub(
+        r"-(alpha|beta|rc)(?:\.?(\d+))?$",
+        lambda m: {"alpha": "a", "beta": "b", "rc": "rc"}[m.group(1)] + (m.group(2) or "0"),
+        ver,
+    )
+
+
 def read_versions(root: Path) -> dict[str, tuple[Path, str]]:
     """label -> (path, current version). Raises BumpError on a missing anchor."""
     out: dict[str, tuple[Path, str]] = {}
@@ -84,21 +98,13 @@ def read_versions(root: Path) -> dict[str, tuple[Path, str]]:
                 raise BumpError(f"anchor: another HIVEMIND_VERSION assignment precedes "
                                 f"the anchor in {path}; the legacy updater would read it")
         out[label] = (path, m.group(2))
+    lock_path = root / "uv.lock"
+    if lock_path.is_file():
+        m_lock = _UV_LOCK_PKG_RE.search(_read(lock_path))
+        if m_lock is None:
+            raise BumpError(f"uv.lock: no hivemind-llama version entry in {lock_path}")
+        out["uv.lock"] = (lock_path, m_lock.group(2))
     return out
-
-
-_UV_LOCK_PKG_RE = re.compile(
-    r'(name\s*=\s*"hivemind-llama"\r?\nversion\s*=\s*")([^"]+)(")'
-)
-
-
-def _pep440_version(ver: str) -> str:
-    """Translate semver pre-releases (-alpha/.N, -beta/.N, -rc/.N) to PEP 440."""
-    return re.sub(
-        r"-(alpha|beta|rc)(?:\.?(\d+))?$",
-        lambda m: {"alpha": "a", "beta": "b", "rc": "rc"}[m.group(1)] + (m.group(2) or "0"),
-        ver,
-    )
 
 
 def plan(root: Path, new: str) -> list[tuple[str, Path, str, str, str]]:
@@ -110,16 +116,14 @@ def plan(root: Path, new: str) -> list[tuple[str, Path, str, str, str]]:
         text = _read(path)
         new_text = rx.sub(lambda m: m.group(1) + new + m.group(3), text, count=1)
         changes.append((label, path, old, new, new_text))
-    lock_path = root / "uv.lock"
-    if lock_path.is_file():
+    if "uv.lock" in current:
+        lock_path, old_lock = current["uv.lock"]
         lock_text = _read(lock_path)
-        m_lock = _UV_LOCK_PKG_RE.search(lock_text)
-        if m_lock is not None:
-            new_pep = _pep440_version(new)
-            new_lock = _UV_LOCK_PKG_RE.sub(
-                lambda m: m.group(1) + new_pep + m.group(3), lock_text, count=1
-            )
-            changes.append(("uv.lock", lock_path, m_lock.group(2), new_pep, new_lock))
+        new_pep = _pep440_version(new)
+        new_lock = _UV_LOCK_PKG_RE.sub(
+            lambda m: m.group(1) + new_pep + m.group(3), lock_text, count=1
+        )
+        changes.append(("uv.lock", lock_path, old_lock, new_pep, new_lock))
     return changes
 
 
@@ -137,7 +141,15 @@ def main(argv: list[str] | None = None) -> int:
             current = read_versions(root)
             for label, (path, ver) in current.items():
                 print(f"  {label:9s} {ver:12s} {path}")
-            if len({ver for _p, ver in current.values()}) != 1:
+            anchor_ver = current["version"][1]
+            expected = {
+                "version": anchor_ver,
+                "anchor": anchor_ver,
+                "pyproject": anchor_ver,
+                "uv.lock": _pep440_version(anchor_ver),
+            }
+            if any(ver != expected.get(label, anchor_ver)
+                   for label, (_p, ver) in current.items()):
                 print("[DRIFT] versions differ - run deploy/bump_version.py <x.y.z>")
                 return 1
             print("[OK] all version anchors agree")

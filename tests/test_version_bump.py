@@ -116,6 +116,21 @@ with tempfile.TemporaryDirectory() as td:
     check("V9 missing server.py anchor -> refused, version.py untouched",
           rc == 2 and "REFUSED" in out and vp.read_bytes() == snap4, f" rc={rc}")
 
+with tempfile.TemporaryDirectory() as td_lock:
+    tmp_lock = _copy_tree(Path(td_lock))
+    shutil.copyfile(ROOT / "uv.lock", tmp_lock / "uv.lock")
+    _run(tmp_lock, "9.8.7")
+    ul = tmp_lock / "uv.lock"
+    ul.write_text(ul.read_text(encoding="utf-8").replace('version = "9.8.7"', 'version = "9.8.7b0"', 1),
+                  encoding="utf-8")
+    rc_drift, out_drift = _run(tmp_lock, "--check")
+    check("V11 --check catches uv.lock version drift",
+          rc_drift == 1 and "DRIFT" in out_drift, f" rc={rc_drift}")
+    rc_fix, _out_fix = _run(tmp_lock, "9.8.7")
+    rc_ok, _out_ok = _run(tmp_lock, "--check")
+    check("V12 bump repairs uv.lock drift and --check passes",
+          rc_fix == 0 and rc_ok == 0, f" fix={rc_fix} ok={rc_ok}")
+
 check("V10 real repo version files untouched", _digest() == before)
 
 sys.exit(_h.finish("version_bump"))

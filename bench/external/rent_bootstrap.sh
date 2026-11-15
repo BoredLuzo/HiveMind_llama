@@ -353,6 +353,7 @@ gpu_patch = {
     "moe_cpu_experts": {
         "qwen3.6:35b-a3b": cpu_experts,
         "qwen3.6:35b-a3b-ud": cpu_experts,
+        "qwen3.6:35b-a3b-mtp": cpu_experts,
         "hermes3.6:35b-a3b": cpu_experts,
         "hermes3.6:35b-a3b-uncensored-genesis-apex-mini": cpu_experts,
     },

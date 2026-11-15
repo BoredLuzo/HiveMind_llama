@@ -592,7 +592,7 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
         # LSP diagnostics stays in core: post-write auto-diagnostics only
         # fire when a server is warm, and this is the tool that warms it.
         # LSP auto-diagnostics runs automatically on write/edit; explicit lsp_*
-        # tools, get_datetime, and send_file stay in duo_core; duo_lean has 10.
+        # tools, get_datetime, and send_file stay in duo_core; duo_lean has 12.
         "get_datetime", "lsp_diagnostics", "send_file",
     },
     "duo_lean": {
