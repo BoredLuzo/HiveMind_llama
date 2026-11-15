@@ -541,6 +541,7 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `gemma-4:e2b-it-qat` | unsloth/gemma-4-E2B-it-qat-GGUF | small all-rounder / vision (+ MTP drafter) | 2.6 GB + 1.0 GB mmproj |
 | `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
 | `qwen3.6:35b-a3b-ud` | unsloth/Qwen3.6-35B-A3B-GGUF | coder / planner (MoE) | 22.4 GB + 0.9 GB mmproj |
+| `qwen3.6:35b-a3b-mtp` | unsloth/Qwen3.6-35B-A3B-MTP-GGUF | coder / planner (MoE + MTP spec-decode) | 22.8 GB + 0.9 GB mmproj |
 | `twil:8b` | webAI-Official/TwIL-8B | dense 8.8B Granite 4.2 reasoning (math/code/IF, balanced Q4_K_M, 40K default ctx) | 5.3 GB |
 | `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | MoE 26B/4B active Gemma 4 reasoning (128K ctx, q8_0 KV, CPU expert offload) | 13.5 GB |
 | `groot:19b-a3b-261023` | GrootTeam/Groot-19B-A3B-261023-GGUF | agent coder, **experimental** (MoE 19B/3B, 128 experts, 128K ctx) | 11.7 GB |

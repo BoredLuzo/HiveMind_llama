@@ -407,6 +407,8 @@ MLOCK_MODEL = True
 
 _MOE_EXPERT_COUNTS = {
     "qwen3.6:35b-a3b": 35,
+    "qwen3.6:35b-a3b-ud": 35,
+    "qwen3.6:35b-a3b-mtp": 35,
     "qwen3.6:35b-a3b-uncensored": 35,
 }
 
@@ -591,7 +593,7 @@ DSPARK_MIN_BUILD = 10173   # llama.cpp mainline #25173 (--spec-type …draft-dsp
 
 #   _MTP_MODELS = {"qwen3.6:35b-a3b-mtp"}
 _MTP_MODELS: set[str] = {
-    "qwen3.5:4b-mtp", _HERMES_V7_MTP, _HERMES_V10_MTP,
+    "qwen3.5:4b-mtp", "qwen3.6:35b-a3b-mtp", _HERMES_V7_MTP, _HERMES_V10_MTP,
 }
 
 

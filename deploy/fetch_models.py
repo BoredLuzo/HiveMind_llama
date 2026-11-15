@@ -246,6 +246,21 @@ SPECS: list[dict] = [
         "mmproj_dest": "mmproj-qwen3.6-35b-a3b-f16.gguf",
     },
     {
+        "key": "qwen3.6:35b-a3b-mtp",
+        "tag": "qwen3.6:35b-a3b-mtp",
+        "desc": "Qwen3.6 35B A3B MTP unsloth UD (Coder/Planner MoE + MTP spec-decode, ~22.8GB download)",
+        "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+        "file_regex": [
+            r"(?i)^qwen3\.6-35b-a3b-ud-q4_k_xl\.gguf$",
+        ],
+        # Both unsloth/Qwen3.6-35B-A3B-GGUF and unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+        # name the remote asset Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf; pin a distinct
+        # local filename so both variants can coexist in models/ without colliding.
+        "file_dest": "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf",
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
+    },
+    {
         # LFM3 (2026-10-30, second attempt): b12001 carries arch `lfm3`
         # (PR #31252); b11889 answered "unknown model architecture: 'lfm3'".
         # Preferred entry is OMNI 2B (text + vision through its own mmproj),
@@ -640,10 +655,10 @@ def _sha256_file(path: Path) -> str:
 
 
 def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
-                  _no_resume: bool = False) -> bool:
+                  _no_resume: bool = False, dest_name: str | None = None) -> bool:
     url = HF_RESOLVE.format(repo=repo, path=f["path"])
     size_gb = int(f.get("size") or 0) / (1024 ** 3)
-    dest = dest_dir / Path(f["path"]).name
+    dest = dest_dir / (dest_name or f.get("dest_name") or Path(f["path"]).name)
     if size_gb > 8.0 and not auto_yes:
         # EOF (audit r4): a non-interactive run (systemd, piped stdin) used to
         # die with an EOFError traceback here instead of skipping cleanly.
@@ -736,7 +751,7 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
                     dest.unlink()
                 except OSError:
                     pass
-                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True)
+                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True, dest_name=dest_name)
         _append = bool(_have and r.status == 206)
         if not _append:
             _have = 0        # server ignored the range: start over, do not append
@@ -783,7 +798,7 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
             if _had_partial and not _no_resume:
                 print("    [INFO] re-downloading from scratch (resume came "
                       "from a different upstream generation)")
-                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True)
+                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True, dest_name=dest_name)
             return False
     else:
         print("    [INFO] checksum: no sha256 available - size check only")
@@ -791,7 +806,9 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
 
 
 def _spec_matches_file(spec: dict, gguf: Path) -> bool:
-    """True if any file_regex of the spec matches this GGUF's name."""
+    """True if this local GGUF matches the spec (pinned file_dest or file_regex)."""
+    if spec.get("file_dest"):
+        return gguf.name.lower() == str(spec["file_dest"]).lower()
     return any(
         re.search(rx, gguf.name, re.IGNORECASE)
         for rx in spec.get("file_regex", [])
@@ -1142,7 +1159,10 @@ def main() -> int:
                 print(f"    [WARNING] Sidecar download failed ({e})")
 
         # Already present?
-        have = [n for n in local_files if re.search(spec["file_regex"][0], n)]
+        if spec.get("file_dest"):
+            have = [n for n in local_files if n == str(spec["file_dest"]).lower()]
+        else:
+            have = [n for n in local_files if re.search(spec["file_regex"][0], n)]
         if args.only_missing and have:
             print(f"    Already present: {have[0]} — skipping (--only-missing)")
             if not args.list_only:
@@ -1192,8 +1212,14 @@ def main() -> int:
         repo = str(repo or "")
         print(f"    Repo: {repo}")
 
+        _main_dest = spec.get("file_dest") or Path(main_file["path"]).name
+        if spec.get("file_dest"):
+            main_file = {**main_file, "dest_name": _main_dest}
         if args.list_only:
-            print(f"    Would download: {main_file['path']}")
+            if spec.get("file_dest"):
+                print(f"    Would download: {main_file['path']} -> {_main_dest}")
+            else:
+                print(f"    Would download: {main_file['path']}")
         else:
             # Declining a large GGUF must skip the WHOLE spec: the projector
             # and the models.json entry belong to a model that is not on disk.
@@ -1211,9 +1237,10 @@ def main() -> int:
                 print("    Skipped - model not downloaded "
                       "(projector/drafter/registration skipped too)")
                 continue
-            local_files[main_file["path"].lower()] = mdir / Path(main_file["path"]).name
+            local_files[main_file["path"].lower()] = mdir / _main_dest
+            local_files[_main_dest.lower()] = mdir / _main_dest
             if spec.get("tag"):
-                _record_known_filename(Path(main_file["path"]).name, spec["tag"])
+                _record_known_filename(_main_dest, spec["tag"])
             _seed_spec_default_profile(spec)
 
         if spec["mmproj_regex"]:

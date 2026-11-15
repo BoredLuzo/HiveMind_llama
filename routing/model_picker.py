@@ -32,7 +32,7 @@ def _pick_direct_model(complexity: str, task_type: str, available: list) -> str:
     if task_type in ("vision", "ocr"):
         _vision_priority = [
             "qwen3.5:4b", "qwen3.5:2b", "qwen3.5:0.8b", "qwen3.5:9b-ud",
-            "qwen3.6:35b-a3b-ud", "qwen3.6:35b-a3b-uncensored",
+            "qwen3.6:35b-a3b-ud", "qwen3.6:35b-a3b-mtp", "qwen3.6:35b-a3b-uncensored",
             "hermes3.6:35b-a3b-uncensored-genesis-apex-mini",
             "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
             "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact",

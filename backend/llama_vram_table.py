@@ -98,6 +98,11 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 6272,
         "calibrated_n_cpu_moe":     35,
     },
+    "qwen3.6:35b-a3b-mtp": {
+        "active_gpu_gb":            4.66,
+        "measured_bytes_per_token": 6272,
+        "calibrated_n_cpu_moe":     35,
+    },
     "qwen3.6:35b-a3b-uncensored": {
         "active_gpu_gb":            4.66,
         "measured_bytes_per_token": 6272,

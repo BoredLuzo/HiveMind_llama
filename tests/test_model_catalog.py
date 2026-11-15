@@ -295,4 +295,62 @@ if air:
           "twil:8b" in _parse_gguf_filename("TwIL-8B-Q4_K_M-balanced.gguf")
           and _parse_gguf_filename("Air-26B-A4B.gguf")[0] == "air:26b-a4b")
 
+# ── Qwen3.6 35B-A3B Unsloth non-MTP + MTP + sharp Jinja template ─────────
+q36_ud = specs.get("qwen3.6:35b-a3b-ud")
+q36_mtp = specs.get("qwen3.6:35b-a3b-mtp")
+check("qwen3.6:35b-a3b-ud and qwen3.6:35b-a3b-mtp are both in the catalog",
+      q36_ud is not None and q36_mtp is not None)
+if q36_ud and q36_mtp:
+    check("qwen3.6:35b-a3b-ud repo pinned to unsloth/Qwen3.6-35B-A3B-GGUF",
+          q36_ud["repo"] == "unsloth/Qwen3.6-35B-A3B-GGUF", f"({q36_ud['repo']})")
+    check("qwen3.6:35b-a3b-mtp repo pinned to unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+          q36_mtp["repo"] == "unsloth/Qwen3.6-35B-A3B-MTP-GGUF", f"({q36_mtp['repo']})")
+    check("qwen3.6:35b-a3b-mtp sets unique file_dest & mmproj_dest",
+          q36_mtp.get("file_dest") == "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf"
+          and q36_mtp.get("mmproj_dest") == "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
+          f"({q36_mtp.get('file_dest')}, {q36_mtp.get('mmproj_dest')})")
+
+    import json as _json_q36
+    import tempfile as _tempfile_q36
+
+    for _pname in (
+        "qwen3.6_35b-a3b-ud.json",
+        "qwen3.6_35b-a3b-mtp.json",
+        "qwen3.6_35b-a3b-uncensored-genesis-final-apex-compact.json",
+    ):
+        _pp = ROOT / "model_configs" / "models" / _pname
+        check(f"{_pname} exists and pins chat_template_sharp_v22.5.0.jinja",
+              _pp.exists() and _json_q36.loads(_pp.read_text(encoding="utf-8")).get("chat_template")
+              == "chat_template_sharp_v22.5.0.jinja")
+
+    _ud_prof = _json_q36.loads((ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-ud.json").read_text(encoding="utf-8"))
+    _mtp_prof = _json_q36.loads((ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-mtp.json").read_text(encoding="utf-8"))
+    check("qwen3.6_35b-a3b-mtp.json enables mtp + 35 CPU experts + ubatch 512",
+          _mtp_prof.get("mtp") is True
+          and int(_mtp_prof.get("moe_cpu_experts") or 0) == 35
+          and int(_mtp_prof.get("ubatch") or 0) == 512)
+    check("qwen3.6_35b-a3b-ud.json keeps mtp disabled",
+          _ud_prof.get("mtp") is False)
+
+    with _tempfile_q36.TemporaryDirectory() as _tmp_q36:
+        _mdir = Path(_tmp_q36)
+        _f_ud = _mdir / "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+        _f_mtp = _mdir / "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf"
+        _f_ud.write_bytes(b"ud")
+        _f_mtp.write_bytes(b"mtp")
+        (_mdir / "model_configs").mkdir(exist_ok=True)
+        _out = _mdir / "models.json"
+        _orig_fm_root = fm.ROOT
+        fm.ROOT = _mdir
+        try:
+            fm.write_models_json(_mdir, out=_out)
+        finally:
+            fm.ROOT = _orig_fm_root
+        _mj = _json_q36.loads(_out.read_text(encoding="utf-8"))
+        check("both Qwen3.6 Unsloth non-MTP and MTP register cleanly without collision",
+              Path(_mj.get("qwen3.6:35b-a3b-ud", "")).name == _f_ud.name
+              and Path(_mj.get("qwen3.6:35b-a3b-mtp", "")).name == _f_mtp.name
+              and _mj.get("qwen3.6:35b-a3b-ud") != _mj.get("qwen3.6:35b-a3b-mtp"),
+              f"({_mj})")
+
 sys.exit(h.finish("model_catalog"))
