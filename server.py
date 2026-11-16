@@ -89,7 +89,7 @@ from core.version import HIVEMIND_VERSION
 # version from THIS file (Select-String, first match) before applying a zip.
 # The literal below is text only — core/version.py stays the executable
 # source. Keep it in sync; test_split_audit_fixes (h2) pins the match.
-# HIVEMIND_VERSION = "1.6.1"
+# HIVEMIND_VERSION = "1.6.2"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -2136,22 +2136,29 @@ async def tts_status():
 
 
 @app.get("/tts/voices")
-async def tts_voices():
-    """The curated voices (the sidecar's catalog is bigger; this is the shipped set)."""
+async def tts_voices(backend: str = ""):
+    """Voices for the active (or requested) TTS backend (`pocket` | `woof`)."""
     from core import tts_engine
+    cfg = load_settings()
+    b = (backend or "").strip().lower() or tts_engine.resolve_backend(cfg)
+    if b not in ("pocket", "woof"):
+        b = tts_engine.DEFAULT_BACKEND
+    voices, default_v, attr = tts_engine.voices_for(b)
     return JSONResponse({
-        "default": tts_engine.DEFAULT_VOICE,
+        "backend": b,
+        "backends": list(tts_engine.BACKENDS),
+        "default": default_v,
         "max_chars": tts_engine.tts_audio.MAX_CHARS,
-        "attribution": tts_engine.ATTRIBUTION,
+        "attribution": attr,
         "voices": [{"key": k, "label": label, "note": note, "license": lic,
                     "source": src}
-                   for k, label, note, lic, src in tts_engine.VOICES],
+                   for k, label, note, lic, src in voices],
     })
 
 
 @app.post("/tts/preload")
 async def tts_preload():
-    """Start the TTS sidecar ahead of the first sentence (tts_preload_run).
+    """Start or warm the configured TTS backend ahead of the first sentence.
 
     Called by the gateway when a phone run starts and by nothing else: the UI
     warms on page load, a phone run has no page. Returns immediately when TTS is
@@ -2166,7 +2173,34 @@ async def tts_preload():
         return JSONResponse({"warm": False, "reason": "TTS_DISABLED"}, status_code=200)
     warm = await asyncio.to_thread(tts_engine.preload, settings)
     return JSONResponse({"warm": bool(warm),
-                         "running": tts_engine.is_running()}, status_code=200)
+                         "running": tts_engine.is_running(settings)}, status_code=200)
+
+
+@app.post("/tts/fetch")
+async def tts_fetch():
+    """Start deploy/fetch_woof.py in the background (ConwayResearch/Underdog-Woof)."""
+    import subprocess
+    import sys as _sys
+
+    from core import tts_engine, tts_woof
+
+    if tts_woof.fetch_state().get("state") == "running":
+        return JSONResponse(tts_engine.TtsError(
+            "TTS_BUSY", "a voice model download is already running").as_dict(), status_code=409)
+    script = Path(__file__).resolve().parent / "deploy" / "fetch_woof.py"
+    if not script.is_file():
+        return JSONResponse(tts_engine.TtsError(
+            "TTS_FAILED", "deploy/fetch_woof.py is missing").as_dict(), status_code=400)
+    try:
+        subprocess.Popen([_sys.executable, str(script)],
+                         cwd=str(script.parent.parent),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL)
+    except OSError as exc:
+        return JSONResponse(tts_engine.TtsError(
+            "TTS_FAILED", f"could not start the download: {exc}").as_dict(), status_code=500)
+    _logger.info("[TTS-WOOF] download started for ConwayResearch/Underdog-Woof")
+    return JSONResponse({"started": True, "fetch": tts_woof.fetch_state()}, status_code=202)
 
 
 @app.post("/tts")

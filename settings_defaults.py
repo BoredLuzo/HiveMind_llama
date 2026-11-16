@@ -503,6 +503,9 @@ DEFAULT_SETTINGS = {
     # Cosette + 1.08x speed are the owner's picks (2026-10-17); Pocket TTS has
     # no speed parameter, so the factor is applied by HiveMind (WSOLA).
     "tts_enabled":               False,
+    # TTS engine: "pocket" (Kyutai Pocket TTS via uvx, CC BY 4.0) or "woof"
+    # (ConwayResearch/Underdog-Woof CPU NumPy ~41 MB, non-commercial only).
+    "tts_backend":               "pocket",
     "tts_voice":                 "anna",
     "tts_speed":                 1.08,
     "tts_timeout_s":             120,

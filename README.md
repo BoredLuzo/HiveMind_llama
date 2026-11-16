@@ -127,7 +127,7 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 
 | Integration | What it provides | Docs |
 |---|---|---|
-| **Voice (STT / TTS)** | Local speech-to-text (`whisper.cpp` / Parakeet) and text-to-speech (`Pocket TTS`), off by default | [docs/voice_setup.md](docs/voice_setup.md), [docs/voice_licenses.md](docs/voice_licenses.md) |
+| **Voice (STT / TTS)** | Local speech-to-text (`whisper.cpp` / Parakeet) and text-to-speech (`Pocket TTS` / `Underdog Woof`), off by default | [docs/voice_setup.md](docs/voice_setup.md), [docs/voice_licenses.md](docs/voice_licenses.md) |
 | **Telegram Gateway** | Remote control from your phone: voice notes, images, PDFs, diff/action approvals | [docs/gateway_setup.md](docs/gateway_setup.md) |
 | **MCP (Server & Client)** | Expose HiveMind tools to IDEs over stdio/HTTP with Origin/auth guards, or consume external MCP servers | [docs/mcp.md](docs/mcp.md), [docs/mcp_client.md](docs/mcp_client.md) |
 | **Language Servers (LSP)** | Auto-attaches compiler/linter diagnostics after edits and enables symbol navigation | [docs/lsp.md](docs/lsp.md) |

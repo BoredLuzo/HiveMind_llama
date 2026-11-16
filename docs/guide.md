@@ -652,15 +652,15 @@ started until you switch it on.
 | `base` | 141 MB | speech to text | 9.9 % - light default for small machines |
 | `small` | 465 MB | speech to text | 7.3 % - slower, small gain |
 | `tiny` | 74 MB | speech to text | 12.4 % - weak CPUs |
-| Pocket TTS | ~200 MB + PyTorch in uv's cache | text to speech | voice `anna` (default), speed `1.08x` |
+| Pocket TTS (default backend) | ~200 MB + PyTorch in uv's cache | text to speech | voice `anna` (default), speed `1.08x` |
+| Underdog Woof (optional backend) | ~41 MB in `voice_models/underdog_woof/` | text to speech | pure NumPy on CPU (no PyTorch, no HF gate), voices `juno` / `mira`, non-commercial |
 | whisper.cpp / parakeet.cpp | 21 MB | the STT binaries | `whisper-cli`, `whisper-server`, `parakeet-cli` |
 
-Voices: `anna` (default), `alba`, `cosette`, `eve`, `jane`, `vera`, `bill_boerst`.
+Pocket TTS voices: `anna` (default), `alba`, `cosette`, `eve`, `jane`, `vera`, `bill_boerst`.
 `cosette` is the Expresso recording (**CC BY-NC 4.0** - non-commercial only);
-the others are CC BY 4.0 or CC0. You can switch voices at any time. `cosette`
-is available but no longer the shipped default; `bill_boerst` is CC0. Speech to
+the others are CC BY 4.0 or CC0. Underdog Woof adds `juno` and `mira` (**Underdog Non-Commercial License 1.0** — opt-in via *Settings → Voice → Backend* or `deploy\setup_voice.bat --woof`). You can switch backends or voices at any time. Speech to
 text lands in
-`<install>/stt/`, TTS in uv's and the Hugging Face cache - never in the repository,
+`<install>/stt/`, Underdog Woof in `<install>/voice_models/underdog_woof/`, and Pocket TTS in uv's and the Hugging Face cache - never in the repository,
 never in a release zip.
 
 **Licences of the audio stack.** HiveMind's own code is under this repo's
@@ -672,6 +672,7 @@ first use** (never part of a release zip), and they keep their own terms.
 | Pocket TTS **model** | `kyutai/pocket-tts` (Hugging Face, gated) | **CC BY 4.0** + gate terms | attribution; the gate forbids voice impersonation/cloning without consent and deceptive use |
 | `pocket-tts` **code** | PyPI, installed in an isolated `uvx` env | **MIT** | keep the notice (not bundled) |
 | **Voice recordings** | `kyutai/tts-voices` | **no blanket licence in that repo** - each voice keeps its source licence | see below |
+| **Underdog Woof** (`juno`, `mira`) | `ConwayResearch/Underdog-Woof` (public HF repo) | **Underdog Non-Commercial License 1.0** | **non-commercial only**; visible credit `"Voice by Underdog Woof"` (`underdog.ai`), keep `LICENSE` + `NOTICE` alongside downloaded weights |
 | Whisper **models** (`ggml-*.bin`) | `ggerganov/whisper.cpp` release assets | **MIT** | notice |
 | whisper.cpp **binaries** (`whisper-cli`, `whisper-server`, `parakeet-cli`) | `ggerganov/whisper.cpp` releases | **MIT** | notice |
 | Parakeet **GGUF** | `ggml-org/parakeet-GGUF` | repo says **MIT**, upstream NVIDIA Parakeet-TDT weights are **CC BY 4.0** | treat as **CC BY 4.0** (the stricter one): attribution if redistributed |
@@ -694,17 +695,19 @@ transcribing it.
 
 Attribution shown in the UI and in `GET /tts/status`:
 *"Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) - recordings: VCTK / Alba
-MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial)"*.
+MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial)"*
+or, when Underdog Woof is active, *"Voice by Underdog Woof (underdog.ai) -
+Underdog Non-Commercial License 1.0 (non-commercial use only)"*.
 Full provenance: [voice_licenses.md](voice_licenses.md).
 
-**Gated model - one-time token setup.** The Pocket TTS model lives behind a
-Hugging Face gate: accept the terms on
+**Gated model - one-time token setup (Pocket TTS only).** The Pocket TTS model
+lives behind a Hugging Face gate: accept the terms on
 [kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts), create a
 **Read** token at <https://huggingface.co/settings/tokens> and either run
 `uvx --from huggingface_hub hf auth login` once or set `HF_TOKEN`. Step by step
 (Windows, Linux/systemd, background-user pitfalls, 401/403 troubleshooting):
-[huggingface_token.md](huggingface_token.md). Speech to text needs no
-token - whisper and parakeet are public repos.
+[huggingface_token.md](huggingface_token.md). Speech to text and **Underdog
+Woof** (`ConwayResearch/Underdog-Woof`) need no token - those are public repos.
 
 ## Telegram (optional)
 

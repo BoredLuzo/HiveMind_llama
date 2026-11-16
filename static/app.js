@@ -1338,6 +1338,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     S.sttPreload = s.stt_preload === true;
     // TTS (1.4): opt-in, same rule - nothing happens while it is off.
     S.ttsEnabled = s.tts_enabled === true;
+    S.ttsBackend = String(s.tts_backend || 'pocket');
     S.ttsVoice = String(s.tts_voice || 'cosette');
     S.ttsSpeed = parseFloat(s.tts_speed || 1.08) || 1.08;
     S.tgVoiceIn = s.telegram_voice_in === true;
@@ -2154,11 +2155,13 @@ function _ttsErrorText(j) {
   if (!j) return 'the TTS engine did not answer';
   var map = {
     TTS_DISABLED: 'text to speech is off in the settings',
-    TTS_NO_UV: 'uv is not installed - TTS needs uvx',
+    TTS_NO_UV: 'uv is not installed - Pocket TTS needs uvx',
+    TTS_NO_NUMPY: 'numpy is missing in the Python venv',
+    TTS_BUSY: 'voice model download is already running',
     TTS_EMPTY: 'nothing to speak',
     TTS_TIMEOUT: 'the engine took too long',
     TTS_ENGINE_BROKEN: 'the voice engine produced no audio (voice config or sidecar log)',
-    TTS_FAILED: 'the engine failed - see logs/pocket_tts.log'
+    TTS_FAILED: 'the engine failed - see logs/'
   };
   var code = (j && j.code) || '';
   // TTS_ENGINE_BROKEN carries a precise reason from the server (log hint
@@ -2527,28 +2530,65 @@ function _syncTgVoice() {
 }
 
 
-// The voice list comes from GET /tts/voices (core/tts_engine.VOICES) - one
-// source, so adding a voice never means editing HTML as well.
-var _ttsVoicesLoaded = false;
+// The voice list comes from GET /tts/voices (core/tts_engine.VOICES / tts_woof) -
+// one source, so adding a voice never means editing HTML as well.
+var _ttsVoicesBackend = '';
 
-function _ttsFillVoices(sel) {
-  if (!sel || _ttsVoicesLoaded) return;
-  fetch('/tts/voices', {cache: 'no-store'}).then(function (r) {
+function _ttsFillVoices(sel, force, backendOverride) {
+  var backend = backendOverride || (S && S.ttsBackend) || 'pocket';
+  if (!sel || (!force && _ttsVoicesBackend === backend)) return;
+  fetch('/tts/voices?backend=' + encodeURIComponent(backend), {cache: 'no-store'}).then(function (r) {
     return r.json();
   }).then(function (d) {
     if (!d || !d.voices || !d.voices.length) return;
-    _ttsVoicesLoaded = true;
+    _ttsVoicesBackend = d.backend || backend;
     if (d.max_chars) S.ttsMaxChars = d.max_chars;
-    var keep = sel.value;
+    var attrEl = document.getElementById('tts-attribution');
+    if (attrEl && d.attribution) {
+      attrEl.innerHTML = esc(d.attribution) + ' &middot; <code>docs\\voice_licenses.md</code>';
+    }
+    var keep = (S && S.ttsVoice) || sel.value || '';
     sel.textContent = '';
+    var validKeys = [];
     d.voices.forEach(function (v) {
+      validKeys.push(v.key);
       var o = document.createElement('option');
       o.value = v.key;
       o.textContent = v.label + (v.note ? ' - ' + v.note : '');
       sel.appendChild(o);
     });
-    sel.value = (S && S.ttsVoice) || keep || d.default || '';
+    var nextVoice = validKeys.indexOf(keep) >= 0 ? keep : (d.default || validKeys[0] || '');
+    sel.value = nextVoice;
+    if (S && nextVoice && S.ttsVoice !== nextVoice) {
+      S.ttsVoice = nextVoice;
+      postSettings({tts_voice: nextVoice});
+    }
   }).catch(function () { /* keep the placeholder, the card still works */ });
+}
+
+function onTtsBackendChange(backend) {
+  backend = (backend === 'woof') ? 'woof' : 'pocket';
+  if (S) S.ttsBackend = backend;
+  _ttsVoicesBackend = '';
+  postSettings({tts_backend: backend});
+  var sel = document.getElementById('tts-voice-sel');
+  _ttsFillVoices(sel, true, backend);
+  _ttsStatusRefresh();
+}
+
+async function ttsFetchWoof() {
+  var prog = document.getElementById('tts-progress');
+  var btn = document.getElementById('tts-download-btn');
+  if (btn) btn.disabled = true;
+  if (prog) prog.textContent = 'starting...';
+  try {
+    var r = await fetch('/tts/fetch', {method: 'POST'});
+    var j = await r.json();
+    if (j && j.code && prog) prog.textContent = _ttsErrorText(j);
+  } catch (e) {
+    if (prog) prog.textContent = 'download failed: ' + e.message;
+  }
+  _ttsStatusRefresh();
 }
 
 function _syncTtsCard() {
@@ -2562,11 +2602,13 @@ function _syncTtsCard() {
     if (typeof _readAloudStop === 'function') _readAloudStop();
     else { _voiceStopAudio(); _readAloudQueue = []; _readAloudBusy = false; }
   }
+  var bSel = document.getElementById('tts-backend-sel');
+  if (bSel && S && S.ttsBackend) bSel.value = S.ttsBackend;
   var btn = document.getElementById('tts-speak-all');
   if (btn) btn.style.display = on ? '' : 'none';
   var sel = document.getElementById('tts-voice-sel');
   if (sel) {
-    _ttsFillVoices(sel);
+    _ttsFillVoices(sel, false);
     if (S.ttsVoice && !sel.value) {
       var matches = Array.prototype.filter.call(sel.options, function (o) {
         return o.value === S.ttsVoice;
@@ -2578,23 +2620,50 @@ function _syncTtsCard() {
   if (spd && !spd.value) spd.value = (S.ttsSpeed || 1.08);
 }
 
+var _ttsFetchPoll = null;
 async function _ttsStatusRefresh() {
   if (!(S && S.ttsEnabled)) { _syncTtsCard(); return; }
   var line = document.getElementById('tts-status-line');
+  var dlRow = document.getElementById('tts-download-row');
+  var dlBtn = document.getElementById('tts-download-btn');
+  var prog = document.getElementById('tts-progress');
   try {
     var r = await fetch('/tts/status', {cache: 'no-store'});
     var st = await r.json();
-    if (line) {
-      if (st.max_chars) S.ttsMaxChars = st.max_chars;
-    if (!st.uv) {
-        line.textContent = 'uv is missing - install it, then TTS works';
-        line.style.color = '#f5c451';
-      } else if (st.running) {
-        line.textContent = 'ready \\u00b7 ' + st.voice + ' \\u00b7 ' + st.speed + 'x';
-        line.style.color = '#6ee7a8';
-      } else {
-        line.textContent = 'engine idle - warm start ~2 s, cold start installs dependencies (can take up to ~1 min, later requests succeed)';
-        line.style.color = '#f5c451';
+    if (st.max_chars) S.ttsMaxChars = st.max_chars;
+    var backend = st.backend || (S && S.ttsBackend) || 'pocket';
+    if (backend === 'woof') {
+      var wf = st.woof_fetch || {};
+      var runningFetch = wf.state === 'running';
+      if (dlRow) dlRow.style.display = (!st.woof_installed || runningFetch) ? 'block' : 'none';
+      if (dlBtn) dlBtn.disabled = runningFetch;
+      if (prog) prog.textContent = runningFetch ? (Math.round(wf.percent || 0) + ' %') : (wf.state === 'error' ? (wf.message || 'error') : '');
+      if (line) {
+        if (runningFetch) {
+          line.textContent = 'downloading Underdog Woof (~41 MB)...';
+          line.style.color = '#f5c451';
+          if (!_ttsFetchPoll) _ttsFetchPoll = setTimeout(function () { _ttsFetchPoll = null; _ttsStatusRefresh(); }, 800);
+        } else if (st.woof_installed) {
+          line.textContent = (st.running ? 'ready' : 'installed') + ' (Underdog Woof CPU) \u00b7 ' + st.voice + ' \u00b7 ' + st.speed + 'x';
+          line.style.color = '#6ee7a8';
+        } else {
+          line.textContent = 'not downloaded yet (~41 MB, no HF token needed) - click Download or Play sample';
+          line.style.color = '#f5c451';
+        }
+      }
+    } else {
+      if (dlRow) dlRow.style.display = 'none';
+      if (line) {
+        if (!st.uv) {
+          line.textContent = 'uv is missing - install it, then Pocket TTS works';
+          line.style.color = '#f5c451';
+        } else if (st.running) {
+          line.textContent = 'ready \u00b7 ' + st.voice + ' \u00b7 ' + st.speed + 'x';
+          line.style.color = '#6ee7a8';
+        } else {
+          line.textContent = 'engine idle - warm start ~2 s, cold start installs dependencies (can take up to ~1 min, later requests succeed)';
+          line.style.color = '#f5c451';
+        }
       }
     }
   } catch (e) {
@@ -15426,6 +15495,7 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
     // "Voice", the rows are "Read aloud"/"Speed"), so the DOM scan can never
     // find them. Explicit entries with the acronym in the search terms.
     [['tts-enabled-toggle', 'Voice output (TTS)', 'voice tts text to speech output enabled'],
+     ['tts-backend-sel', 'TTS voice model (Pocket TTS / Underdog Woof)', 'voice tts backend model pocket woof underdog numpy'],
      ['tts-voice-sel', 'TTS voice', 'voice tts voice model speaker'],
      ['tts-read-direct-toggle', 'Read aloud: direct answers (TTS)', 'tts read aloud speak direct chat'],
      ['tts-read-agentic-toggle', 'Read aloud: agentic runs (TTS)', 'tts read aloud speak agentic plan'],

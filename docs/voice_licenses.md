@@ -11,6 +11,7 @@ non-commercial and two models carry attribution obligations.
 | HiveMind's own voice code (`core/tts_*.py`, `core/stt_*.py`) | the repo's own license | none |
 | `pocket-tts` **code** (installed by `uvx`) | **MIT** (`kyutai-labs/pocket-tts`) | keep the copyright notice with substantial copies (we do not vendor it) |
 | **Pocket TTS model weights** (`kyutai/pocket-tts`) | **CC BY 4.0** | **attribution**, plus the gated "prohibited use" terms |
+| **Underdog Woof** (`ConwayResearch/Underdog-Woof`, opt-in backend) | **Underdog Non-Commercial License 1.0** | **non-commercial only**; display credit `"Voice by Underdog Woof"` (`underdog.ai`) and keep `LICENSE` + `NOTICE` alongside downloaded weights (downloaded on demand to `voice_models/underdog_woof/`, never vendored) |
 | whisper models (`ggerganov/whisper.cpp` → `ggml-*.bin`) | **MIT** (the HF repos for the ggml weights - incl. openai/whisper-* and Systran/faster-whisper-* - are tagged MIT) | notice |
 | whisper.cpp + parakeet binaries (`ggml-org/whisper.cpp`) | MIT | notice |
 | Parakeet weights (`ggml-org/parakeet-GGUF`) | repo says MIT, upstream `nvidia/parakeet-tdt-0.6b-v3` says **CC BY 4.0** | treat as **CC BY 4.0** (the stricter one) |
@@ -62,11 +63,29 @@ user's own recordings (the microphone test, Telegram voice notes) are transcribe
 and **discarded immediately** - they are not stored, not used as a voice prompt,
 and the temp WAV is deleted in a `finally` block.
 
+## Underdog Woof (`ConwayResearch/Underdog-Woof`, opt-in backend)
+
+Underdog Woof provides two pure-NumPy English voices (`juno` and `mira`, int8
+weights ~40.6 MB). It is **opt-in**, downloaded on demand to
+`voice_models/underdog_woof/`, never bundled in the repository or release ZIPs,
+and governed by the **Underdog Non-Commercial License 1.0**:
+
+- **Non-commercial use only.** Personal, academic, and internal non-commercial
+  use is permitted; commercial use requires a separate license from Underdog.
+- **Required credit:** when the Underdog Woof backend is active, the Voice card
+  and `/tts/status` display `"Voice by Underdog Woof (underdog.ai) - Underdog Non-Commercial License 1.0 (non-commercial use only)"`.
+- **Preserved notices:** `deploy/fetch_woof.py` downloads `LICENSE` and `NOTICE`
+  verbatim into `voice_models/underdog_woof/` alongside `woof_int8.npz` and the
+  runtime modules.
+
 ## Attribution text (used in the UI and the README)
 
 > Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) - voice recordings: VCTK /
 > Alba MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0,
 > non-commercial)
+>
+> Voice by Underdog Woof (underdog.ai) - Underdog Non-Commercial License 1.0
+> (non-commercial use only) [shown when the Underdog Woof backend is selected]
 
 Speech to text: OpenAI Whisper models (Apache-2.0) and NVIDIA Parakeet
 (CC BY 4.0) via whisper.cpp (MIT).

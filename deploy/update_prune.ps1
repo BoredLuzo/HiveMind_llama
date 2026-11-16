@@ -20,7 +20,7 @@ $protFiles = 'settings.json','models.json','vision_model.json','presets.json',
              'gateway_state.json','gateway_state.json.corrupt','gateway.disabled',
              'gateway.lock','gateway_audit.jsonl','gateway_state.tmp'
 $protDirs  = 'sessions','context','logs','custom_prompts','.hive_uploads',
-             'learning','learning_logs','.venv','llama','models'
+             'learning','learning_logs','.venv','llama','models','voice_models'
 
 # NEVER-PRUNE update.bat (audit 2026-11-04): this script runs while
 # update.bat is still executing. If a future release ever dropped

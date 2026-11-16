@@ -1828,13 +1828,26 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Speaks answers out loud with a local voice (Pocket TTS, CPU only). Pick a voice and a speed below, then use the speaker button on any answer - or let Telegram send it as a voice note. Needs <code>uv</code> on PATH and a one-time <code>hf auth login</code> (gated model, see <code>docs\voice_setup.md</code>); the engine runs in its own isolated environment, so HiveMind's install stays untouched. The first request fetches ~200 MB into uv's cache, afterwards it stays warm and shuts down when idle.</div>
+      <div class="fld-hint">Speaks answers out loud locally (CPU only, English). Pick <strong>Pocket TTS</strong> (Kyutai sidecar via <code>uv</code> + one-time <code>hf auth login</code>, see <code>docs\voice_setup.md</code>) or <strong>Underdog Woof</strong> (pure NumPy, ~41 MB, no HF login, non-commercial only). Then use the speaker button on any answer or let Telegram send voice notes.</div>
       <div id="tts-options" class="tgl-sub" style="display:none">
         <div class="tgl-row" style="align-items:flex-start">
           <span class="tgl-text" style="max-width:150px">Engine</span>
           <div id="tts-status" style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.5;color:#8f9bb3">
             <div id="tts-status-line">&mdash;</div>
+            <div id="tts-download-row" style="display:none;margin-top:4px">
+              <button id="tts-download-btn" onclick="ttsFetchWoof()"
+                style="background:#1d2637;border:1px solid #2e3a4e;border-radius:4px;padding:3px 8px;color:#c8d4e4;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer">Download (~41 MB)</button>
+              <span id="tts-progress" style="margin-left:8px"></span>
+            </div>
           </div>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Voice model</span>
+          <select id="tts-backend-sel" onchange="onTtsBackendChange(this.value)"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:210px;flex-shrink:0">
+            <option value="pocket">Pocket TTS (Kyutai, HF login)</option>
+            <option value="woof">Underdog Woof (41 MB NumPy, no HF login)</option>
+          </select>
         </div>
         <div class="tgl-row">
           <span class="tgl-text">Voice</span>

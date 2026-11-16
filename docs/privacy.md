@@ -20,13 +20,14 @@ logs live in the install folder. (Short summary in the
 
 ## Model downloads and tokens
 
-HiveMind never creates a Hugging Face token. Public models download
-anonymously (including the LFS checksum lookup). For gated models such as
-Pocket TTS, create a Read token at <https://huggingface.co/settings/tokens>
-and either run `hf auth login` (the installer reads the token file it writes)
-or set `HF_TOKEN`. Without one, a gated download stops with a login hint
-instead of a traceback. Step by step (Windows, Linux/systemd,
-background-user pitfalls, 401/403 troubleshooting):
+HiveMind never creates a Hugging Face token. Public models — including
+GGUFs, Whisper/Parakeet STT, and the optional **Underdog Woof** TTS
+(`ConwayResearch/Underdog-Woof`) — download anonymously without any login.
+For gated models such as Pocket TTS (`kyutai/pocket-tts`), create a Read token
+at <https://huggingface.co/settings/tokens> and either run `hf auth login`
+(the installer reads the token file it writes) or set `HF_TOKEN`. Without one,
+a gated download stops with a login hint instead of a traceback. Step by step
+(Windows, Linux/systemd, background-user pitfalls, 401/403 troubleshooting):
 [huggingface_token.md](huggingface_token.md).
 
 ## Fully offline

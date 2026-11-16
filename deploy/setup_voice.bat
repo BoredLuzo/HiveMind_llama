@@ -25,15 +25,18 @@ if not exist "%PY%" set "PY=python"
 
 set "MODEL="
 set "DOTTS=0"
+set "DOWOOF=0"
 for %%A in (%*) do (
     if /i "%%~A"=="--tts"  set "DOTTS=1"
+    if /i "%%~A"=="--woof" set "DOWOOF=1"
     if /i "%%~A"=="--both" set "DOTTS=1"
-    if /i not "%%~A"=="--tts" if /i not "%%~A"=="--both" set "MODEL=%%~A"
+    if /i not "%%~A"=="--tts" if /i not "%%~A"=="--both" if /i not "%%~A"=="--woof" set "MODEL=%%~A"
 )
 if "%MODEL%"=="" set "MODEL=parakeet-q4k"
 
 set "DOSTT=1"
 if /i "%~1"=="--tts" set "DOSTT=0"
+if /i "%~1"=="--woof" set "DOSTT=0"
 
 echo.
 echo  +-----------------------------------------------------------+
@@ -55,7 +58,15 @@ echo.
 
 :stt_done
 if "%DOTTS%"=="1" goto do_tts
+if "%DOWOOF%"=="1" goto do_woof
 echo  [2/2] Text to speech - skipped
+echo.
+goto summary
+
+:do_woof
+echo  [2/2] Text to speech - Underdog Woof ^(CPU NumPy, ~41 MB, no HF login^)
+echo.
+"%PY%" deploy\fetch_woof.py
 echo.
 goto summary
 

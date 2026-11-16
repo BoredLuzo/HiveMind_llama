@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**294 settings keys.**
+**295 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -276,6 +276,7 @@ its comment) in either file, then re-run the generator.
 | `telegram_result_mode` | str | `both` | yes | What a phone run sends back (1.4.2). "both" = text + voice note, "text" = text only, "voice" = only the model-generated answer as a voice note (the progress lines stay text). telegram_progress_msgs turns the info lines off entirely for a pure "results only" channel. |
 | `telegram_voice_in` | bool | `False` | yes | Telegram gateway voice (per bot, opt-in). The gateway reads these from the engine, so the UI switches drive it; greying follows stt_enabled / tts_enabled (a voice note needs STT, a voice answer needs TTS). |
 | `telegram_voice_out` | bool | `False` | yes |  |
+| `tts_backend` | str | `pocket` | yes | TTS engine: "pocket" (Kyutai Pocket TTS via uvx, CC BY 4.0) or "woof" (ConwayResearch/Underdog-Woof CPU NumPy ~41 MB, non-commercial only). |
 | `tts_enabled` | bool | `False` | yes | Opt-in like STT: the sidecar (torch) only starts when tts_enabled is on. Cosette + 1.08x speed are the operator's picks ; Pocket TTS has no speed parameter, so the factor is applied by HiveMind (WSOLA). |
 | `tts_idle_stop_s` | int | `900` | - |  |
 | `tts_normalize` | bool | `True` | - | Server-side levelling of the sidecar output (measured -15.5 dBFS peak). |

@@ -76,14 +76,14 @@ APPLY_XF = [
 # also matched model_configs\models, silently skipping the tracked
 # model-config JSONs on every update (XD-ANCHOR, audit 2026-11-04).
 APPLY_XD = ["sessions", ".hive_uploads", "learning_logs", "logs", ".venv",
-            "llama"]
+            "llama", "voice_models"]
 
 # ── backup excludes ─────────────────────────────────────────────────────────
 # models excluded: GGUFs can live here in some setups — gigabytes nobody
 # wants in a backup. The exclude is ANCHORED to the install root at call
 # time. update_backup_* is excluded so backups never nest.
 BACKUP_XD = [".venv", "llama", "logs", "sessions", "learning_logs",
-             "__pycache__", TMPDIR_NAME, "update_backup_*"]
+             "voice_models", "__pycache__", TMPDIR_NAME, "update_backup_*"]
 
 WARN_RE = re.compile(r"(?i)\b(warning|breaking|known issues?|migrat\w*"
                      r"|attention|caution|deprecat\w*)\b")

@@ -38,8 +38,15 @@ import time
 from pathlib import Path
 
 from core import tts_audio
+from core import tts_woof
 
 logger = logging.getLogger(__name__)
+
+BACKENDS = [
+    {"key": "pocket", "label": "Pocket TTS (Kyutai - CC BY 4.0, HF login)"},
+    {"key": "woof", "label": "Underdog Woof (CPU NumPy, 41 MB, no HF login, non-commercial)"},
+]
+DEFAULT_BACKEND = "pocket"
 
 #: The shipped voices: (key, label, note, license, source). The license column is
 #: the reason this table is the single source - see docs/voice_licenses.md.
@@ -151,14 +158,35 @@ _http_client = None
 
 
 # ── settings helpers ────────────────────────────────────────────────────────
-def resolve_voice(settings: dict | None = None) -> str:
+def resolve_backend(settings: dict | None = None, *, voice: str = "") -> str:
+    """Resolve the active TTS backend (``pocket`` or ``woof``)."""
+    v = str(voice or "").strip().lower()
+    if v:
+        if v in {item[0] for item in tts_woof.WOOF_VOICES}:
+            return "woof"
+        if v in {item[0] for item in VOICES}:
+            return "pocket"
+    raw = str((settings or {}).get("tts_backend") or DEFAULT_BACKEND).strip().lower()
+    return "woof" if raw == "woof" else DEFAULT_BACKEND
+
+
+def voices_for(backend: str | None = None):
+    """Return ``(voices_list, default_voice, attribution)`` for ``backend``."""
+    if str(backend or "").strip().lower() == "woof":
+        return tts_woof.WOOF_VOICES, tts_woof.DEFAULT_WOOF_VOICE, tts_woof.WOOF_ATTRIBUTION
+    return VOICES, DEFAULT_VOICE, ATTRIBUTION
+
+
+def resolve_voice(settings: dict | None = None, *, backend: str | None = None) -> str:
     want = str((settings or {}).get("tts_voice") or "").strip()
-    keys = {v[0] for v in VOICES}
+    b = backend or resolve_backend(settings)
+    voices, default_v, _ = voices_for(b)
+    keys = {v[0] for v in voices}
     if want in keys:
         return want
     if want:
-        logger.info("[TTS] unknown voice %r - using %s", want, DEFAULT_VOICE)
-    return DEFAULT_VOICE
+        logger.info("[TTS] unknown voice %r for backend=%s - using %s", want, b, default_v)
+    return default_v
 
 
 def resolve_speed(settings: dict | None = None) -> float:
@@ -197,13 +225,16 @@ def base_url() -> str:
 
 
 # ── lifecycle ───────────────────────────────────────────────────────────────
-def is_running() -> bool:
+def is_running(settings: dict | None = None) -> bool:
+    if settings is not None and resolve_backend(settings) == "woof":
+        return tts_woof.is_running()
     proc = _state.get("proc")
-    return proc is not None and proc.poll() is None
+    return (proc is not None and proc.poll() is None) or tts_woof.is_running()
 
 
 def stop(force: bool = False) -> None:
-    """Stop the sidecar (idempotent). ``force`` skips the graceful path."""
+    """Stop the sidecar and unload any warm CPU TTS model (idempotent)."""
+    tts_woof.stop()
     with _lock:
         proc = _state.get("proc")
         log = _state.get("log")
@@ -413,18 +444,18 @@ def touch() -> None:
 
 
 def preload(settings: dict | None = None) -> bool:
-    """Warm the sidecar ahead of the first request (``tts_preload_run``).
+    """Warm the active TTS backend ahead of the first request (``tts_preload_run``).
 
     Cheap and safe to call at the start of every run: it returns immediately when
-    TTS is off, and the actual start is the same ``_start`` the first synthesis
-    would trigger - only earlier, so nobody waits 12 s for the first sentence.
-    Never raises.
+    TTS is off. Never raises.
     """
     settings = settings or {}
     if not settings.get("tts_enabled", False):
         return False
     if not settings.get("tts_preload_run", True):
         return False
+    if resolve_backend(settings) == "woof":
+        return tts_woof.preload(resolve_voice(settings, backend="woof"))
     if is_running():
         _state["last_used"] = time.time()
         return True
@@ -434,6 +465,20 @@ def preload(settings: dict | None = None) -> bool:
     except TtsError as exc:
         logger.info("[TTS] preload skipped: %s", exc)
         return False
+
+
+def _synthesize_woof(text: str, voice: str, settings: dict) -> bytes:
+    """Render raw 24 kHz mono PCM WAV through ConwayResearch/Underdog-Woof."""
+    tts_woof.maybe_idle_stop(resolve_idle_stop(settings))
+    try:
+        return tts_woof.synthesize_wav(text, voice=voice, auto_download=True)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "numpy" in msg.lower():
+            raise TtsError("TTS_NO_NUMPY", msg) from exc
+        raise TtsError("TTS_FAILED", f"Underdog Woof failed: {msg[:160]}") from exc
+    except OSError as exc:
+        raise TtsError("TTS_FAILED", f"Underdog Woof download/load failed: {exc}") from exc
 
 
 # ── synthesis ───────────────────────────────────────────────────────────────
@@ -457,13 +502,25 @@ def synthesize(text: str, settings: dict | None = None, *,
         raise TtsError("TTS_EMPTY", "nothing to say")
     if len(text) > tts_audio.MAX_CHARS:
         text = text[:tts_audio.MAX_CHARS].rsplit(" ", 1)[0] + " ..."
-    voice = voice or resolve_voice(settings)
+    backend = resolve_backend(settings, voice=voice)
+    voice = voice if voice in {v[0] for v in voices_for(backend)[0]} else resolve_voice(settings, backend=backend)
     spd = tts_audio.clamp_speed(speed if speed is not None else resolve_speed(settings))
     _key = (voice, spd, text)
     _hit = _cache_get(_key)
     if _hit is not None:
         _state["last_used"] = time.time()
         return dict(_hit)
+
+    if backend == "woof":
+        wav = _synthesize_woof(text, voice, settings)
+        _state["last_used"] = time.time()
+        stretched = tts_audio.stretch_wav(wav, spd, normalize_out=bool(settings.get(
+            "tts_normalize", True)))
+        result = {"wav": stretched, "duration": tts_audio.duration_seconds(stretched),
+                  "voice": voice, "speed": spd}
+        _cache_put(_key, result)
+        return dict(result)
+
     _maybe_idle_stop(settings)
     url = _start(settings, voice)
 
@@ -539,18 +596,25 @@ def hf_token_set() -> bool:
 
 def status(settings: dict | None = None) -> dict:
     settings = settings or {}
+    backend = resolve_backend(settings)
+    voices, default_v, attr = voices_for(backend)
     return {
         "enabled": bool(settings.get("tts_enabled", False)),
-        "running": is_running(),
-        "voice": resolve_voice(settings),
+        "backend": backend,
+        "backends": list(BACKENDS),
+        "running": is_running(settings),
+        "voice": resolve_voice(settings, backend=backend),
+        "default_voice": default_v,
         "speed": resolve_speed(settings),
         "uv": bool(shutil.which("uvx")),
+        "woof_installed": tts_woof.is_installed(),
+        "woof_fetch": tts_woof.fetch_state(),
         "voices": [{"key": k, "label": label, "note": note, "license": lic,
-                    "source": src} for k, label, note, lic, src in VOICES],
-        "attribution": ATTRIBUTION,
+                    "source": src} for k, label, note, lic, src in voices],
+        "attribution": attr,
         "idle_stop_s": resolve_idle_stop(settings),
         "max_chars": tts_audio.MAX_CHARS,
-        "port": _state.get("port") or 0,
+        "port": (_state.get("port") or 0) if backend == "pocket" else 0,
         # gated model: without a token the first download fails with 401. The UI
         # turns this into a pointer to docs/huggingface_token.md.
         "hf_token": hf_token_set(),

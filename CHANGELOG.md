@@ -1,3 +1,33 @@
+## [1.6.2] - 2026-11-16
+
+Patch release adding optional local CPU NumPy text-to-speech via Underdog Woof,
+fixing explicit `"remember that"` long-term memory storage when extraction models
+think aloud, and tidying historical release notes out of the repository root.
+
+### Added & Improved
+- **Optional Underdog Woof TTS backend (`ConwayResearch/Underdog-Woof`):** Added
+  opt-in pure-NumPy int8 CPU synthesis (~40.6 MB, no PyTorch, no Hugging Face
+  token required) with voices `juno` and `mira` alongside the default Pocket TTS
+  backend (`settings_defaults.py` `tts_backend`, `deploy/fetch_woof.py`,
+  `core/tts_woof.py`, `core/tts_engine.py`), `GET /tts/voices` + `POST /tts/fetch`
+  (`server.py`), Voice card backend selector / Download button / Underdog Woof
+  attribution (`index.html`, `static/app.js`), `deploy/setup_voice.bat --woof`,
+  `voice_models/` updater preservation (`deploy/updater.py`,
+  `deploy/update_prune.ps1`), voice/privacy/settings documentation, and
+  regression coverage (`tests/test_tts_woof.py`).
+- **Repository root cleanup:** Moved `RELEASE_NOTES_*.md` files into
+  `docs/releases/` and excluded them from release ZIP archives via
+  `.gitattributes` (`CONTRIBUTING.md`, `deploy/bump_version.py`,
+  `deploy/prepush_check.ps1`).
+
+### Fixed
+- **Memory Write (`nothing stored` on explicit `"remember that"` prompts):**
+  Suppressed extraction-phase thinking noise before memory parsing, added a
+  note-text fallback when structured extraction returned empty, and emitted the
+  shortcut agent envelope cleanly (`context/chat_util.py`,
+  `core/chat_shortcuts.py`, `hive_functions/pipeline.py`,
+  `tests/test_memory_routing.py`).
+
 ## [1.6.1] - 2026-11-16
 
 Patch release addressing Image Processing UI/backend coherence, mid-load Vulkan

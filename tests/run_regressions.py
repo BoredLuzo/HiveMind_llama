@@ -127,6 +127,7 @@ SUITES = [
     ("coder_briefing",            "tests/test_coder_briefing.py",             30),
     ("tts_audio",                 "tests/test_tts_audio.py",                  60),
     ("tts_engine",                "tests/test_tts_engine.py",                 90),
+    ("tts_woof",                  "tests/test_tts_woof.py",                   60),
     ("tts_server",                "tests/test_tts_server.py",                 45),
     ("gateway_voice",             "tests/test_gateway_voice.py",              45),
     ("gateway_voice_out",         "tests/test_gateway_voice_out.py",          30),
