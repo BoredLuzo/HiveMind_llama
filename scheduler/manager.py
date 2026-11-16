@@ -278,7 +278,12 @@ class SchedulerManager:
             if tier in ("mcp", "full") or raw_mode == "auto":
                 try:
                     from infra import mcp_client as _mc
-                    if _mc.enabled() and getattr(_mc.get_client(), "_defs", None) is None:
+                    _mc_inst = _mc.get_client()
+                    _has_dead_mcp = any(
+                        getattr(_c, "dead", False)
+                        for _c in (getattr(_mc_inst, "_conns", None) or {}).values()
+                    )
+                    if _mc.enabled() and (getattr(_mc_inst, "_defs", None) is None or _has_dead_mcp):
                         await asyncio.wait_for(_mc.refresh(), timeout=15.0)
                 except (ImportError, AttributeError, RuntimeError, OSError, asyncio.TimeoutError) as _mcp_err:
                     logger.debug("[AUTOMATION] lazy MCP warmup skipped: %s", _mcp_err)

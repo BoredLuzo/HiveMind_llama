@@ -362,6 +362,28 @@ def main() -> int:
               and upd.get("last_duration_s") == 4.2
               and upd.get("pending_fire") is True, f"({upd})")
 
+        # Dead MCP connection between periodic runs triggers automatic refresh().
+        from types import SimpleNamespace as _NS
+        from infra import mcp_client as _mc
+        _refreshed = []
+        async def _fake_refresh():
+            _refreshed.append(True)
+            return {"enabled": True, "servers": []}
+        _dead_client = _NS(_defs=[], _conns={"mail": _NS(dead=True)})
+        _mcp_job = fm.store.add({
+            "name": "Mail Check", "prompt": "check unread",
+            "schedule": {"kind": "every", "interval_s": 2400},
+            "mode": "simple", "tools_tier": "mcp",
+            "next_ts": time.time() - 1,
+        })
+        fm._run_stream = _fake_stream
+        with _mock.patch.object(_mc, "enabled", return_value=True), \
+             _mock.patch.object(_mc, "get_client", return_value=_dead_client), \
+             _mock.patch.object(_mc, "refresh", side_effect=_fake_refresh):
+            asyncio.run(fm._fire(_mcp_job, time.time(), "due"))
+        check("dead MCP connection triggers automatic refresh before firing",
+              _refreshed == [True], f"(refreshed={_refreshed})")
+
     check("Automations UI exposes MCP tier, Telegram push & Agentic naming",
           'value="agentic"' in html and 'value="mcp"' in html
           and 'id="auto-notify-tg"' in html

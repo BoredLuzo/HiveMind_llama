@@ -41,8 +41,9 @@ and `.venv` are kept.
   as well as tool loops; aborting a paused run ends cleanly as `aborted`.
 - Auto mode no longer hijacks general questions into Code Duo when the encoder
   decider is off, and short read lookups stay on Direct tools.
-- Added a read/web-only `research` tier for Direct mode and improved Markdown
-  chat typography in the UI.
+- Added a read/web-only `research` tier for Direct mode, warm/direct slot
+  reuse for memory extraction (capped context), automatic dead-MCP reconnect in
+  scheduled automations, and improved Markdown chat typography in the UI.
 
 ## Code Duo & tools
 

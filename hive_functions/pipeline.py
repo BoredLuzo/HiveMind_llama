@@ -214,10 +214,13 @@ class Pipeline:
 
     async def _call_raw(self, model: str, system: str, user: str,
                         temperature: float = 0.1, max_tokens: int = 100,
-                        agent_role: str | None = None) -> str:
+                        agent_role: str | None = None,
+                        max_ctx: int | None = None) -> str:
         messages = [{"role": "system", "content": system},
                     {"role": "user",   "content": user}]
         num_ctx = _get_num_ctx(model, agent_role)
+        if max_ctx is not None:
+            num_ctx = min(int(num_ctx), int(max_ctx)) if num_ctx is not None else int(max_ctx)
         kwargs = {"ctx": num_ctx} if num_ctx is not None else {}
         return await self.ollama.chat(model, messages, temperature, max_tokens, **kwargs)
 
@@ -382,10 +385,43 @@ class Pipeline:
              "was weißt du", "was hast du gespeichert", "zeig memory",
              "liste memory"])
 
+    def _memory_extractor_target(self) -> tuple[str, str, int]:
+        """Pick `(model, agent_role, max_ctx)` for memory extraction.
+
+        Reuse a warm running slot first so memory shortcuts never spawn an
+        unrelated judge model next to an active chat/coder slot; when cold,
+        prefer `direct` over `judge` and cap context at 4096 tokens.
+        """
+        _direct = str(self.agents["direct"].model or "").strip() if "direct" in self.agents else ""
+        _judge = str(self.agents["judge"].model or "").strip() if "judge" in self.agents else ""
+        try:
+            from backend.llama_server_manager import manager as _lsm
+            _slots = [
+                _s for _s in (getattr(_lsm, "_slots", None) or [])
+                if str(getattr(_s, "model", "") or "").strip()
+                and getattr(_s, "is_running", True)
+                and not getattr(_s, "_loading", False)
+            ]
+            for _s in _slots:
+                if _direct and str(_s.model).strip().lower() == _direct.lower():
+                    _c = int(getattr(_s, "_num_ctx", 0) or 4096)
+                    return str(_s.model), "direct", min(_c, 4096) if _c > 0 else 4096
+            if _slots:
+                _s0 = _slots[0]
+                _c = int(getattr(_s0, "_num_ctx", 0) or 4096)
+                return str(_s0.model), "direct", min(_c, 4096) if _c > 0 else 4096
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as _slot_err:
+            _log.debug("[MEMORY] warm slot probe skipped: %s", _slot_err)
+        if _direct:
+            return _direct, "direct", 4096
+        return _judge, "judge", 4096
+
     async def _handle_memory_request(self, text: str) -> str:
+        _mem_model, _mem_role, _mem_ctx = self._memory_extractor_target()
         result = await self._call_raw(
-            self.agents["judge"].model,
+            _mem_model,
             PROMPTS["memory_extractor"], text, 0.1, 100,
+            agent_role=_mem_role, max_ctx=_mem_ctx,
         )
         try:
             match = re.search(r'\{[^{}]+\}', result, re.DOTALL)
