@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     for _label, path, _old, _nv, new_text in pending:
         _write(path, new_text)
     print(f"[OK] bumped to {new} ({len(pending)} file(s)). "
-          f"Remember: CHANGELOG.md heading '## [{new}]' and RELEASE_NOTES_{new}.md.")
+          f"Remember: CHANGELOG.md heading '## [{new}]' and docs/releases/RELEASE_NOTES_{new}.md.")
     return 0
 
 

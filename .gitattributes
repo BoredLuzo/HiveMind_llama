@@ -41,6 +41,8 @@
 /docs/integrations.md export-ignore
 /docs/screenshot*.png export-ignore
 /deploy/recommend_models.py export-ignore
+/docs/releases/ export-ignore
+/docs/releases/** export-ignore
 /RELEASE_NOTES_*.md export-ignore
 /scripts/ export-ignore
 # bench/ is the D1 eval harness + task corpus: developer-only, never needed

@@ -104,11 +104,11 @@ runs and the release zip are untouched: `.coveragerc`, the helper scripts and
 4. `deploy\package_release.bat` builds the zip from `git archive HEAD`, so the tag
    must exist first (`BUILD_INFO.txt` records it).
 5. Publish: `gh release create <tag> <zip> --title "HiveMind <ver>"
-   --notes-file RELEASE_NOTES_<ver>.md --target main`.
+   --notes-file docs/releases/RELEASE_NOTES_<ver>.md --target main`.
 
 ## What does not ship
 
-`tests/`, `scripts/`, `RELEASE_NOTES_*.md`, `CONTRIBUTING.md`, `.gitignore`
+`tests/`, `scripts/`, `docs/releases/`, `CONTRIBUTING.md`, `.gitignore`
 and `.gitattributes` are `export-ignore` - the release zip contains the
 program, the launchers and the user docs only. Internal audit/handoff and
 benchmark notes are kept outside the checkout (`../local_docs/`), not tracked.

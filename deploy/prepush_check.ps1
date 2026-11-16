@@ -119,7 +119,8 @@ Check "l) .gitignore covers scratch patterns" ($missingGi.Count -eq 0) ($missing
 # -- m) release notes for the current version, and they name it -----------------
 # A notes file is optional (a release may rely on the changelog only), but if it
 # exists it must carry the version and must not be empty.
-$notesFile = "RELEASE_NOTES_$($srv).md"
+$notesFile = "docs/releases/RELEASE_NOTES_$($srv).md"
+if (-not (Test-Path $notesFile)) { $notesFile = "RELEASE_NOTES_$($srv).md" }
 if (Test-Path $notesFile) {
     $notesBody = Get-Content $notesFile -Raw
     Check "m) release notes match $srv" `
