@@ -56,10 +56,10 @@ benchmark parity.
 - **Native secret-path denylist, MCP CSRF & workspace containment:** Enforced the shared
   secret-file denylist (`.env`, SSH/TLS keys, credentials, cloud/token configs)
   across native `read_file`, `list_files`, `find_by_name`, and `search_code`
-  tools (`utils/file.py`, `tools/handlers/file_tools.py`,
-  `tools/handlers/search_tools.py`), added Origin/Content-Type CSRF checks and
+  tools (`utils/file.py`, `tools/handlers/file_ops.py`,
+  `tools/handlers/code_intel.py`), added Origin/Content-Type CSRF checks and
   `tool_shell` secret env scrubbing to `infra/mcp_server.py`, validated `run_tests` `paths`/`targets`
-  arguments via `os.path.commonpath` against workspace escape
+  arguments via `Path.relative_to` containment against workspace escape
   (`tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`), and
   stripped unowned `conftest.py` files before installing hidden tests
   (`bench/runner.py`).

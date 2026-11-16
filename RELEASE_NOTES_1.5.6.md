@@ -1,5 +1,8 @@
 # Release 1.5.6
 
+> Note: `v1.5.6` was tagged only and never published as a separate GitHub release;
+> its changes ship as part of [Release 1.6.0](RELEASE_NOTES_1.6.0.md).
+
 Maintainability, direct-run control, patch-native editing and 35B performance
 on top of 1.5.5. No settings are reset and no model has to be re-downloaded.
 

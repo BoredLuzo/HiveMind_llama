@@ -22,7 +22,7 @@ jobs:
         # with (B10, 2026-11-07).
         run: uv lock --check
       - name: Install minimal deps
-        run: pip install -q httpx pypdf
+        run: pip install -q httpx pypdf fastapi
       - name: Portable regression subset
         run: |
           python tests/test_unbound_guards.py
@@ -44,8 +44,7 @@ jobs:
           python tests/test_duo_ctx_meter.py
           python tests/test_duo_explore_gate.py
           python tests/test_lsp_tools.py
-          # Gateway/document/send-file/image fixes: all of these import only
-          # stdlib + httpx (+ pypdf for real extraction) on Linux.
+          # Gateway/document/send-file/image/scheduler checks: stdlib + httpx + pypdf + fastapi on Linux.
           python tests/test_gateway_send.py
           python tests/test_gateway_bridge.py
           python tests/test_gateway_command_flow.py
