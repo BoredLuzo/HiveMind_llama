@@ -1,3 +1,48 @@
+## [1.6.1] - 2026-11-16
+
+Patch release addressing Image Processing UI/backend coherence, mid-load Vulkan
+slot aborts, adaptive MoE CPU-expert offloading under tight VRAM, and Windows
+installer/updater polish on top of `1.6.0`.
+
+### Added & Improved
+- **Coherent Image Processing & docs refresh:** Unified multimodal/preprocess
+  handling across Direct, Code Duo (`resolve_image_plan`, `duo_steer_images_policy`,
+  sentinel suppression), dynamic Agentic handoffs (`core/chat_run.py`), role
+  selection (`routing/model_automap.py`), planner image attachment
+  (`hive_functions/planner.py`), and Image Processing UI settings/descriptions
+  (`index.html`, `static/app.js`, `settings_defaults.py`, `docs/settings.md`),
+  alongside an updated landing page (`README.md`) and hardware/catalog guide
+  (`docs/guide.md`).
+- **Adaptive MoE CPU-expert offload & VRAM accuracy:** Added override-aware
+  `vram_of_moe(..., n_cpu_moe=...)` / `moe_base_gb_for_experts`
+  (`backend/llama_vram_table.py`, `routers/vram.py`) and
+  `_auto_step_moe_cpu_offload()` in `backend/llama_start_phases.py` to scale
+  `--n-cpu-moe` up to GGUF `block_count` when live GPU VRAM is tight.
+- **CPU PyTorch decider setup & HF cache parity:** `deploy/check_optionals.bat`
+  and `install.bat` now install `gliner2[local]` against the CPU PyTorch wheel
+  index, install packages before `deploy/fetch_decider.py`, and recognize
+  Hugging Face cached `fastino/GLiNER2.5-Decide` weights written by
+  `install.bat`.
+
+### Fixed
+- **240s slot-load deadlock & cross-task slot kill:** Added `SlotAbortedError`
+  (`backend/llama_manager_utils.py`), generation-fenced `ModelSlot.abort_wait()`
+  (`backend/llama_slots.py`), `force_kill_all()` wake-up
+  (`backend/manager_health.py`), and ownership checks around `_vulkan_init_sem`
+  and `ensure_loaded()` (`backend/llama_start_phases.py`,
+  `backend/manager_load.py`) so cleared/killed loads unwind immediately instead
+  of spinning 240s, falling back to `--n-gpu-layers 0`, or evicting a newer
+  task's slot.
+- **Pre-Flight VRAM MiB calculation:** Fixed missing `* 1024` MiB conversions
+  for `_current_own` and `_min_needed` during slot Pre-Flight checks in
+  `backend/llama_start_phases.py`.
+- **Clean-install & updater decider/watchdog errors:** `watchdog_engine.bat`
+  now creates `%LOCALAPPDATA%\HiveMindGateway` before logging and ignores absent
+  `settings.json` cleanly; `deploy/check_optionals.bat` verifies
+  `import torch, gliner2; from gliner2 import AutoExtractor` after `uv pip install`
+  with an automatic `--reinstall` repair pass instead of printing `[OK]` on
+  broken `.venv` imports.
+
 ## [1.6.0] - 2026-11-15
 
 Dedicated 1.6.0 release unifying capability-agnostic GGUF drop-in discovery

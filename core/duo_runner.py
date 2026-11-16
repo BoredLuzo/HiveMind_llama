@@ -735,6 +735,7 @@ async def _duo_planner_phase(
         if _fup_task_ctx:
             _planner_task = (
                 ctx.user_input
+                + build_image_desc_block(getattr(ctx, "image_description", None))
                 + "\n\n[Previous task in this chat — context for this follow-up]\n"
                 + _fup_task_ctx
             )
@@ -1168,8 +1169,14 @@ async def _duo_critic_review(
         ctx.exec_ctrl.transition(AgentState.CRITIC_REVIEW)
         ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
 
-        # Use tool-capable system prompt when tools are enabled
+        # Use tool-capable system prompt when tools are enabled (preserving
+        # any appended [IMAGE DESCRIPTION] block from phase 2.5).
         _effective_critic_sys = DUO_CRITIC_TOOLS_SYSTEM if _critic_tools_enabled else _duo_critic_sys
+        if _critic_tools_enabled and "[IMAGE DESCRIPTION" in _duo_critic_sys:
+            _img_marker = "\n\n[IMAGE DESCRIPTION"
+            _idx = _duo_critic_sys.find(_img_marker)
+            if _idx >= 0:
+                _effective_critic_sys = DUO_CRITIC_TOOLS_SYSTEM + _duo_critic_sys[_idx:]
 
         _critic_msgs = [
             {"role": "system", "content": _effective_critic_sys},
@@ -2675,18 +2682,18 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             has_subtasks=bool(_subtasks),
             has_explore_ctx=_explore_has_contents,
         ) + _coder_dyn_hints + build_image_desc_block(getattr(ctx, "image_description", None))
-        # VISION-TRUTH GATE pre-prompt (2026-10-04): if the
-        # coder slot is ALREADY loaded and really runs without a projector,
-        # downgrade the plan BEFORE the notes/parts decide from it. No slot
-        # loaded (fresh load below) trusts the plan - the post-load gate
-        # re-checks against /props truth.
+        # VISION-TRUTH GATE pre-prompt (2026-10-04): read currently loaded
+        # slot truth so STRICT-VISION never claims [VISION] before the slot
+        # confirms vision_active=True. Only downgrade pre-prompt if NO mmproj
+        # exists on disk; a warm text-only slot upgrades in _duo_coder_preloop.
         _cv_pre = None                 # unknown = no vision claim (strict rule)
         if _img_plan.get("coder") == "raw":
             try:
                 from backend.llama_server_manager import manager as _lsm_vgate
+                from backend.llama_manager_utils import resolve_mmproj_strict as _mms_pre
                 _cslot_pre = await _lsm_vgate._find_loaded(exec_mdl)
                 _cv_pre = getattr(_cslot_pre, "vision_active", None) if _cslot_pre is not None else None
-                if _cv_pre is False:
+                if _cv_pre is False and _mms_pre(exec_mdl) is None:
                     _img_plan, _vg_warns = effective_image_plan(
                         _img_plan, coder_slot_vision=_cv_pre,
                         has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
@@ -3576,35 +3583,35 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # user messages — same channel as the zero-activity
                         # nudge below.
                         _round_steer = drain_steer_messages(ctx.run_id)
-                        if (any(_st["images"] for _st in _round_steer)
-                                and not bool(ctx.settings.get("duo_coder_images_off", False))
-                                and str(ctx.settings.get("duo_image_mode") or "") != "preprocess"):
-                            # STEER-IMAGE UPGRADE (2026-10-06, live T2): see
-                            # the chunk-boundary drain — upgrade the coder
-                            # slot before the image parts reach the POST.
-                            try:
-                                from backend.llama_server_manager import manager as _mgr_vu2
-                                yield await ctx.emit({"type": "status", "content":
-                                    "🖼 image steer received — loading vision support (~15 s)…"})
-                                await _mgr_vu2.upgrade_port_to_vision(int(_dport))
-                            except (RuntimeError, OSError, httpx.HTTPError) as _vu_err2:
-                                logger.warning("[STEER-IMAGE] vision upgrade failed: %s", _vu_err2)
+                        _r_steer_allowed = False
+                        _r_steer_reason = ""
+                        if any(_st["images"] for _st in _round_steer):
+                            from core.duo_helpers import duo_steer_images_policy
+                            _r_steer_allowed, _r_steer_reason = duo_steer_images_policy(
+                                exec_mdl, ctx.settings, getattr(ctx, "vision_cfg", None))
+                            if _r_steer_allowed:
+                                try:
+                                    from backend.llama_server_manager import manager as _mgr_vu2
+                                    yield await ctx.emit({"type": "status", "content":
+                                        "🖼 image steer received — loading vision support (~15 s)…"})
+                                    await _mgr_vu2.upgrade_port_to_vision(int(_dport))
+                                    _dtool_opts["vision"] = True
+                                except (RuntimeError, OSError, httpx.HTTPError) as _vu_err2:
+                                    logger.warning("[STEER-IMAGE] vision upgrade failed: %s", _vu_err2)
+                                    _r_steer_allowed = False
+                                    _r_steer_reason = "vision upgrade failed"
                         for _st in _round_steer:
                             yield await ctx.emit({"type": "steer",
                                                   "content": str(_st["text"] or ""),
                                                   "images": len(_st["images"] or [])})
                         if _round_steer:
                             for _st in _round_steer:
-                                # AUDIT (2026-10-08): same drop rule as the
-                                # chunk-boundary drain - images_off and
-                                # preprocess mode keep the coder text-only,
-                                # raw image parts would hit the API without
-                                # a projector.
-                                if _st["images"] and (
-                                        bool(ctx.settings.get("duo_coder_images_off", False))
-                                        or str(ctx.settings.get("duo_image_mode") or "") == "preprocess"):
+                                if _st["images"] and not _r_steer_allowed:
                                     yield await ctx.emit({"type": "status", "content":
-                                        "⚠ Image steer dropped - the coder stays text-only (raw mode + images allowed)."})
+                                        f"⚠ Image attachment in steer dropped ({_r_steer_reason})."})
+                                    if str(_st.get("text") or "").strip():
+                                        _dtool_msgs.append(
+                                            _build_steer_user_message(_st["text"], None))
                                     continue
                                 _dtool_msgs.append(
                                     _build_steer_user_message(_st["text"], _st["images"]))

@@ -436,6 +436,9 @@ SUITES = [
     ("llm_transport",              "tests/test_llm_transport.py",              45),
     ("direct_agent_card",          "tests/test_direct_agent_card.py",          30),
     ("glm_deep_audit_wave2",       "tests/test_glm_deep_audit_wave2.py",       45),
+    ("image_coherence",            "tests/test_image_coherence.py",            45),
+    ("wait_ready_abort",           "tests/test_wait_ready_abort.py",           30),
+    ("moe_auto_cpu",               "tests/test_moe_auto_cpu.py",               30),
 
 ]
 

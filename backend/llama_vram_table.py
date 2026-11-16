@@ -285,14 +285,78 @@ def moe_cfg_for(model_name: str) -> dict | None:
     return cfg
 
 
-def vram_of_moe(model_name: str, num_ctx: int = 4096) -> float:
+def _explicit_moe_override(model_name: str) -> int | None:
+    """Return user's explicit MOE_CPU_EXPERTS override for `model_name`, if any."""
+    try:
+        from backend import llama_config as _lc
+        moe_map = getattr(_lc, "MOE_CPU_EXPERTS", None) or {}
+    except (ImportError, AttributeError):
+        return None
+    if not isinstance(moe_map, dict) or not moe_map:
+        return None
+    raw = str(model_name or "").strip().lower()
+    if not raw:
+        return None
+    norm = re.sub(r"#\d+$", "", raw).removesuffix(":latest")
+    ud_stripped = norm[:-3] if norm.endswith("-ud") else norm
+    lower_map = {str(k).strip().lower(): v for k, v in moe_map.items()}
+    for cand in (raw, norm, ud_stripped):
+        if cand in lower_map and lower_map[cand] is not None:
+            try:
+                return int(lower_map[cand])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def moe_base_gb_for_experts(
+    model_name: str,
+    cfg: dict,
+    n_cpu_moe: int | None = None,
+) -> float:
+    """Estimate active GPU base GB at `n_cpu_moe`, scaling conservatively from
+    the calibrated table/profile split and GGUF block count when overridden."""
+    base = float(cfg["active_gpu_gb"])
+    cal_n = int(cfg.get("calibrated_n_cpu_moe") or cfg.get("n_cpu_moe") or 0)
+    eff_n = int(n_cpu_moe) if n_cpu_moe is not None else _explicit_moe_override(model_name)
+    if eff_n is None or cal_n <= 0 or eff_n == cal_n:
+        return base
+
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_meta
+        meta = _read_meta(model_name) or {}
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError):
+        meta = {}
+    file_gb = float(meta.get("file_size_gb") or 0.0)
+    if file_gb <= base or file_gb <= 0.0:
+        return base
+
+    total_blocks = int(meta.get("block_count") or 0)
+    eff_clamped = min(max(0, eff_n), total_blocks) if total_blocks > 0 else max(0, eff_n)
+    if eff_clamped == cal_n:
+        return base
+    per_block_gb = (file_gb - base) / float(cal_n)
+    if eff_clamped > cal_n:
+        floor_gb = max(2.2, round(file_gb * 0.21, 2))
+        adjusted = base - (eff_clamped - cal_n) * (per_block_gb * 0.80)
+        return round(max(floor_gb, adjusted), 2)
+    adjusted = base + (cal_n - eff_clamped) * per_block_gb
+    return round(min(file_gb, adjusted), 2)
+
+
+def vram_of_moe(
+    model_name: str,
+    num_ctx: int = 4096,
+    *,
+    n_cpu_moe: int | None = None,
+) -> float:
 
 
     cfg = moe_cfg_for(model_name)
     if not cfg:
         return vram_of_with_ctx(model_name, num_ctx)  # dense fallback
 
-    base = cfg["active_gpu_gb"]
+    base = moe_base_gb_for_experts(model_name, cfg, n_cpu_moe=n_cpu_moe)
     if num_ctx <= 4096:
         return base
 
@@ -365,7 +429,7 @@ def vram_of(model_name: str) -> float:
     # must never override it.
     _cfg = moe_cfg_for(model_name)
     if _cfg and _cfg.get("active_gpu_gb"):
-        return round(float(_cfg["active_gpu_gb"]), 2)
+        return round(moe_base_gb_for_experts(model_name, _cfg), 2)
 
     _dense_ov, _ = _profile_dense_vram(model_name)
     if _dense_ov is not None:

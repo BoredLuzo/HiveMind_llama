@@ -252,13 +252,17 @@ def get_automap(query: str = "", available: list | None = None, *,
     if vram_budget_gb and vram_budget_gb > 0:
         _vram_per_model = (vram_budget_gb - 0.5) / 2.0
 
+    _need_vision_roles = bool(has_images or task_type in ("vision", "ocr"))
+
     # Score available models for each role
     for role, reqs in ROLE_REQUIREMENTS.items():
-        # Check persisted automap first
+        # Check persisted automap first (skip non-vision override for image entry roles)
         _persisted = _automap_data.get("assignments", {}).get(role)
         if _persisted and _persisted in available:
-            assignments[role] = _persisted
-            continue
+            if not (_need_vision_roles and role in ("direct", "analyst")
+                    and not get_model_capabilities(_persisted).get("vision")):
+                assignments[role] = _persisted
+                continue
 
         best_model = ""
         best_score = -999
@@ -266,6 +270,8 @@ def get_automap(query: str = "", available: list | None = None, *,
             caps = get_model_capabilities(m)
             score = 0
             # Capability scoring
+            if _need_vision_roles and role in ("direct", "analyst"):
+                score += 6 if caps.get("vision") else -6
             if reqs["prefer_thinking"] and caps.get("thinking"):
                 score += 3
             if reqs["prefer_tool_call"] and caps.get("tool_call"):

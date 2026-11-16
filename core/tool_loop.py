@@ -651,29 +651,32 @@ class ToolLoop:
             # steer can carry IMAGES (screenshots) as content parts.
             if self._run_id:
                 _steer_items = drain_steer_messages(self._run_id)
-                if any(_st["images"] for _st in _steer_items):
-                    # STEER-IMAGE UPGRADE (2026-10-06, live T2): the slot was
-                    # loaded without the projector (no images planned at run
-                    # start) — a mid-run image steer would 500 the next POST.
-                    # Upgrade-only reload before the message parts ride out.
-                    try:
-                        from backend.llama_server_manager import manager as _mgr_vu
+                _has_img_steer = any(_st["images"] for _st in _steer_items)
+                _steer_can_vision = False
+                if _has_img_steer:
+                    from core.duo_helpers import model_supports_mmproj
+                    _steer_can_vision = model_supports_mmproj(self.cfg.model)
+                    if _steer_can_vision:
+                        try:
+                            from backend.llama_server_manager import manager as _mgr_vu
+                            yield await self._emit({"type": "status", "content":
+                                "🖼 image steer received — loading vision support (~15 s)…"})
+                            await _mgr_vu.upgrade_port_to_vision(self._port)
+                        except (RuntimeError, OSError, httpx.HTTPError) as _vu_err:
+                            yield await self._emit({"type": "status", "content":
+                                f"⚠ vision upgrade failed: {str(_vu_err)[:100]}"})
+                            _steer_can_vision = False
+                    else:
                         yield await self._emit({"type": "status", "content":
-                            "🖼 image steer received — loading vision support (~15 s)…"})
-                        await _mgr_vu.upgrade_port_to_vision(self._port)
-                    except (RuntimeError, OSError, httpx.HTTPError) as _vu_err:
-                        yield await self._emit({"type": "status", "content":
-                            f"⚠ vision upgrade failed: {str(_vu_err)[:100]}"})
+                            f"⚠ Image attachment in steer dropped — '{self.cfg.model}' is not multimodal or has no mmproj."})
                 for _st in _steer_items:
-                    # STEER CARD (2026-10-06): a dedicated event instead of
-                    # the 60-char status line — the UI renders a persistent
-                    # card in the chat flow and the gateway relays its own
-                    # note to the phone.
+                    _imgs_use = _st["images"] if _steer_can_vision else []
                     yield await self._emit({"type": "steer",
                                             "content": str(_st["text"] or ""),
                                             "images": len(_st["images"] or [])})
-                    _tool_messages.append(
-                        _build_steer_user_message(_st["text"], _st["images"]))
+                    if _imgs_use or str(_st.get("text") or "").strip():
+                        _tool_messages.append(
+                            _build_steer_user_message(_st["text"], _imgs_use))
 
             # ── after_round callback ──
             if self._on_after_round:

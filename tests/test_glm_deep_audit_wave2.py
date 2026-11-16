@@ -55,9 +55,10 @@ _wait_ready_tail = _phases_src[_phases_src.index("async def _phase_preflight_and
 check(
     "P2-Backend _phase_preflight_and_spawn resets slot._loading = False in finally",
     "_wait_done = False" in _wait_ready_tail
-    and "if not _wait_done:" in _wait_ready_tail
+    and "if not _wait_done" in _wait_ready_tail
     and "await _kill_slot_async(slot)" in _wait_ready_tail
-    and "    finally:\n        slot._loading = False" in _wait_ready_tail.replace("\r\n", "\n"),
+    and "    finally:\n" in _wait_ready_tail.replace("\r\n", "\n")
+    and "slot._loading = False" in _wait_ready_tail.replace("\r\n", "\n").rsplit("    finally:", 1)[1],
 )
 
 

@@ -154,21 +154,10 @@ async def _duo_coder_round_input(ctx, ps):
     # their own content-parts user message after _coder_msgs is built.
     _steer_items = drain_steer_messages(ctx.run_id)
     _steer_img_items = []
-    _coder_imgs_off = bool(ctx.settings.get("duo_coder_images_off", False))
-    # AUDIT (1.3.3): image steers belong to the RAW path only. In
-    # preprocess mode the coder is text-only by contract - the old
-    # code force-upgraded its slot to vision (~15 s stall + VRAM)
-    # behind a mode that promises "every agent stays text-based".
-    _steer_imgs_allowed = (
-        str(ctx.settings.get("duo_image_mode") or "") != "preprocess")
-    if (any(_st["images"] for _st in _steer_items)
-            and not _coder_imgs_off and _steer_imgs_allowed):
-        # STEER-IMAGE UPGRADE (2026-10-06, live T2): the coder slot
-        # may have loaded without the projector — upgrade BEFORE the
-        # image parts ride into the next chunk POST. The port MUST
-        # be the CODER port (retest live: _find_loaded(exec_mdl)
-        # matched the PLANNER slot first when planner==coder and
-        # upgraded the wrong one).
+    from core.duo_helpers import duo_steer_images_policy
+    _steer_imgs_allowed, _steer_deny_why = duo_steer_images_policy(
+        exec_mdl, ctx.settings, getattr(ctx, "vision_cfg", None))
+    if any(_st["images"] for _st in _steer_items) and _steer_imgs_allowed:
         try:
             _vu_port = int(_cached_coder_port or _coder_port or 0)
             if _vu_port:
@@ -178,9 +167,9 @@ async def _duo_coder_round_input(ctx, ps):
                 await _mgr_vu.upgrade_port_to_vision(_vu_port)
         except (RuntimeError, OSError, httpx.HTTPError) as _vu_err:
             logger.warning("[STEER-IMAGE] vision upgrade failed: %s", _vu_err)
+            _steer_imgs_allowed = False
+            _steer_deny_why = "vision upgrade failed"
     for _st in _steer_items:
-        # STEER CARD (2026-10-06): dedicated event — the UI renders
-        # a persistent card, the gateway relays its own phone note.
         yield await ctx.emit({"type": "steer",
                               "content": str(_st["text"] or ""),
                               "images": len(_st["images"] or [])})
@@ -189,8 +178,6 @@ async def _duo_coder_round_input(ctx, ps):
             if _st["images"]:
                 _steer_img_items.append(_st)
             else:
-                # STEER FRAME (2026-10-07): same priority framing as
-                # build_steer_user_message (see duo_helpers).
                 _coder_input += ("\n\n[OWNER STEER - highest priority, arrived mid-run]\n"
                                  + _st["text"].strip()
                                  + "\nIncorporate this immediately: it overrides your current "
@@ -315,11 +302,11 @@ async def _duo_coder_round_input(ctx, ps):
     # not be merged into the first user message (that already holds
     # the round-1 image when the plan says raw).
     for _st in _steer_img_items:
-        if _coder_imgs_off or not _steer_imgs_allowed:
+        if not _steer_imgs_allowed:
             yield await ctx.emit({"type": "status", "content":
-                "⚠ Image steer dropped - in preprocess mode the coder "
-                "stays text-only (switch to Raw image mode for image "
-                "steers)."})
+                f"⚠ Image attachment in steer dropped ({_steer_deny_why})."})
+            if str(_st.get("text") or "").strip():
+                _coder_msgs.append(build_steer_user_message(_st["text"], None))
             continue
         _coder_msgs.append(build_steer_user_message(_st["text"], _st["images"]))
         logger.info("[DUO] steer with %d image(s) appended as user parts message",

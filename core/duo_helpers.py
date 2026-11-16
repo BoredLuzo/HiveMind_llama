@@ -925,9 +925,63 @@ def build_image_desc_block(desc) -> str:
     compression) and the planner task. Empty desc -> empty block.
     """
     _d = str(desc or "").strip()
-    if not _d:
+    if not _d or is_vision_error_text(_d):
         return ""
     return "\n\n[IMAGE DESCRIPTION]:\n" + _d
+
+
+def is_vision_error_text(text: str | None) -> bool:
+    """True when `text` is a vision preprocessor error/fallback sentinel rather
+    than a real visual description (prevents error strings from entering prompts)."""
+    t = str(text or "").strip().lower()
+    return t.startswith((
+        "[vision-preprocessing-error",
+        "[vision preprocessing error",
+        "[vision fallback",
+    ))
+
+
+def model_supports_mmproj(model: str) -> bool:
+    """True when `model` is marked vision-capable and has a matching mmproj on disk."""
+    if not str(model or "").strip():
+        return False
+    try:
+        from core.model_sampling import _model_profile
+        if not bool((_model_profile(model) or {}).get("vision", False)):
+            return False
+        from backend.llama_manager_utils import resolve_mmproj_strict
+        return resolve_mmproj_strict(model) is not None
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return False
+
+
+def duo_steer_images_policy(model: str, settings: dict | None,
+                            vision_cfg: dict | None = None) -> tuple[bool, str]:
+    """Return `(allowed, deny_reason)` for attaching mid-run steer images in Code Duo."""
+    cfg = settings or {}
+    if bool(cfg.get("duo_coder_images_off", False)):
+        return False, "coder images OFF"
+    if effective_duo_image_mode(cfg, vision_cfg) == "preprocess":
+        return False, "Describe/preprocess mode keeps coder text-only"
+    if not model_supports_mmproj(model):
+        return False, f"coder '{model}' is not multimodal or has no mmproj"
+    return True, ""
+
+
+def effective_duo_image_mode(settings: dict | None,
+                             vision_cfg: dict | None = None) -> str:
+    """Resolve the active Code Duo image mode ('direct' or 'preprocess').
+
+    Matches `resolve_image_plan` sentinel semantics: explicit `'direct'` or
+    `'preprocess'` wins; `None` / empty derives `'preprocess'` when
+    `vision_cfg` is enabled with a model, else `'direct'`.
+    """
+    raw = (settings or {}).get("duo_image_mode")
+    if raw is None or str(raw).strip() == "":
+        vc = vision_cfg or {}
+        return "preprocess" if (vc.get("enabled") and vc.get("model")) else "direct"
+    val = str(raw).strip().lower()
+    return "preprocess" if val == "preprocess" else "direct"
 
 
 def attach_images_to_last_user(msgs, images):
@@ -935,9 +989,10 @@ def attach_images_to_last_user(msgs, images):
     attached images (2026-10-01).
 
     Wire format matches llama_client._convert_messages: image_url parts
-    first (raw base64 wrapped as a jpeg data URL — llama-server sniffs the
-    real mime), then the text part. No-op when images is empty or no user
-    message exists; callers pass this ONLY after resolve_image_plan() said 'raw'.
+    first (existing data: URLs kept verbatim, raw base64 wrapped as jpeg
+    data URL — llama-server sniffs the real mime), then the text part. No-op
+    when images is empty or no user message exists; callers pass this ONLY
+    after resolve_image_plan() said 'raw'.
     """
     _imgs = [str(b).strip() for b in (images or []) if str(b or "").strip()]
     if not _imgs or not msgs:
@@ -948,7 +1003,8 @@ def attach_images_to_last_user(msgs, images):
             if not isinstance(_txt, str):
                 return msgs  # already parts / unexpected shape: leave untouched
             _parts = [{"type": "image_url",
-                       "image_url": {"url": "data:image/jpeg;base64," + _b}}
+                       "image_url": {"url": _b if _b.startswith("data:")
+                                     else "data:image/jpeg;base64," + _b}}
                       for _b in _imgs]
             _parts.append({"type": "text", "text": _txt})
             _m["content"] = _parts
@@ -1009,10 +1065,14 @@ def resolve_duo_role_models(settings) -> tuple:
     Returns (planner_model, coder_model) - either may be "" when unset.
     """
     _agents = settings.get("agents") or {}
-    _planner = str((((_agents.get("duo_planner") or {}).get("model")))
-                   or settings.get("duo_planner_model") or "").strip()
     _coder = str((((_agents.get("duo_coder") or {}).get("model")))
                  or settings.get("duo_coder_model") or "").strip()
+    _planner = str(settings.get("duo_planner_model") or "").strip()
+    if not _planner:
+        if bool(settings.get("duo_planner_use_coder_ctx", True)) and _coder:
+            _planner = _coder
+        else:
+            _planner = str((((_agents.get("duo_planner") or {}).get("model"))) or "").strip()
     return _planner, _coder
 
 
@@ -1143,7 +1203,8 @@ def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
         warnings.append(f"duo_image_mode not set — derived '{mode}' from the vision config")
     plan = {"planner": "none", "coder": "none"}
     if mode == "preprocess":
-        if str(getattr(ctx, "image_description", "") or "").strip():
+        _desc = str(getattr(ctx, "image_description", "") or "").strip()
+        if _desc and not is_vision_error_text(_desc):
             plan["planner"] = plan["coder"] = "description"
         else:
             warnings.append("preprocess mode but no image description available — "

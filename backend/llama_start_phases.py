@@ -29,8 +29,10 @@ from .llama_config import (
     resolve_gpu_layers, ubatch_extra_mib,
 )
 from .llama_manager_utils import (
-    CTX_DOWN_MIN, LLAMA_STARTUP_READY_TIMEOUT_SECONDS, VRAMPreFlightError,
-    VRAM_BUDGET_GB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+    CTX_DOWN_MIN, LLAMA_STARTUP_READY_TIMEOUT_SECONDS, SlotAbortedError,
+    VRAMPreFlightError,
+    VRAM_BUDGET_GB, VRAM_PRE_FLIGHT_MARGIN_MIB,
+    VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
     _VRAM_BASE_OVERHEAD_GB, _WIN_CNF, _available_ram_gb,
     _kill_slot_async, _needs_mmproj, _probe_backend_devices,
     _probe_backend_dlls, _probe_binary_build, _OLLAMA_ONLY_BASES,
@@ -1049,6 +1051,96 @@ class _SpawnPhase:
     num_ctx: int = 0
 
 
+def _auto_step_moe_cpu_offload(
+    mgr,
+    slot,
+    cmd: list[str],
+    model: str,
+    gguf_path,
+    num_ctx: int,
+    fit,
+    moe_cache_used: float,
+    ub_base: int,
+    ub_eff: int,
+    ub_src: str,
+    ub_delta_mib: float,
+):
+    """When live VRAM blocks an MoE load at its default --n-cpu-moe, step CPU
+    expert offloading upward (up to GGUF block_count) so the full context can
+    still load on GPU+CPU instead of refusing."""
+    if fit.ok or "--n-cpu-moe" not in cmd:
+        return fit, moe_cache_used, ub_delta_mib, None
+    try:
+        idx = cmd.index("--n-cpu-moe")
+        cur_moe = int(cmd[idx + 1])
+    except (ValueError, IndexError, TypeError):
+        return fit, moe_cache_used, ub_delta_mib, None
+
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        meta = _read_gguf_meta(gguf_path or model) or {}
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError):
+        meta = {}
+    total_blocks = int(meta.get("block_count") or 0)
+    if total_blocks <= cur_moe:
+        return fit, moe_cache_used, ub_delta_mib, cur_moe
+
+    norm_model = _strip_alias(model)
+    base_vram_gb = vram_of_moe(norm_model, num_ctx)
+    has_ub_delta = ub_delta_mib > 0 and ub_eff > ub_base
+
+    def _probe(cand_moe: int, extra_mib: float, margin_mib: int | None = None):
+        step_gb = vram_of_moe(norm_model, num_ctx, n_cpu_moe=cand_moe)
+        delta_mib = (step_gb - base_vram_gb) * 1024.0
+        if delta_mib >= 0:
+            return None
+        kwargs = {
+            "exclude_slot_id": slot.slot_id,
+            "extra_needed_mib": extra_mib + delta_mib,
+        }
+        if margin_mib is not None:
+            kwargs["safety_margin_mib"] = margin_mib
+        return mgr.can_fit(model, num_ctx, **kwargs)
+
+    passes: list[tuple[float, int | None, bool]] = [
+        (float(moe_cache_used), None, False),
+    ]
+    if has_ub_delta:
+        passes.append((max(0.0, float(moe_cache_used) - float(ub_delta_mib)), None, True))
+    reduced_extra = (
+        max(0.0, float(moe_cache_used) - float(ub_delta_mib))
+        if has_ub_delta
+        else float(moe_cache_used)
+    )
+    passes.append((reduced_extra, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB, has_ub_delta))
+
+    for extra_mib, margin_mib, drop_ub in passes:
+        for cand_moe in range(cur_moe + 1, total_blocks + 1):
+            cand_fit = _probe(cand_moe, extra_mib, margin_mib)
+            if cand_fit is None or not cand_fit.ok:
+                continue
+            cmd[idx + 1] = str(cand_moe)
+            if drop_ub:
+                try:
+                    cmd[cmd.index("--ubatch-size") + 1] = str(int(ub_base))
+                    cmd[cmd.index("--batch-size") + 1] = str(max(1024, int(ub_base)))
+                except (ValueError, TypeError):
+                    logger.warning("[MOE-UBATCH] could not rewrite --ubatch-size in cmd")
+                moe_cache_used = max(0.0, float(moe_cache_used) - float(ub_delta_mib))
+                ub_delta_mib = 0.0
+            logger.warning(
+                "[MOE-AUTO-CPU] %s @ctx=%d does not fit at --n-cpu-moe=%d "
+                "(needed=%.0fMiB, free=%.0fMiB) — stepping CPU MoE offload to "
+                "--n-cpu-moe=%d/%d (est=%.0fMiB + %dMiB margin%s)",
+                model, num_ctx, cur_moe, fit.needed_mib, fit.free_mib,
+                cand_moe, total_blocks, cand_fit.needed_mib, cand_fit.margin_mib,
+                f", ubatch {ub_eff}->{ub_base}" if drop_ub else "",
+            )
+            return cand_fit, moe_cache_used, ub_delta_mib, cand_moe
+
+    return fit, moe_cache_used, ub_delta_mib, cur_moe
+
+
 async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                                      gguf_path, num_ctx: int,
                                      vision: bool, n_parallel: int,
@@ -1199,18 +1291,29 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 _fit_base.free_mib, ub_base,
             )
             ub_delta_mib = 0.0
+    _active_moe_count = None
+    if not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE and "--n-cpu-moe" in cmd:
+        _fit, _moe_cache_used, ub_delta_mib, _active_moe_count = _auto_step_moe_cpu_offload(
+            self, slot, cmd, model, gguf_path, num_ctx,
+            _fit, _moe_cache_used, ub_base, ub_eff, ub_src, ub_delta_mib,
+        )
     if not _fit.ok:
         # AUDIT-FIX 2026-08-03: Diagnose-Attribute + Zeitreihen-Log.
         # external_usage_est = Total - frei - eigene geladene Slots (Fremdbelegung).
         _current_own = sum(
-            vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
+            vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096) * 1024
             for s in self._slots if s.is_running and s.model
         )
         _ext_est = max(0, int(TOTAL_VRAM_MIB - _fit.free_mib - _current_own))
         # FIXED-DOMINANT (2026-09-06): the model's base load must fit at least
         # at minimal context WITH reduced margin, else every resolution is
         # pointless (old: 768 margin → hidden false blocks).
-        _min_needed = vram_of_moe(_strip_alias(model), 4096) + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
+        _base_4k_gb = (
+            vram_of_moe(_strip_alias(model), 4096, n_cpu_moe=_active_moe_count)
+            if _active_moe_count is not None
+            else vram_of_moe(_strip_alias(model), 4096)
+        )
+        _min_needed = (_base_4k_gb * 1024) + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
         _fixed_dominant = _min_needed > _fit.free_mib
         # CTX/MARGIN RESOLUTION (2026-09-06): previously a fixed 768-MiB
         # margin silently degraded to 4096 when the full context just barely
@@ -1229,7 +1332,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 _free_res = _fit.free_mib
             _res = resolve_ctx_fit(
                 num_ctx, _free_res,
-                lambda _c: vram_of_moe(_strip_alias(model), int(_c)) * 1024,
+                lambda _c: (
+                    vram_of_moe(_strip_alias(model), int(_c), n_cpu_moe=_active_moe_count)
+                    if _active_moe_count is not None
+                    else vram_of_moe(_strip_alias(model), int(_c))
+                ) * 1024,
                 allow_graceful=ctx_graceful,
             )
             if _res is not None:
@@ -1305,7 +1412,12 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             try:
                 _fb_free = float(_fit.free_mib or 0)
                 for _cand_c in (32768, 28672, 24576, 20480, 16384, 14336, 12288, 10240, 8192):
-                    if _cand_c < num_ctx and (vram_of_moe(_strip_alias(model), _cand_c) * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB) <= _fb_free:
+                    _cand_gb = (
+                        vram_of_moe(_strip_alias(model), _cand_c, n_cpu_moe=_active_moe_count)
+                        if _active_moe_count is not None
+                        else vram_of_moe(_strip_alias(model), _cand_c)
+                    )
+                    if _cand_c < num_ctx and (_cand_gb * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB) <= _fb_free:
                         _max_fit_ctx = _cand_c
                         break
             except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
@@ -1391,6 +1503,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     except OSError as _cleanup_exc:
         logger.warning("SLOT-LOG-CLEANUP failed: %s", _cleanup_exc)
     _log_file_closed = False
+    _entry_slot_gen = getattr(slot, "_lifecycle_gen", None)
     try:
         _log_file.write(
             f"=== llama-server START ===\n"
@@ -1429,11 +1542,27 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             _gguf_gb, _available_ram_gb(),
         )
 
+        if (
+            _entry_slot_gen is not None
+            and getattr(slot, "_lifecycle_gen", _entry_slot_gen) != _entry_slot_gen
+        ):
+            raise SlotAbortedError(
+                f"Model load for '{model}' aborted before process spawn."
+            )
         slot._ready_event.clear()
 
         # ── VULKAN-INIT-SERIALISIERUNG ─────────────────────────────────────────
         logger.info(f"Waiting for GPU-init semaphore for {model} ...")
+        _wait_aborted = False
+        _spawned_proc = None
         async with self._vulkan_init_sem:
+            if (
+                _entry_slot_gen is not None
+                and getattr(slot, "_lifecycle_gen", _entry_slot_gen) != _entry_slot_gen
+            ):
+                raise SlotAbortedError(
+                    f"Model load for '{model}' aborted while waiting for GPU-init semaphore."
+                )
             logger.info(f"GPU-init semaphore acquired for {model}")
             # POSIX-LIB-PATH (2026-09-13): ubuntu tarball builds carry their
             # shared libs next to the binary (libggml-vulkan.so etc.).
@@ -1462,14 +1591,14 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             )
             _log_file.close()
             _log_file_closed = True
+            _spawned_proc = slot.process
+            _spawned_gen = getattr(slot, "_lifecycle_gen", None)
             slot.model      = model
             slot.loaded_at  = time.time()
             # VISION-TRUTH (2026-10-01): True only when the projector is
-            # really attached — a missing mmproj file must NOT mark the
-            # slot vision-capable (the attach-time precheck relies on
-            # this flag).
-            slot._vision    = vision and (_mmproj_resolved is not None
-                                          or not _needs_mmproj(model, vision=vision))
+            # actually attached (covers vision_mmproj_always text loads, never
+            # marks text-only models as vision slots).
+            slot._vision    = (_mmproj_resolved is not None) if _needs_mmproj(model, vision=True) else False
             slot._num_ctx   = num_ctx
             slot._n_parallel = n_parallel
             slot._jinja      = "--jinja" in cmd
@@ -1479,10 +1608,16 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 ready = await slot.wait_ready(
                     timeout=LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
                     http_client=self._get_shared_http_client(),
+                    expected_process=_spawned_proc,
+                    lifecycle_gen=_spawned_gen,
+                )
+                _wait_aborted = (
+                    (_spawned_gen is not None and getattr(slot, "_lifecycle_gen", _spawned_gen) != _spawned_gen)
+                    or slot.process is not _spawned_proc
                 )
 
                 # AMD-VULKAN-COMMIT-FIX:
-                if ready:
+                if ready and not _wait_aborted:
                     _peers_active = [
                         s for s in self._slots
                         if s.slot_id != slot.slot_id and (s.is_running or s._loading)
@@ -1508,8 +1643,24 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                         await asyncio.sleep(_vk_commit_s)
                 _wait_done = True
             finally:
-                if not _wait_done:
+                if not _wait_done and (
+                    (_spawned_gen is None or getattr(slot, "_lifecycle_gen", _spawned_gen) == _spawned_gen)
+                    and slot.process is _spawned_proc
+                ):
                     await _kill_slot_async(slot)
+        if _wait_aborted:
+            if (
+                _spawned_proc is not None
+                and _spawned_proc.poll() is None
+                and slot.process is not _spawned_proc
+            ):
+                try:
+                    _spawned_proc.terminate()
+                except OSError:
+                    pass
+            raise SlotAbortedError(
+                f"Model load for '{model}' aborted (slot killed or purged)."
+            )
         slot._loading = False
         if not ready:
             _exit = slot.process.poll() if slot.process else -1
@@ -1652,7 +1803,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 AttributeError, IndexError, httpx.HTTPError):
             slot.swa_window = 0
     finally:
-        slot._loading = False
+        if (
+            _entry_slot_gen is None
+            or getattr(slot, "_lifecycle_gen", _entry_slot_gen) == _entry_slot_gen
+        ):
+            slot._loading = False
         if not _log_file_closed:
             try:
                 _log_file.close()

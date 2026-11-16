@@ -12,7 +12,7 @@ quick start, hardware minimums and the extras list see the
 - Python 3.12–3.14 (Python 3.14 is auto-installed by the setup)
 - uv (auto-installed)
 - 8 GB+ VRAM GPU recommended for single-model / sequential **Code Duo** runs (one active model slot at a time; AMD/Intel via Vulkan, NVIDIA via CUDA). **Smart Preload**, multiple simultaneously loaded models, or large 100k+ context runs need more headroom (16 GB+ VRAM or CPU/hybrid offload) — Smart Preload is off by default
-- ~30 GB disk for the recommended model set
+- Disk: ~12 GB for a starter set of four small models (including vision projectors), ~25–40 GB with one 24B–35B MoE model, ~130 GB for the full optional installer catalog (see [Download catalog](#download-catalog)); 32 GB+ system RAM recommended when offloading MoE experts to the CPU
 - Git (optional, autocommit/diff integration)
 - Docker Desktop (optional, SearXNG web search)
 - Windows Core Utils (optional but recommended): `winget install Microsoft.CoreUtils`.
@@ -193,6 +193,36 @@ two of them pure code analysis (no LLM, fast, deterministic):
 Repo memory (`duo_repo_memory_enabled`) and symbol-reference hints
 (`duo_symbol_ref_enabled`) add previously learned insights about the repo to
 the Coder context.
+
+### Image processing
+
+Every run mode configures image handling in the **Image Processing** accordion
+in the sidebar:
+
+- **Simple / Direct & Auto:** Choose **Direct (multimodal)** (attach raw
+  images to the active multimodal model, loading `--mmproj` on demand — or
+  auto-switching when `Auto` picks a multimodal model) or **Describe first**
+  (run the configured Describer model once into text context so text-only chat
+  models can handle screenshots too). In **Auto** mode, both the **Direct**
+  controls and the **Agentic (Planner/Coder)** controls appear directly below
+  each other so you can configure either route without switching tabs.
+- **Code Duo (Agentic / Critic-Duo):** Choose **Direct (multimodal)** or
+  **Describe first** (with the Describer selector inline). In Direct mode,
+  select which roles receive raw images (**Planner** and/or **Coder**),
+  optionally preload `--mmproj` for text-only starts (`Preload projector`) so
+  mid-run image steers skip a reload, or lock the Coder to text-only
+  (`No images to Coder`, saving projector VRAM and ignoring steered images while
+  keeping steered text).
+- **Pipeline:** Choose **Direct (multimodal)** or **Describe first** using the
+  same two-button toggle as Direct and Code Duo. In Direct mode, pick which
+  stages receive raw images (**Analyst**, **Refiner**, **Critic**,
+  **Synthesizer**, with optional Vision-Agent fallback); in Describe first mode,
+  pick the `Vision-Agent` model and optionally pass its description to Refiner
+  and Critic via `Full img-desc` (`image_desc_full_pipeline`).
+- **Persistent image files (`image_uploads_persistent`):** By default uploads
+  stay in memory as base64; when enabled, images save under
+  `<workspace>/.hive_uploads/` and their file paths are passed to Direct, Duo
+  Coder, and Pipeline Analyst prompts for local scripts or OCR tools.
 
 ## Tools
 
@@ -567,9 +597,10 @@ drafter as a sidecar - it is never registered as a model.
 GGUFs already on disk can be registered without downloading anything
 (`setup_models.bat` -> `[R]`) or given a full config via `[C]`.
 
-Multimodal: gemma-4 has a built-in vision encoder; qwen3.5/3.6/hermes use an
-`mmproj` projector (auto-downloaded with the model). Non-multimodal models fall
-back to the vision-agent preprocessing path.
+Multimodal: `gemma-4`, `qwen3.5`, `qwen3.6`, and `hermes` load their paired
+`mmproj` projector (auto-downloaded with the model) on demand when images are
+attached. Non-multimodal models use the `Describe first` Describer /
+Vision-Agent preprocessing path.
 
 Chat templates: a profile's `chat_template` wins; without one, qwen3.5/3.6/
 hermes models launch with the bundled `model_configs/chat_template_sharp_v22.5.0.jinja`
@@ -594,6 +625,9 @@ overrides live in `model_configs/models/<tag>.json`.
   both to move presets between installs.
 - Windows toast notifications when runs stop or need input; wake-lock during
   runs (`keep_awake_during_run`).
+- Automations tab: engine-scheduled recurring (`every 40m`, 5-field cron) or
+  one-shot jobs persisted in `automations.json`, running with optional tool/MCP
+  access and posting results to chat or Telegram.
 
 ## Voice (optional, beta)
 

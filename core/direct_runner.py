@@ -594,7 +594,9 @@ async def _run_direct_inner(ctx):
                 _direct_log.warning("[SOUL] prompt layer build failed: %s", _soul_err)
         direct_input = ctx.user_input
         if ctx.image_description:
-            direct_input = ctx.user_input + f"\n\n[Image description from vision model]:\n{ctx.image_description}"
+            from core.duo_helpers import is_vision_error_text as _is_vis_err
+            if not _is_vis_err(ctx.image_description):
+                direct_input = ctx.user_input + f"\n\n[Image description from vision model]:\n{ctx.image_description}"
 
         _direct_caps = ctx.model_profile(_direct_model) if ctx.model_profile else {}
         _direct_vision = bool(_direct_caps.get("vision", False))
@@ -696,6 +698,13 @@ async def _run_direct_inner(ctx):
             "in (German question -> German answer). Match the user's language "
             "exactly, including on tool-only turns."
         )
+        _img_paths = getattr(ctx, "image_paths", None) or []
+        if _img_paths:
+            sys_p += (
+                "\n\n[IMAGE FILES]: the user's uploaded image(s) are saved at: "
+                + ", ".join(_img_paths)
+                + ". Reference them by path if needed (binary - do not read raw bytes)."
+            )
         messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
         # FIX (2026-09-01): emit the "Answer" agent event BEFORE the direct
         # tools loop. Otherwise the ToolLoop streams its token events before the
@@ -714,9 +723,7 @@ async def _run_direct_inner(ctx):
             # only after the loop ended (UI showed nothing during the run).
             async for _ev in _run_direct_tools(
                     ctx, _direct_model, messages, _direct_tool_mode, _dt_result,
-                    vision=bool(_direct_images)
-                    or (bool(ctx.settings.get("duo_coder_always_vision", False))
-                        and not bool(ctx.settings.get("duo_coder_images_off", False)))):
+                    vision=bool(_direct_images)):
                 yield await ctx.emit(_ev)
             _tool_content = _dt_result.content
             _tool_final_msgs = _dt_result.final_msgs

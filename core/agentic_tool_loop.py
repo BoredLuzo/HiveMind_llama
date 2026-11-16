@@ -242,9 +242,14 @@ class AgenticToolLoop(ToolLoop):
         # the note with an explicit "image gone, don't invent" line; the
         # user gets ONE visible status (not per round).
         _before = dtool_msgs[0].get("content") if dtool_msgs and isinstance(dtool_msgs[0], dict) else None
+        _before_len = len(dtool_msgs)
         _retract_vision_note_if_lost(dtool_msgs)
-        if isinstance(_before, str) and dtool_msgs and isinstance(dtool_msgs[0].get("content"), str) \
-                and _before != dtool_msgs[0]["content"]:
+        _retracted = (
+            (len(dtool_msgs) != _before_len)
+            or (isinstance(_before, str) and dtool_msgs and isinstance(dtool_msgs[0].get("content"), str)
+                and _before != dtool_msgs[0]["content"])
+        )
+        if _retracted:
             logging.getLogger("hivemind.tool_loop").warning(
                 "[TOOL-LOOP][VISION-GATE] [VISION] note replaced - round carries "
                 "no image parts anymore (images_in_request=0)")

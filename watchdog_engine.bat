@@ -20,13 +20,15 @@ REM PORT-FROM-SETTINGS (audit 2026-11-03): the watchdog watched a hardcoded
 REM 8001 while the installer supports a custom server_port; a healthy engine
 REM on another port looked dead and was restarted every 20 s.
 set "PORT=8001"
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "try { $s = Get-Content 'settings.json' -Raw | ConvertFrom-Json; if ($s.server_port) { [int]$s.server_port } } catch {}"`) do set "PORT=%%P"
-set "WDLOG=%LOCALAPPDATA%\HiveMindGateway\watchdog.log"
-set "WDMARK=%LOCALAPPDATA%\HiveMindGateway\watchdog.marker"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "try { if (Test-Path 'settings.json') { $s = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($s.server_port) { [int]$s.server_port } } } catch {}"`) do set "PORT=%%P"
+set "WDDIR=%LOCALAPPDATA%\HiveMindGateway"
+if not exist "%WDDIR%" mkdir "%WDDIR%" >nul 2>&1
+set "WDLOG=%WDDIR%\watchdog.log"
+set "WDMARK=%WDDIR%\watchdog.marker"
 
 if /i not "%~1"=="stop" goto maybe_takeover
 if exist "%WDMARK%" del "%WDMARK%" >nul 2>&1
-echo [%date% %time%] watchdog stop requested - marker removed >> "%WDLOG%"
+if exist "%WDDIR%" echo [%date% %time%] watchdog stop requested - marker removed >> "%WDLOG%"
 exit /b 0
 
 :maybe_takeover

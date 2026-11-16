@@ -56,12 +56,16 @@ REM --- routing decider -------------------------------------------------------
 set "DEC_DIR=models\decider\gliner25-decide"
 set "HAVE_DEC="
 for %%F in ("%DEC_DIR%\*") do if exist "%%~F" set "HAVE_DEC=1"
+if not defined HAVE_DEC if exist "%HF_CACHE%\models--fastino--GLiNER2.5-Decide*" set "HAVE_DEC=1"
+if not defined HAVE_DEC if defined HF_HOME if exist "%HF_HOME%\hub\models--fastino--GLiNER2.5-Decide*" set "HAVE_DEC=1"
 if not defined HAVE_DEC set "MISS_DEC=1"
 REM MODEL-ONLY is not enough: a 1.5.2 install can have the downloaded
-REM GLiNER2 model while gliner2/PyTorch is still missing. Check the import
-REM too, or the optional install is never offered again.
-"%PY%" -c "import gliner2" >nul 2>&1
-if errorlevel 1 set "MISS_DEC=1"
+REM GLiNER2 model while gliner2/PyTorch is still missing or broken. Verify
+REM the actual import too, or the optional install is never offered again.
+set "HAVE_DEC_PKG="
+"%PY%" -c "import torch, gliner2; from gliner2 import AutoExtractor" >nul 2>&1
+if not errorlevel 1 set "HAVE_DEC_PKG=1"
+if not defined HAVE_DEC_PKG set "MISS_DEC=1"
 
 REM --- browser tool ----------------------------------------------------------
 REM A dependency refresh can bump playwright past the installed browser build
@@ -139,30 +143,38 @@ if defined MISS_TTS (
     echo   asked. HiveMind never creates a token; public models need none.
     call "%~dp0setup_voice.bat" --tts
 )
-if defined MISS_DEC (
-    echo.
-    echo  --- routing decider ----------------------------------------
-    echo   Model: fastino/GLiNER2.5-Decide
-    echo   Package: gliner2[local] + PyTorch ^(about 2.5 GB download^)
-    "%PY%" deploy\fetch_decider.py
-    if exist "requirements-decider.txt" (
-        if defined UV_EXE (
-            echo   Installing with uv: "%UV_EXE%" pip install --python "%PY%"
-            "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
-            if errorlevel 1 (
-                echo   [WARN] routing decider package install failed.
-                echo          The model is downloaded, but gliner2/PyTorch is not usable.
-                echo          Run this yourself to see the full error:
-                echo            "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
-            ) else (
-                echo   [OK] routing decider package installed.
-            )
-        ) else (
-            echo   [WARN] uv is not available - the routing decider package was not installed.
-            echo          Run install.bat once ^(it provisions uv^), then re-run update.bat.
-        )
-    )
+if not defined MISS_DEC goto after_dec
+echo.
+echo  --- routing decider ----------------------------------------
+echo   Model: fastino/GLiNER2.5-Decide
+echo   Package: gliner2[local] + CPU PyTorch
+if not exist "requirements-decider.txt" goto dec_fetch_weights
+if defined HAVE_DEC_PKG goto dec_fetch_weights
+if not defined UV_EXE (
+    echo   [WARN] uv is not available - the routing decider package was not installed.
+    echo          Run install.bat once ^(it provisions uv^), then re-run update.bat.
+    goto after_dec
 )
+echo   Installing with uv: "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt ^(CPU torch^)
+"%UV_EXE%" pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match -r requirements-decider.txt
+if errorlevel 1 "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
+"%PY%" -c "import torch, gliner2; from gliner2 import AutoExtractor" >nul 2>&1
+if errorlevel 1 (
+    echo   [INFO] Decider import check failed after fast install - repairing with --reinstall...
+    "%UV_EXE%" pip install --reinstall --python "%PY%" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match -r requirements-decider.txt
+    if errorlevel 1 "%UV_EXE%" pip install --reinstall --python "%PY%" -r requirements-decider.txt
+)
+"%PY%" -c "import torch, gliner2; from gliner2 import AutoExtractor" >nul 2>&1
+if errorlevel 1 (
+    echo   [WARN] routing decider package install failed or remained incomplete.
+    echo          Run this yourself to see the exact import error:
+    echo            "%PY%" -c "import torch, gliner2; from gliner2 import AutoExtractor"
+    goto after_dec
+)
+echo   [OK] routing decider package installed.
+:dec_fetch_weights
+if not defined HAVE_DEC "%PY%" deploy\fetch_decider.py
+:after_dec
 if defined MISS_BROWSER (
     echo.
     echo  --- browser tool -------------------------------------------

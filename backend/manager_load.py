@@ -30,7 +30,7 @@ from .llama_manager_utils import (
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
     VRAM_PRE_FLIGHT_MARGIN_MIB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
     CTX_DOWN_MIN, resolve_ctx_fit,
-    VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
+    SlotAbortedError, VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
     _probe_binary_build,
     _probe_backend_devices, _probe_backend_dlls,
@@ -791,6 +791,7 @@ class LlamaLoadMixin:
                 f"Not loadable on this GPU (8GB)."
             )
         _need_start = False
+        _claim_gen = 0
         _vision_upgrade_pending = False
         slot = None
         # LOAD-SEQ (audit B1): bumped by every ensure_loaded entry. The AMD
@@ -906,6 +907,8 @@ class LlamaLoadMixin:
                 slot = await self._find_free_slot() or await self._evict_lru_async()
                 if slot is None:
                     raise RuntimeError("No free slot available")
+                _claim_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                slot._lifecycle_gen = _claim_gen
                 slot._loading      = True
                 slot.model         = model
                 slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
@@ -914,17 +917,50 @@ class LlamaLoadMixin:
 
         await self._enforce_vram_budget(slot)
 
+        def _slot_aborted(expected_gen: int) -> bool:
+            return getattr(slot, "_lifecycle_gen", expected_gen) != expected_gen
+
+        async def _kill_if_owned(expected_gen: int) -> None:
+            if not _slot_aborted(expected_gen):
+                await _kill_slot_async(slot)
+
+        async def _reclaim_for_retry(expected_gen: int) -> int:
+            if _slot_aborted(expected_gen):
+                raise SlotAbortedError(
+                    f"Model load for '{model}' aborted (slot killed or purged)."
+                )
+            await _kill_slot_async(slot)
+            if slot.model is not None or getattr(slot, "_loading", False):
+                raise SlotAbortedError(
+                    f"Model load for '{model}' aborted (slot reclaimed by peer)."
+                )
+            new_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+            slot._lifecycle_gen = new_gen
+            slot._loading = True
+            slot.model = model
+            return new_gen
+
         if _need_start:
             # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
             # CRASHED slot carries a stale SET event from its previous
             # load; skipping _start_process handed callers a dead port.
             # On a fresh claim nobody else is starting this slot and
             # _start_process clears the event itself.
+            if _slot_aborted(_claim_gen):
+                raise SlotAbortedError(
+                    f"Model load for '{model}' aborted (slot killed or purged)."
+                )
             try:
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                                           vision=vision, n_parallel=n_parallel,
                                           ctx_graceful=ctx_graceful)
+            except SlotAbortedError:
+                raise
             except RuntimeError as _start_exc:
+                if _slot_aborted(_claim_gen):
+                    raise SlotAbortedError(
+                        f"Model load for '{model}' aborted (slot killed or purged)."
+                    ) from _start_exc
                 # EXPERT-CACHE-RETRY (2026-11-03): a load crash caused by
                 # --moe-cache-mib (Vulkan #30697) is cured by dropping the
                 # flag; retry once before any other fallback.
@@ -950,15 +986,19 @@ class LlamaLoadMixin:
                     logger.warning(
                         "Load failed with --moe-cache-mib=%d - retrying once "
                         "without the expert cache", _cache_live)
-                    await _kill_slot_async(slot)
-                    slot._loading = True
-                    slot.model = model
+                    _claim_gen = await _reclaim_for_retry(_claim_gen)
                     try:
                         await self._start_process(
                             slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                             vision=vision, n_parallel=n_parallel,
                             ctx_graceful=ctx_graceful, moe_cache=False)
+                    except SlotAbortedError:
+                        raise
                     except Exception as _cache_exc:
+                        if _slot_aborted(_claim_gen):
+                            raise SlotAbortedError(
+                                f"Model load for '{model}' aborted (slot killed or purged)."
+                            ) from _cache_exc
                         # Fall through to the normal error handling with the
                         # ORIGINAL exception instead of swallowing the AMD /
                         # CPU fallback paths.
@@ -976,16 +1016,20 @@ class LlamaLoadMixin:
                         f"AMD Vulkan collision for '{model}' (exit=-1) — "
                         f"waiting 5s and retrying once ..."
                     )
-                    await _kill_slot_async(slot)
-                    slot._loading = True
-                    slot.model    = model
+                    _claim_gen = await _reclaim_for_retry(_claim_gen)
                     await asyncio.sleep(5.0)
+                    if _slot_aborted(_claim_gen):
+                        raise SlotAbortedError(
+                            f"Model load for '{model}' aborted (slot killed or purged)."
+                        )
                     try:
                         await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                                                    vision=vision, n_parallel=n_parallel,
                                                    ctx_graceful=ctx_graceful)
+                    except SlotAbortedError:
+                        raise
                     except Exception:
-                        await _kill_slot_async(slot)
+                        await _kill_if_owned(_claim_gen)
                         raise
                 elif not _cache_retried_ok and "exit=-1" in str(_start_exc) and GPU_LAYERS > 0:
                     _model_vram = _vram_of(_strip_alias(model))
@@ -997,20 +1041,18 @@ class LlamaLoadMixin:
                     # (light compressors ~2.1 GB, fallback minis) may still
                     # take the CPU fallback.
                     if _model_vram > 3.0:
-                        await _kill_slot_async(slot)
+                        await _kill_if_owned(_claim_gen)
                         raise RuntimeError(
                             f"Model '{model}' ({_model_vram:.1f}GB) could not be loaded on the GPU (exit=-1).\n"
                             f"Likely cause: VRAM not yet released (AMD Vulkan timing).\n"
                             f"  → Restart the server, or wait 10s and try again.\n"
                             f"  → CPU fallback skipped: {_model_vram:.1f}GB on CPU is too slow."
                         ) from _start_exc
+                    _claim_gen = await _reclaim_for_retry(_claim_gen)
                     logger.warning(
                         f"Single-model start for '{model}' with exit=-1 failed - "
                         "one-time CPU fallback with --n-gpu-layers 0"
                     )
-                    await _kill_slot_async(slot)
-                    slot._loading = True
-                    slot.model = model
                     try:
                         await self._start_process(
                             slot,
@@ -1021,14 +1063,20 @@ class LlamaLoadMixin:
                             gpu_layers_override=0,
                             ctx_graceful=ctx_graceful,
                         )
+                    except SlotAbortedError:
+                        raise
                     except Exception:
-                        await _kill_slot_async(slot)
+                        await _kill_if_owned(_claim_gen)
                         raise
                 elif not _cache_retried_ok:
-                    await _kill_slot_async(slot)
+                    await _kill_if_owned(_claim_gen)
                     raise
-            except Exception:
-                await _kill_slot_async(slot)
+            except Exception as _other_exc:
+                if isinstance(_other_exc, SlotAbortedError) or _slot_aborted(_claim_gen):
+                    raise SlotAbortedError(
+                        f"Model load for '{model}' aborted (slot killed or purged)."
+                    ) from _other_exc
+                await _kill_if_owned(_claim_gen)
                 raise
 
         try:
@@ -1057,7 +1105,19 @@ class LlamaLoadMixin:
             )
             self._metric_inc("evictions_total")
             self._metric_inc("evictions_vision_race")
+            _upgrade_gen = int(getattr(slot, "_lifecycle_gen", 0))
+            if _slot_aborted(_upgrade_gen):
+                raise SlotAbortedError(
+                    f"Model load for '{model}' aborted (slot killed or purged)."
+                )
+            # Keep direct _kill_slot_async(slot) call so AST guard in test_vision_load_race stays intact.
             await _kill_slot_async(slot)
+            if slot.model is not None or getattr(slot, "_loading", False):
+                raise SlotAbortedError(
+                    f"Model load for '{model}' aborted (slot reclaimed by peer)."
+                )
+            _upgrade_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+            slot._lifecycle_gen = _upgrade_gen
             slot._loading = True
             slot.model = model
             slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
@@ -1068,8 +1128,14 @@ class LlamaLoadMixin:
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                                           vision=True, n_parallel=n_parallel,
                                           ctx_graceful=ctx_graceful)
-            except Exception:
-                await _kill_slot_async(slot)
+            except SlotAbortedError:
+                raise
+            except Exception as _uv_exc:
+                if _slot_aborted(_upgrade_gen):
+                    raise SlotAbortedError(
+                        f"Model load for '{model}' aborted (slot killed or purged)."
+                    ) from _uv_exc
+                await _kill_if_owned(_upgrade_gen)
                 raise
             try:
                 await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)

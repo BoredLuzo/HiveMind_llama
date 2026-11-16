@@ -52,12 +52,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Ziel   : {target}")
 
     try:
-        import gliner2  # noqa: F401
+        import torch  # noqa: F401
+        from gliner2 import AutoExtractor  # noqa: F401
         print("gliner2: installed")
-    except ImportError:
+    except (ImportError, OSError):
         print("gliner2: MISSING - the model download alone is not enough.")
-        print("         Install gliner2[local] + PyTorch (about 2.5 GB) with uv:")
-        print("           uv pip install --python .venv\\Scripts\\python.exe -r requirements-decider.txt")
+        print("         Install gliner2[local] + CPU PyTorch with uv:")
+        print("           uv pip install --python .venv\\Scripts\\python.exe --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match -r requirements-decider.txt")
         print("         If uv is missing, run install.bat once to provision it.")
 
     cli = _hf_cli()

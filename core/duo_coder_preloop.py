@@ -238,8 +238,10 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
             and _plan_port_actual_ctx >= _plan_ctx_req
             and (_coder_ctx_need <= 0 or _plan_port_actual_ctx >= _coder_ctx_need)
         )
+        _need_raw_vision = (_img_plan.get("coder") == "raw")
         if _planner_is_coder and _plan_port_available and _plan_port_alive \
-                and _planner_ctx_ok and (not _always_vision or _plan_port_vision):
+                and _planner_ctx_ok and (not _always_vision or _plan_port_vision) \
+                and (not _need_raw_vision or _plan_port_vision):
             _cached_coder_port = _plan_port
             _cached_coder_port_ctx = _plan_port_actual_ctx  # honest slot ctx (>= coder need)
             logger.info("[Planner=Coder] Model stays in VRAM - slot ctx=%d covers coder need=%d (vision=%s)",
@@ -253,17 +255,18 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 ),
             })
         elif _planner_is_coder and _plan_port_available and _plan_port_alive \
-                and (not _planner_ctx_ok or (_always_vision and not _plan_port_vision)):
+                and (not _planner_ctx_ok or (_always_vision and not _plan_port_vision)
+                     or (_need_raw_vision and not _plan_port_vision)):
             _ctx_need_eff = max(_plan_ctx_req, _coder_ctx_need)
-            if _planner_ctx_ok and _always_vision and not _plan_port_vision:
+            if _planner_ctx_ok and (_always_vision or _need_raw_vision) and not _plan_port_vision:
                 logger.info(
-                    "[PLANNER=CODER] always-vision toggle: slot has no projector — "
+                    "[PLANNER=CODER] vision reload needed: planner slot has no projector — "
                     "planner slot evicted, coder loads fresh WITH mmproj")
                 yield await ctx.emit({
                     "type": "status",
                     "content": (
-                        f"⚡ Always-vision: coder loads WITH the projector — "
-                        "planner slot freed for a fresh load."
+                        "⚡ Coder needs vision projector — freeing planner slot "
+                        "for fresh mmproj load."
                     ),
                 })
             else:
@@ -350,8 +353,12 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                     pass
                 if _evicted_workers > 0:
                     await asyncio.sleep(1.5)
-                if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
+                if _cached_coder_port is not None:
                     _coder_load_ok = True
+                    if _img_plan.get("coder") == "raw" and _plan_port_vision is True \
+                            and CODER_VISION_NOTE not in _duo_coder_sys:
+                        _duo_coder_sys += CODER_VISION_NOTE
+                        logger.info("[DUO][VISION-GATE] [VISION] note added on Planner=Coder reuse")
                     yield await ctx.emit({"type": "status",
                         "content": f"✅ Coder ready ({exec_mdl.split(':')[0]} — Planner=Coder, no reload)"})
                     # FIX (2026-08-31): The fast path did not emit the "agent"

@@ -1001,69 +1001,70 @@
         <span id="vision-accordion-arrow" style="margin-left:auto;font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
       </div>
       <div id="vision-accordion-body" style="display:none;padding:0 12px 12px;border-top:1px solid #222a38">
-        <!-- DUO IMAGE PLAN (2026-10-01): agentic runs decide per role -->
-        <div id="duo-image-sec" style="padding:10px 0 6px;border-bottom:1px dashed #222a38;margin-bottom:10px">
-          <div style="font-size:10px;color:#c8d4e4;font-weight:600;margin-bottom:6px">Agentic duo runs (planner + coder) &mdash; used in <span style="color:#20b0a0">coder/duo</span> mode only</div>
-          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:6px">
-            <input type="radio" name="duo-image-mode" id="duo-img-mode-preprocess" onchange="setDuoImageMode('preprocess')">
-            <span style="font-size:10px;color:var(--tx2);line-height:1.5"><b>Describe:</b> the vision model below describes the image once &mdash; Planner and Coder get the text (works with any model).</span>
-          </label>
-          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:4px">
-            <input type="radio" name="duo-image-mode" id="duo-img-mode-direct" onchange="setDuoImageMode('direct')">
-            <span style="font-size:10px;color:var(--tx2);line-height:1.5"><b>Raw image:</b> the image goes to each checked role (must be multimodal, projector file required).</span>
-          </label>
-          <div id="duo-image-prepro-warn" style="display:none;font-size:9px;color:#c88a00;margin:2px 0 4px 24px;line-height:1.5">⚠ "Describe" needs a vision model &mdash; pick one in the Preprocessor section below (switch the mode buttons there first)</div>
-          <div style="font-size:10px;color:var(--tx2);margin:6px 0 2px 24px">Where should the raw image go?</div>
-          <div id="duo-image-roles" style="display:none;margin:0 0 4px 24px">
-            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
-              <input type="checkbox" id="duo-img-planner" onchange="setDuoImageRole('planner',this.checked)">
-              <span id="duo-img-planner-status">Planner</span>
-            </label>
-            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
-              <input type="checkbox" id="duo-img-coder" onchange="setDuoImageRole('coder',this.checked)">
-              <span id="duo-img-coder-status">Coder</span>
-            </label>
+        <div id="vision-flow-card" style="font-family:'IBM Plex Mono',monospace;font-size:9px;line-height:1.6;border:1px solid #1e2a38;border-radius:5px;padding:8px 10px;margin:10px 0;color:#8fa5bf"></div>
+
+        <!-- CHAT / DIRECT & AUTO -->
+        <div id="direct-image-sec">
+          <div id="image-mode-generic-hdr" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:8px;line-height:1.5">
+            How attached images are handled in <b>Chat / Direct</b>:
           </div>
-          <div style="display:none;margin:8px 0 0 24px" id="duo-coder-img-toggles">
-            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
-              <input type="checkbox" id="coder-images-off-toggle" onchange="setCoderImagesOff(this.checked)">
-              <span>Coder takes no images <span style="color:#7a8fa8">(never loads mmproj, saves VRAM)</span></span>
-            </label>
-            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
-              <input type="checkbox" id="coder-always-vision-toggle-duo" onchange="setCoderAlwaysVision(this.checked)">
-              <span>Coder always loads mmproj <span style="color:#7a8fa8">(+VRAM, image steers without the reload)</span></span>
-            </label>
-            <div style="font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:4px">
-              Off: the coder slot never loads the projector, image steers to the coder are dropped (0 mmproj VRAM).
-              Always: the projector loads with the run, image steers skip the ~15 s mid-run reload.
+          <div id="image-mode-row" style="display:flex;gap:4px;margin-bottom:8px">
+            <button id="im-direct" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('direct')" title="Send raw images directly to your multimodal chat model (or auto-fallback)">&#x1F441; Direct (multimodal)</button>
+            <button id="im-preprocess" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('preprocess')" title="A Vision Describer turns the image into text once before the answer">&#x1F4DD; Describe first</button>
+          </div>
+          <div id="im-direct-sec" style="display:none;padding:2px 0 4px">
+            <div style="font-size:10px;color:var(--tx2);margin-bottom:3px">Active target:</div>
+            <div id="direct-img-status" style="font-size:10px;color:var(--tx2);margin-bottom:4px">Direct</div>
+            <div id="im-direct-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5">
+              Raw images go straight to the Direct model (projectors load on demand). Text-only setups auto-pick an installed multimodal model unless pinned in Agents.
             </div>
           </div>
-          <div id="duo-image-note" style="display:none;font-size:9px;color:#20b0a0;margin-left:24px;line-height:1.5"></div>
-          <div id="duo-image-info" style="display:none;font-size:9px;color:#7a8fa8;margin-left:24px;line-height:1.5">
-            Multimodal models (qwen3.5, qwen3.6, hermes, gemma-4) receive the raw image directly.<br>
-            Text-only roles skip the image &mdash; the per-role status line tells you which.
+        </div>
+
+        <!-- AGENTIC / CODE DUO -->
+        <div id="duo-image-sec" style="display:none;padding:2px 0 6px">
+          <div id="duo-image-sec-hdr" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:8px;line-height:1.5">
+            How attached images are handled in <b style="color:#20b0a0">Agentic / Code Duo</b>:
           </div>
-        </div>
-        <div id="image-mode-generic-hdr" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:10px;margin-bottom:8px;line-height:1.6">
-          Direct chat &amp; pipeline &mdash; how images are processed when you attach one:
+          <div id="duo-image-mode-row" style="display:flex;gap:4px;margin-bottom:8px">
+            <button id="duo-im-direct" class="ghost" style="flex:1;font-size:10px" onclick="setDuoImageMode('direct')" title="Send raw images directly to checked multimodal roles (--mmproj loaded on demand)">&#x1F441; Direct (multimodal)</button>
+            <button id="duo-im-preprocess" class="ghost" style="flex:1;font-size:10px" onclick="setDuoImageMode('preprocess')" title="A Vision Describer turns the image into text once — Planner, Coder, and Critic stay text-only">&#x1F4DD; Describe first</button>
+          </div>
+          <div id="duo-direct-sec" style="display:none">
+            <div id="duo-image-targets-label" style="font-size:10px;color:var(--tx2);margin:2px 0 4px">Send raw image to:</div>
+            <div id="duo-image-roles" style="display:none;margin:0 0 6px 0">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
+                <input type="checkbox" id="duo-img-planner" onchange="setDuoImageRole('planner',this.checked)">
+                <span id="duo-img-planner-status">Planner</span>
+              </label>
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
+                <input type="checkbox" id="duo-img-coder" onchange="setDuoImageRole('coder',this.checked)">
+                <span id="duo-img-coder-status">Coder</span>
+              </label>
+            </div>
+            <div style="display:none;margin:4px 0 4px 0;padding-top:4px;border-top:1px dashed #1e2a38" id="duo-coder-img-toggles">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
+                <input type="checkbox" id="coder-images-off-toggle" onchange="setCoderImagesOff(this.checked)">
+                <span>Coder takes no images <span style="color:#7a8fa8">(never loads mmproj, saves VRAM)</span></span>
+              </label>
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
+                <input type="checkbox" id="coder-always-vision-toggle-duo" onchange="setCoderAlwaysVision(this.checked)">
+                <span>Coder always loads mmproj <span style="color:#7a8fa8">(+VRAM, mid-run image steers skip ~15 s reload)</span></span>
+              </label>
+            </div>
+            <div id="duo-image-note" style="display:none;font-size:9px;color:#20b0a0;margin-top:4px;line-height:1.5"></div>
+            <div id="duo-image-info" style="display:none;font-size:9px;color:#7a8fa8;line-height:1.5">
+              Only checked multimodal roles receive raw images; non-vision models skip the image cleanly.
+            </div>
+          </div>
+          <div id="duo-image-prepro-warn" style="display:none;font-size:9px;color:#c88a00;margin:2px 0 6px;line-height:1.5">&#x26A0; Pick a Vision Describer model below so Describe mode can analyze images.</div>
         </div>
 
-        <div id="image-mode-row" style="display:flex;gap:4px;margin-bottom:8px">
-          <button id="im-direct" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('direct')" title="Multimodal models get the raw image directly">Direct</button>
-          <button id="im-preprocess" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('preprocess')" title="A dedicated vision model describes the image as text before the run">Preprocessor</button>
-          <button id="im-pipeline" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('pipeline')" title="The pipeline's vision-agent analyzes the image">Pipeline</button>
-        </div>
-
-        <div id="vision-flow-card" style="font-family:'IBM Plex Mono',monospace;font-size:9px;line-height:1.6;border:1px solid #1e2a38;border-radius:5px;padding:8px 10px;margin-bottom:10px;color:#8fa5bf"></div>
-
-        <div id="im-direct-sec" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:8px">
-          The flow card above shows the live image route for the current model.
-        </div>
-
-        <div id="im-preprocess-sec" style="display:none">
+        <!-- SHARED VISION DESCRIBER (used whenever Direct/Auto or Agentic runs in "Describe first") -->
+        <div id="im-preprocess-sec" style="display:none;border-top:1px dashed #222a38;padding-top:8px;margin-top:6px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Vision Describer model</div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:6px">
-            A dedicated vision model turns the image into a text description <b>before</b> the run.<br>
-            Every agent stays text-based &mdash; works with any model.
+            Describes attached images as text before the run &mdash; downstream chat/coding models stay text-only.
           </div>
           <div class="row" style="margin-bottom:4px">
             <select id="vision-model-sel" style="flex:1" onchange="setVisionModel(this.value)"></select>
@@ -1073,83 +1074,74 @@
             <span id="vision-test-result"></span>
           </div>
           <div id="vision-prepro-warn" style="display:none;font-size:9px;color:#c88a00;margin-top:2px;font-family:'IBM Plex Mono',monospace">
-            ⚠ This model is not on the preprocessing allowlist
+            &#x26A0; This model is not on the preprocessing allowlist
           </div>
         </div>
 
-        <div id="im-pipeline-sec" style="display:none">
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:6px">
-            The pipeline's <b>vision-agent</b> analyzes the image and passes a text description to the other agents.<br>
-            You can additionally send raw images to multimodal pipeline agents.
+        <!-- PIPELINE MODE -->
+        <div id="im-pipeline-sec" style="display:none;padding:2px 0 6px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:8px;line-height:1.5">
+            How attached images are handled in <b style="color:#b090d0">Pipeline</b>:
           </div>
-          <div class="vision-row">
-            <span class="cfl-label" style="font-size:11px">Vision Agent enabled</span>
-            <label class="cfl-sw">
-              <input type="checkbox" id="va-enabled-toggle" onchange="setVisionAgentEnabled(this.checked)">
-              <span class="sl"></span>
-            </label>
+          <div id="pipe-image-mode-row" style="display:flex;gap:4px;margin-bottom:8px">
+            <button id="pipe-im-direct" class="ghost" style="flex:1;font-size:10px" onclick="setPipelineImageMode('direct')" title="Send raw images directly to checked multimodal Pipeline stages (--mmproj loaded on demand)">&#x1F441; Direct (multimodal)</button>
+            <button id="pipe-im-preprocess" class="ghost" style="flex:1;font-size:10px" onclick="setPipelineImageMode('preprocess')" title="Vision-Agent turns attached images into text once before Analyst runs">&#x1F4DD; Describe first</button>
           </div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Model</div>
-          <div class="row" style="margin-bottom:8px">
-            <select id="va-model-sel" style="flex:1" onchange="setVisionAgentModel(this.value)">
-              <option value="">&#8212; choose model &#8212;</option>
-            </select>
-          </div>
-          <!-- VISIBILITY (2026-10-03): sequential/parallel has no backend
-               reader yet (pipeline_runner is sequential-only). Hidden until
-               the runner actually implements it; setVisionAgentMode stays
-               wired for that day. -->
-          <div style="display:none">
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Mode</div>
-            <div style="display:flex;gap:4px;margin-bottom:6px">
-              <button id="va-mode-seq" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('sequential')">&#9654; Sequential</button>
-              <button id="va-mode-par" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('parallel')">&#9654;&#9654; Parallel</button>
-            </div>
-            <div id="va-mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);line-height:1.4"></div>
-          </div>
-          <div style="margin-top:8px;border-top:1px solid #1e2a38;padding-top:8px">
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:6px">Raw image to roles (multimodal only)</div>
-            <div class="vision-row" style="margin-bottom:4px">
-              <span class="cfl-label" style="font-size:11px">Analyst</span>
-              <label class="cfl-sw">
+          <div id="pipe-direct-sec" style="display:none">
+            <div style="font-size:10px;color:var(--tx2);margin:2px 0 4px">Send raw image to:</div>
+            <div style="margin:0 0 6px 0">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
                 <input type="checkbox" id="pv-role-analyst" onchange="setPipelineVisionRole('analyst',this.checked)">
-                <span class="sl"></span>
+                <span id="pipe-img-analyst-status">Analyst</span>
               </label>
-            </div>
-            <div class="vision-row" style="margin-bottom:4px">
-              <span class="cfl-label" style="font-size:11px">Refiner</span>
-              <label class="cfl-sw">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
                 <input type="checkbox" id="pv-role-refiner" onchange="setPipelineVisionRole('refiner',this.checked)">
-                <span class="sl"></span>
+                <span id="pipe-img-refiner-status">Refiner</span>
               </label>
-            </div>
-            <div class="vision-row" style="margin-bottom:4px">
-              <span class="cfl-label" style="font-size:11px">Critic</span>
-              <label class="cfl-sw">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
                 <input type="checkbox" id="pv-role-critic" onchange="setPipelineVisionRole('critic',this.checked)">
-                <span class="sl"></span>
+                <span id="pipe-img-critic-status">Critic</span>
               </label>
-            </div>
-            <div class="vision-row" style="margin-bottom:4px">
-              <span class="cfl-label" style="font-size:11px">Synthesizer</span>
-              <label class="cfl-sw">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
                 <input type="checkbox" id="pv-role-synthesizer" onchange="setPipelineVisionRole('synthesizer',this.checked)">
-                <span class="sl"></span>
+                <span id="pipe-img-synthesizer-status">Synthesizer</span>
               </label>
             </div>
-            <div class="vision-row" style="margin-bottom:4px">
-              <span class="cfl-label" style="font-size:11px">Coder &mdash; always load mmproj (+VRAM)</span>
-              <label class="cfl-sw">
-                <input type="checkbox" id="coder-always-vision-toggle" onchange="setCoderAlwaysVision(this.checked)">
-                <span class="sl"></span>
+            <div id="pipe-image-note" style="display:none;font-size:9px;color:#b090d0;margin-top:4px;line-height:1.5"></div>
+            <div style="font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:6px">
+              Only checked multimodal stages receive raw images; non-vision stages skip the image cleanly.
+            </div>
+            <div style="padding-top:4px;border-top:1px dashed #1e2a38">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
+                <input type="checkbox" id="va-enabled-toggle" onchange="setVisionAgentEnabled(this.checked)">
+                <span>Vision-Agent fallback <span style="color:#7a8fa8">(describe image if Analyst lacks vision)</span></span>
               </label>
             </div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5">
-              Only roles whose model is <b>multimodal</b> actually receive the raw image.<br>
-              All other roles get the text description from the vision-agent.<br>
-              Coder mmproj preload: image <b>steers</b> inject without the
-              mid-run vision reload (&#8760;15 s) &mdash; at the cost of VRAM every run.
+          </div>
+          <div id="pipe-va-picker" style="display:none;border-top:1px dashed #222a38;padding-top:8px;margin-top:6px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Vision-Agent model (Describer)</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:6px">
+              Describes attached images as text before Analyst runs &mdash; downstream stages stay text-only.
             </div>
+            <div class="row" style="margin-bottom:4px">
+              <select id="va-model-sel" style="flex:1" onchange="setVisionAgentModel(this.value)">
+                <option value="">&#8212; choose model &#8212;</option>
+              </select>
+            </div>
+            <div id="pipe-image-prepro-warn" style="display:none;font-size:9px;color:#c88a00;margin:2px 0 4px;line-height:1.5">&#x26A0; Pick a Vision-Agent model above so Describe mode can analyze images.</div>
+            <div id="full-imgdesc-row" style="margin-top:6px;padding-top:6px;border-top:1px dashed #1e2a38">
+              <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer">
+                <input type="checkbox" id="img-pipeline-toggle"
+                  onchange="postSettings({image_desc_full_pipeline:this.checked});">
+                <span>Full img-desc <span style="color:#7a8fa8">(also pass description to Refiner + Critic)</span></span>
+              </label>
+            </div>
+          </div>
+          <!-- VISIBILITY (kept out of presets via _PRESET_NEVER_KEYS) -->
+          <div style="display:none">
+            <button id="va-mode-seq" class="ghost" onclick="setVisionAgentMode('sequential')">Sequential</button>
+            <button id="va-mode-par" class="ghost" onclick="setVisionAgentMode('parallel')">Parallel</button>
+            <div id="va-mode-desc"></div>
           </div>
         </div>
       </div>
@@ -1213,21 +1205,10 @@
       ON = analyst searches before analysis (first iteration only)<br>
       OFF = no automatic websearch
     </div>
-    <!-- Image description: full pipeline -->
-    <div class="cfl-row" id="full-imgdesc-row" style="margin-top:6px">
-      <span class="cfl-label">Full img-desc</span>
-      <label class="cfl-sw">
-        <input type="checkbox" id="img-pipeline-toggle"
-          onchange="postSettings({image_desc_full_pipeline:this.checked});">
-        <span class="sl"></span>
-      </label>
-    </div>
-    <div id="full-imgdesc-hint" style="font-size:9px;color:var(--tx3);padding:0 4px 6px;line-height:1.5">ON = image description to all agents (refiner+critic)<br>OFF = only analyst gets the image description</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
       Critic provides tune-constraints &#8594; refiner gets hard constraints.<br>
       <span style="color:var(--amber)">&#9889; Adversarial Loop</span> instead of stylistic refinement.
     </div>
-    <!-- Image Processing -->
     <div class="sec">Iterations <span style="float:right;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2)">(Pipeline)</span></div>
     <div class="iters-row">
       <label>Deliberation cycles</label>

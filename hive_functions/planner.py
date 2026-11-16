@@ -1456,6 +1456,9 @@ async def run_planner(
                 {"role": "system", "content": _nt_sys},
                 {"role": "user",   "content": _planner_user},
             ]
+            if images:
+                from core.duo_helpers import attach_images_to_last_user
+                _nt_messages = attach_images_to_last_user(_nt_messages, images)
             _nt_timeout = float(settings.get("duo_soft_planner_wall_timeout_s", 180))
             _nt_temp, _nt_smp = _resolve_planner_sampling(
                 planner_model, False, settings, fallback_temp=0.1,

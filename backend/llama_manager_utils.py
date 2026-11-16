@@ -18,6 +18,10 @@ logger = logging.getLogger("llama_manager")
 
 CanFitResult = namedtuple("CanFitResult", ["ok", "needed_mib", "free_mib", "margin_mib", "source"])
 
+
+class SlotAbortedError(RuntimeError):
+    """Raised when an in-flight model load is aborted (slot killed/purged)."""
+
 _WIN_CNF = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "Windows" else 0
 
 VRAM_BUDGET_GB: float = 7.5  # Standardbudget: real nutzbar
@@ -274,17 +278,15 @@ def _mmproj_always_enabled() -> bool:
 
 def _needs_mmproj(model: str, vision: bool = False) -> bool:
     base = model.split(":")[0].lower()
-    if base in _MMPROJ_REQUIRED_BASES:
+    if base in _MMPROJ_REQUIRED_BASES or base in _VISION_CAPABLE_BASES:
         # TEXT-ONLY MMPROJ SKIP (35B lever 6, 2026-11-12): the projector
         # costs ~0.8-1.3 GB VRAM and a pure text/code run never encodes an
         # image with it. Without `vision` the projector stays off; the first
         # image request pays the one-time upgrade reload
         # (needs_vision_reload -> ensure_loaded(vision=True) /
         # upgrade_port_to_vision). vision_mmproj_always=true restores the
-        # always-attach behavior.
+        # always-attach behavior across both projector families.
         return bool(vision) or _mmproj_always_enabled()
-    if vision and base in _VISION_CAPABLE_BASES:
-        return True
     # REGISTRY-PROJECTOR (2026-11-01): a model the registry declares a
     # projector for is vision-capable even when its base is not in the list
     # above (user-registered models). Without this an image run attached to a

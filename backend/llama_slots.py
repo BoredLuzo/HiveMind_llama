@@ -37,6 +37,9 @@ class ModelSlot:
         self._idle_timeout: Optional[float] = None
         self._ready_event  = asyncio.Event()
         self._loading      = False
+        self._lifecycle_gen: int = 0
+        self._wait_abort_ev: Optional[asyncio.Event] = None
+        self._wait_abort_loop: Optional[asyncio.AbstractEventLoop] = None
         self.pinned_at     = 0.0   # PIN EXPIRY (2026-10-02): set on pin, LRU ignores pins older than 30 min
         self._orphan_port: Optional[int] = None
         self._vision       = False
@@ -128,9 +131,73 @@ class ModelSlot:
         # MONOTONIC (audit A3): pairs with the idle monitor's clock
         self.last_used = time.monotonic()
 
-    async def wait_ready(self, timeout: float = LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
-                         http_client: Optional[httpx.AsyncClient] = None) -> bool:
+    def abort_wait(self) -> None:
+        """Bump lifecycle generation and wake any active wait_ready() immediately."""
+        self._lifecycle_gen = int(getattr(self, "_lifecycle_gen", 0)) + 1
+        ev = getattr(self, "_wait_abort_ev", None)
+        if ev is not None:
+            loop = getattr(self, "_wait_abort_loop", None)
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if loop is not None and running is not loop and not loop.is_closed():
+                try:
+                    loop.call_soon_threadsafe(ev.set)
+                    return
+                except RuntimeError:
+                    pass
+            try:
+                ev.set()
+            except RuntimeError:
+                pass
 
+    async def wait_ready(
+        self,
+        timeout: float = LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
+        http_client: Optional[httpx.AsyncClient] = None,
+        *,
+        expected_process: Optional[subprocess.Popen] = None,
+        lifecycle_gen: Optional[int] = None,
+    ) -> bool:
+        _entry_gen = (
+            lifecycle_gen
+            if lifecycle_gen is not None
+            else getattr(self, "_lifecycle_gen", None)
+        )
+        _exp_proc = expected_process
+        _had_proc = _exp_proc is not None or self.process is not None
+        _abort_ev: Optional[asyncio.Event] = None
+        if hasattr(self, "_lifecycle_gen"):
+            _abort_ev = asyncio.Event()
+            try:
+                self._wait_abort_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._wait_abort_loop = None
+            self._wait_abort_ev = _abort_ev
+
+        def _aborted() -> bool:
+            if _entry_gen is not None and getattr(self, "_lifecycle_gen", _entry_gen) != _entry_gen:
+                return True
+            if _exp_proc is not None and self.process is not _exp_proc:
+                return True
+            if _had_proc and self.process is None:
+                return True
+            if self.process and self.process.poll() is not None:
+                return True
+            return False
+
+        async def _abortable_sleep(secs: float) -> bool:
+            if _abort_ev is None:
+                await asyncio.sleep(secs)
+                return _aborted()
+            if _abort_ev.is_set() or _aborted():
+                return True
+            try:
+                await asyncio.wait_for(_abort_ev.wait(), timeout=secs)
+                return True
+            except asyncio.TimeoutError:
+                return _aborted()
 
         deadline = time.time() + timeout
         c = http_client
@@ -140,10 +207,12 @@ class ModelSlot:
             _owns_client = True
         try:
             while time.time() < deadline:
-                if self.process and self.process.poll() is not None:
+                if _aborted():
                     return False
                 try:
                     r = await c.get(f"{self.url}/health")
+                    if _aborted():
+                        return False
                     if r.status_code == 200:
                         try:
                             body = r.json()
@@ -162,7 +231,8 @@ class ModelSlot:
                             _stable_count = 1
                             _stable_needed = 3
                             while _stable_count < _stable_needed and time.time() < deadline:
-                                await asyncio.sleep(1.0)
+                                if await _abortable_sleep(1.0):
+                                    return False
                                 try:
                                     _r2 = await c.get(f"{self.url}/health")
                                     if _r2.status_code == 200:
@@ -171,7 +241,7 @@ class ModelSlot:
                                         _stable_count = 0
                                 except Exception:
                                     _stable_count = 0
-                            if _stable_count >= _stable_needed:
+                            if _stable_count >= _stable_needed and not _aborted():
                                 try:
                                     _rm2 = await c.get(f"{self.url}/v1/models")
                                     if _rm2.status_code == 200:
@@ -181,9 +251,13 @@ class ModelSlot:
                             return False
                 except Exception:
                     pass
-                await asyncio.sleep(0.5)
+                if await _abortable_sleep(0.5):
+                    return False
             return False
         finally:
+            if _abort_ev is not None and getattr(self, "_wait_abort_ev", None) is _abort_ev:
+                self._wait_abort_ev = None
+                self._wait_abort_loop = None
             if _owns_client:
                 try:
                     await c.aclose()
@@ -191,6 +265,7 @@ class ModelSlot:
                     pass
 
     def kill(self):
+        self.abort_wait()
         if self._orphan_port is not None:
             try:
                 _kill_port_sync(self._orphan_port)

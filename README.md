@@ -5,38 +5,41 @@
 [![license](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.12--3.14-3776ab)](pyproject.toml)
 
-Local multi-agent coding assistant on top of `llama.cpp`. HiveMind pairs
-deterministic repository analysis, single- or multi-model routing, scoped tool
-tiers, LSP compiler feedback, and checkpointed execution inside a single-page
-web UI at `http://localhost:8001` — running locally on your own GPU and CPU with
-no cloud LLM or API keys.
+**HiveMind is a local AI assistant for chatting and coding that runs in your
+browser, on your own GPU or CPU.** It is built on `llama.cpp`, needs no cloud
+API keys and has no per-token fees, and your code, chats and memories stay on
+your machine. Ask a quick question, or hand it a coding task: it explores your
+project, edits files, runs your tests and fixes what fails — all from one web UI
+at `http://localhost:8001`.
 
 ![HiveMind web UI — Simple/Direct chat with live web search and Agent Mode controls](docs/screenshot.png)
 
-## Key capabilities
+## What you get
 
-- **Capability-agnostic GGUF drop-in & VRAM orchestration:** Drop `.gguf` files
-  (including multi-part `-NNNNN-of-NNNNN` shards and paired `mmproj` vision
-  projectors) into your models folder; HiveMind inspects GGUF metadata, manages
-  llama.cpp worker slots across CUDA, Vulkan, ROCm, and CPU backends, skips
-  large MoE `mlock` traps, and evicts idle slots automatically.
-- **Primary run modes (`Auto`, `Simple / Direct`, `Agentic / Code Duo`):**
-  Route trivially or deterministically from `Auto` into fast single-model
-  `Direct` chat (with optional inline tools, `/pause`/`/resume`, and mid-run
-  steering) or full autonomous `Code Duo` execution.
-- **Three-layer codebase intelligence:** Combines PageRank dependency ranking
-  (`Tree-Scout`), a byte-pinned `Static Repo-Map` extended at each compression via
-  `[REPO-MAP-DELTA — changed since the pin]` symbol updates, and bounded
-  incremental `Deep Retrieval` (`RepoIndex`) across Python, JS/TS, Rust, Go,
-  Java, C/C++, C#, Ruby, and PHP.
-- **Patch-native editing, LSP diagnostics & verification gate:** Supports
-  unified multi-file `apply_patch` diffs, surgical `edit_file` / AST edits,
-  background-warmed LSP auto-diagnostics (or pyright/lint fallback), and a
-  post-edit test/smoke verification gate (up to 3 auto-verify vetoes before
-  flagging an unverified completion).
-- **KV-cache-preserving context management:** Combines Mask-First observation
-  masking, `cache_horizon` tail-first eviction, byte-stable system prompts, and
-  chunk checkpoints so long tasks resume cleanly across engine restarts.
+- **One local UI for quick answers and real coding work.** Use plain chat
+  (optionally with tools and web search) for everyday questions, or switch to
+  the coding agent for multi-step tasks. `Auto` mode picks for you.
+- **Bring your own models.** Drop any `.gguf` file into your `models/` folder and
+  it shows up in the UI. HiveMind reads the file, picks sensible launch
+  settings, and loads and unloads models to fit your GPU memory (Vulkan, CUDA,
+  ROCm or CPU). An optional installer downloads a tested preset catalog.
+  (Multi-part files and vision add-on files are detected automatically.)
+- **A coding agent that checks its work.** The agent works in an
+  explore → edit → test → fix loop. After it changes code it runs your tests (or
+  a syntax/smoke check) before it is allowed to finish; if it still cannot
+  verify after up to 3 vetoes, the result is flagged as unverified instead of
+  silently accepted.
+- **Safer edits.** Multi-file patch editing, compiler/linter feedback from
+  language servers after each edit, an optional action-approval gate, and
+  checkpoints so long tasks resume after an engine restart.
+- **Prompts stay small on long tasks.** A ranked repo map and bounded code
+  search give the model the right files, and long runs compress their own
+  context while keeping the cached prompt prefix intact. (Under the hood:
+  Tree-Scout ranking, Deep Retrieval, KV-cache-preserving compression — see
+  [docs/architecture.md](docs/architecture.md).)
+- **Everything around it is optional and local.** Web search through SearXNG,
+  MCP server and client, scheduled automations, voice input/output, and Telegram
+  remote control (voice notes, images, PDFs, approvals).
 
 Token budgets (tool schema, tool results, injected hints, read caps) are
 derived at run time from the model's context length.
@@ -79,7 +82,17 @@ a message. Drop any extra `.gguf` weights into `models/` (or
   on NVIDIA, ROCm/CPU supported).
 - **16 GB+ VRAM (or hybrid CPU/MoE offload):** Recommended for **Smart Preload**,
   multiple simultaneous models (`Critic-Duo`), large MoE weights, or 100k+
-  context windows (~30 GB disk for the full optional installer catalog).
+  context windows.
+- **System RAM:** 32 GB+ is recommended when you offload MoE experts to the CPU
+  (the offloaded weights live in RAM).
+- **Disk:** model files dominate. A starter set of four small models (for example
+  `qwen3.5:4b-mtp`, `gemma-4:e4b-it-qat`, `minicpm5:2b-sharp`, `lfm3:1.7b-qad`)
+  is about 12 GB including vision projectors. Adding one 24B–35B MoE model adds
+  roughly 14–24 GB, so about 25–40 GB in total. The full optional installer
+  catalog (19 models, including projectors and speculative-decoding drafters) is
+  about 130 GB. Sizes are listed in the
+  [download catalog](docs/guide.md#download-catalog); `python deploy/fetch_models.py --list-only`
+  is the authoritative answer.
 - **Optional tooling:** Git, Docker Desktop (for local SearXNG web search),
   and language servers via `deploy\install_lsp_packs.bat`. See
   [docs/guide.md](docs/guide.md#requirements).
@@ -96,7 +109,7 @@ a message. Drop any extra `.gguf` weights into `models/` (or
 Three coder tool tiers trade schema overhead against breadth (`Tools & Optionals` sidebar):
 
 - **Lean (`duo_lean`, 8 tools):** Orthogonal minimal core (`read_file`, `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`, `task_complete`).
-- **Core (`duo_core`, default — 18 base + optional `+Subagent`):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
+- **Core (`duo_core`, default — 18 base tools + optional `+Subagent` = 19):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
 - **Full (`duo_full`):** Adds `replace_lines`, `edit_ast`, `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, MCP client tools, and `remember`.
 
 Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
@@ -119,6 +132,8 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 | **MCP (Server & Client)** | Expose HiveMind tools to IDEs over stdio/HTTP with Origin/auth guards, or consume external MCP servers | [docs/mcp.md](docs/mcp.md), [docs/mcp_client.md](docs/mcp_client.md) |
 | **Language Servers (LSP)** | Auto-attaches compiler/linter diagnostics after edits and enables symbol navigation | [docs/lsp.md](docs/lsp.md) |
 | **Headless Browser** | Headless Chromium inspection (`navigate`, `snapshot`, `click`, `evaluate`, console logs) | [docs/guide.md](docs/guide.md#tools) |
+| **Vision / Image Processing** | Per-mode multimodal `--mmproj` or `Describe first` preprocessing, mid-run image steers, optional saved uploads | [docs/guide.md](docs/guide.md#image-processing) |
+| **Automations** | Engine-scheduled recurring (`every 40m`, cron) or one-shot runs with tool/MCP access in the `Automations` tab | [docs/guide.md](docs/guide.md#ui-and-control) |
 | **Soul *(experimental)*** | Peer-rating personality/style adaptation stored locally | [docs/guide.md](docs/guide.md#learning-and-memory) |
 | **OpenAI-compatible API** | `/v1/chat/completions` multi-agent pipeline endpoint | [docs/guide.md](docs/guide.md#api) |
 

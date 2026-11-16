@@ -182,6 +182,15 @@ class LlamaHealthMixin:
         started; the name-wide sweep only runs on an explicit request
         (`include_foreign=True`, e.g. phone `/purge all`).
         '''
+        # Wake any in-flight wait_ready() loops and advance their lifecycle
+        # generation before killing processes so they release _vulkan_init_sem
+        # immediately rather than spinning the remaining 240s after process=None.
+        for _s in self._slots:
+            if hasattr(_s, "abort_wait"):
+                _s.abort_wait()
+            else:
+                _s._lifecycle_gen = int(getattr(_s, "_lifecycle_gen", 0)) + 1
+
         killed = []
         _own_pids = []
         for _s in self._slots:
@@ -250,6 +259,10 @@ class LlamaHealthMixin:
                         await _kill_slot_async(s)
                     except Exception:
                         pass
+                if hasattr(s, "abort_wait"):
+                    s.abort_wait()
+                else:
+                    s._lifecycle_gen = int(getattr(s, "_lifecycle_gen", 0)) + 1
                 s.process  = None
                 s.model    = None
                 s._loading = False

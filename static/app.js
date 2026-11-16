@@ -918,6 +918,7 @@ async function loadModels() {
       // show server-side errors in the console
       if (d.error) console.warn('[/models] Server error:', d.error);
       // cache profiles for agent dropdowns
+      S._mmprojCache = {};
       if (d.profiles && d.profiles.length) {
         S.modelProfiles = {};
         d.profiles.forEach(function(p) { if (p.name) S.modelProfiles[p.name] = p; });
@@ -1497,7 +1498,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     S.visionAgentModel   = s.vision_agent_model   || '';
     S.visionAgentMode    = 'sequential';  // runner is sequential-only; radio hidden
     // PIPELINE-VISION: pass images directly to multimodal pipeline agents?
-    S.pipelineVisionDirect = s.pipeline_vision_direct !== false;
+    S.pipelineVisionDirect = s.pipeline_vision_direct === true;
     // PIPELINE-VISION per role: which roles get raw images directly.
     S.pipelineVisionRoles = s.pipeline_vision_roles || {};
     _applyPipelineVisionRolesUI();
@@ -1508,22 +1509,18 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     // CODER ALWAYS-VISION (2026-10-06): preload the projector for the coder
     // so image steers don't pay the mid-run upgrade stall. Opt-in (VRAM).
     S.coderAlwaysVision = !!s.duo_coder_always_vision;
-    var _cavEl = document.getElementById('coder-always-vision-toggle');
-    if (_cavEl) _cavEl.checked = S.coderAlwaysVision;
     // CODER IMAGES OFF (2026-10-07, owner): hard "coder takes no images" —
     // wins over the role checkbox and the always-vision toggle (backend
     // resolve_image_plan + steer drains honor it).
     S.coderImagesOff = !!s.duo_coder_images_off;
     var _cioEl = document.getElementById('coder-images-off-toggle');
     if (_cioEl) _cioEl.checked = S.coderImagesOff;
-    // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted. The
-    // persisted key had no backend reader and presets freezing UI state
-    // drifted it from vision_model.json (the actual truth, loaded by
-    // loadVisionConfig which derives the mode from it below).
+    // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted.
     S.imageMode = '';
     // DUO IMAGE PLAN (2026-10-01): sentinel None = derived client-side the
     // same way the backend does it (active vision cfg -> preprocess)
-    S.duoImageMode = s.duo_image_mode !== undefined && s.duo_image_mode !== null
+    S._duoImageModeExplicit = (s.duo_image_mode !== undefined && s.duo_image_mode !== null && s.duo_image_mode !== '');
+    S.duoImageMode = S._duoImageModeExplicit
       ? s.duo_image_mode
       : ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
     S.duoImageToPlanner = s.duo_image_to_planner === true;
@@ -3423,7 +3420,7 @@ function renderAgentCards(agents) {
   // update the agent map after rendering
   setTimeout(buildAgentMapFromSettings, 50);
   // VISION-HINT: update the image path (multimodal direct / prepro / vision agent)
-  if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
+  if (typeof updateDuoImageUI === 'function') { try { updateDuoImageUI(); } catch(e) {} }
 }
 
 function _syncAgentModelState(key, model, sel) {
@@ -3431,7 +3428,9 @@ function _syncAgentModelState(key, model, sel) {
   if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
   S.currentAssignments[key].model = model;
   if (S.agentsCfg && S.agentsCfg[key]) S.agentsCfg[key].model = model;
-  if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
+  if (['direct', 'duo_planner', 'duo_coder', 'analyst', 'refiner', 'critic', 'synthesizer'].indexOf(key) >= 0) {
+    if (typeof updateDuoImageUI === 'function') { try { updateDuoImageUI(); } catch(e) {} }
+  }
   if (key === 'duo_coder') {
     S.duoCoderModel = model;
     var _dcm = document.getElementById('duo-coder-model-sel');
@@ -4053,6 +4052,33 @@ function handleImgs(input) {
   input.value = '';
 }
 
+function _isVisionCapableModel(m) {
+  if (!m) return false;
+  var pr = S.modelProfiles && (S.modelProfiles[m] || S.modelProfiles[(m || '').split(':')[0]]);
+  if (pr && pr.vision) return true;
+  var lo = String(m).toLowerCase();
+  return ['qwen3-vl', 'llava', 'moondream', 'bakllava', 'minicpm-v', 'granite3.2', 'vision'].some(function(vm) {
+    return lo.indexOf(vm) >= 0;
+  });
+}
+
+function _anyInstalledVisionModel() {
+  return (S.models || []).some(_isVisionCapableModel);
+}
+
+function _duoImageRoleModels() {
+  var coder = S.duoCoderModel
+    || (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model)
+    || '';
+  var planner = S.duoPlannerModel || '';
+  if (!planner) {
+    planner = (S.duoPlannerUseCoderCtx !== false && coder)
+      ? coder
+      : ((S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '');
+  }
+  return { planner: planner, coder: coder };
+}
+
 function _updateImgVisionHint() {
   var c = document.getElementById('img-preview');
   if (!c) return;
@@ -4065,55 +4091,119 @@ function _updateImgVisionHint() {
   function _style(bg, col, brd) {
     hint.style.background = bg; hint.style.color = col; hint.style.border = '1px solid ' + brd;
   }
+  if (S.mode === 'pipeline') {
+    if (S.pipelineVisionDirect === true) {
+      var _pRoles = ['analyst','refiner','critic','synthesizer'].filter(function(r) {
+        return S.pipelineVisionRoles && S.pipelineVisionRoles[r];
+      });
+      if (!_pRoles.length) _pRoles = ['analyst'];
+      var _pCapable = _pRoles.filter(function(r) {
+        var am = (S.currentAssignments && S.currentAssignments[r] && S.currentAssignments[r].model) || '';
+        return _isVisionCapableModel(am);
+      });
+      if (_pCapable.length) {
+        _style('rgba(72,120,192,.12)', '#80b0e0', 'rgba(72,120,192,.3)');
+        hint.textContent = '[Pipeline Direct] Raw image -> ' + _pCapable.join(', ')
+          + (S.visionAgentEnabled && S.visionAgentModel ? (' (fallback Vision-Agent: ' + S.visionAgentModel + ')') : '') + '.';
+      } else if (S.visionAgentModel) {
+        _style('rgba(136,88,192,.12)', '#b090d0', 'rgba(136,88,192,.3)');
+        hint.textContent = '[Pipeline Fallback] Checked roles are text-only — Vision-Agent (' + S.visionAgentModel + ') describes image.';
+      } else {
+        _style('rgba(176,64,64,.12)', '#d09090', 'rgba(176,64,64,.3)');
+        hint.textContent = 'WARNING: checked Pipeline stages are text-only and no Vision-Agent model is selected.';
+      }
+    } else if (S.visionAgentModel) {
+      _style('rgba(136,88,192,.12)', '#b090d0', 'rgba(136,88,192,.3)');
+      hint.textContent = '[Describe first] Vision-Agent (' + S.visionAgentModel + ') describes the image before Analyst.';
+    } else {
+      _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
+      hint.textContent = 'Describe mode needs a Vision-Agent model — pick one under Image Processing.';
+    }
+    c.appendChild(hint);
+    return;
+  }
   var _isDuo = S.mode === 'code_duo' || S._runIsDuo;
   if (!_isDuo) {
     var dModel = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model) || '';
-    var dProf = S.modelProfiles && (S.modelProfiles[dModel] || S.modelProfiles[(dModel||'').split(':')[0]]);
-    if (dProf && dProf.vision) {
-      _style('rgba(72,120,192,.12)', '#80b0e0', 'rgba(72,120,192,.3)');
-      hint.textContent = '[Multimodal] (' + dModel + ') processes the image directly.';
-    } else if (S.visionAgentEnabled && S.visionAgentModel) {
+    if (S.mode === 'auto') {
+      var _aDm = S.duoImageMode || ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
+      var _aMdls = _duoImageRoleModels();
+      var _aDirectLbl = (S.imageMode === 'preprocess' && S.visionModel)
+        ? ('Describe (' + S.visionModel + ')')
+        : (_isVisionCapableModel(dModel) ? ('Direct (' + dModel + ')')
+          : (_anyInstalledVisionModel() ? 'Direct (auto-switch)' : 'none'));
+      var _aDuoLbl = (_aDm === 'preprocess')
+        ? (S.visionModel ? ('Describe (' + S.visionModel + ')') : 'needs Describer')
+        : (function() {
+            var _t = [];
+            if (S.duoImageToPlanner) _t.push('Planner' + (_isVisionCapableModel(_aMdls.planner) ? '' : ' [no vision]'));
+            if (S.duoImageToCoder && S.coderImagesOff !== true) _t.push('Coder' + (_isVisionCapableModel(_aMdls.coder) ? '' : ' [no vision]'));
+            return _t.length ? _t.join('+') : 'no role checked';
+          })();
+      if (_aDirectLbl === 'none' && (_aDuoLbl === 'needs Describer' || _aDuoLbl === 'no role checked')) {
+        _style('rgba(176,64,64,.12)', '#d09090', 'rgba(176,64,64,.3)');
+      } else {
+        _style('rgba(72,120,192,.12)', '#80b0e0', 'rgba(72,120,192,.3)');
+      }
+      hint.textContent = '[Auto] Direct: ' + _aDirectLbl + ' · Agentic: ' + _aDuoLbl + '.';
+      c.appendChild(hint);
+      return;
+    }
+    if (S.imageMode === 'preprocess' && S.visionModel) {
       _style('rgba(136,88,192,.12)', '#b090d0', 'rgba(136,88,192,.3)');
-      hint.textContent = '[Vision-agent] (' + S.visionAgentModel + ') describes the image as text.';
+      hint.textContent = '[Describe first] (' + S.visionModel + ') turns image into text for ' + (dModel || 'Direct') + '.';
+    } else if (S.imageMode === 'preprocess') {
+      _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
+      hint.textContent = 'Describe mode needs a Vision Describer model (open Image Processing).';
+    } else if (_isVisionCapableModel(dModel)) {
+      _style('rgba(72,120,192,.12)', '#80b0e0', 'rgba(72,120,192,.3)');
+      hint.textContent = '[Direct multimodal] (' + dModel + ') sees the image directly.';
+    } else if (_anyInstalledVisionModel()) {
+      _style('rgba(72,120,192,.12)', '#80b0e0', 'rgba(72,120,192,.3)');
+      hint.textContent = '[Direct auto-fallback] (' + (dModel || 'direct') + ' is text-only — switches to an installed multimodal model).';
     } else {
       _style('rgba(176,64,64,.12)', '#d09090', 'rgba(176,64,64,.3)');
-      hint.textContent = 'WARNING: no multimodal direct model and no vision-agent - the image will be ignored.';
+      hint.textContent = 'WARNING: no multimodal model installed and Describe first is off — the image will be ignored.';
     }
     c.appendChild(hint);
     return;
   }
   // DUO: mirror resolve_image_plan (describe / raw-per-role / none)
   var _m = S.duoImageMode || ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
-  function _regVis(mdl) {
-    var pr = S.modelProfiles && (S.modelProfiles[mdl] || S.modelProfiles[(mdl||'').split(':')[0]]);
-    return !!(pr && pr.vision);
-  }
-  var _cModel = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
-  var _pModel = (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '';
+  var _duoMdls = _duoImageRoleModels();
+  var _pModel = _duoMdls.planner;
+  var _cModel = _duoMdls.coder;
   if (_m === 'preprocess') {
-    if (S.visionEnabled && S.visionModel) {
+    if (S.visionModel) {
       _style('rgba(136,88,192,.12)', '#b090d0', 'rgba(136,88,192,.3)');
-      hint.textContent = '[Vision model] (' + S.visionModel + ') describes the image - Planner and Coder get the text.';
+      hint.textContent = '[Describe first] (' + S.visionModel + ') describes the image — Planner and Coder get the text.';
     } else {
       _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
-      hint.textContent = 'Describe mode needs a vision model - pick one under Image Processing (Preprocessor).';
+      hint.textContent = 'Describe mode needs a Vision Describer model — pick one under Image Processing.';
     }
   } else {
-    // ROLE ORDER (2026-10-04, user): the planner is the head of the duo -
-    // name it first in every summary line.
-    var _t = [];
-    if (S.duoImageToPlanner) _t.push(_pModel ? ('Planner (' + _pModel + ')') : 'Planner');
-    if (S.duoImageToCoder) _t.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
-    var _visOk = _t.length && (!_cModel || _regVis(_cModel));
-    if (!_t.length) {
+    var _okTargets = [];
+    var _badTargets = [];
+    if (S.duoImageToPlanner) {
+      if (!_pModel || _isVisionCapableModel(_pModel)) _okTargets.push(_pModel ? ('Planner (' + _pModel + ')') : 'Planner');
+      else _badTargets.push('Planner (' + _pModel + ')');
+    }
+    if (S.duoImageToCoder && S.coderImagesOff !== true) {
+      if (!_cModel || _isVisionCapableModel(_cModel)) _okTargets.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
+      else _badTargets.push('Coder (' + _cModel + ')');
+    }
+    if (!_okTargets.length && !_badTargets.length) {
       _style('rgba(122,143,168,.1)', '#7a8fa8', 'rgba(122,143,168,.25)');
-      hint.textContent = 'No target selected: the image stays unused (pick Planner/Coder in Image Processing).';
-    } else if (_visOk) {
+      hint.textContent = 'No target selected: check Planner or Coder under Image Processing.';
+    } else if (_okTargets.length && !_badTargets.length) {
       _style('rgba(32,176,160,.12)', '#20b0a0', 'rgba(32,176,160,.3)');
-      hint.textContent = 'Raw image goes to: ' + _t.join(' + ') + '. Click a streaming card to follow it live.';
+      hint.textContent = 'Raw image goes to: ' + _okTargets.join(' + ') + '.';
+    } else if (_okTargets.length) {
+      _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
+      hint.textContent = 'Raw image -> ' + _okTargets.join(' + ') + ' (skipped for non-multimodal ' + _badTargets.join(' + ') + ').';
     } else {
       _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
-      hint.textContent = 'WARNING: ' + _t.join(' + ') + ' is not multimodal - the image will be skipped for it.';
+      hint.textContent = 'WARNING: ' + _badTargets.join(' + ') + ' is not multimodal — switch to Describe first or pick a vision model.';
     }
   }
   c.appendChild(hint);
@@ -4261,8 +4351,12 @@ function showStatus(txt) {
 // frames. Unsteered items auto-send one-by-one when the run finishes.
 S.followUpQueue = S.followUpQueue || [];
 
-function queueFollowUp(text) {
-  S.followUpQueue.push({ text: text, steered: false });
+function queueFollowUp(text, images) {
+  S.followUpQueue.push({
+    text: text || '',
+    images: Array.isArray(images) ? images.slice() : [],
+    steered: false
+  });
   renderFollowUpQueue();
 }
 
@@ -4278,9 +4372,10 @@ function renderFollowUpQueue() {
     badge.textContent = 'queued';
     badge.style.cssText = 'flex:0 0 auto;font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:#d0a020;border:1px solid currentColor;border-radius:4px;padding:2px 6px';
     row.appendChild(badge);
+    const nImgs = Array.isArray(item.images) ? item.images.length : 0;
     const body = document.createElement('span');
     body.style.cssText = 'flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx)';
-    body.textContent = item.text;
+    body.textContent = (nImgs ? ('[+' + nImgs + ' img] ') : '') + (item.text || '(image steer)');
     row.appendChild(body);
     const mkBtn = function(label, title, fn, color) {
       const b = document.createElement('button');
@@ -4292,7 +4387,11 @@ function renderFollowUpQueue() {
     row.appendChild(mkBtn('\u2191 Steer', 'Inject at the next tool-call boundary', function(){ steerFollowUp(idx); }, '#4a9eff'));
     row.appendChild(mkBtn('\u270E', 'Edit — back into the prompt input', function(){
       const inp = document.getElementById('input');
-      if (inp) { inp.value = item.text; inp.focus(); }
+      if (inp) { inp.value = item.text || ''; inp.focus(); }
+      if (nImgs) {
+        S.pendingImgs = item.images.slice();
+        if (typeof renderImgPreview === 'function') renderImgPreview();
+      }
       S.followUpQueue.splice(idx, 1);
       renderFollowUpQueue();
     }));
@@ -4323,14 +4422,16 @@ function steerFollowUp(idx) {
   if (!item || item.steered) return;
   const rid = S.currentRunId;
   if (!rid || !S.streaming) { showStatus('\u26A0 Run already finished \u2014 message stays queued.'); return; }
+  const imgsPayload = Array.isArray(item.images) ? item.images.map(function(i){ return i.b64; }).filter(Boolean) : [];
   fetch('/api/run/' + encodeURIComponent(rid) + '/steer', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ text: item.text })
+    body: JSON.stringify({ text: item.text || '', images: imgsPayload })
   }).then(function(r){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     S.followUpQueue.splice(idx, 1);
     renderFollowUpQueue();
-    _steerChatNote(item.text);
+    const noteTxt = (item.text || '') + (imgsPayload.length ? (' [+' + imgsPayload.length + ' img]') : '');
+    _steerChatNote(noteTxt.trim());
   }).catch(function(e){ showStatus('\u26A0 Steer failed: ' + e.message + ' \u2014 stays queued.'); });
 }
 
@@ -4341,7 +4442,11 @@ function _drainFollowUpQueue() {
   const next = S.followUpQueue.shift();
   renderFollowUpQueue();
   const inp = document.getElementById('input');
-  if (inp) inp.value = next.text;
+  if (inp) inp.value = next.text || '';
+  if (Array.isArray(next.images) && next.images.length) {
+    S.pendingImgs = next.images.slice();
+    if (typeof renderImgPreview === 'function') renderImgPreview();
+  }
   sendMsg();
 }
 
@@ -6914,24 +7019,12 @@ async function sendMsg() {
   const inp = document.getElementById('input');
   const txt = inp.value.trim();
   if (!txt && !S.pendingImgs.length) return;
-  // MID-RUN STEERING (2026-09-29): while a run streams, typed messages
-  // queue up (ZCode-style) instead of being dropped — "↑ Steer" injects
-  // them at the next tool-call boundary, unsteered ones auto-send when the
-  // run finishes. Works from the very first streaming moment (run_id is
-  // looked up at steer time; early-phase messages simply stay queued).
-  // Images mid-run keep the old drop behavior.
-  if (S.streaming && !S.pendingImgs.length) {
-    queueFollowUp(txt);
+  // MID-RUN STEERING / FOLLOW-UP QUEUE: allow queueing or steering text + images.
+  if (S.streaming) {
+    queueFollowUp(txt, S.pendingImgs.slice());
+    S.pendingImgs = []; renderImgPreview();
     inp.value = ''; inp.style.height = 'auto';
     _updateSendState();
-    return;
-  }
-  if (S.streaming) {
-    // MID-RUN IMAGE FEEDBACK (2026-10-03): images cannot queue into a
-    // running run, say so instead of dropping them silently.
-    if (S.pendingImgs.length) {
-      showStatus('Images cannot be added while a run is streaming. Wait for it to finish, or stop the run first.');
-    }
     return;
   }
 
@@ -7018,43 +7111,49 @@ async function sendMsg() {
     return; // the finally block takes care of S.streaming=false + UI cleanup
   }
 
-  // 'minicpm-v' (not 'minicpm'): minicpm5:2b-sharp is text-only and used to
-  // be falsely counted as a vision model
-  const VISION_MODELS = ['qwen3-vl', 'llava', 'moondream', 'bakllava', 'minicpm-v', 'granite3.2', 'vision'];
   if (imgs.length && S.mode !== 'automap') {
-    // FIX: the vision warning checks BOTH agent assignments AND the image-preprocessing config.
-    // Before: only direct/analyst checked → warning always when granite3.2-vision:2b was
-    // configured via the preprocessing toggle (because 'granite3.2' was not in VISION_MODELS
-    // and it is not an agent assignment but a separate vision_cfg).
-    const directModel  = ((S.currentAssignments['direct']  || {}).model || '').toLowerCase();
-    const analystModel = ((S.currentAssignments['analyst'] || {}).model || '').toLowerCase();
-    const duoCoderModel = ((S.currentAssignments['duo_coder'] || {}).model || '').toLowerCase();
-    const hasVisionAgent = VISION_MODELS.some(function(vm) {
-      return directModel.indexOf(vm) >= 0 || analystModel.indexOf(vm) >= 0
-        || duoCoderModel.indexOf(vm) >= 0;
-    });
-    // preprocessing mode: image-preprocess toggle active + model set = vision active
-    const hasVisionPrepro = S.visionEnabled && !!S.visionModel;
-    const hasVisionDedicated = S.visionAgentEnabled && !!S.visionAgentModel;
-    // REGISTRY VISION (2026-10-04, live UI test): the legacy name list below
-    // misses every vision model HiveMind actually ships (qwen3.5, gemma-4,
-    // hermes3.6) - the direct-chat gate therefore DROPPED images for
-    // registry-vision models ("No vision model active") while the backend
-    // could see them fine. The modelProfiles registry flag is the truth for
-    // direct/analyst/duo alike (same source as the per-role 👁 badges).
-    function _regVis(m) {
-      if (!m) return false;
-      var pr = S.modelProfiles && (S.modelProfiles[m] || S.modelProfiles[m.split(':')[0]]);
-      return !!(pr && pr.vision);
+    var _canProcessImg = false;
+    if (S.mode === 'code_duo') {
+      var _dmPre = (S.duoImageMode === 'preprocess');
+      var _duoMd = _duoImageRoleModels();
+      _canProcessImg = (_dmPre && !!S.visionModel)
+        || (!_dmPre && ((S.duoImageToPlanner && _isVisionCapableModel(_duoMd.planner))
+                        || (S.duoImageToCoder && S.coderImagesOff !== true && _isVisionCapableModel(_duoMd.coder))));
+    } else if (S.mode === 'pipeline') {
+      if (S.pipelineVisionDirect === true) {
+        var _anyCfgRole = ['analyst','refiner','critic','synthesizer'].some(function(r) {
+          return S.pipelineVisionRoles && S.pipelineVisionRoles[r];
+        });
+        var _pHasRawRole = ['analyst','refiner','critic','synthesizer'].some(function(r) {
+          var am = (S.currentAssignments[r] || {}).model || '';
+          var active = (r === 'analyst' && !_anyCfgRole) || (S.pipelineVisionRoles && S.pipelineVisionRoles[r]);
+          return active && _isVisionCapableModel(am);
+        });
+        _canProcessImg = _pHasRawRole || !!S.visionAgentModel;
+      } else {
+        _canProcessImg = !!S.visionAgentModel;
+      }
+    } else {
+      var _directM = (S.currentAssignments['direct'] || {}).model || '';
+      var _canDirectImg = (S.visionEnabled && !!S.visionModel)
+        || _isVisionCapableModel(_directM)
+        || _anyInstalledVisionModel();
+      if (S.mode === 'auto') {
+        var _aDmPre = (S.duoImageMode === 'preprocess');
+        var _aDuoMd = _duoImageRoleModels();
+        var _canDuoAuto = (_aDmPre && !!S.visionModel)
+          || (!_aDmPre && ((S.duoImageToPlanner && _isVisionCapableModel(_aDuoMd.planner))
+                            || (S.duoImageToCoder && S.coderImagesOff !== true && _isVisionCapableModel(_aDuoMd.coder))));
+        _canProcessImg = _canDirectImg || _canDuoAuto;
+      } else {
+        _canProcessImg = _canDirectImg;
+      }
     }
-    var duoCoderRegistryVision = _regVis(duoCoderModel);
-    const hasVision = hasVisionAgent || _regVis(directModel) || _regVis(analystModel)
-                    || hasVisionPrepro || hasVisionDedicated || duoCoderRegistryVision;
-    if (!hasVision) {
+    if (!_canProcessImg) {
       const hint = document.createElement('div');
       hint.className = 'msg divider';
       hint.style.cssText = 'color:#e09030;border-color:rgba(224,144,48,.3)';
-      hint.textContent = '\u26A0 No vision model active \u2014 enable image preprocessing or choose automap';
+      hint.textContent = '\u26A0 No active vision handler for this mode \u2014 check Image Processing settings';
       document.getElementById('chat').appendChild(hint);
     }
   }
@@ -11703,6 +11802,7 @@ function togglePlannerUseCoderCtx(on) {
     if (plInput) { plInput.disabled = false; plInput.value = S.duoCtxPlanner || 16384; }
   }
   updateCtxScopeHint();
+  if (typeof updateDuoImageUI === 'function') updateDuoImageUI();
 }
 
 // CONTEXT-SLOT (2026-10-20): die Context-Felder leben in der Advanced-Leiste,
@@ -11876,52 +11976,19 @@ function togglePreExploreAdv() {
 function _applyImageModeUI(mode) {
   var bd = document.getElementById('im-direct');
   var bp = document.getElementById('im-preprocess');
-  var bl = document.getElementById('im-pipeline');
-  if (bd) bd.classList.toggle('on', mode === 'direct');
+  if (bd) bd.classList.toggle('on', mode !== 'preprocess');
   if (bp) bp.classList.toggle('on', mode === 'preprocess');
-  if (bl) bl.classList.toggle('on', mode === 'pipeline');
   var ds = document.getElementById('im-direct-sec');
-  var ps = document.getElementById('im-preprocess-sec');
-  var ls = document.getElementById('im-pipeline-sec');
-  if (ds) ds.style.display = (mode === 'direct') ? 'block' : 'none';
-  if (ps) ps.style.display = (mode === 'preprocess') ? 'block' : 'none';
-  if (ls) ls.style.display = (mode === 'pipeline') ? 'block' : 'none';
-  // SCOPING FIX (2026-10-04, user): this function used to un-hide the
-  // generic sections without checking the duo scoping - in code_duo the
-  // generic info line appeared (or vanished for good after the next
-  // updateDuoImageUI). Re-apply the scoping so the last writer wins RIGHT.
+  if (ds) ds.style.display = (mode !== 'preprocess') ? 'block' : 'none';
   if (typeof updateDuoImageUI === 'function') { try { updateDuoImageUI(); } catch (e) {} }
 }
 
 function setImageMode(mode) {
-  S.imageMode = mode;
-  _applyImageModeUI(mode);
-  // NOT persisted (2026-10-03): image_processing_mode has no backend
-  // reader - the one truth for preprocessing is vision_model.json, posted
-  // right below via /vision/config. Presets must not freeze UI state.
-  if (mode === 'preprocess') {
-    S.visionEnabled = true;
-    fetch('/vision/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: true})});
-    S.visionAgentEnabled = false;
-    postSettings({vision_agent_enabled: false});
-  } else if (mode === 'direct') {
-    S.visionEnabled = false;
-    fetch('/vision/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: false})});
-    S.visionAgentEnabled = false;
-    postSettings({vision_agent_enabled: false});
-  } else {
-    S.visionEnabled = false;
-    fetch('/vision/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: false})});
-    S.visionAgentEnabled = true;
-    if (!S.pipelineVisionRoles || !Object.keys(S.pipelineVisionRoles).length) {
-      S.pipelineVisionRoles = {analyst: true};
-      postSettings({pipeline_vision_roles: S.pipelineVisionRoles});
-    }
-    postSettings({vision_agent_enabled: true});
-  }
-  var vaEl = document.getElementById('va-enabled-toggle');
-  if (vaEl) vaEl.checked = S.visionAgentEnabled;
-  _applyPipelineVisionRolesUI();
+  var eff = (mode === 'preprocess') ? 'preprocess' : 'direct';
+  S.imageMode = eff;
+  S.visionEnabled = (eff === 'preprocess');
+  fetch('/vision/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: S.visionEnabled})});
+  _applyImageModeUI(eff);
   if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
 }
 
@@ -11939,9 +12006,35 @@ function setTgEnabled(on) {
 }
 
 function setVisionAgentEnabled(enabled) {
-  S.visionAgentEnabled = enabled;
-  postSettings({vision_agent_enabled: enabled});
-  if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
+  S.visionAgentEnabled = !!enabled;
+  postSettings({vision_agent_enabled: S.visionAgentEnabled});
+  updateDuoImageUI();
+}
+
+function setPipelineImageMode(m) {
+  var isDirect = (m === 'direct');
+  S.pipelineVisionDirect = isDirect;
+  if (isDirect) {
+    var _anyRole = ['analyst','refiner','critic','synthesizer'].some(function(r) {
+      return S.pipelineVisionRoles && S.pipelineVisionRoles[r];
+    });
+    if (!_anyRole) {
+      if (!S.pipelineVisionRoles) S.pipelineVisionRoles = {};
+      S.pipelineVisionRoles.analyst = true;
+      _applyPipelineVisionRolesUI();
+    }
+    S.visionAgentEnabled = false;
+  } else {
+    S.visionAgentEnabled = true;
+  }
+  var vaEl = document.getElementById('va-enabled-toggle');
+  if (vaEl) vaEl.checked = S.visionAgentEnabled;
+  postSettings({
+    pipeline_vision_direct: S.pipelineVisionDirect,
+    vision_agent_enabled: S.visionAgentEnabled,
+    pipeline_vision_roles: S.pipelineVisionRoles || {}
+  });
+  updateDuoImageUI();
 }
 
 // CODER ALWAYS-VISION (2026-10-06): preload the projector for the coder so
@@ -11976,14 +12069,17 @@ function _applyPipelineVisionRolesUI() {
 function setPipelineVisionRole(role, enabled) {
   if (!S.pipelineVisionRoles) S.pipelineVisionRoles = {};
   S.pipelineVisionRoles[role] = enabled;
-  postSettings({pipeline_vision_roles: S.pipelineVisionRoles});
-  if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
+  postSettings({
+    pipeline_vision_roles: S.pipelineVisionRoles,
+    pipeline_vision_direct: S.pipelineVisionDirect === true
+  });
+  updateDuoImageUI();
 }
 
 function setVisionAgentModel(model) {
   S.visionAgentModel = model;
   postSettings({vision_agent_model: model});
-  if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
+  updateDuoImageUI();
 }
 
 function setVisionAgentMode(mode) {
@@ -12012,7 +12108,7 @@ function populateVisionAgentModelSel() {
   var grpVision = document.createElement('optgroup');
   grpVision.label = '✓ Vision-capable';
   var grpOther = document.createElement('optgroup');
-  grpOther.label = 'Andere';
+  grpOther.label = 'Other models';
   (S.models || []).forEach(function(m) {
     var opt = document.createElement('option');
     opt.value = m;
@@ -12055,88 +12151,154 @@ function _updateVisionPreview() {
   if (!preview) return;
 
   var _dModel = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model) || '';
-  var _dProf = _dModel && S.modelProfiles && (S.modelProfiles[_dModel] || S.modelProfiles[_dModel.split(':')[0]]);
-  var _dVision = !!( _dProf && _dProf.vision );
+  var _dVision = _isVisionCapableModel(_dModel);
   var _dDisp = _dModel ? _dModel.replace(':latest','').split('/').pop() : '—';
-  // DUO-CODER VISION (2026-10-01): in agentic duo runs the CODER decides
-  var _cModel = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
-  var _cProf = _cModel && S.modelProfiles && (S.modelProfiles[_cModel] || S.modelProfiles[_cModel.split(':')[0]]);
-  var _cVision = !!( _cProf && _cProf.vision );
-  var _cDisp = _cModel ? _cModel.replace(':latest','').split('/').pop() : '—';
-  var mode = S.imageMode || 'direct';
+  var _duoMdls = _duoImageRoleModels();
+  var _pModel = _duoMdls.planner;
+  var _cModel = _duoMdls.coder;
+  var _pVision = _isVisionCapableModel(_pModel);
+  var _cVision = _isVisionCapableModel(_cModel);
   var _flow = '';
-  // AUTOMAP (2026-10-05, user): in automap the judge routes image tasks to
-  // a multimodal model - show THAT, not the direct-chat flow.
+
   if (S.mode === 'automap') {
     if (flowCard) {
       flowCard.style.borderColor = 'rgba(240,176,64,.45)';
       flowCard.style.background = 'rgba(240,176,64,.07)';
-      _flow = '<span style="color:#f0b040">&#9654; AutoMap:</span> image tasks are routed to a '
-            + 'multimodal model automatically (see the VISION badge in the agent list).<br>'
-            + '<span style="color:var(--tx3)">Chat answers stay text-only unless a multimodal direct model is set.</span>';
+      _flow = '<span style="color:#f0b040">&#9654; AutoMap:</span> image runs prefer multimodal models for Direct / Analyst.<br>'
+            + '<span style="color:var(--tx3)">Or enable Describe first below to turn images into text before the run.</span>';
+      flowCard.innerHTML = _flow;
     }
-    flowCard.innerHTML = _flow;
-    preview.textContent = '';
-    if (badge) badge.style.display = 'none';
-    if (inputEl) inputEl.style.borderColor = '';
+    preview.textContent = (S.imageMode === 'preprocess' && S.visionModel)
+      ? ('(' + S.visionModel.replace(':latest','').split('/').pop() + ' · Describe)')
+      : '';
+    if (badge) {
+      var onAm = (S.imageMode === 'preprocess' && !!S.visionModel);
+      badge.style.display = onAm ? 'inline-block' : 'none';
+      badge.classList.toggle('on', onAm);
+      if (onAm) badge.textContent = 'DESCRIBE';
+    }
+    if (inputEl) inputEl.style.borderColor = (S.imageMode === 'preprocess' && S.visionModel) ? '#8858c0' : '';
     return;
   }
+
+  if (S.mode === 'code_duo') {
+    var _dm = S.duoImageMode || ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
+    if (flowCard) {
+      if (_dm === 'preprocess') {
+        flowCard.style.borderColor = 'rgba(224,144,48,.45)';
+        flowCard.style.background = 'rgba(224,144,48,.07)';
+        var _dsm = (S.visionModel || '').replace(':latest','').split('/').pop();
+        _flow = '<span style="color:#e0a050">&#9654; Agentic Describe first:</span> ' + (_dsm || 'pick a Vision Describer below')
+              + ' turns images into text once.<br>'
+              + '<span style="color:var(--tx3)">Planner, Coder, and Critic stay text-only.</span>';
+      } else {
+        flowCard.style.borderColor = 'rgba(32,176,160,.45)';
+        flowCard.style.background = 'rgba(32,176,160,.07)';
+        var _rawTargets = [];
+        if (S.duoImageToPlanner) _rawTargets.push('Planner' + (_pVision ? '' : ' (text-only)'));
+        if (S.duoImageToCoder && S.coderImagesOff !== true) _rawTargets.push('Coder' + (_cVision ? '' : ' (text-only)'));
+        _flow = '<span style="color:#20b0a0">&#9654; Agentic Direct:</span> '
+              + (_rawTargets.length ? ('Raw image to ' + _rawTargets.join(' + ') + '.') : 'No role checked for raw images.')
+              + '<br><span style="color:var(--tx3)">Projectors (--mmproj) load on demand per role.</span>';
+      }
+      flowCard.innerHTML = _flow;
+    }
+    if (_dm === 'preprocess' && S.visionModel) {
+      preview.textContent = '(' + S.visionModel.replace(':latest','').split('/').pop() + ' · Describe)';
+      if (badge) { badge.style.display = 'inline-block'; badge.classList.add('on'); badge.textContent = 'DESCRIBE'; }
+      if (inputEl) inputEl.style.borderColor = '#8858c0';
+    } else {
+      preview.textContent = '';
+      if (badge) badge.style.display = 'none';
+      if (inputEl) inputEl.style.borderColor = '';
+    }
+    return;
+  }
+
+  if (S.mode === 'pipeline') {
+    var _pipeDir = (S.pipelineVisionDirect === true);
+    var _vm = (S.visionAgentModel || '').replace(':latest','').split('/').pop();
+    var _roles = ['analyst','refiner','critic','synthesizer'].filter(function(r) {
+      return S.pipelineVisionRoles && S.pipelineVisionRoles[r];
+    });
+    if (_pipeDir && !_roles.length) _roles = ['analyst'];
+    if (flowCard) {
+      if (!_pipeDir) {
+        flowCard.style.borderColor = 'rgba(224,144,48,.45)';
+        flowCard.style.background = 'rgba(224,144,48,.07)';
+        _flow = '<span style="color:#e0a050">&#9654; Pipeline Describe first:</span> Vision-Agent (' + (_vm || 'pick model below') + ') turns images into text once.<br>'
+              + '<span style="color:var(--tx3)">Pipeline stages stay text-only (no --mmproj loaded).</span>';
+      } else {
+        flowCard.style.borderColor = 'rgba(136,88,192,.45)';
+        flowCard.style.background = 'rgba(136,88,192,.07)';
+        var _pipeTargets = _roles.map(function(r) {
+          var rm = (S.currentAssignments && S.currentAssignments[r] && S.currentAssignments[r].model) || '';
+          return r.charAt(0).toUpperCase() + r.slice(1) + (_isVisionCapableModel(rm) ? '' : ' (text-only)');
+        });
+        _flow = '<span style="color:#b090d0">&#9654; Pipeline Direct:</span> Raw image to ' + _pipeTargets.join(' + ') + '.'
+              + '<br><span style="color:var(--tx3)">Projectors (--mmproj) load on demand per checked multimodal stage'
+              + (S.visionAgentEnabled && _vm ? ('; fallback: ' + _vm) : '') + '.</span>';
+      }
+      flowCard.innerHTML = _flow;
+    }
+    if (!_pipeDir && S.visionAgentModel) {
+      preview.textContent = '(' + _vm + ' · Describe)';
+      if (badge) { badge.style.display = 'inline-block'; badge.classList.add('on'); badge.textContent = 'DESCRIBE'; }
+      if (inputEl) inputEl.style.borderColor = '#8858c0';
+    } else {
+      preview.textContent = '';
+      if (badge) badge.style.display = 'none';
+      if (inputEl) inputEl.style.borderColor = '';
+    }
+    return;
+  }
+
+  // Chat / Direct & Auto
+  var mode = S.imageMode === 'preprocess' ? 'preprocess' : 'direct';
   if (flowCard) {
+    var _autoNote = '';
+    if (S.mode === 'auto') {
+      var _adm = S.duoImageMode || ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
+      if (_adm === 'preprocess') {
+        _autoNote = ' Coding handoffs use Agentic Describe first.';
+      } else {
+        var _at = [];
+        if (S.duoImageToPlanner) _at.push('Planner');
+        if (S.duoImageToCoder && S.coderImagesOff !== true) _at.push('Coder');
+        _autoNote = ' Coding handoffs use Agentic Direct (' + (_at.length ? _at.join('+') : 'no role checked') + ').';
+      }
+    }
     if (mode === 'preprocess') {
       flowCard.style.borderColor = 'rgba(224,144,48,.45)';
       flowCard.style.background = 'rgba(224,144,48,.07)';
       var _pm = (S.visionModel || '').replace(':latest','').split('/').pop();
-      _flow = '<span style="color:#e0a050">&#9654; Preprocessor:</span> ' + (_pm || 'no model selected')
-            + ' describes the image as text before the run.<br>'
-            + '<span style="color:var(--tx3)">Every agent stays text-based.</span>';
-    } else if (mode === 'pipeline') {
-      flowCard.style.borderColor = 'rgba(136,88,192,.45)';
-      flowCard.style.background = 'rgba(136,88,192,.07)';
-      var _vm = (S.visionAgentModel || '').replace(':latest','').split('/').pop();
-      _flow = '<span style="color:#b090d0">&#9654; Pipeline:</span> the vision-agent'
-            + (_vm ? ' (' + _vm + ')' : ' (no model selected)')
-            + ' describes the image as text.<br>';
-      var _roles = [];
-      ['analyst','refiner','critic','synthesizer'].forEach(function(r) {
-        if (S.pipelineVisionRoles && S.pipelineVisionRoles[r]) _roles.push(r);
-      });
-      if (_roles.length) {
-        _flow += '<span style="color:var(--tx3)">Raw image to: ' + _roles.join(', ') + ' (multimodal only).</span>';
-      } else {
-        _flow += '<span style="color:var(--tx3)">No role gets the raw image &mdash; all agents receive only the text description.</span>';
-      }
+      _flow = '<span style="color:#e0a050">&#9654; Describe first:</span> ' + (_pm || 'no Vision Describer selected')
+            + ' turns attached images into text.<br>'
+            + '<span style="color:var(--tx3)">Direct chat stays text-only (no mmproj on chat slot).' + _autoNote + '</span>';
     } else {
       flowCard.style.borderColor = 'rgba(72,120,192,.45)';
       flowCard.style.background = 'rgba(72,120,192,.07)';
       if (_dVision) {
         _flow = '<span style="color:#80b0e0">&#9654; Direct:</span> ' + _dDisp
               + ' is multimodal &mdash; raw images go straight to it.<br>'
-              + '<span style="color:var(--tx3)">No separate vision model is loaded.</span>';
+              + '<span style="color:var(--tx3)">Vision projector loads on demand; no separate describer needed.' + _autoNote + '</span>';
+      } else if (_anyInstalledVisionModel()) {
+        _flow = '<span style="color:#80b0e0">&#9654; Direct (auto-fallback):</span> ' + _dDisp
+              + ' is text-only &mdash; image runs switch to an installed multimodal model.<br>'
+              + '<span style="color:var(--tx3)">Or choose Describe first above.' + _autoNote + '</span>';
       } else {
         _flow = '<span style="color:#d09090">&#9654; Direct:</span> ' + _dDisp
-              + ' is not multimodal.<br>'
-              + '<span style="color:var(--tx3)">Images may be ignored &mdash; switch to Preprocessor/Pipeline or pick a multimodal direct model.</span>';
-        // DUO-CODER LINE (2026-10-05, user: 'weird konfiguriert' in chat
-        // mode): only relevant when a duo run actually consumes it.
-        if (_cModel && (S.mode === 'code_duo' || S._runIsDuo)) {
-          _flow += '<br><span style="color:' + (_cVision ? '#80b0e0' : 'var(--tx3)') + '">&#9654; Duo-Coder:</span> ' + _cDisp
-                 + (_cVision ? ' is multimodal &mdash; in agentic runs the raw image goes to the coder.' : ' is not multimodal (description via vision model needed).');
-        }
+              + ' is not multimodal and no vision model is installed.<br>'
+              + '<span style="color:var(--tx3)">Download a multimodal model or pick a Vision Describer under Describe first.' + _autoNote + '</span>';
       }
     }
     flowCard.innerHTML = _flow;
   }
 
   if (mode === 'preprocess' && S.visionModel) {
-    const short = S.visionModel.replace(':latest','').split('/').pop();
-    preview.textContent = '(' + short + ' · Prepro)';
-    if (badge) { badge.style.display = 'inline-block'; badge.classList.add('on'); badge.textContent = 'PREPRO'; }
+    preview.textContent = '(' + S.visionModel.replace(':latest','').split('/').pop() + ' · Describe)';
+    if (badge) { badge.style.display = 'inline-block'; badge.classList.add('on'); badge.textContent = 'DESCRIBE'; }
     if (inputEl) inputEl.style.borderColor = '#8858c0';
-  } else if (mode === 'pipeline' && S.visionAgentModel) {
-    const short = S.visionAgentModel.replace(':latest','').split('/').pop();
-    preview.textContent = '(' + short + ' · Pipeline)';
-    if (badge) { badge.style.display = 'inline-block'; badge.classList.add('on'); badge.textContent = 'PIPELINE'; }
-    if (inputEl) inputEl.style.borderColor = '';
   } else {
     preview.textContent = '';
     if (badge) badge.style.display = 'none';
@@ -12148,29 +12310,20 @@ function _updateVisionPreview() {
 async function loadVisionConfig() {
   try {
     const d = await (await fetch('/vision/config')).json();
-    S.visionEnabled = d.enabled || false;
-    S.visionModel   = d.model   || '';
+    S.visionEnabled = !!d.enabled;
+    S.visionModel   = d.model || '';
     const sel  = document.getElementById('vision-model-sel');
-    const badge = document.getElementById('vision-active-badge');
-    // IMAGE-PROCESSING-MODE: derive if not persisted yet (migration from the
-    // previous two-accordion UI where the preprocessor was a separate toggle).
-    if (!S.imageMode) {
-      if (S.visionEnabled && S.visionModel) S.imageMode = 'preprocess';
-      else if (S.visionAgentEnabled) S.imageMode = 'pipeline';
-      else S.imageMode = 'direct';
+    S.imageMode = (S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct';
+    if (!S._duoImageModeExplicit) {
+      S.duoImageMode = (S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct';
     }
     _applyImageModeUI(S.imageMode);
-    if (badge) badge.classList.toggle('on',
-      (S.imageMode === 'preprocess' && !!S.visionModel) ||
-      (S.imageMode === 'pipeline' && !!S.visionAgentModel));
-    _updateVisionPreview();
     if (sel) {
       sel.innerHTML = '<option value="">-- No vision model --</option>';
-      // optgroup: preprocessing-capable models on top, the rest below
       var grpPrepro = document.createElement('optgroup');
-      grpPrepro.label = '✓ Preprocessing-capable (recommended)';
+      grpPrepro.label = '✓ Recommended Vision Describers';
       var grpVision  = document.createElement('optgroup');
-      grpVision.label = '👁 Vision (no preprocessing)';
+      grpVision.label = '👁 Multimodal / Vision';
       var grpOther   = document.createElement('optgroup');
       grpOther.label = 'Other models';
       S.models.forEach(function(m) {
@@ -12178,15 +12331,11 @@ async function loadVisionConfig() {
         o.value = m;
         const prof = S.modelProfiles[m] || {};
         const inAllowlist = S.visionAllowlist.has(m);
-        // fallback detection when profiles are not yet loaded
-        const looksVision = ['vl','llava','vision','moondream','minicpm','glm'].some(function(v){
-          return m.toLowerCase().includes(v);
-        });
         if (inAllowlist) {
           o.textContent = '✓ ' + m;
           o.style.color = '#4caf82';
           grpPrepro.appendChild(o);
-        } else if (prof.vision || looksVision) {
+        } else if (prof.vision || _isVisionCapableModel(m)) {
           o.textContent = '👁 ' + m;
           o.style.color = '#8858c0';
           grpVision.appendChild(o);
@@ -12199,25 +12348,24 @@ async function loadVisionConfig() {
       if (grpVision.children.length)  sel.appendChild(grpVision);
       if (grpOther.children.length)   sel.appendChild(grpOther);
       if (S.visionModel) sel.value = S.visionModel;
-      // warning for a stored model that cannot do preprocessing
       const warn = document.getElementById('vision-prepro-warn');
       if (warn) warn.style.display = (S.visionModel && !S.visionAllowlist.has(S.visionModel)) ? 'block' : 'none';
     }
+    updateDuoImageUI();
   } catch(e) {}
 }
 
 function setVisionModel(model) {
   S.visionModel = model;
-  const badge = document.getElementById('vision-active-badge');
-  if (badge) badge.classList.toggle('on', S.visionEnabled && !!model);
-  _updateVisionPreview();
-  // warning when the chosen model cannot do preprocessing
+  var enable = !!model && (S.imageMode === 'preprocess');
+  if (enable) S.visionEnabled = true;
   const warn = document.getElementById('vision-prepro-warn');
   if (warn) warn.style.display = (model && !S.visionAllowlist.has(model)) ? 'block' : 'none';
   fetch('/vision/config', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({model: model})
+    body: JSON.stringify(enable ? {model: model, enabled: true} : {model: model})
   });
+  updateDuoImageUI();
 }
 
 async function testVisionModel() {
@@ -15044,6 +15192,7 @@ async function loadGitConfig(s) {
 // a resolvable projector file (GET /vision/mmproj).
 function setDuoImageMode(m) {
   S.duoImageMode = m;
+  S._duoImageModeExplicit = true;
   postSettings({duo_image_mode: m});
   updateDuoImageUI();
 }
@@ -15055,56 +15204,90 @@ function setDuoImageRole(role, checked) {
 function updateDuoImageUI() {
   var _sec = document.getElementById('duo-image-sec');
   if (!_sec) return;
-  // MODE SCOPING (2026-10-03): the duo block governs code_duo runs only;
-  // the generic Direct/Preprocessor/Pipeline block governs everything else.
-  // Showing both at once (with different semantics) was the main confusion.
   var _isDuo = (S.mode === 'code_duo');
-  _sec.style.display = _isDuo ? '' : 'none';
-  var _genericIds = ['image-mode-generic-hdr', 'image-mode-row', 'vision-flow-card', 'im-direct-sec', 'im-preprocess-sec', 'im-pipeline-sec'];
-  _genericIds.forEach(function(id) {
-    var _el = document.getElementById(id);
-    if (_el) _el.style.display = _isDuo ? 'none' : '';
-  });
-  // FULL IMG-DESC block (pipeline-only): the toggle row sits in the config
-  // tab, its hint div is a sibling without the row id - hide both.
-  var _fid = document.getElementById('full-imgdesc-row');
-  if (_fid) _fid.style.display = _isDuo ? 'none' : '';
-  var _fih = document.getElementById('full-imgdesc-hint');
-  if (_fih) _fih.style.display = _isDuo ? 'none' : '';
-  var _m = S.duoImageMode || 'direct';
-  var _rPre = document.getElementById('duo-img-mode-preprocess');
-  var _rDir = document.getElementById('duo-img-mode-direct');
-  if (_rPre) _rPre.checked = (_m === 'preprocess');
-  if (_rDir) _rDir.checked = (_m !== 'preprocess');
+  var _isAuto = (S.mode === 'auto');
+  var _isPipe = (S.mode === 'pipeline');
+  var _showDirect = (!_isDuo && !_isPipe);
+  var _showDuo = (_isDuo || _isAuto);
+  var _m = S.duoImageMode || ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
+  var _imgMode = (S.imageMode === 'preprocess') ? 'preprocess' : 'direct';
+  var _pipeDir = (S.pipelineVisionDirect === true);
+
+  var _directSec = document.getElementById('direct-image-sec');
+  var _pipeSec = document.getElementById('im-pipeline-sec');
+  var _preproSec = document.getElementById('im-preprocess-sec');
+  var _flowEl = document.getElementById('vision-flow-card');
+  if (_flowEl) _flowEl.style.display = '';
+  _sec.style.display = _showDuo ? '' : 'none';
+  _sec.style.borderTop = _isAuto ? '1px dashed #222a38' : '';
+  _sec.style.marginTop = _isAuto ? '8px' : '';
+  _sec.style.paddingTop = _isAuto ? '10px' : '2px';
+  var _duoHdr = document.getElementById('duo-image-sec-hdr');
+  if (_duoHdr) {
+    _duoHdr.innerHTML = _isAuto
+      ? 'Coding / <b style="color:#20b0a0">Agentic</b> routes in <b>Auto</b>:'
+      : 'How attached images are handled in <b style="color:#20b0a0">Agentic / Code Duo</b>:';
+  }
+  if (_directSec) _directSec.style.display = _showDirect ? '' : 'none';
+  if (_pipeSec) _pipeSec.style.display = _isPipe ? '' : 'none';
+  if (_preproSec) {
+    var _showPrepro = (_showDuo && _m === 'preprocess') || (_showDirect && _imgMode === 'preprocess');
+    _preproSec.style.display = _showPrepro ? 'block' : 'none';
+  }
+
+  // Direct / Auto controls
+  var _ghdr = document.getElementById('image-mode-generic-hdr');
+  if (_ghdr) {
+    _ghdr.innerHTML = _isAuto
+      ? '<b>Chat / Direct</b> routes in <b>Auto</b>:'
+      : 'How attached images are handled in <b>Chat / Direct</b>:';
+  }
+  var _dsEl = document.getElementById('im-direct-sec');
+  if (_dsEl) _dsEl.style.display = (_showDirect && _imgMode !== 'preprocess') ? 'block' : 'none';
+  var _bdBtn = document.getElementById('im-direct');
+  var _bpBtn = document.getElementById('im-preprocess');
+  if (_bdBtn) _bdBtn.classList.toggle('on', _imgMode !== 'preprocess');
+  if (_bpBtn) _bpBtn.classList.toggle('on', _imgMode === 'preprocess');
+  if (_showDirect && _imgMode !== 'preprocess') {
+    var _dMdl = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model) || '';
+    _updateDuoRoleStatus('direct-img-status', 'Direct', _dMdl, {
+      nonVisionSuffix: _anyInstalledVisionModel()
+        ? " \u2014 auto-switches to installed multimodal model"
+        : " \u2014 can't see images"
+    });
+  }
+
+  // Agentic / Code Duo controls (same 2-button bar, also shown inside Auto)
+  var _dbDir = document.getElementById('duo-im-direct');
+  var _dbPre = document.getElementById('duo-im-preprocess');
+  if (_dbDir) _dbDir.classList.toggle('on', _m !== 'preprocess');
+  if (_dbPre) _dbPre.classList.toggle('on', _m === 'preprocess');
+  var _duoDirectSec = document.getElementById('duo-direct-sec');
+  if (_duoDirectSec) _duoDirectSec.style.display = (_m !== 'preprocess') ? 'block' : 'none';
   var _roles = document.getElementById('duo-image-roles');
-  if (_roles) _roles.style.display = (_m === 'direct') ? 'block' : 'none';
+  if (_roles) _roles.style.display = (_m !== 'preprocess') ? 'block' : 'none';
   var _pChk = document.getElementById('duo-img-planner');
   var _cChk = document.getElementById('duo-img-coder');
   if (_pChk) _pChk.checked = S.duoImageToPlanner === true;
   if (_cChk) _cChk.checked = S.duoImageToCoder === true;
-  // CODER IMAGES OFF (2026-10-07, owner): the toggles live in the duo
-  // block, visible whenever the duo image plan section is (direct mode).
-  // While OFF: coder checkbox + the always-vision copies are pinned off.
+
   var _cio = S.coderImagesOff === true;
   var _cavDuo = document.getElementById('coder-always-vision-toggle-duo');
   var _togglesRow = document.getElementById('duo-coder-img-toggles');
-  if (_togglesRow) _togglesRow.style.display = (_isDuo && _m === 'direct') ? '' : 'none';
+  if (_togglesRow) _togglesRow.style.display = (_showDuo && _m !== 'preprocess') ? '' : 'none';
   if (_cavDuo) { _cavDuo.checked = !_cio && S.coderAlwaysVision === true; _cavDuo.disabled = _cio; }
   var _cioToggle = document.getElementById('coder-images-off-toggle');
   if (_cioToggle) _cioToggle.checked = _cio;
-  var _cavPipe = document.getElementById('coder-always-vision-toggle');
-  if (_cavPipe) { _cavPipe.checked = !_cio && S.coderAlwaysVision === true; _cavPipe.disabled = _cio; }
   if (_cChk) { _cChk.disabled = _cio; if (_cio) _cChk.checked = false; }
-  var _pm = (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '';
-  var _cm = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
-  _updateDuoRoleStatus('duo-img-planner-status', 'Planner', _pm);
-  _updateDuoRoleStatus('duo-img-coder-status', 'Coder', _cm);
-  // TARGET SUMMARY (2026-10-03): say explicitly whether the raw image goes
-  // to both roles or just one of them (the two checkboxes are independent).
-  if (S.pendingImgs && S.pendingImgs.length) _updateImgVisionHint();
+
+  if (_showDuo && _m !== 'preprocess') {
+    var _duoMdls = _duoImageRoleModels();
+    _updateDuoRoleStatus('duo-img-planner-status', 'Planner', _duoMdls.planner);
+    _updateDuoRoleStatus('duo-img-coder-status', 'Coder', _duoMdls.coder);
+  }
   var _note = document.getElementById('duo-image-note');
   if (_note) {
-    if (_m !== 'direct') { _note.style.display = 'none'; }
+    if (_m === 'preprocess') { _note.style.display = 'none'; }
     else {
       var _t = [];
       if (S.duoImageToPlanner) _t.push('Planner');
@@ -15115,39 +15298,79 @@ function updateDuoImageUI() {
       } else {
         _note.textContent = S.coderImagesOff === true
           ? '→ Coder takes NO images (toggle on)'
-          : '→ No target selected: the image will not be used';
+          : '→ No target selected: pick Planner and/or Coder above (or switch to Describe first)';
       }
       _note.style.display = 'block';
     }
   }
-  // DUO INFO LINE (2026-10-04, user): the generic "Multimodal models
-  // receive the raw image directly" explanation used to vanish in duo
-  // mode - the duo block carries its own copy now.
   var _dinfo = document.getElementById('duo-image-info');
-  if (_dinfo) _dinfo.style.display = (_isDuo && _m === 'direct') ? 'block' : 'none';
-  // PREPROCESS TRAP (2026-10-03): the radio does NOT enable the vision
-  // config, without a configured vision model the description never
-  // exists and the image is unused. Say so inline.
+  if (_dinfo) _dinfo.style.display = (_showDuo && _m !== 'preprocess') ? 'block' : 'none';
   var _trap = document.getElementById('duo-image-prepro-warn');
-  if (_trap) _trap.style.display = (_isDuo && _m === 'preprocess' && !(S.visionEnabled && S.visionModel)) ? 'block' : 'none';
-  // FLOW CARD REFRESH (2026-10-05, user: stale duo info in chat mode):
-  // setMode only calls updateDuoImageUI - without this the flow card kept
-  // the previous mode's render (duo line visible in direct chat).
+  if (_trap) _trap.style.display = (_showDuo && _m === 'preprocess' && !S.visionModel) ? 'block' : 'none';
+
+  // Pipeline controls (same 2-button bar + live role statuses)
+  var _pbDir = document.getElementById('pipe-im-direct');
+  var _pbPre = document.getElementById('pipe-im-preprocess');
+  if (_pbDir) _pbDir.classList.toggle('on', _pipeDir);
+  if (_pbPre) _pbPre.classList.toggle('on', !_pipeDir);
+  var _pDirSec = document.getElementById('pipe-direct-sec');
+  if (_pDirSec) _pDirSec.style.display = (_isPipe && _pipeDir) ? 'block' : 'none';
+  var _pVaPicker = document.getElementById('pipe-va-picker');
+  if (_pVaPicker) _pVaPicker.style.display = (_isPipe && (!_pipeDir || S.visionAgentEnabled)) ? 'block' : 'none';
+  var _pFullRow = document.getElementById('full-imgdesc-row');
+  if (_pFullRow) _pFullRow.style.display = (_isPipe && (!_pipeDir || S.visionAgentEnabled)) ? 'block' : 'none';
+  var _pWarn = document.getElementById('pipe-image-prepro-warn');
+  if (_pWarn) _pWarn.style.display = (_isPipe && !_pipeDir && !S.visionAgentModel) ? 'block' : 'none';
+  var _pNote = document.getElementById('pipe-image-note');
+  if (_isPipe && _pipeDir) {
+    var _pRoleList = [['analyst','Analyst'],['refiner','Refiner'],['critic','Critic'],['synthesizer','Synthesizer']];
+    var _pChecked = [];
+    _pRoleList.forEach(function(pair) {
+      var rk = pair[0], rlbl = pair[1];
+      var rm = (S.currentAssignments && S.currentAssignments[rk] && S.currentAssignments[rk].model) || '';
+      _updateDuoRoleStatus('pipe-img-' + rk + '-status', rlbl, rm);
+      if (S.pipelineVisionRoles && S.pipelineVisionRoles[rk]) _pChecked.push(rlbl);
+    });
+    if (_pNote) {
+      _pNote.textContent = _pChecked.length
+        ? ('→ Raw image goes to: ' + _pChecked.join(' + '))
+        : '→ Default fallback: Analyst (pick stage checkboxes above)';
+      _pNote.style.display = 'block';
+    }
+  } else if (_pNote) {
+    _pNote.style.display = 'none';
+  }
+
+  if (S.pendingImgs && S.pendingImgs.length) _updateImgVisionHint();
   if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch (e) {} }
 }
-function _updateDuoRoleStatus(elId, label, model) {
+function _updateDuoRoleStatus(elId, label, model, opts) {
   var _el = document.getElementById(elId);
   if (!_el) return;
-  var _prof = S.modelProfiles && (S.modelProfiles[model] || S.modelProfiles[(model||'').split(':')[0]]);
-  var _vision = !!(model && _prof && _prof.vision);
   if (!model) { _el.textContent = label; return; }
-  if (!_vision) { _el.textContent = label + ' (' + model + ') — can\'t see images'; return; }
+  var _prof = S.modelProfiles && (S.modelProfiles[model] || S.modelProfiles[(model||'').split(':')[0]]);
+  var _vision = !!(_prof && _prof.vision) || _isVisionCapableModel(model);
+  if (!_vision) {
+    _el.textContent = label + ' (' + model + ')' + ((opts && opts.nonVisionSuffix) || " — can't see images");
+    return;
+  }
+  function _renderMM(d) {
+    if (_el.dataset && _el.dataset.mmModel !== model) return;
+    if (d && d.projector) _el.textContent = label + ' (' + model + ') \uD83D\uDC41 sees images';
+    else _el.textContent = label + ' (' + model + ') — mmproj missing, image will be skipped';
+  }
+  if (_el.dataset) _el.dataset.mmModel = model;
+  if (S._mmprojCache && S._mmprojCache[model] !== undefined) {
+    _renderMM(S._mmprojCache[model]);
+    return;
+  }
   _el.textContent = label + ' (' + model + ') \uD83D\uDC41 checking projector\u2026';
   fetch('/vision/mmproj?model=' + encodeURIComponent(model))
     .then(function(r){ return r.json(); })
     .then(function(d) {
-      if (d.projector) _el.textContent = label + ' (' + model + ') \uD83D\uDC41 sees images';
-      else _el.textContent = label + ' (' + model + ') — mmproj missing, image will be skipped';
+      if (!S._mmprojCache) S._mmprojCache = {};
+      S._mmprojCache[model] = d;
+      _renderMM(d);
     })
     .catch(function() { _el.textContent = label + ' (' + model + ')'; });
 }

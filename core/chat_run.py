@@ -969,6 +969,36 @@ async def run_stream(
     _route_as_tool = _rd_ps._route_as_tool
     complexity = _rd_ps.complexity
 
+    if complexity == "code_duo" and images and str(mode or "").strip().lower() != "code_duo":
+        from core.chat_vision_pre import _run_duo_preprocess_branch
+        from core.duo_helpers import (
+            effective_duo_image_mode,
+            is_vision_error_text,
+            resolve_duo_role_models,
+            should_evict_vision_after_prepro,
+        )
+        _has_valid_desc = bool(image_description and not is_vision_error_text(image_description))
+        if effective_duo_image_mode(_run_settings, _vision_cfg) == "preprocess" and not _has_valid_desc:
+            async for _ev in _run_duo_preprocess_branch(
+                images, user_input, emit, _run_settings, _vision_cfg, existing_description=image_description or ""
+            ):
+                if isinstance(_ev, dict) and "_duo_desc" in _ev:
+                    image_description = _ev["_duo_desc"]
+                    _prepro_success = bool(image_description)
+                else:
+                    yield _ev
+        elif _prepro_success:
+            _vm_dyn = str((_vision_cfg or {}).get("model") or "").strip()
+            _pm_dyn, _cm_dyn = resolve_duo_role_models(_run_settings)
+            if should_evict_vision_after_prepro("code_duo", _vm_dyn, {_pm_dyn, _cm_dyn}):
+                try:
+                    from backend.llama_server_manager import manager as _vsm_dyn
+                    await _vsm_dyn.evict(_vm_dyn)
+                    yield await emit({"type": "status", "content":
+                        f"[Image] vision model ({_vm_dyn}) evicted — VRAM free for dynamic Agentic handoff"})
+                except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as _ve_dyn:
+                    logger.debug("[IMAGE] dynamic duo evict skipped: %s", _ve_dyn)
+
     if _route_as_tool:
         # C7 (2026-11-07 maintainability sprint): the inline tool route lives
         # in core/chat_tools_route.py (verbatim motion; return-terminated).

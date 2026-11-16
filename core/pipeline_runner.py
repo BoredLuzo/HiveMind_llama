@@ -73,16 +73,17 @@ async def run_pipeline(ctx):
         soul_layer = ctx.build_soul_prompt_layer(soul, style_only=True)
 
         # ── Vision-Agent ─────────────────────────────────────────────────────
-        # leerer pipeline_vision_roles + pipeline_vision_direct → {"analyst": True}.
-        _vision_roles_cfg = dict(ctx.settings.get("pipeline_vision_roles") or {})
+        # Describe-first mode (pipeline_vision_direct=False) keeps every stage
+        # text-only even if pipeline_vision_roles still holds prior selections.
         _pipeline_vision_direct = bool(ctx.settings.get("pipeline_vision_direct", False))
-        if not _vision_roles_cfg and _pipeline_vision_direct:
+        _vision_roles_cfg = dict(ctx.settings.get("pipeline_vision_roles") or {}) if _pipeline_vision_direct else {}
+        if _pipeline_vision_direct and not any(_vision_roles_cfg.values()):
             _vision_roles_cfg = {"analyst": True}
 
         _analyst_vision = _role_vision(ctx, "analyst", 0, vision_agent_images, _vision_roles_cfg)
         _va_model   = ctx.settings.get("vision_agent_model", "") or ctx.pipeline.agents["vision"].model
         _va_has_model = bool(_va_model)
-        _va_enabled = (not _analyst_vision) and bool(vision_agent_images) and _va_has_model and (
+        _va_enabled = (not _analyst_vision) and not getattr(ctx, "image_description", "") and bool(vision_agent_images) and _va_has_model and (
             ctx.settings.get("vision_agent_enabled", False)
             or ctx.effective_task_type in ("vision", "ocr")
             or not _pipeline_vision_direct)
@@ -278,9 +279,18 @@ async def run_pipeline(ctx):
                 if soul_layer:
                     sys_p = soul_layer + "\n\n" + sys_p
                 imgs_for_analyst = (ctx.images if (_analyst_vision and i == 0) else [])
-                # Inject image description as context if available
+                # Inject image description and persistent file paths as context if available
                 if ctx.image_description and i == 0 and not _analyst_vision:
-                    analyst_input = analyst_input + f"\n\n[Image description from vision model]:\n{ctx.image_description}"
+                    from core.duo_helpers import is_vision_error_text as _is_vis_err
+                    if not _is_vis_err(ctx.image_description):
+                        analyst_input = analyst_input + f"\n\n[Image description from vision model]:\n{ctx.image_description}"
+                _img_paths = getattr(ctx, "image_paths", None) or []
+                if _img_paths and i == 0:
+                    sys_p += (
+                        "\n\n[IMAGE FILES]: the user's uploaded image(s) are saved at: "
+                        + ", ".join(_img_paths)
+                        + ". Reference them by path if needed (binary - do not read raw bytes)."
+                    )
                 msgs  = ctx.make_messages(ctx.pipeline, sys_p, analyst_input, imgs_for_analyst, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
                 yield await ctx.emit({
                     "type": "agent", "content": "Analyst", "model": ctx.registry_get("analyst"),
@@ -383,8 +393,13 @@ async def run_pipeline(ctx):
                 if soul_layer:
                     sys_p = soul_layer + "\n\n" + sys_p
 
-                _img_ctx = (f"\n\n[Image description]:\n{ctx.image_description}"
-                            if ctx.image_description and ctx.settings.get("image_desc_full_pipeline", False)
+                from core.duo_helpers import is_vision_error_text as _is_vis_err
+                _pipe_desc = (_vision_agent_out or ctx.image_description or "").strip()
+                if _is_vis_err(_pipe_desc):
+                    _pipe_desc = ""
+                _refiner_vision = _role_vision(ctx, "refiner", i, vision_agent_images, _vision_roles_cfg)
+                _img_ctx = (f"\n\n[Image description]:\n{_pipe_desc}"
+                            if _pipe_desc and not _refiner_vision and ctx.settings.get("image_desc_full_pipeline", False)
                             else "")
                 if ctx.constraint_mode and critic_out and i > 0:
                     refiner_input = (
@@ -404,7 +419,6 @@ async def run_pipeline(ctx):
                     )
                     is_repair = False
 
-                _refiner_vision = _role_vision(ctx, "refiner", i, vision_agent_images, _vision_roles_cfg)
                 imgs_for_refiner = ctx.images if _refiner_vision else []
                 msgs = ctx.make_messages(ctx.pipeline, sys_p, refiner_input, imgs_for_refiner, False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
 
@@ -513,8 +527,13 @@ async def run_pipeline(ctx):
                 if soul_layer:
                     sys_p = soul_layer + "\n\n" + sys_p
 
-                _img_ctx_c = (f"\n\n[Image description]:\n{ctx.image_description}"
-                              if ctx.image_description and ctx.settings.get("image_desc_full_pipeline", False)
+                from core.duo_helpers import is_vision_error_text as _is_vis_err_c
+                _pipe_desc_c = (_vision_agent_out or ctx.image_description or "").strip()
+                if _is_vis_err_c(_pipe_desc_c):
+                    _pipe_desc_c = ""
+                _critic_vision = _role_vision(ctx, "critic", i, vision_agent_images, _vision_roles_cfg)
+                _img_ctx_c = (f"\n\n[Image description]:\n{_pipe_desc_c}"
+                              if _pipe_desc_c and not _critic_vision and ctx.settings.get("image_desc_full_pipeline", False)
                               else "")
                 if ctx.constraint_mode:
                     critic_input = (
@@ -531,7 +550,6 @@ async def run_pipeline(ctx):
                         f"Problem: {ctx.user_input}{_img_ctx_c}\n\nAnalysis:\n{refiner_out}\n\nWhat is being overlooked?"
                     )
 
-                _critic_vision = _role_vision(ctx, "critic", i, vision_agent_images, _vision_roles_cfg)
                 imgs_for_critic = ctx.images if _critic_vision else []
                 msgs = ctx.make_messages(ctx.pipeline, sys_p, critic_input, imgs_for_critic, False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
 

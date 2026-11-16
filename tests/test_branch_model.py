@@ -30,7 +30,7 @@ SCRIPT = SCRIPT_PATH.read_text(encoding="ascii", errors="replace") if SCRIPT_PAT
 check("1a no pinned release line", "Current release:" not in README)
 check("1b no hardcoded zip name", "HiveMind_v1." not in README)
 check("1c the release badges stay", "img.shields.io/github/v/release" in README)
-check("1d the description stays", "Local multi-agent coding assistant" in README)
+check("1d the description stays", "local AI assistant for chatting and coding" in README)
 
 # ── 2. CONTRIBUTING nennt das Modell und den Schritt ───────────────────
 check("2a main is documented as the released state", "Released state" in CONTRIB)

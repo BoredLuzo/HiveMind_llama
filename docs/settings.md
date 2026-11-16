@@ -44,7 +44,7 @@ its comment) in either file, then re-run the generator.
 | `duo_caps` | object | `{}` | - |  |
 | `duo_chunking` | bool | `False` | yes | CHUNKING DEFAULT OFF : stays a working opt-in, but a fresh install runs one coder pass (the planner subtasks are skipped with an honest status) instead of silently chunking. |
 | `duo_coder_after_run` | str | `keep` | yes | CODER LIFETIME : keep = the slot stays warm after the run (idle TTL decides), evict = release it at the run end so the next prompt can load any model/mode without evicting anything. |
-| `duo_coder_always_vision` | bool | `False` | yes | Send images to the coder even when the task looks text-only. |
+| `duo_coder_always_vision` | bool | `False` | yes | Preload --mmproj on the coder slot even on text-only tasks so mid-run image steers skip a reload (costs projector VRAM; ignored if Coder off). |
 | `duo_coder_ctx_agentic` | null | `None` | yes |  |
 | `duo_coder_ctx_normal` | null | `None` | yes |  |
 | `duo_coder_explore_chars` | int | `0` | yes |  |
@@ -181,7 +181,7 @@ its comment) in either file, then re-run the generator.
 | `git_username` | str | `` | yes |  |
 | `gpu_backend` | str | `` | - |  |
 | `image_desc_full_pipeline` | bool | `False` | yes |  |
-| `image_uploads_persistent` | bool | `False` | yes | False = uploads live only as base64 inside the run (nothing on disk); True = kept under <workspace>/.hive_uploads and referenced by path. |
+| `image_uploads_persistent` | bool | `False` | yes | False = uploads live only as base64 inside the run (nothing on disk); True = kept under <workspace>/.hive_uploads and referenced by path for Direct, Duo Coder, and Pipeline Analyst runs. |
 | `intent_agent` | object | `{...}` | yes |  |
 | `judge_keepalive_enabled` | bool | `False` | yes |  |
 | `judge_prefetch_before_complexity` | bool | `False` | - | OFF : warms the judge model before the routing decision - pure latency win on a big card, an eviction risk on a small one. Opt-in. |

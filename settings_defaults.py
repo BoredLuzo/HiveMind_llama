@@ -314,7 +314,8 @@ DEFAULT_SETTINGS = {
     "duo_soft_planner_wall_timeout_s": 300,
     "duo_planner_ttl_seconds": 0,    # 0 = auto (450s), >0 = Override
     "duo_coder_ttl_seconds":   0,    # 0 = auto (420s), >0 = Override
-    # Send images to the coder even when the task looks text-only.
+    # Preload --mmproj on the coder slot even on text-only tasks so mid-run
+    # image steers skip a reload (costs projector VRAM; ignored if Coder off).
     "duo_coder_always_vision": False,
     # CODER LIFETIME (2026-10-17): keep = the slot stays warm after the
     # run (idle TTL decides), evict = release it at the run end so the next
@@ -586,8 +587,9 @@ DEFAULT_SETTINGS = {
     # carries images; a text-only load of a vision-capable model starts
     # without it, and the first image request pays a one-time upgrade reload
     # (needs_vision_reload / upgrade_port_to_vision). True = the old
-    # behavior: projector families (llava, minicpm-v, qwen3-vl, ...) always
-    # carry the projector even for pure text/code runs.
+    # behavior: multimodal GGUF families with paired mmproj (qwen3.5, qwen3.6,
+    # gemma-4, hermes, llava, ...) always carry the projector even for pure
+    # text/code runs.
     "vision_mmproj_always":    False,
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
@@ -710,7 +712,8 @@ DEFAULT_SETTINGS = {
     # VRAM even when an image arrives in the run.
     "duo_coder_images_off": False,
     # False = uploads live only as base64 inside the run (nothing on disk);
-    # True = kept under <workspace>/.hive_uploads and referenced by path.
+    # True = kept under <workspace>/.hive_uploads and referenced by path
+    # for Direct, Duo Coder, and Pipeline Analyst runs.
     "image_uploads_persistent": False,
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls
     # decay the counter by 1, successful writes reset it to 0 — only a

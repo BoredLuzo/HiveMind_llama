@@ -553,11 +553,12 @@ REM packages through uv. The installer has already provisioned uv above;
 REM falling back to a pip that may not exist in the uv venv only hid errors.
 uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet >> "%DEC_LOG%" 2>&1
 if errorlevel 1 uv pip install --python "%PY%" torch --quiet >> "%DEC_LOG%" 2>&1
-uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet >> "%DEC_LOG%" 2>&1
+uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match -r requirements-decider.txt --quiet >> "%DEC_LOG%" 2>&1
+if errorlevel 1 uv pip install --python "%PY%" gliner2[local] transformers huggingface_hub --quiet >> "%DEC_LOG%" 2>&1
 echo  Fetching the model weights...
 "%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')" >> "%DEC_LOG%" 2>&1
 set "DEC_SNAP=%errorlevel%"
-"%PY%" -c "import torch, gliner2" >nul 2>&1
+"%PY%" -c "import torch, gliner2; from gliner2 import AutoExtractor" >nul 2>&1
 REM INSTALLER-AUDIT (2026-11-01): the "ready" message used to key only on
 REM the snapshot exit - huggingface_hub succeeds even when torch/gliner2
 REM failed, and offline it is the snapshot that fails. Gate on BOTH.
