@@ -114,7 +114,8 @@ for n in _stop_lines:
     _synced += 1 if ("ps._loop_detected = True" in _window
                      or ("_sync_state()" in _window and _helper_syncs_loop)) else 0
 check("f every compress stop syncs _loop_detected before returning",
-      len(_stop_lines) == 2 and _synced == 2, f" stops={len(_stop_lines)} synced={_synced}")
+      len(_stop_lines) >= 2 and _synced == len(_stop_lines),
+      f" stops={len(_stop_lines)} synced={_synced}")
 
 # ── g. ctx_overrides.default ────────────────────────────────────────────────
 from core.ctx_overrides import _ctx_override_lookup  # noqa: E402

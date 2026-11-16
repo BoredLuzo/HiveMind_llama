@@ -1,25 +1,20 @@
 ## [1.6.0] - 2026-11-15
 
-Dedicated 1.6.0 release unifying local model discovery and catalog updates
-(`twil:8b`, `air:26b-a4b`, `qwen3.6:35b-a3b-mtp`), Direct/Duo/Agentic transport
-& verification-gate hardening, security & runtime containment, scheduler
-hardening, and Linux/Colab benchmark parity.
+Dedicated 1.6.0 release unifying capability-agnostic GGUF drop-in discovery
+alongside catalog updates, Direct/Duo/Agentic transport & verification-gate
+hardening, security & runtime containment, scheduler hardening, and Linux/Colab
+benchmark parity.
 
 ### Added & Improved
-- **GGUF drop-in discovery & catalog updates:** Extracted
+- **GGUF drop-in discovery & catalog refresh:** Extracted
   `backend/gguf_meta.py` to inspect GGUF metadata, multi-part shards
   (`-NNNNN-of-NNNNN`), and paired `mmproj` projectors safely across shared model
-  directories; replaced `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` in the
-  installer (`deploy/fetch_models.py`, `docs/guide.md`) with `twil:8b`
-  (`webAI-Official/TwIL-8B`, `TwIL-8B-Q4_K_M-balanced.gguf`, 8.8B Granite 4.2
-  reasoning model, `num_ctx=40960`, `temperature=1.0`, `top_p=0.95`) and
-  `air:26b-a4b` (`webAI-Official/Air-26B-A4B-gguf`, `Air-26B-A4B.gguf`, Gemma 4
-  26B-A4B MoE, `num_ctx=131072`, `q8_0` KV, `moe_cpu_experts=20` keeping 10/30
-  MoE blocks on GPU); added `qwen3.6:35b-a3b-mtp`
-  (`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`, `Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf`,
-  `mtp=true`) alongside `qwen3.6:35b-a3b-ud` with `chat_template_sharp_v22.5.0.jinja`
-  pinned across Qwen3.6-35B-A3B profiles; isolated cached model profiles via
-  `deepcopy` in `model_configs/models_registry.py`.
+  directories; added quant-variant profile fallback and isolated cached model
+  profiles via `deepcopy` in `model_configs/models_registry.py` so capabilities
+  follow detected metadata/profiles rather than parameter counts; refreshed the
+  installer catalog (`deploy/fetch_models.py`, `docs/guide.md`, adding
+  `twil:8b`, `air:26b-a4b`, and `qwen3.6:35b-a3b-mtp` and replacing the old
+  `hermes3.6` default).
 - **Duo verification gate & contract extraction:** Added post-edit verification
   depth gating and smoke-check enforcement (`core/duo_task_complete_gate.py`,
   `core/duo/preflight.py`, `core/tool_exec_helpers.py`, `core/tool_executor.py`),
@@ -35,30 +30,46 @@ hardening, and Linux/Colab benchmark parity.
   down-grading when RLIMIT/RAM is tight, and `subagent_lite` / UI state sync.
 - **Tools & scheduler:** Made `subagent_research` a toggleable `[+Subagent]`
   optional alongside `[+Websearch]` and `[+Git]` on `duo_core` (18 base +
-  `+Subagent` = 19 default), expanded `duo_lean` from 10 to 12 tools
-  (`run_python` and `undo_last` added in `tools/definitions.py` so shared
-  verification/recovery prompts match advertised tools in
-  `hive_functions/prompts.py`), extracted target file paths for `apply_patch`
-  `patch`/`diff` headers in `_approval_call_key` / `_norm_write_path`
-  (`tools/runner.py`), fixed `apply_patch` EOF/newline parsing and
-  `auto_test_note` settings propagation, and closed `SchedulerManager`
+  `+Subagent` = 19 default), streamlined `duo_lean` to the **8 orthogonal core
+  tools** (`read_file`, `edit_file`, `write_file`, `search_code`, `find_files`,
+  `run_bash`, `run_tests`, `task_complete`) with aligned prompts and gates
+  (`tools/definitions.py`, `hive_functions/prompts.py`,
+  `core/duo_task_complete_gate.py`), extracted target file paths for
+  `apply_patch` `patch`/`diff` headers in `_approval_call_key` /
+  `_norm_write_path` (`tools/runner.py`), fixed `apply_patch` EOF/newline parsing
+  and `auto_test_note` settings propagation, and closed `SchedulerManager`
   spawn/fire race conditions.
+- **Context KV-cache, Auto routing & Repo-Map deltas:** Appended editor context
+  to preserve byte-0 prompt caching (`context/chat_util.py`), added
+  `cache_horizon` tail-first eviction and post-shrink `guard_tokens` / stale real
+  token resets (`context/compression.py`, `core/duo_ctx_meter.py`), attached
+  top-level symbol deltas at each compression in `append_repo_map_delta`
+  (`[REPO-MAP-DELTA — changed since the pin]`, `core/repomap_pin.py`), broadened
+  `RepoIndex` identifier splitting and
+  multi-language symbol indexing (`context/repo_index.py`), fixed
+  `mode="auto"` routing when `duo_agentic_mode=true`
+  (`core/chat_route_decision.py`, `routing/decider.py`), added `pause_gate` in
+  `ToolLoop` (`core/tool_loop.py`), and gated `run_peer_ratings` behind
+  `use_learned` (`core/direct_runner.py`, `hive_functions/pipeline.py`).
 
 ### Security & Privacy
-- **Native secret-path denylist & workspace containment:** Enforced the shared
+- **Native secret-path denylist, MCP CSRF & workspace containment:** Enforced the shared
   secret-file denylist (`.env`, SSH/TLS keys, credentials, cloud/token configs)
   across native `read_file`, `list_files`, `find_by_name`, and `search_code`
   tools (`utils/file.py`, `tools/handlers/file_tools.py`,
-  `tools/handlers/search_tools.py`), validated `run_tests` `paths`/`targets`
+  `tools/handlers/search_tools.py`), added Origin/Content-Type CSRF checks and
+  `tool_shell` secret env scrubbing to `infra/mcp_server.py`, validated `run_tests` `paths`/`targets`
   arguments via `os.path.commonpath` against workspace escape
   (`tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`), and
   stripped unowned `conftest.py` files before installing hidden tests
   (`bench/runner.py`).
-- **Supply-chain & model-store hardening:** Switched `deploy/updater.py` release
+- **Supply-chain, model-store & installer hardening:** Switched `deploy/updater.py` release
   digest checks to fail-closed (`sha256:` verification required with no override
   when digests are missing or mismatched), pinned `llama.cpp` release tag `b12001`
-  in `deploy/llama_build_pin.txt` (with `--tag` / `--latest` overrides), and
-  validated `model_configs` agent/model identifiers against path traversal.
+  in `deploy/llama_build_pin.txt` (with `--tag` / `--latest` overrides),
+  fixed Linux/Ubuntu key matching in `deploy/fetch_whisper.py`, pointed
+  `deploy/install_windows.bat` NSSM setup at `.venv\Scripts\python.exe run.py`,
+  and validated `model_configs` agent/model identifiers against path traversal.
 
 ### Fixed
 - Guarded `_phase_claim` peer-slot eviction in `backend/llama_start_phases.py`
@@ -76,7 +87,7 @@ hardening, and Linux/Colab benchmark parity.
   `bench/external/rent_bootstrap.sh`, and expanded
   `bench/external/hivemind_bench_colab_autopilot.ipynb` with dedicated per-run
   cells across **3 Suites × 3 Runs** (Core 23 tasks, Aider Polyglot 34 tasks,
-  DeepSWE 3 real-world repo tasks on 4B & 35B-MTP), live 45s
+  DeepSWE 3 real-world repo tasks — configurable for any local model), live 45s
   heartbeat/`[progress]` status, `STATUS_OVERVIEW.txt` deadlock age checks, and
   clean post-save pipe exit. Covered by **386/386** standalone regression suites.
 

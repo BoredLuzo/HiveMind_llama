@@ -163,9 +163,9 @@ RUNTIME ENVIRONMENT:
     - One write_file call caps at the run's write budget (a TRUNCATION_MARKER
       in the result means it got cut). Never attempt an oversized full write - it
       gets cut - the partial content lands with a TRUNCATION_MARKER; continue from the reported cut line.
-- PREFER get_signatures for API/signature questions - it returns structure
-  without burning context. Full read_file only when you need implementation
-  bodies or exact edit anchors.
+- Inspect only what you need: use search_code or read_file with start_line/end_line
+  ranges for structure/signatures without burning context; full read_file only
+  when you need implementation bodies or exact edit anchors.
 - The shell used by run_bash and the path/command syntax are platform-specific —
   follow the OS/runtime note that is appended to this system prompt for the
   current machine (PowerShell on Windows, bash on Unix).
@@ -188,8 +188,9 @@ RULES:
 - Do not narrate tool calls before executing them. Call tools directly
   and silently. Only explain findings after tool results are returned.
 - AUTONOMY FIRST: Solve independently by reading code and using tools.
-  Only call ask_user for: architecture decisions, missing secrets/keys,
-  destructive operations, or genuinely ambiguous requirements.
+  If ask_user is in your tool list, call it only for: architecture decisions,
+  missing secrets/keys, destructive operations, or genuinely ambiguous
+  requirements; otherwise decide autonomously and state the assumption in task_complete.
 
 ERROR RECOVERY:
 - If you see [TOOL_ERROR:...] or [SYSTEM] messages: diagnose the EXACT error code,
@@ -198,7 +199,7 @@ ERROR RECOVERY:
 - If edit_file content is too large: use several smaller edit_file calls
   (one change each). Do NOT repeat the oversized call.
 - If edit_file old_text fails to match 2x: read_file the file again and copy the passage verbatim.
-- If run_bash times out: split work into smaller commands or use run_python.
+- If run_bash times out: split work into smaller, bounded commands.
 - If run_bash returns non-zero: read the error output CAREFULLY before retrying.
 """
 
@@ -219,8 +220,8 @@ Start with a tool call when you can. A plan restatement costs an extra round.
 - Large files: one write_file call per file within your WRITE RULES char
   target. If a call is cut off, the server salvages up to the last complete
   line so you can append or patch the remainder.
-- Install dependencies ONLY via install_package (npm/pip/cargo/go/dotnet/composer) —
-  never raw run_bash 'npm install'/'pip install'. Budget is limited per run.
+- Do NOT run broad package installs ('npm install'/'pip install') unless required
+  and supported by your active tools. Budget is limited per run.
   Do NOT run docker/docker-compose or start servers.
   Keep verification light: syntax check, unit tests, or lint via run_bash.
   When verification passes (or was never needed): call task_complete immediately.
@@ -290,7 +291,7 @@ TOOL RESULTS ARE AUTOMATED:
 DUO_CODER_UNEXPLORED = """
 CODEBASE — UNEXPLORED:
 
-No exploration ran. Find the target files (find_files or list_dir).
+No exploration ran. Find the target files (find_files or search_code).
 Read exactly ONE file, then edit/write it before reading the next.
 Do NOT read all files upfront — interleave: read one → edit/write it → next file.
 """

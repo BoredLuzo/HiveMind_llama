@@ -125,14 +125,14 @@ def _ctx_shrink_round(
     *, dtool_ctx, compress_threshold, est_tokens, guard_tokens,
     can_compress, force_compress_next, total_tool_rounds, dtool_msgs,
     tool_ctx_lru, coder_real_prompt_tokens, coder_est_at_real,
-    recent_focus_paths, mask_enabled,
+    recent_focus_paths, mask_enabled, cache_horizon: int = 0,
 ) -> _CtxShrinkResult:
-    """Emergency-evict + mask-before-compress decision, moved verbatim.
+    """Emergency-evict + mask-before-compress decision.
 
-    Mutates `dtool_msgs` (in-place eviction) and the by-ref lists
-    `coder_real_prompt_tokens` / `coder_est_at_real` (stale-real reset)
-    exactly like the inline block did; the runner emits `events` in order
-    and keeps the compression cycle.
+    Mutates `dtool_msgs` (in-place eviction) and resets `coder_real_prompt_tokens`
+    / `coder_est_at_real` + `res.guard_tokens` whenever eviction/masking shrinks
+    the context, so follow-up checks see post-shrink counts rather than stale
+    pre-mask totals.
     """
     res = _CtxShrinkResult(est_tokens=int(est_tokens), guard_tokens=int(guard_tokens))
     # CACHE-FRIENDLY (2026-09-04): compression is the
@@ -172,18 +172,21 @@ def _ctx_shrink_round(
             target_token_budget=int(dtool_ctx * _EVICT_TARGET_PCT),
             hard_floor_tokens=int(dtool_ctx * _EVICT_HARD_FLOOR_PCT),
             protect_paths=recent_focus_paths,
+            cache_horizon=cache_horizon,
         )
         if _evicted_n > 0:
-            res.est_tokens = _calib_tokens(coder_real_prompt_tokens, coder_est_at_real, int(_estimate_ctx_tokens(dtool_msgs)))
-            # METER-FIX (2026-08-25): the real value is now
-            # STALE (pre-eviction). Reset -> naechster
-            # ctx_meter nutzt den frischen Schaetzer.
+            _real_before_evict = int(res.guard_tokens)
+            # METER-FIX: pre-eviction real prompt tokens are stale now — reset
+            # BEFORE recomputing est_tokens/guard_tokens so _decide_context_action
+            # sees the post-eviction token count.
             coder_real_prompt_tokens[0] = 0
             coder_est_at_real[0] = 0
+            res.est_tokens = _calib_tokens(coder_real_prompt_tokens, coder_est_at_real, int(_estimate_ctx_tokens(dtool_msgs)))
+            res.guard_tokens = int(res.est_tokens)
             logger.warning(
                 "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
                 _est_before_evict, _evicted_n, int(res.est_tokens), int(dtool_ctx),
-                int(dtool_ctx * _EVICT_TARGET_PCT), int(dtool_ctx * _EVICT_HARD_FLOOR_PCT), int(res.guard_tokens),
+                int(dtool_ctx * _EVICT_TARGET_PCT), int(dtool_ctx * _EVICT_HARD_FLOOR_PCT), _real_before_evict,
                 res.guard_decision.reason,
             )
             res.events.append({
@@ -224,15 +227,19 @@ def _ctx_shrink_round(
                 target_token_budget=int(compress_threshold),
                 hard_floor_tokens=int(dtool_ctx * _EVICT_HARD_FLOOR_PCT),
                 protect_paths=recent_focus_paths,
+                cache_horizon=cache_horizon,
             )
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                 AttributeError, IndexError) as _mask_err:
             logger.warning("[CTX-MASK] failed: %s", _mask_err)
             res.masked_n = 0
         if res.masked_n > 0:
+            # Stale pre-mask real prompt tokens must be cleared so
+            # res.guard_tokens reflects the post-mask estimate cleanly.
+            coder_real_prompt_tokens[0] = 0
+            coder_est_at_real[0] = 0
             res.est_tokens = _calib_tokens(coder_real_prompt_tokens, coder_est_at_real, int(_estimate_ctx_tokens(dtool_msgs)))
-            res.guard_tokens = max(
-                int(coder_real_prompt_tokens[0] or 0), int(res.est_tokens))
+            res.guard_tokens = int(res.est_tokens)
             if res.guard_tokens <= int(compress_threshold):
                 res.compress_ok = False
                 res.events.append({"type": "status",

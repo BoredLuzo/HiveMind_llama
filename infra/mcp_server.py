@@ -178,6 +178,27 @@ def _auth_ok(headers: dict) -> bool:
     return hmac.compare_digest(auth[7:].strip(), token)
 
 
+def _origin_allowed(headers: dict) -> bool:
+    """Reject cross-site browser CSRF calls via Sec-Fetch-Site / Origin."""
+    fetch_site = (headers.get("sec-fetch-site", "") or "").strip().lower()
+    if fetch_site == "cross-site":
+        return False
+    origin = (headers.get("origin", "") or "").strip()
+    if not origin:
+        return True
+    configured = {
+        o.strip() for o in os.environ.get("MCP_HTTP_CORS_ORIGINS", "").split(",")
+        if o.strip()
+    }
+    if origin in configured:
+        return True
+    try:
+        host = (urlparse(origin).hostname or "").strip().lower().strip("[]")
+    except ValueError:
+        return False
+    return host in _LOOPBACK_HOSTS
+
+
 def _cors_headers(origin: str) -> str:
 
     configured = [o.strip() for o in os.environ.get("MCP_HTTP_CORS_ORIGINS", "").split(",") if o.strip()]
@@ -780,9 +801,26 @@ async def tool_query(query: str, mode: str = "auto", iterations: int = 2, notify
     return "".join(tokens).strip()
 
 
+_SCRUBBED_SHELL_ENV_KEYS = (
+    "HIVEMIND_INTERNAL_TOKEN",
+    "MCP_HTTP_TOKEN",
+    "HIVEMIND_TG_TOKEN",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+)
+_SCRUBBED_SHELL_ENV_RE = re.compile(
+    r"(?:^|_)(?:TOKEN|SECRET|API_KEY|PASSWORD|PASSWD)(?:_|$)",
+    re.IGNORECASE,
+)
+
+
 async def tool_shell(cmd: str, timeout: int = 30) -> str:
     safe   = bool(SAFE_SHELL_RE.match(cmd.strip()))
     prefix = "" if safe else "⚠ Unsafe command: "
+    _shell_env = {
+        k: v for k, v in os.environ.items()
+        if k not in _SCRUBBED_SHELL_ENV_KEYS and not _SCRUBBED_SHELL_ENV_RE.search(k)
+    }
     proc: asyncio.subprocess.Process | None = None
     try:
         if IS_WINDOWS:
@@ -791,6 +829,7 @@ async def tool_shell(cmd: str, timeout: int = 30) -> str:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(WORKSPACE),
+                env=_shell_env,
             )
         else:
             proc = await asyncio.create_subprocess_shell(
@@ -798,6 +837,7 @@ async def tool_shell(cmd: str, timeout: int = 30) -> str:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(WORKSPACE),
+                env=_shell_env,
                 # Linux audit 2026-11-03: own process group so a timeout can
                 # kill the whole tree instead of orphaning grandchildren.
                 start_new_session=True,
@@ -2845,7 +2885,7 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
         path = path.split("?")[0]
 
         # ── Tier 0.1 Hardening (2026-08-24) ───────────────────────────────
-        if not _host_allowed(headers.get("host", "")):
+        if not _host_allowed(headers.get("host", "")) or not _origin_allowed(headers):
             writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             await writer.drain(); writer.close(); return
         if not _auth_ok(headers):
@@ -2893,6 +2933,10 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
             await writer.drain(); writer.close(); return
 
         if method == "POST" and path == "/mcp":
+            _ct_raw = (headers.get("content-type", "") or "").split(";", 1)[0].strip().lower()
+            if _ct_raw and _ct_raw != "application/json":
+                writer.write(b"HTTP/1.1 415 Unsupported Media Type\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain(); writer.close(); return
             try:
                 content_length = int(headers.get("content-length", len(body_part)) or 0)
             except (TypeError, ValueError):

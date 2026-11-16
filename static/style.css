@@ -1322,53 +1322,63 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .tool-result-pre .tr-dir  { color: #70b8e0; }
 .tool-result-pre .tr-file { color: #90c898; }
 .tool-result-pre .tr-sym  { color: #b890d0; }
-/* ── Coder bubble markdown rendering ────────────────────────────────────── */
-.coder-md-text strong { color: #c8e0f0; font-weight: 700; }
-.coder-md-text em { color: #a8c8b0; font-style: italic; }
+/* ── Coder & Direct chat bubble markdown rendering ───────────────────────── */
+.coder-md-text {
+  display: block; white-space: normal; min-height: 1em;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px; line-height: 1.65; color: var(--txh);
+}
+.coder-md-text strong { color: #e2eff8; font-weight: 600; }
+.coder-md-text em { color: #b4d2be; font-style: italic; }
 .coder-md-text .coder-inline-code {
-  font-family: 'IBM Plex Mono', monospace; font-size: 10px;
-  background: rgba(32,176,160,.12); border: 1px solid rgba(32,176,160,.22);
-  border-radius: 3px; padding: 0 4px; color: #80d8c8;
+  font-family: 'IBM Plex Mono', monospace; font-size: 12.5px;
+  background: rgba(32,176,160,.11); border: 1px solid rgba(32,176,160,.22);
+  border-radius: 4px; padding: 1px 5px; color: #80d8c8;
 }
 .coder-md-text .coder-code-block {
-  display: block; margin: 4px 0;
-  font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; line-height: 1.55;
-  background: rgba(0,0,0,.22); border: 1px solid rgba(32,176,160,.12);
-  border-radius: 4px; padding: 6px 8px; color: #80c8b0;
+  display: block; margin: 8px 0;
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.55;
+  background: rgba(11,13,16,.65); border: 1px solid var(--b2);
+  border-radius: 6px; padding: 10px 12px; color: #98d8c4;
   white-space: pre-wrap; word-break: break-word; overflow-x: auto;
 }
 .coder-md-text .coder-h {
-  display: block; margin: 5px 0 2px; font-size: 11px; color: #a8d0e8; font-weight: 700; letter-spacing: .03em;
-  border-bottom: 1px solid rgba(168,208,232,.15); padding-bottom: 1px;
+  display: block; margin: 12px 0 5px; font-size: 14px; color: var(--txh);
+  font-weight: 600; letter-spacing: .01em; line-height: 1.35;
 }
+.coder-md-text .coder-h:first-child { margin-top: 2px; }
+.coder-md-text .coder-h1 {
+  font-size: 16.5px; border-bottom: 1px solid rgba(168,208,232,.14); padding-bottom: 3px;
+}
+.coder-md-text .coder-h2 {
+  font-size: 15px; border-bottom: 1px solid rgba(168,208,232,.14); padding-bottom: 3px;
+}
+.coder-md-text .coder-h3 { font-size: 14px; color: #a8d0e8; }
+.coder-md-text .coder-h4 { font-size: 13.5px; color: #a8d0e8; }
 .coder-md-text .coder-li::before { content: '›'; color: #20b0a0; margin-right: 5px; }
 .coder-md-text .coder-li { display: block; padding: 1px 0 1px 10px; }
 .coder-md-text .coder-bul::before { content: '•'; color: #20b0a0; margin-right: 6px; }
 .coder-md-text .coder-task::before { content: ''; margin-right: 0; }
 .coder-md-text .coder-chk { display: inline-block; margin-right: 6px; color: #3a9960; }
 .coder-md-text .coder-task.done { color: #7fae9f; text-decoration: line-through; }
-/* CHAT-MD-FIX (2026-08-27): block elements for normal responses (LM-Studio style) */
-/* LIVE-MD (2026-08-31): min-height against height jumping during live rendering */
-.coder-md-text { display: block; white-space: normal; min-height: 1em; }
-.coder-md-text p { margin: 3px 0; }
-.coder-md-text hr { border: none; border-top: 1px solid rgba(168,208,232,.2); margin: 6px 0; }
+.coder-md-text p { margin: 6px 0; }
+.coder-md-text p:first-child { margin-top: 0; }
+.coder-md-text p:last-child { margin-bottom: 0; }
+.coder-md-text hr { border: none; border-top: 1px solid rgba(168,208,232,.16); margin: 10px 0; }
 .coder-md-text blockquote.coder-bq {
-  margin: 4px 0; padding: 3px 8px; border-left: 3px solid rgba(32,176,160,.5);
+  margin: 6px 0; padding: 4px 10px; border-left: 3px solid rgba(32,176,160,.5);
   background: rgba(32,176,160,.07); border-radius: 0 4px 4px 0; color: #9ab8c8;
 }
-.coder-md-text ul.coder-ul, .coder-md-text ol.coder-ol { margin: 3px 0; padding-left: 20px; }
-.coder-md-text ul.coder-ul li, .coder-md-text ol.coder-ol li { margin: 1px 0; }
-.coder-md-text a { color: #60b0f0; text-decoration: underline; }
+.coder-md-text ul.coder-ul, .coder-md-text ol.coder-ol { margin: 6px 0; padding-left: 22px; }
+.coder-md-text ul.coder-ul li, .coder-md-text ol.coder-ol li { margin: 4px 0; line-height: 1.6; }
+.coder-md-text a { color: #60b0f0; text-decoration: underline; text-underline-offset: 2px; }
 .coder-md-text table.coder-tbl {
-  border-collapse: collapse; margin: 4px 0; font-size: 10px; width: auto; max-width: 100%;
+  border-collapse: collapse; margin: 8px 0; font-size: 12.5px; width: auto; max-width: 100%;
 }
 .coder-md-text table.coder-tbl th, .coder-md-text table.coder-tbl td {
-  border: 1px solid rgba(168,208,232,.25); padding: 2px 8px; text-align: left;
+  border: 1px solid rgba(168,208,232,.22); padding: 5px 10px; text-align: left;
 }
-.coder-md-text table.coder-tbl th { background: rgba(32,176,160,.12); color: #a8d0e8; font-weight: 700; }
-.coder-md-text .coder-h1 { font-size: 12.5px; }
-.coder-md-text .coder-h2 { font-size: 11.5px; }
-.coder-md-text .coder-h3 { font-size: 11px; }
+.coder-md-text table.coder-tbl th { background: rgba(32,176,160,.12); color: #a8d0e8; font-weight: 600; }
 /* Plan markdown: own renderer (no <br> redundancy, controlled spacing) */
 .planner-plan-block .plan-md { white-space: normal; font-size: 12px; line-height: 1.6; color: #9ab0c4; }
 .planner-plan-block .plan-md .pm-h { font-size: 11px; color: #a8d0e8; font-weight: 700; letter-spacing: .03em; border-bottom: 1px solid rgba(168,208,232,.15); padding-bottom: 2px; margin: 12px 0 6px; }

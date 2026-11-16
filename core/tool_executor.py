@@ -836,7 +836,8 @@ async def execute_tool_round(
         _perf["tool_chars_capped"] += len(_dresult)
         if _is_too_large:
             await _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
-                                    trs.last_too_large_path, round_state, hooks)
+                                    trs.last_too_large_path, round_state, hooks,
+                                    tool_mode=tool_mode)
         else:
             _dresult, _hint_matched = _inject_tool_error_hints(
                 _dname, _dargs, _dresult, _dtc_call, dtool_msgs, trs.attempts_per_file, trs.tool_error_retries,

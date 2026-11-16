@@ -26,6 +26,7 @@ class _ExploreRoundResult:
     loop_detected: bool = False
     action: str = "proceed"          # "break" when the threshold is reached
     events: list = dataclasses.field(default_factory=list)
+    nudge_message: str = ""
 
 
 async def _explore_round_gate(
@@ -54,6 +55,12 @@ async def _explore_round_gate(
                 "[EXPLORE-METER] explore_only_rounds=%d/%d (exports=%d partial=%s fallback=%s)",
                 res.explore_only_rounds, _threshold,
                 _total_exports, _explore_was_partial, _any_fallback)
+        if not _new_explore and res.explore_only_rounds == 2 and res.explore_only_rounds < _threshold:
+            res.nudge_message = (
+                "[EXPLORE-LIMIT] 2 consecutive exploration rounds repeated already-seen "
+                "targets without progress. Stop repeating read/search calls on the same "
+                "targets and implement or edit the solution now."
+            )
         if res.explore_only_rounds >= _threshold:
             res.events.append(await ctx.emit({
                 "type": "status",

@@ -103,7 +103,13 @@ async def _decide_route_impl(
         _jfn = judge_call_async
 
         async def _judge_async(_text: str):
+            _pl = getattr(_state, "pipeline", None)
+            if _pl is not None and hasattr(_pl, "_last_judge_verdict"):
+                _pl._last_judge_verdict = {}
             _level = await _jfn(_text, judge_bias)
+            _jv = getattr(_pl, "_last_judge_verdict", None) or {}
+            if isinstance(_jv, dict) and _jv.get("reason") == "judge_cold":
+                return "", 0.0
             return _level, 0.0
 
         _judge_cb = _judge_async
@@ -795,9 +801,10 @@ async def run_stream(
     _judge_prefetch_task: asyncio.Task | None = None
     _can_need_judge = (
         mode in ("auto", "automap")
-        and not duo_config.agentic_mode
+        and not agentic_force
         and not force_complexity
         and 10 < int(judge_bias) < 90
+        and _routing_decider.normalise_mode(_run_settings.get("routing_judge")) != "off"
     )
     if _can_need_judge and bool(settings.get("judge_prefetch_before_complexity", False)):
         async def _run_prefetch_judge_once():

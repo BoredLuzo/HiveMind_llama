@@ -77,4 +77,20 @@ _ctx, _r = _run(round_tool_names={"web_search"}, explore_only_rounds=2,
 check("non-explore/non-write tools leave the streak untouched",
       _r.explore_only_rounds == 2 and _r.action == "proceed")
 
+_ctx, _r = _run(explore_only_rounds=1)
+check("explore_only_rounds == 2 emits one-shot nudge_message",
+      _r.explore_only_rounds == 2 and _r.action == "proceed"
+      and "[EXPLORE-LIMIT]" in _r.nudge_message,
+      repr(_r))
+
+_ctx, _r = _run(
+    round_tool_names={"search_code"},
+    dr_tcs=[{"function": {"name": "search_code", "arguments": {"query": "test_x"}}}],
+    seen_explore_paths={"test_x"},
+    explore_only_rounds=1,
+)
+check("repeat search_code query without new path increments to nudge",
+      _r.explore_only_rounds == 2 and "[EXPLORE-LIMIT]" in _r.nudge_message,
+      repr(_r))
+
 sys.exit(h.finish("duo_explore_gate"))

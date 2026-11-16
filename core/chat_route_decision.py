@@ -79,11 +79,22 @@ async def _chat_route_decision(ps):
     _decider_on = _routing_decider.normalise_mode(
         (model_overrides or {}).get("routing_decider") or settings.get("routing_decider")
     ) != "off"
+    _judge_on = _routing_decider.normalise_mode(
+        (model_overrides or {}).get("routing_judge")
+        or (_run_settings or {}).get("routing_judge")
+        or settings.get("routing_judge")
+    ) != "off"
     # A3 (2026-11-07): a persisted agentic flag must not turn a simple
-    # read/list prompt into a Code Duo run. Narrow and coding-verb guarded;
-    # an explicit agentic_force (gateway /mode agentic) still wins.
+    # read/list prompt into a Code Duo run, nor hijack non-coding prompts in
+    # mode="auto" when decider is off (duo_agentic_mode selects solo Agentic vs
+    # Critic-Duo when Code Duo runs, not that every question becomes Code Duo).
     _simple_tool = is_simple_tool_prompt(user_input)
-    if duo_config.agentic_mode and mode in ("auto", "automap") and (agentic_force or not _decider_on):
+    if (
+        duo_config.agentic_mode
+        and mode in ("auto", "automap")
+        and (agentic_force or not _decider_on)
+        and (agentic_force or _simple_tool or (not _judge_on and _routing_decider.rule_decision(user_input).route == "agentic"))
+    ):
         if _simple_tool and not agentic_force:
             complexity = "simple"
             _complexity_source = "tool_intent"

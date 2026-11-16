@@ -375,7 +375,7 @@ if _h is not None:
     check("[b2] runner no longer resolves budgets inline",
           "tokenize_count" not in _runseg)
     check("[b2] runner still owns the round loop bound",
-          "for _dr in range(_max_tool_rounds + 2)" in _runseg)
+          "_max_tool_rounds + 2" in _runseg)
 
 # ── block 1: disconnect park + final cleanup ────────────────────────────────
 PARK_FIELDS = ["loop_items", "di", "done_tasks", "written_files",

@@ -3553,14 +3553,15 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         remember_insight=ctx.memory.remember_repo_insight,
                         evict_model=partial(evict_model_handler, ctx),
                     )
-                    _round_budget0 = _max_tool_rounds
-                    # +2 slots: the grace round plus one nudge-retry round; the
-                    # extra slots stay gated on _grace_round_active at the top.
-                    for _dr in range(_max_tool_rounds + 2):
+                    # Dynamic bound: honors in-loop replan bonuses to _max_tool_rounds
+                    # while keeping the +2 ceiling for the grace + nudge-retry rounds.
+                    _dr = -1
+                    while _dr + 1 < _max_tool_rounds + 2:
+                        _dr += 1
                         _round_t0 = time.monotonic()
                         if is_ctx_aborted(ctx) or _loop_detected:
                             break
-                        if _dr >= _round_budget0 and not _grace_round_active:
+                        if _dr >= _max_tool_rounds and not _grace_round_active:
                             break
                         if time.monotonic() >= _duo_deadline_at:
                             _duo_timed_out = True
@@ -3701,6 +3702,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             coder_est_at_real=_coder_est_at_real,
                             recent_focus_paths=_recent_focus_paths,
                             mask_enabled=bool(ctx.settings.get("duo_mask_before_compress", True)),
+                            cache_horizon=int(_coder_real_at_msgs_len[0] or 0),
                         )
                         _est_tokens = _shr.est_tokens
                         _guard_tokens = _shr.guard_tokens
@@ -4311,6 +4313,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _ld_setter(3314); _loop_detected = True
                             if _exec_result.duo_timed_out:
                                 _duo_timed_out = True
+                        _gate_vetoed = False
                         if _exec_result.task_complete_called:
                             # C3 (2026-11-07 maintainability sprint): the
                             # verify gate lives in core/duo_task_complete_gate.
@@ -4336,6 +4339,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _grace_round_active = _tc_ps.grace_round_active
                             if _tc_ps.action == "break":
                                 break
+                            _gate_vetoed = not _exec_result.task_complete_called
                         _total_tool_rounds += 1
                         _lifetime_tool_rounds += 1
                         # Exploration-loop detection: track rounds with only explore tools
@@ -4365,6 +4369,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             yield _eg_ev
                         if _eg.action == "break":
                             break
+                        if _eg.nudge_message:
+                            _dtool_msgs.append({"role": "user", "content": _eg.nudge_message})
                         if _round_wrote_file:
                             _no_write_rounds = 0
                             _no_write_nudged = False
@@ -4372,7 +4378,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _no_write_rounds += 1
                         _round_wrote_file = False
                         _no_write_threshold = 14 if ctx.duo_config.until_finished else 8
-                        if _no_write_rounds >= _no_write_threshold and not _no_write_nudged:
+                        if (_no_write_rounds >= _no_write_threshold and not _no_write_nudged
+                                and not _gate_vetoed):
                             _no_write_nudged = True
                             _nudge = (
                                 f"[NO PROGRESS] {_no_write_rounds} tool round(s) without any file edit. "
@@ -4386,7 +4393,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _vf_streak_cur = int(getattr(ctx.exec_ctrl, "verify_fail_streak", 0) or 0)
                         if _vf_streak_cur == 0:
                             _verify_streak_nudged = False
-                        elif _vf_streak_cur >= 3 and not _verify_streak_nudged:
+                        elif (_vf_streak_cur >= 3 and not _verify_streak_nudged
+                              and not _gate_vetoed):
                             _verify_streak_nudged = True
                             _dtool_msgs.append({
                                 "role": "user",
@@ -4394,7 +4402,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                     "[VERIFY-STREAK] The same verification failure has repeated 3 times "
                                     "across edits. Stop tweaking the same lines — re-read the full error "
                                     "output and problem specification, check your data structures/constants, "
-                                    "or use `undo_last` and take a different approach."
+                                    "or revert the broken change and take a different approach."
                                 ),
                             })
                         ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)

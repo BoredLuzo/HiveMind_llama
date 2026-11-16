@@ -153,8 +153,8 @@ check("emergency: same messages list is mutated in place",
 check("emergency: stale real prompt tokens reset to 0", _cpt[0] == 0 and _car[0] == 0)
 check("emergency: est refreshed via calib (real=0 -> raw est)",
       _r.est_tokens == 9500)
-check("emergency: guard stays stale across passes (mask-only update)",
-      _r.guard_tokens == 7000 and _dec.calls[1]["guard_tokens"] == 7000)
+check("emergency: guard updates across passes and reflects refreshed est",
+      _r.guard_tokens == 9500 and _dec.calls[1]["guard_tokens"] == 9000)
 check("emergency: one status event per pass, exact order and text",
       [e["type"] for e in _r.events] == ["status", "status"]
       and [e["content"] for e in _r.events] == [
@@ -195,11 +195,14 @@ check("mask event: exact type and text",
       _r.events == [{"type": "status",
                      "content": "🧹 Masked 4 stale tool output(s) — no summary needed."}])
 
-# ── 5. mask event when real tokens dominate (mask does NOT clear) ──────────
-with _patched(_FakeDecide(_COMPRESS), _FakeEvict(3), _est_fake(500)):
-    _r = _run(coder_real_prompt_tokens=[6500], coder_est_at_real=[5000])
-check("mask: guard = max(real=6500, calib est=650)",
-      _r.guard_tokens == 6500 and _r.est_tokens == 650)
+# ── 5. mask above threshold resets stale real tokens & keeps compression on ───
+_cpt5 = [6500]
+_car5 = [5000]
+with _patched(_FakeDecide(_COMPRESS), _FakeEvict(3), _est_fake(6500)):
+    _r = _run(coder_real_prompt_tokens=_cpt5, coder_est_at_real=_car5)
+check("mask: resets stale real tokens and refreshes guard/est",
+      _cpt5[0] == 0 and _car5[0] == 0
+      and _r.guard_tokens == 6500 and _r.est_tokens == 6500)
 check("mask above threshold keeps compression on",
       _r.compress_ok is True and _r.masked_n == 3 and len(_r.events) == 1)
 

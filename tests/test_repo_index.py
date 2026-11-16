@@ -167,4 +167,28 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td, \
         check("_extract returns empty symbols for symlink target",
               sym_entry.symbols == [], f"({sym_entry.symbols})")
 
+# SUB-TOKEN & MULTI-LANGUAGE (2026-11-16): camelCase/snake_case sub-tokens
+# and compiled languages (.rs, .go) rank properly without full reads.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    (ws / "lib.rs").write_text(
+        "pub struct RateLimiter {}\n"
+        "pub async fn check_quota_limit(user_id: u64) -> bool { true }\n",
+        encoding="utf-8")
+    (ws / "main.go").write_text(
+        "package main\nfunc startWorkerPool() {}\n",
+        encoding="utf-8")
+    ml_idx = RepoIndex(ws, nested=True)
+    ml_idx.refresh()
+    rs_syms = set(ml_idx.entries["lib.rs"].symbols) if "lib.rs" in ml_idx.entries else set()
+    go_syms = set(ml_idx.entries["main.go"].symbols) if "main.go" in ml_idx.entries else set()
+    check("rust symbols extracted", {"RateLimiter", "check_quota_limit"} <= rs_syms, f"({rs_syms})")
+    check("go symbols extracted", {"startWorkerPool"} <= go_syms, f"({go_syms})")
+    q_rs = ml_idx.search("quota limiter", limit=2)
+    q_go = ml_idx.search("worker pool", limit=2)
+    check("snake_case/camelCase sub-token search hits rust",
+          bool(q_rs) and q_rs[0][0] == "lib.rs", f"({q_rs})")
+    check("camelCase sub-token search hits go",
+          bool(q_go) and q_go[0][0] == "main.go", f"({q_go})")
+
 sys.exit(h.finish("repo_index"))

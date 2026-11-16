@@ -151,6 +151,7 @@ def _evict_stale_tool_outputs(
     target_token_budget: int,
     hard_floor_tokens: int,
     protect_paths: list[str] | None = None,
+    cache_horizon: int = 0,
 ) -> int:
     """
     Phase 2 semantic eviction:
@@ -161,6 +162,8 @@ def _evict_stale_tool_outputs(
       the run's current focus files are never evicted — masking the file the
       model is actively editing is the direct cause of memory-based edits
       ("old_text not found" loops after compression).
+    - cache_horizon: prefer masking messages at idx >= cache_horizon (uncached
+      tail) before falling back to earlier prefix entries when more room is needed.
     """
     if not messages:
         return 0
@@ -171,9 +174,15 @@ def _evict_stale_tool_outputs(
     if est <= target_token_budget:
         return 0
 
+    horizon = max(0, int(cache_horizon or 0))
+    candidates = (
+        sorted(lru.candidates(), key=lambda e: int(e.get("idx", -1)) < horizon)
+        if horizon > 0 else lru.candidates()
+    )
+
     evicted = 0
     _evicted_read_paths: list[str] = []
-    for entry in lru.candidates():
+    for entry in candidates:
         if est <= target_token_budget:
             break
         idx = int(entry.get("idx", -1))

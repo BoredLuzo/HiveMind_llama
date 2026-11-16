@@ -133,4 +133,9 @@ _route(_p6)
 check("route: explicit code_duo mode is untouched",
       _p6.complexity == "code_duo", f" ({_p6.complexity})")
 
+_p7, _ = _ps("Was ist die Hauptstadt von Frankreich?", agentic=True)
+_route(_p7)
+check("route: agentic + non-coding question in auto does not hijack into code_duo",
+      _p7.complexity in ("trivial", "simple"), f" ({_p7.complexity})")
+
 sys.exit(h.finish("simple_tool_routing"))

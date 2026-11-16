@@ -49,7 +49,7 @@ msgs = _make_messages(_Pipeline(), "SYSTEM", "hello", None, False, False)
 check("no context -> no block", BLOCK not in msgs[0]["content"])
 check("system prompt still first", msgs[0]["role"] == "system")
 
-# ── 2. Mit Kontext: Block steht VOR dem System-Prompt ───────────────────
+# ── 2. Mit Kontext: Block steht nach dem Basis-System-Prompt (prefix-cache-safe) ──
 ctx = ec.parse_context({
     "workspace": WS, "file": "src/main.rs", "cursor_line": 12,
     "selection": "fn main() {}",
@@ -60,7 +60,7 @@ ec.store().put(ctx)
 msgs = _make_messages(_Pipeline(), "SYSTEM", "hello", None, False, False)
 sys_text = msgs[0]["content"]
 check("block injected into the system prompt", BLOCK in sys_text)
-check("block comes before the prompt", sys_text.index(BLOCK) < sys_text.index("SYSTEM"))
+check("block comes after the base prompt (prefix-cache-safe)", sys_text.index("SYSTEM") < sys_text.index(BLOCK))
 check("open file named", "src/main.rs" in sys_text)
 check("selection carried", "fn main() {}" in sys_text)
 check("diagnostic carried", "unused variable" in sys_text)

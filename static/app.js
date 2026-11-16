@@ -481,7 +481,7 @@ function setDuoCoderToolTier(v) {
 }
 
 var _CODER_TIER_HINTS = {
-  lean: 'Lean (10) \u2014 Minimal core: files, search, bash, tests.',
+  lean: 'Lean (8) \u2014 Minimal core: read, edit, write, search, find, bash, tests.',
   core: 'Core (18) \u2014 Default: Lean + apply_patch, batch, AST/symbols, diagnostics.',
   full: 'Full (All) \u2014 All inline, browser, full LSP, scratchpad & MCP tools.',
 };
@@ -4923,19 +4923,33 @@ function _escHtml(s) {
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+function _mdSafeHref(url) {
+  // XSS (audit 2026-11-03): the URL sits inside a double-quoted href. The
+  // text was escaped before this pass, but encode quote/angle chars anyway
+  // so a crafted URL cannot break out of the attribute.
+  return String(url).replace(/["'<>`\\]/g, function(ch) {
+    return encodeURIComponent(ch);
+  });
+}
+
 function _mdInline(s) {
-  // Inline-Code, Bold, Italic, Links (nur http/https, target=_blank)
+  // Inline code, bold, italic, markdown links, bare http/https URLs (target=_blank)
   s = s.replace(/`([^`\n]+)`/g, '<code class="coder-inline-code">$1</code>');
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
   s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function(_m, label, url) {
-    // XSS (audit 2026-11-03): the URL sits inside a double-quoted href. The
-    // text was escaped before this pass, but encode quote/angle chars anyway
-    // so a crafted URL cannot break out of the attribute.
-    var safe = String(url).replace(/["'<>`\\]/g, function(ch) {
-      return encodeURIComponent(ch);
-    });
-    return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+    return '<a href="' + _mdSafeHref(url) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+  });
+  s = s.replace(/(<code\b[^>]*>[\s\S]*?<\/code>|<a\b[^>]*>[\s\S]*?<\/a>)|(https?:\/\/[^\s<>"')]+)/g, function(_m, skip, url) {
+    if (skip) return skip;
+    var trail = '';
+    var tm = url.match(/([.,;:!?]|&(?:quot|lt|gt|#39);)+$/);
+    if (tm) {
+      trail = tm[0];
+      url = url.slice(0, url.length - trail.length);
+    }
+    if (!url) return trail;
+    return '<a href="' + _mdSafeHref(url) + '" target="_blank" rel="noopener noreferrer">' + url + '</a>' + trail;
   });
   return s;
 }
@@ -4960,15 +4974,19 @@ function _mdRender(text) {
     var ln = lines[i];
     var m;
 
-    // Restore code block placeholder
-    m = ln.match(/^\u0000B(\d+)\u0000$/);
+    // Restore code block placeholder (allow optional leading/trailing whitespace)
+    m = ln.match(/^\s*\u0000B(\d+)\u0000\s*$/);
     if (m) { closeList(); closeTable(); out.push(blocks[+m[1]]); continue; }
 
     if (!ln.trim()) { closeList(); closeTable(); continue; }
 
-    // Headings  # ## ###
-    m = ln.match(/^\s{0,3}(#{1,3})\s+(.+)$/);
-    if (m) { closeList(); closeTable(); out.push('<div class="coder-h coder-h' + m[1].length + '">' + _mdInline(_escHtml(m[2])) + '</div>'); continue; }
+    // Headings  # .. ###### (clamped to coder-h1..coder-h4)
+    m = ln.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
+    if (m) {
+      closeList(); closeTable();
+      out.push('<div class="coder-h coder-h' + Math.min(m[1].length, 4) + '">' + _mdInline(_escHtml(m[2])) + '</div>');
+      continue;
+    }
 
     // Horizontal rule  ---  ***  ___
     m = ln.match(/^\s{0,3}([-*_])\s*\1\s*\1\s*$/);
@@ -4995,11 +5013,11 @@ function _mdRender(text) {
       continue;
     }
 
-    // Numbered list
-    m = ln.match(/^\s*\d+[.)]\s+(.+)$/);
+    // Numbered list (preserve explicit value so code blocks / splits don't reset counter)
+    m = ln.match(/^\s*(\d+)[.)]\s+(.+)$/);
     if (m) {
       if (list !== 'ol') { closeList(); closeTable(); out.push('<ol class="coder-ol">'); list = 'ol'; }
-      out.push('<li>' + _mdInline(_escHtml(m[1])) + '</li>');
+      out.push('<li value="' + m[1] + '">' + _mdInline(_escHtml(m[2])) + '</li>');
       continue;
     }
 
@@ -5022,13 +5040,21 @@ function _mdRender(text) {
       continue;
     }
 
+    // Indented continuation line inside an open list item
+    if (list !== null && /^\s{2,}\S/.test(ln) && out.length && /<\/li>$/.test(out[out.length - 1])) {
+      out[out.length - 1] = out[out.length - 1].replace(/<\/li>$/, '<br>' + _mdInline(_escHtml(ln.trim())) + '</li>');
+      continue;
+    }
+
     // Plain paragraph (per line — chat style, single \n = line break)
     closeList(); closeTable();
     out.push('<p>' + _mdInline(_escHtml(ln)) + '</p>');
   }
   closeList();
   closeTable();
-  return out.join('');
+  return out.join('').replace(/\u0000B(\d+)\u0000/g, function(_, idx) {
+    return blocks[+idx] || '';
+  });
 }
 
 function _mdInlinePlan(s) {

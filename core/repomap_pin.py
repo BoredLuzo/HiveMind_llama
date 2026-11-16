@@ -23,6 +23,32 @@ _MAP_HEADING = "## Static Repo-Map"
 _DELTA_HEAD = "[REPO-MAP-DELTA — changed since the pin]"
 MAX_DELTA_LINES = 12        # paths per appended delta line
 MAX_DELTA_BLOCKS = 4        # older delta blocks are merged away
+_MAX_DELTA_SYMBOLS = 5      # top-level symbols rendered per delta path
+
+
+def _format_delta_entry(raw_path: str, workspace: str | Path | None) -> str:
+    """Format a changed delta path, attaching up to 5 top-level symbols when readable."""
+    cand = Path(raw_path)
+    norm = raw_path.replace("\\", "/")
+    fallback = (cand.name or norm) if cand.is_absolute() else norm
+    if not workspace:
+        return fallback
+    try:
+        from context.repo_index import extract_symbols_for_text
+        ws_root = Path(workspace).resolve()
+        target = cand if cand.is_absolute() else (ws_root / cand)
+        resolved = target.resolve()
+        if target.is_symlink() or not resolved.is_relative_to(ws_root) or not resolved.is_file():
+            return fallback
+        rel = resolved.relative_to(ws_root).as_posix()
+        if resolved.stat().st_size <= 256 * 1024:
+            src = resolved.read_text(encoding="utf-8", errors="replace")
+            syms = extract_symbols_for_text(src, resolved.suffix.lower())[:_MAX_DELTA_SYMBOLS] if "\x00" not in src else []
+            if syms:
+                return f"{rel} [{', '.join(syms)}]"
+        return rel
+    except (ImportError, OSError, ValueError, TypeError):
+        return fallback
 
 
 def _extract_map_block(content: str):
@@ -102,13 +128,15 @@ def pin_static_map(messages: list) -> bool:
 
 
 def append_repo_map_delta(messages: list, changed_paths, *,
-                          removed_paths=None) -> bool:
+                          removed_paths=None, workspace=None) -> bool:
     """Append one delta line to the pinned block (called at compression only).
 
     The repo map is frozen for the run so the prefix cache holds; files the
     agent created or deleted are therefore invisible to it. Compression is the
     one moment where the prefix is rewritten anyway, so the delta rides along
-    for free. Returns True when something was appended.
+    for free. When `workspace` is passed, also includes up to 5 extracted
+    top-level symbols for each changed/created file so renamed or newly added
+    APIs remain discoverable across compressions. Returns True when modified.
     """
     if not messages:
         return False
@@ -118,19 +146,24 @@ def append_repo_map_delta(messages: list, changed_paths, *,
     content = str(sysm.get("content") or "")
     if _PIN_MARKER not in content:
         return False                      # nothing pinned - nothing to extend
-    added = [str(p) for p in (changed_paths or []) if str(p).strip()]
+    raw_added = [str(p) for p in (changed_paths or []) if str(p).strip()]
     removed = [str(p) for p in (removed_paths or []) if str(p).strip()]
-    if not added and not removed:
+    if not raw_added and not removed:
         return False
 
-    # keep only what the pinned block does not already mention
-    added = [p for p in dict.fromkeys(added) if Path(p).name not in content]
+    scope = (content.split(_DELTA_HEAD, 1)[1] if _DELTA_HEAD in content else "") if workspace else content
+    added = []
+    for p in dict.fromkeys(raw_added):
+        entry = _format_delta_entry(p, workspace)
+        if (entry if workspace else Path(p).name) not in scope:
+            added.append(entry)
+
     if not added and not removed:
         return False
 
     parts = []
     if added:
-        parts.append("+ " + ", ".join(p.replace("\\", "/") for p in added[:MAX_DELTA_LINES]))
+        parts.append("+ " + ", ".join(added[:MAX_DELTA_LINES]))
     if removed:
         parts.append("- " + ", ".join(p.replace("\\", "/") for p in removed[:MAX_DELTA_LINES]))
     line = _DELTA_HEAD + "\n" + "\n".join(parts)

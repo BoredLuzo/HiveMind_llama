@@ -366,21 +366,42 @@ def _mode_can_write(tool_mode: str, duo_ws: bool = False) -> bool:
 
 
 
+def _mode_has_tool(tool_mode: str, tool_name: str) -> bool:
+    """Return True if `tool_mode` exposes `tool_name` (fail-open when unset)."""
+    if not tool_mode:
+        return True
+    try:
+        from tools.definitions import _tool_names_for_mode
+        return tool_name in _tool_names_for_mode(tool_mode)
+    except (ImportError, AttributeError, KeyError, TypeError):
+        return True
+
+
 async def _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
-                              last_too_large_path, round_state, hooks):
+                              last_too_large_path, round_state, hooks,
+                              tool_mode: str = ""):
     """S13: too-large content -> SPLIT REQUIRED (from execute_tool_round)."""
     last_too_large_path[0] = _dargs.get("path", "")
     round_state.parse_errors += 1
     dtool_msgs.append({"role": "tool", "content": _dresult,
                         "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
     if not _recovery_saturated(dtool_msgs):
+        if _mode_has_tool(tool_mode, "write_file_append"):
+            _steps = (
+                "You MUST split the file into chunks:\n"
+                "  1. edit_file(path, <first segment>)\n"
+                "  2. write_file_append(path, <next segment>)\n"
+                "  3. write_file_append(path, <rest...>)\n"
+            )
+        else:
+            _steps = (
+                "Write a smaller initial skeleton with write_file and expand it "
+                "with targeted edit_file calls, or split helpers into a separate module.\n"
+            )
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             f"[SPLIT REQUIRED] {_dname} rejected: content too large.\n"
-            f"You MUST split the file into chunks:\n"
-            f"  1. edit_file(path, <first segment>)\n"
-            f"  2. write_file_append(path, <next segment>)\n"
-            f"  3. write_file_append(path, <rest...>)\n"
-            f"Do NOT call edit_file again with the same large content. Start chunk 1 now."
+            f"{_steps}"
+            f"Do NOT call {_dname} again with the same large content. Start chunk 1 now."
         ))
     await hooks.emit({"type": "token", "content": f"\n[⚠ {_dname}: too large — forcing split mode]\n"})
 
@@ -534,8 +555,9 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
             _dresult = (
                 f"[SYSTEM] run_bash timed out {_n}x. "
                 "The command is too expensive. Split it into smaller steps, "
-                "use run_python for logic, or check if an existing faster tool "
-                "(find_files, search_code, read_file) can achieve the same result.\n\n"
+                "use edit_file or write_file for file changes instead of shell redirects, "
+                "or check if a faster built-in tool (find_files, search_code, read_file) "
+                "can achieve the same result.\n\n"
                 f"Last result: {_dresult[:600]}"
             )
         else:
@@ -544,7 +566,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                 "[TIMEOUT] run_bash timed out. The command is too slow or hung. "
                 "Do NOT retry the identical command — it will time out again. "
                 "Check if you can: (a) use a faster built-in tool, "
-                "(b) split into smaller steps, or (c) use run_python instead.")
+                "(b) split into smaller steps, or (c) use python -c in run_bash or edit_file instead.")
 
     elif _tool_error_has_code(_dresult, "RUN_BASH_NONZERO", "run_bash"):
         _matched = True
@@ -554,10 +576,10 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
             _dresult = (
                 "[SYSTEM] run_bash produced a non-zero exit code 4x. "
                 "The command or its approach does not work. "
-                "Change strategy — use Python (run_python), "
-                "access files directly (read_file/edit_file), "
-                "or analyze the root cause before continuing.\n\n"
-                + ('...' if len(_dresult) > 300 else '')
+                "Change strategy — access or update files directly "
+                "(read_file/edit_file), quote paths containing spaces, "
+                "or run a small python -c check before continuing.\n\n"
+                + f"Last output: {_dresult[:300]}" + ('...' if len(_dresult) > 300 else '')
             )
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
@@ -573,21 +595,22 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 "[SYSTEM] run_bash blocked 2x — this or similar commands "
-                "are blocked for security reasons. Use Python (run_python) "
-                "or git commands as an alternative."
+                "are blocked for security reasons. Use read_file / edit_file "
+                "or run inline code inside the workspace via python -c as an alternative."
             )
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
                 "[BLOCKED] run_bash command blocked for safety. "
-                "Do NOT retry the same command. Use run_python or a safer alternative.")
+                "Do NOT retry the same command. Use read_file / edit_file or run inline code via python -c.")
 
     elif _tool_error_has_code(_dresult, "RUN_BASH_EXEC_ERROR", "run_bash"):
         _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_user_hint(dtool_msgs,
             "run_bash: the shell itself failed to execute (not the command). "
-            "Try run_python for the same logic, or simplify to a single build/test command. "
+            "Check the command syntax or use read_file / edit_file instead of complex shell pipelines, "
+            "or simplify to a single build/test command. "
             "Do NOT retry the identical run_bash call.")
 
     elif _tool_error_has_code(_dresult, "FILE_READ_FAILED", "read_file"):
@@ -595,9 +618,9 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         # always surfaced: path guidance is cheap and precise
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
-            f"FILE_READ_FAILED on '{_dargs.get('path', '')}': check the path with list_dir, "
-            "verify the file exists, then retry. If the file is missing, "
-            "use find_files to locate it or create it with write_file."
+            f"FILE_READ_FAILED on '{_dargs.get('path', '')}': verify the file exists "
+            "or locate it with find_files, then retry. If the file is missing, "
+            "create it with write_file."
         ))
 
     elif _tool_error_has_code(_dresult, "EDIT_AST_UNAVAILABLE", "edit_ast"):
@@ -664,7 +687,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "FIND_FILES_FAILED: try a simpler glob like *.py or *.ts, "
-            "or use list_dir to explore the directory manually."
+            "or use search_code / run_bash to explore the directory."
         ))
 
     elif _tool_error_has_code(_dresult, "LIST_DIR_FAILED", "list_dir"):

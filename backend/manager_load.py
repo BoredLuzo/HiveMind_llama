@@ -582,7 +582,7 @@ class LlamaLoadMixin:
         _base_l = _canonical_l.split(":")[0].lower()
         if _base_l in _OLLAMA_ONLY_BASES:
             raise RuntimeError(
-                f"Model '{model}' is Ollama-only (architecture not supported in b8278)."
+                f"Model '{model}' is Ollama-only (architecture not supported by the bundled llama-server)."
             )
         if _canonical_l in VRAM_OVERFLOW_MODELS:
             raise RuntimeError(
@@ -782,7 +782,7 @@ class LlamaLoadMixin:
         _base = _canonical.split(":")[0].lower()
         if _base in _OLLAMA_ONLY_BASES:
             raise RuntimeError(
-                f"Model '{model}' is Ollama-only (architecture not supported in b8278)."
+                f"Model '{model}' is Ollama-only (architecture not supported by the bundled llama-server)."
             )
         # OVERFLOW-GUARD (against the canonical name)
         if _canonical in VRAM_OVERFLOW_MODELS:
@@ -840,7 +840,22 @@ class LlamaLoadMixin:
                     else:
                         # angefordert, klemmt llama-server max_tokens still auf
                         _req_ctx = num_ctx or CONTEXT_SIZE_DEFAULT
-                        if slot._num_ctx > 0 and _req_ctx > slot._num_ctx:
+                        _in_flight = (
+                            slot.in_flight_active()
+                            if hasattr(slot, "in_flight_active")
+                            else int(getattr(slot, "in_flight", 0) or 0) > 0
+                        )
+                        _busy = _in_flight or (bool(getattr(slot, "pinned", False)) and not pin)
+                        _ctx_short = slot._num_ctx > 0 and _req_ctx > slot._num_ctx
+                        _par_short = (getattr(slot, "_n_parallel", 1) > 0
+                                      and n_parallel > getattr(slot, "_n_parallel", 1))
+                        if _busy and (_ctx_short or _par_short):
+                            logger.warning(
+                                "ensure_loaded: %s busy (in-flight/pinned) - reusing slot "
+                                "instead of reload (ctx %d<%d, parallel_short=%s)",
+                                model, slot._num_ctx, _req_ctx, _par_short,
+                            )
+                        if _ctx_short and not _busy:
                             logger.info(
                                 f"ensure_loaded: {model} ctx mismatch "
                                 f"(running with {slot._num_ctx}, needs {_req_ctx}) — reload."
@@ -850,8 +865,7 @@ class LlamaLoadMixin:
                             await _kill_slot_async(slot)
                             slot = None
                         # → with asyncio.gather several requests fire at once; llama queues them.
-                        elif (getattr(slot, "_n_parallel", 1) > 0
-                              and n_parallel > getattr(slot, "_n_parallel", 1)):
+                        elif _par_short and not _busy:
                             logger.info(
                                 f"ensure_loaded: {model} parallel mismatch "
                                 f"(running with --parallel {getattr(slot, '_n_parallel', 1)}, needs {n_parallel}) — reload."

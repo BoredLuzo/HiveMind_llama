@@ -592,13 +592,13 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
         # LSP diagnostics stays in core: post-write auto-diagnostics only
         # fire when a server is warm, and this is the tool that warms it.
         # LSP auto-diagnostics runs automatically on write/edit; explicit lsp_*
-        # tools, get_datetime, and send_file stay in duo_core; duo_lean has 12.
+        # tools, get_datetime, and send_file stay in duo_core; duo_lean has 8.
         "get_datetime", "lsp_diagnostics", "send_file",
     },
     "duo_lean": {
         "read_file", "edit_file", "write_file",
-        "run_bash", "run_python", "run_tests", "undo_last",
-        "search_code", "find_files", "list_dir", "get_signatures",
+        "run_bash", "run_tests",
+        "search_code", "find_files",
         "task_complete",
     },
     # WEDGE-HANDOFF (2026-09-17): fresh-context repair delegate. Read + write

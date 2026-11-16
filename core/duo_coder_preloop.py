@@ -133,6 +133,11 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 "from the start."
                 if "write_file_append" in _pre_tools else ""
             )
+            _sig_hint = (
+                " For quick API/signature inspection without full reads, prefer "
+                "get_signatures."
+                if "get_signatures" in _pre_tools else ""
+            )
             # WRITE-RULES-DEDUPE (2026-09-17): the full chunk/marker contract
             # also lives in the write_file/write_file_append tool descriptions
             # — the system block now carries only the per-model numbers.
@@ -146,7 +151,7 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 f"existing module-level constants, functions, or imports when adding to a "
                 f"file; when moving a symbol to another module for backward compatibility, "
                 f"re-export it directly via `from new_module import symbol` (not a wrapper `def`)."
-                f"{_append_hint}"
+                f"{_append_hint}{_sig_hint}"
             )
         except Exception:
             pass

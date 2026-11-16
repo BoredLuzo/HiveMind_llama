@@ -274,14 +274,18 @@ class Pipeline:
                 from backend.llama_server_manager import manager as _mgr
                 judge_model = self.agents["judge"].model
                 if _mgr.get_port_for(judge_model) is None:
+                    from routing.decider import rule_decision as _rule_dec
+                    _r = _rule_dec(user_input)
+                    _lvl = "complex" if _r.route == "agentic" else "simple"
+                    _rt = "duo" if _r.route == "agentic" else "direct"
                     self._last_judge_verdict = {
-                        "level": "simple",
-                        "route": "direct",
-                        "task_type": "general",
-                        "tool_model": "small",
+                        "level": _lvl,
+                        "route": _rt,
+                        "task_type": "code" if _r.route == "agentic" else "general",
+                        "tool_model": "large" if _r.route == "agentic" else "small",
                         "reason": "judge_cold",
                     }
-                    return "simple"
+                    return _lvl
             except Exception:
                 pass
 

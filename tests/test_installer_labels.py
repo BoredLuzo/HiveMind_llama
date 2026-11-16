@@ -186,9 +186,10 @@ def main() -> int:
           'if exist "%~dp0..\\.venv\\Scripts\\python.exe" '
           'set "HMPY=%~dp0..\\.venv\\Scripts\\python.exe"' in iw)
     check("install_windows.bat: service install uses the resolved python",
-          '"%HMPY%" "%~dp0hivemind_windows.py" install' in iw)
+          '"%NSSM_BIN%" install HiveMind "%HMPY%"' in iw)
     check("install_windows.bat: bare `python` invocation is gone",
-          not re.search(r'^\s*python\s+"%~dp0hivemind_windows\.py"', iw, re.M))
+          not re.search(r'^\s*python\s+"%~dp0hivemind_windows\.py"', iw, re.M)
+          and not re.search(r'install\s+HiveMind\s+"?python"?\b', iw, re.M))
 
     # ── deploy/install_lsp_packs.bat: bad pack numbers warn, never miss ────
     lp = (ROOT / "deploy" / "install_lsp_packs.bat").read_text(

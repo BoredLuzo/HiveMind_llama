@@ -241,6 +241,10 @@ _TAMPER_CONFIG_NAMES = (
     "pytest.ini",
     ".pytest.ini",
     "tox.ini",
+    "pytest.py",
+    "unittest.py",
+    "setup.cfg",
+    "pyproject.toml",
 )
 
 
@@ -389,7 +393,76 @@ def _run_with_tree_kill(
             exc.stderr = err
         except (OSError, subprocess.SubprocessError):
             pass
+        _reap_workspace_orphans(cwd)
         raise
+
+
+def _reap_workspace_orphans(work: Path | None, *extra_paths: Path | None) -> int:
+    """Kill POSIX orphan processes spawned in detached process groups/sessions.
+
+    CLI harnesses (hermes, pi) often run tool commands in their own session via
+    setsid/start_new_session so os.killpg on the outer CLI process misses
+    spinning grandchildren. Scanning /proc for processes referencing the cell's
+    temp workspace or harness home prevents leaked CPU spinners from starving
+    llama-server OpenMP worker threads across later cells.
+    """
+    if os.name == "nt" or not Path("/proc").is_dir():
+        return 0
+    targets: list[str] = []
+    for p in (work, *extra_paths):
+        if p is None:
+            continue
+        try:
+            s = str(Path(p).resolve())
+        except OSError:
+            s = str(p)
+        if s and s != "/" and s not in targets:
+            targets.append(s)
+    if not targets:
+        return 0
+    self_pid = os.getpid()
+    parent_pid = os.getppid()
+    try:
+        self_pgid = os.getpgrp()
+    except OSError:
+        self_pgid = -1
+    killed = 0
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid <= 1 or pid in (self_pid, parent_pid):
+            continue
+        matched = False
+        try:
+            cwd_str = os.readlink(entry / "cwd")
+            if any(cwd_str == t or cwd_str.startswith(t + "/") for t in targets):
+                matched = True
+        except OSError:
+            pass
+        if not matched:
+            for fname in ("cmdline", "environ"):
+                try:
+                    raw = (entry / fname).read_bytes().decode("utf-8", errors="replace")
+                    if any(t in raw for t in targets):
+                        matched = True
+                        break
+                except OSError:
+                    continue
+        if not matched:
+            continue
+        try:
+            pgid = os.getpgid(pid)
+            if pgid > 1 and pgid != self_pgid:
+                os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed += 1
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    return killed
 
 
 def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[bool, str]:
@@ -409,7 +482,8 @@ def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[boo
     env = dict(os.environ)
     py_bin_dir = str(Path(sys.executable).parent)
     env["PATH"] = f"{py_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    env["PYTHONPATH"] = _workspace_pythonpath(work, env.get("PYTHONPATH", ""))
+    # Do not inherit external PYTHONPATH that could shadow stdlib/pytest in checks.
+    env["PYTHONPATH"] = _workspace_pythonpath(work, "")
     try:
         r = _run_with_tree_kill(
             task.check, shell=True, cwd=work, env=env, timeout=timeout,
@@ -508,12 +582,51 @@ async def _abort_hivemind(base_url: str, chat_id: str) -> None:
     """Best-effort abort so a timed-out HiveMind run stops using llama-server."""
     if not chat_id:
         return
+    root = base_url.rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
             await client.post(
-                base_url.rstrip("/") + "/abort",
+                root + "/abort",
                 params={"chat_id": chat_id, "silent": "true"},
             )
+            for _ in range(10):
+                try:
+                    r = await client.get(f"{root}/pause-state/{chat_id}")
+                    if r.status_code == 200 and r.json().get("active") is False:
+                        break
+                except (httpx.HTTPError, OSError, ValueError):
+                    break
+                await asyncio.sleep(0.5)
+    except (httpx.HTTPError, OSError):
+        pass
+
+
+async def _wait_llama_slot_idle(cfg: Config, max_wait_s: float = 5.0) -> None:
+    """Poll llama-server /slots briefly after a timeout until processing stops."""
+    base = str(cfg.llama_url or "").strip().rstrip("/")
+    if not base:
+        return
+    steps = max(1, int(max_wait_s / 0.5))
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(2.5, connect=1.5)) as client:
+            for _ in range(steps):
+                try:
+                    r = await client.get(f"{base}/slots")
+                    if r.status_code != 200:
+                        return
+                    data = r.json()
+                    if not isinstance(data, list):
+                        return
+                    busy = any(
+                        bool(s.get("is_processing"))
+                        or (isinstance(s.get("state"), int) and s.get("state") != 0)
+                        for s in data if isinstance(s, dict)
+                    )
+                    if not busy:
+                        return
+                except (httpx.HTTPError, OSError, ValueError):
+                    return
+                await asyncio.sleep(0.5)
     except (httpx.HTTPError, OSError):
         pass
 
@@ -925,6 +1038,7 @@ def _run_hermes(task: Task, work: Path, cfg: Config) -> dict:
             "detail": f"hermes failed: {exc}",
         }
     finally:
+        _reap_workspace_orphans(work, hermes_home)
         shutil.rmtree(hermes_home, ignore_errors=True)
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
     return {
@@ -1128,6 +1242,7 @@ def _run_pi(task: Task, work: Path, cfg: Config) -> dict:
             "detail": f"pi failed: {exc}",
         }
     finally:
+        _reap_workspace_orphans(work, pi_conf_dir)
         shutil.rmtree(pi_conf_dir, ignore_errors=True)
     parsed = _parse_pi_json_output(r.stdout or "")
     raw_detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
@@ -1171,13 +1286,21 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     except (httpx.HTTPError, OSError, ValueError) as exc:
         extra = {"tokens": 0, "detail": f"{type(exc).__name__}: {exc}"[:800]}
     seconds = round(time.time() - started, 1)
+    await asyncio.to_thread(_reap_workspace_orphans, work)
+    if (
+        extra.get("stop_reason") == "timeout"
+        or "timed out" in str(extra.get("detail") or "").lower()
+    ):
+        await _wait_llama_slot_idle(cfg)
     # CHURN before hidden tests are installed (agent output only).
     _churn = diff_stats(task.repo, work)
     # Run blocking verification off the event loop so heartbeat and cell timeout stay live.
     _check_t0 = time.monotonic()
-    ok, check_out = await asyncio.to_thread(run_check, task, work, cfg.task_timeout_s)
+    _check_timeout = min(int(cfg.task_timeout_s or 300), 60)
+    ok, check_out = await asyncio.to_thread(run_check, task, work, _check_timeout)
+    await asyncio.to_thread(_reap_workspace_orphans, work)
     check_seconds = round(time.monotonic() - _check_t0, 1)
-    if check_out.startswith("check timeout after "):
+    if check_out.startswith(("check timed out after ", "check timeout after ")):
         _now_h = datetime.now().strftime("%H:%M:%S")
         print(
             f"[{_now_h}]   WARNING {task.id} {cond}: {check_out.splitlines()[0]}",

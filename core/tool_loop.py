@@ -293,6 +293,7 @@ class ToolLoop:
         on_after_round: OnAfterRound | None = None,
         on_compress: OnCompress | None = None,
         abort_check: Callable[[], bool] | None = None,
+        pause_gate: Callable[[], AsyncIterator[dict]] | None = None,
         custom_executor: Callable[[str, dict], Awaitable[str]] | None = None,
         emit_status=None,
     ):
@@ -306,6 +307,7 @@ class ToolLoop:
         self._on_after_round = on_after_round
         self._on_compress = on_compress
         self._abort_check = abort_check
+        self._pause_gate = pause_gate
         self._custom_executor = custom_executor
         self._emit_status = emit_status
 
@@ -329,6 +331,9 @@ class ToolLoop:
 
         _exhausted = False
         for _round in range(self.cfg.max_rounds):
+            if self._pause_gate is not None:
+                async for _pev in self._pause_gate():
+                    yield _pev
             if self._abort_check and self._abort_check():
                 state.stop_reason = "aborted"
                 break

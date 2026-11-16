@@ -170,19 +170,30 @@ def extract_features(text: str) -> dict:
             lower))),
         "ui_words": bool(re.search(r"\b(menu|button|screen|layout|dialog|window|ui|design|theme|css|style|farbe|color)\b", lower)),
         "small_edit_words": bool(re.search(r"\b(rename|umbenennen|typo|value|wert|port|farbe|color|colour|comment|kommentar|one line|eine zeile|variable)\b", lower)),
+        "code_target": bool(re.search(
+            r"\b(function|class|method|module|endpoint|api|script|program|cli|"
+            r"component|parser|server|client|router|handler|database|schema|"
+            r"test|tests|unittest|pytest|funktion|klasse|methode|modul|skript|"
+            r"programm)\b",
+            lower,
+        )),
     }
 
 
 def rule_decision(text: str) -> Decision:
     """Fallback ohne Modell: konservativ, aber nicht still 'simple'.
 
-    Code-Signal (Dateiendung/Pfad/Zeile/Fence/Bugwort + Bauwort) -> agentic,
+    Code-Signal (Dateiendung/Pfad/Zeile/Fence/Code-Target/Bugwort + Bauwort) -> agentic,
     sonst direct. Planner nur bei 'big' Signalen oder mehreren Signalen.
     """
     f = extract_features(text)
-    code = (f["has_file_ext"] or f["has_path"] or f["has_line_ref"] or f["code_fence"]) and (
-        f["build_words"] or f["bug_words"]
-    )
+    code = (
+        f["has_file_ext"]
+        or f["has_path"]
+        or f["has_line_ref"]
+        or f["code_fence"]
+        or f.get("code_target", False)
+    ) and (f["build_words"] or f["bug_words"])
     route = "agentic" if (code or (f["bug_words"] and f["build_words"])) else "direct"
     planner = route == "agentic" and (f["big_words"] or (f["has_file_ext"] and f["words"] > 60))
     return Decision(

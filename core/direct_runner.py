@@ -94,13 +94,14 @@ class _DirectToolsResult:
     The generator streams events while it runs; after exhaustion `content` and
     `final_msgs` are filled for the fallback plain stream / persistence.
     """
-    __slots__ = ("content", "final_msgs", "send_files", "written_files")
+    __slots__ = ("content", "final_msgs", "send_files", "written_files", "pause_aborted")
 
     def __init__(self) -> None:
         self.content = ""
         self.final_msgs = None
         self.send_files: list[str] = []
         self.written_files: list[str] = []
+        self.pause_aborted: bool = False
 
 
 async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
@@ -207,6 +208,13 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             if _dir_agent_temp is not None and ("temperature" in _dir_user_samp or float(_dir_agent_temp) != 0.4)
             else None
         )
+        async def _tool_pause_gate():
+            _pg = _PauseGateResult()
+            async for _gev in _direct_manual_pause_gate(ctx, _pg, phase="direct_tools"):
+                yield _gev
+            if not _pg.continue_run:
+                result.pause_aborted = True
+
         _loop = ToolLoop(
             config=ToolLoopConfig(
                 stream=True, max_rounds=_rounds, max_post_attempts=3,
@@ -236,7 +244,8 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             # instantly aborted") and mid-run steering never drained in
             # direct mode (the drain site keys on the same id).
             run_id=str(getattr(ctx, "run_id", "") or ""),
-            abort_check=lambda: is_ctx_aborted(ctx),
+            abort_check=lambda: bool(is_ctx_aborted(ctx) or result.pause_aborted),
+            pause_gate=_tool_pause_gate,
             on_tool_result=_capture_tool_result,
             on_before_post=_capture_msgs,
             # NO-PROGRESS (2026-11-08): identical repeated tool calls get one
@@ -767,10 +776,10 @@ async def _run_direct_inner(ctx):
         _direct_ctx_cap = ctx.get_num_ctx(_direct_model, "direct") or 8192
         _direct_tokens = min(int(_direct_tokens), max(256, int(_direct_ctx_cap)))
         parts, t = [], time.time()
-        _pause_aborted = False   # A1: an abort during the pause gate ends the run
-        if _direct_tools_active and _tool_content:
-            # ToolLoop already streamed the answer live — reuse it for persistence.
-            parts = [_tool_content]
+        _pause_aborted = bool(_dt_result and _dt_result.pause_aborted)   # A1: an abort during the pause gate ends the run
+        if _direct_tools_active and (_tool_content or _pause_aborted):
+            # ToolLoop already streamed the answer live (or aborted in pause) — skip fallback stream.
+            parts = [_tool_content] if _tool_content else []
         else:
             _d_ct_sum = _d_pt_sum = _d_ca_sum = 0
             try:
@@ -968,15 +977,16 @@ async def _run_direct_inner(ctx):
         def _observed(t):
             if t.exception():
                 _direct_log.warning("background task failed: %s", t.exception())
-        _t_ratings = asyncio.create_task(run_peer_ratings(
-            run_id=ctx.run_id,
-            user_input=ctx.user_input,
-            outputs={"direct": content},
-            use_learned=ctx.use_learned,
-            rating_mode="direct",
-            has_images=bool(ctx.images),
-        ))
-        _t_ratings.add_done_callback(_observed)
+        if getattr(ctx, "use_learned", False):
+            _t_ratings = asyncio.create_task(run_peer_ratings(
+                run_id=ctx.run_id,
+                user_input=ctx.user_input,
+                outputs={"direct": content},
+                use_learned=ctx.use_learned,
+                rating_mode="direct",
+                has_images=bool(ctx.images),
+            ))
+            _t_ratings.add_done_callback(_observed)
         _t_soul = asyncio.create_task(ctx.maybe_trigger_soul_evolution(run_count))
         _t_soul.add_done_callback(_observed)
         return

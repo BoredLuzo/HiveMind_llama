@@ -474,7 +474,7 @@ def _collect_new_explore_paths(tool_calls: list, seen: set[str]) -> list[str]:
     new_paths: list[str] = []
     for _tc in tool_calls or []:
         _fn = ((_tc.get("function") or {}).get("name") or "").strip()
-        if _fn not in ("read_file", "list_dir", "find_files"):
+        if _fn not in ("read_file", "list_dir", "find_files", "search_code"):
             continue
         _args = (_tc.get("function") or {}).get("arguments") or {}
         if isinstance(_args, str):
@@ -483,7 +483,17 @@ def _collect_new_explore_paths(tool_calls: list, seen: set[str]) -> list[str]:
                 _args = _json.loads(_args)
             except Exception:
                 _args = {}
-        _p = str((_args or {}).get("path") or "").strip()
+        _p = ""
+        if _fn in ("search_code", "find_files") and isinstance(_args, dict):
+            _pat = str(_args.get("pattern") or _args.get("query") or "").strip()
+            _scope = str(_args.get("path") or _args.get("dir") or _args.get("directory") or "").strip()
+            if _pat:
+                _p = f"{_pat} @ {_scope}" if _scope else _pat
+        for _k in (() if _p else ("path", "file", "dir", "directory", "pattern", "query")):
+            _v = str((_args or {}).get(_k) or "").strip()
+            if _v:
+                _p = _v
+                break
         if not _p:
             continue
         _norm = _p.replace("\\", "/").lower()

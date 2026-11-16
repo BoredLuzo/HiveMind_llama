@@ -57,6 +57,16 @@ async def _pre_explore_cache_set(key: tuple, value: dict):  # BUG-6 FIX: async g
         logger.debug("pre_explore_cache: skip caching empty result")
         return
 
+    ws_raw = value.get("workspace")
+    if _build_file_signature is not None and ws_raw:
+        files = dict(value.get("files") or {})
+        ws_path = Path(str(ws_raw))
+        for safety_file in (".gitignore", "package.json", "tsconfig.json", "pyproject.toml", "pom.xml", "Cargo.toml", "setup.py"):
+            sf_abs = str(ws_path / safety_file)
+            if sf_abs not in files and safety_file not in files:
+                files[sf_abs] = _build_file_signature(sf_abs) or 0
+        value = {**value, "files": files}
+
     async with _get_pre_explore_lock():  # BUG-6 FIX: async with
         _pre_explore_cache[key] = value
         _now = time.time()

@@ -25,6 +25,7 @@ from bench.runner import (  # noqa: E402
     _parse_file_blocks, _parse_pi_json_output,
     _preflight,
     _parse_token_count, _persist, _read_hermes_state_usage,
+    _reap_workspace_orphans,
     _resolve_aider_bin, _run_aider, _resolve_hermes_bin, _run_hermes,
     _resolve_pi_bin, _run_pi, _safe_rel_path, aggregate,
     apply_full_files, apply_patch, diff_stats, load_tasks, prepare_workspace,
@@ -727,7 +728,22 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_async_chk_") as _atd:
         _br.run_check = _orig_check
 
     check("_one_run: blocking run_check runs off the event loop (heartbeat stays live)",
-          _arow["ok"] is True and _aticks >= 2 and _arow.get("check_seconds", 0.0) >= 0.1,
+          _arow["ok"] is True and _aticks >= 2 and _atow_secs
+          if (_atow_secs := _arow.get("check_seconds", 0.0) >= 0.1) else False,
           f" (ticks={_aticks}, check_seconds={_arow.get('check_seconds')})")
+
+    # ── tamper config scrub (pytest.py / pyproject.toml) + orphan reaper ──
+    _tamper_ws = _aroot / "ws_tamper_cfg"
+    _tamper_ws.mkdir(parents=True)
+    (_tamper_ws / "pytest.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (_tamper_ws / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    _t_task = Task("tamper_cfg", "p", "python -c \"pass\"", tests=tasks[0].tests)
+    _ok_tc, _out_tc = run_check(_t_task, _tamper_ws)
+    check("hidden: pytest.py and pyproject.toml created by agent are scrubbed before check",
+          _ok_tc and not (_tamper_ws / "pytest.py").exists()
+          and not (_tamper_ws / "pyproject.toml").exists(),
+          f" (ok={_ok_tc}, out={_out_tc!r})")
+    check("orphan reaper: safe callable across platforms",
+          isinstance(_reap_workspace_orphans(_tamper_ws), int))
 
 sys.exit(h.finish("bench_runner"))

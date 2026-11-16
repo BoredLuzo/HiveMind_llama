@@ -9,7 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from core.repomap_pin import pin_static_map
+from core.repomap_pin import append_repo_map_delta, pin_static_map
+import tempfile
 
 from tests._harness import Harness  # noqa: E402
 
@@ -107,5 +108,20 @@ check("T2: pinned system untouched when updated map copy arrives",
       moved_v2 is False and _msgs_v2[0]["content"] == s1)
 check("T3: updated map copy stays in user history (append-only)",
       MAP_V2 in str(_msgs_v2[1].get("content", "")))
+
+# ── symbol-enriched delta at compression when workspace is provided ────────
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    ws = Path(td)
+    (ws / "src").mkdir()
+    (ws / "src" / "a.py").write_text("class Alpha:\n    pass\ndef helper():\n    return 1\n", encoding="utf-8")
+    (ws / "src" / "new_mod.py").write_text("def fresh_api():\n    pass\n", encoding="utf-8")
+    delta_msgs = [{"role": "system", "content": s1}]
+    changed = append_repo_map_delta(delta_msgs, ["src/a.py", "src/new_mod.py"], workspace=ws)
+    delta_sys = delta_msgs[0]["content"]
+    check("D1: workspace-aware delta appends changed + new files with symbols",
+          changed is True and "src/a.py [Alpha, helper]" in delta_sys and "src/new_mod.py [fresh_api]" in delta_sys,
+          delta_sys)
+    check("D2: identical snapshot is not duplicated on repeat",
+          append_repo_map_delta(delta_msgs, ["src/a.py", "src/new_mod.py"], workspace=ws) is False)
 
 sys.exit(h.finish("repomap_pin"))

@@ -32,12 +32,17 @@ import os
 import re
 from pathlib import Path
 
-# Text/code suffixes worth indexing (same family as the pre-seed set).
+# Text/code suffixes worth indexing (same family as the pre-seed set + compiled systems languages).
 TEXT_SUFFIXES = frozenset({
     ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml",
     ".yaml", ".yml", ".md", ".txt", ".html", ".css", ".sh",
+    ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".cs", ".rb", ".php",
 })
-_SYMBOL_SUFFIXES = frozenset({".py", ".js", ".jsx", ".ts", ".tsx"})
+_JS_SUFFIXES = frozenset({".js", ".jsx", ".ts", ".tsx"})
+_OTHER_SYMBOL_SUFFIXES = frozenset({
+    ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".cs", ".rb", ".php",
+})
+_SYMBOL_SUFFIXES = frozenset({".py"}) | _JS_SUFFIXES | _OTHER_SYMBOL_SUFFIXES
 _MAX_EXTRACT_BYTES = 512 * 1024
 
 # Cheap JS/TS symbol extraction — no tree-sitter. Good enough for retrieval
@@ -45,6 +50,9 @@ _MAX_EXTRACT_BYTES = 512 * 1024
 _JS_SYMBOL_RES = (
     re.compile(r"\b(?:function|class|interface|enum)\s+([A-Za-z_$][\w$]*)"),
     re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?!=)"),
+)
+_OTHER_SYMBOL_RES = (
+    re.compile(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|export\s+|static\s+|final\s+|abstract\s+)*(?:fn|func|struct|enum|trait|interface|class|def|type)\s+([A-Za-z_][A-Za-z0-9_]*)"),
 )
 
 _MAX_SYMBOLS_PER_FILE = 64
@@ -75,9 +83,14 @@ _STOP_TOKENS = frozenset({
 })
 
 
+_CAMEL_RE = re.compile(r"([a-z0-9])([A-Z])")
+
+
 def _tokens(text: str) -> frozenset[str]:
+    raw = text or ""
+    expanded = f"{raw} {_CAMEL_RE.sub(r'\1 \2', raw).replace('_', ' ')}" if raw else ""
     return frozenset(
-        t.lower() for t in _TOKEN_RE.findall(text or "")
+        t.lower() for t in _TOKEN_RE.findall(expanded)
         if t.lower() not in _STOP_TOKENS
     )
 
@@ -107,10 +120,10 @@ def _py_symbols(src: str) -> list[str]:
     return names[:_MAX_SYMBOLS_PER_FILE]
 
 
-def _js_symbols(src: str) -> list[str]:
-    """Cheap regex symbols for .js/.ts/.jsx/.tsx (declarations + bindings)."""
+def _regex_symbols(src: str, patterns: tuple[re.Pattern[str], ...]) -> list[str]:
+    """Cheap regex symbol extraction for non-Python files (bounded to _MAX_SYMBOLS_PER_FILE)."""
     seen: list[str] = []
-    for rx in _JS_SYMBOL_RES:
+    for rx in patterns:
         for m in rx.finditer(src or ""):
             name = m.group(1)
             if name and name not in seen:
@@ -118,6 +131,18 @@ def _js_symbols(src: str) -> list[str]:
                 if len(seen) >= _MAX_SYMBOLS_PER_FILE:
                     return seen
     return seen
+
+
+def extract_symbols_for_text(src: str, suffix: str) -> list[str]:
+    """Dispatch top-level symbol extraction by lowercase file suffix."""
+    sfx = (suffix or "").lower()
+    if sfx == ".py":
+        return _py_symbols(src)
+    if sfx in _JS_SUFFIXES:
+        return _regex_symbols(src, _JS_SYMBOL_RES)
+    if sfx in _OTHER_SYMBOL_SUFFIXES:
+        return _regex_symbols(src, _OTHER_SYMBOL_RES)
+    return []
 
 
 class _Entry:
@@ -136,7 +161,7 @@ class _Entry:
         self.stem_tokens = _tokens(stem_no_ext)
         self.path_tokens = _tokens(rel.replace("/", " ").replace("_", " ")
                                    .replace("-", " ").replace(".", " "))
-        self.symbol_tokens = frozenset(s.lower() for s in symbols)
+        self.symbol_tokens = frozenset(s.lower() for s in symbols) | _tokens(" ".join(symbols))
 
     def score(self, qtokens: frozenset[str]) -> int:
         if not qtokens:
@@ -282,10 +307,7 @@ class RepoIndex:
             except OSError:
                 src = ""
             if src and "\x00" not in src:
-                if suffix == ".py":
-                    symbols = _py_symbols(src)
-                elif suffix in (".js", ".jsx", ".ts", ".tsx"):
-                    symbols = _js_symbols(src)
+                symbols = extract_symbols_for_text(src, suffix)
         return _Entry(rel, mtime_ns, size, symbols)
 
     def search(self, query: str, limit: int = 4) -> list[tuple[str, int]]:

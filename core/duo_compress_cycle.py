@@ -37,6 +37,7 @@ from core.duo.preflight import (
 from core.duo_helpers import (
     _RE_UNIX_PATH, _RE_WIN_PATH, _compress_fail_streak_update,
 )
+from core.run_context import is_ctx_aborted
 from utils.file import normalize_tool_path as _normalize_tool_path
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
 
@@ -328,7 +329,7 @@ async def _duo_compress_cycle(ctx, ps):
     if ctx.settings.get("duo_pin_static_map", True):
         try:
             from core.repomap_pin import append_repo_map_delta as _rmd
-            if _rmd(_dtool_msgs, list(_written_files or [])):
+            if _rmd(_dtool_msgs, list(_written_files or []), workspace=_ws_str):
                 logger.info("[REPO-MAP-DELTA] appended %d changed path(s) at compression",
                             len(list(_written_files or [])))
         except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError,
@@ -353,6 +354,10 @@ async def _duo_compress_cycle(ctx, ps):
     # so updating only the local variable still threw
     # the delta away.
     _comp_kwargs["system_prompt"] = _sys_for_compress
+    if is_ctx_aborted(ctx):
+        _sync_state()
+        ps.stop = True
+        return
     _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
     # MINI-SHRINK-RETRY (2026-09-07): if the full compression
     # barely shrank (<15% of the before value), an early
@@ -366,12 +371,13 @@ async def _duo_compress_cycle(ctx, ps):
     # second identical attempt cannot shrink more.
     if (not _mini_retry_done
             and not _compress_local_only
+            and not is_ctx_aborted(ctx)
             and str(_comp_mode or "full") == "full"
             and int(_est_tokens_before_compress or 0) > 2048):
         _mini_retry_done = True
         _after1_est = int(_estimate_ctx_tokens(_dtool_msgs))
         _shrink1 = (int(_est_tokens_before_compress) - _after1_est) / max(1, int(_est_tokens_before_compress))
-        if _shrink1 < 0.15:
+        if _shrink1 < 0.15 and not is_ctx_aborted(ctx):
             logger.warning(
                 "[CTX-COMPRESS-RETRY] before=%d after1=%d shrink=%.2f < 0.15 — starting escalated retry",
                 int(_est_tokens_before_compress), _after1_est, _shrink1,
@@ -445,9 +451,12 @@ async def _duo_compress_cycle(ctx, ps):
         plan_anchor=_plan_anchor_text)
     if not _cs_valid:
         logger.warning("[COMPRESSION] Summary failed validation — using enriched fallback")
-    # BUG-2 FIX: Compress-Fallback erkennen → UI-Warning.
-    if not _cs_valid:
-        # Allow structural fallback (no "COMPRESSION FAILED" sentinel)
+    # BUG-2 FIX: only bypass semantic validation for the deterministic local fallback.
+    if not _cs_valid and (
+        _compress_local_only
+        or "## State Reconstruction (compression model unavailable)" in _cs_summary
+    ):
+        # Allow deterministic structural fallback (no "COMPRESSION FAILED" sentinel)
         _cs_valid = "COMPRESSION FAILED" not in (
             _dtool_msgs[-1].get("content", "") or ""
         )

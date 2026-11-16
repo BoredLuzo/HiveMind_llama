@@ -3,7 +3,7 @@
 
 - duo_core defaults to 18 tools (plus send_file when include_send_file=True);
   2026-11-11 (D3): +apply_patch (patch-native multi-file edits).
-- duo_lean provides the compact 12-tool set (+run_python, +undo_last) without get_datetime/send_file/lsp_*.
+- duo_lean provides the compact 8-tool set (read/edit/write/search/find/bash/tests/complete).
 - duo_full opts into git/web/MCP/browser/full-LSP tools.
 - direct_research gets web + read/search (no write/exec).
 """
@@ -50,13 +50,14 @@ check("coder core: every duo_core tool is in _TOOL_PRIORITY",
 _lean = _names("duo_lean")
 _expected_lean = {
     "read_file", "edit_file", "write_file",
-    "run_bash", "run_python", "run_tests", "undo_last",
-    "search_code", "find_files", "list_dir", "get_signatures", "task_complete",
+    "run_bash", "run_tests",
+    "search_code", "find_files", "task_complete",
 }
-check("coder lean: exact 12-tool set", _lean == _expected_lean,
+check("coder lean: exact 8-tool set", _lean == _expected_lean and len(_lean) == 8,
       f" ({sorted(_lean)})")
-check("coder lean: excludes get_datetime, send_file, and lsp_references",
-      not ({"get_datetime", "send_file", "lsp_references", "lsp_diagnostics"}
+check("coder lean: excludes get_datetime, send_file, lsp_*, get_signatures, list_dir, run_python, undo_last",
+      not ({"get_datetime", "send_file", "lsp_references", "lsp_diagnostics",
+            "get_signatures", "list_dir", "run_python", "undo_last"}
            & _names("duo_lean", include_send_file=True)))
 
 _full = _get_inline_tools(mode="duo_full")
@@ -66,8 +67,8 @@ _full_json = len(json.dumps(_full))
 check("coder core: schema is materially smaller than full",
       _core_json < _full_json * 0.65,
       f" ({_core_json} vs {_full_json} chars)")
-check("coder lean: schema is smaller than core",
-      _lean_json < _core_json,
+check("coder lean: schema is materially smaller than core",
+      _lean_json < _core_json * 0.65,
       f" ({_lean_json} vs {_core_json} chars)")
 
 check("resolve: default is core", resolve_coder_tool_mode({}) == "duo_core")

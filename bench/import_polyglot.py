@@ -40,7 +40,50 @@ def _ignore(_dir: str, names: list[str]) -> set[str]:
     return {n for n in names if _is_skipped_name(n)}
 
 
-def _extract_test_contract(tests: list[Path], slug: str) -> str:
+def _scan_repo_stubs(
+    repo_dir: Path | None,
+) -> tuple[dict[str, list[str]], dict[str, set[str]], set[str]]:
+    """Collect stub class methods, class instance attributes, and module functions."""
+    repo_classes: dict[str, list[str]] = {}
+    repo_class_attrs: dict[str, set[str]] = {}
+    repo_funcs: set[str] = set()
+    if repo_dir is None or not Path(repo_dir).is_dir():
+        return repo_classes, repo_class_attrs, repo_funcs
+    for py_file in sorted(Path(repo_dir).glob("*.py")):
+        if py_file.name.endswith("_test.py") or py_file.name == "__init__.py":
+            continue
+        try:
+            stree = ast.parse(
+                py_file.read_text(encoding="utf-8", errors="replace"),
+                filename=str(py_file),
+            )
+        except (OSError, SyntaxError):
+            continue
+        for node in stree.body:
+            if isinstance(node, ast.ClassDef):
+                meths = repo_classes.setdefault(node.name, [])
+                attrs = repo_class_attrs.setdefault(node.name, set())
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef):
+                        if item.name not in meths:
+                            meths.append(item.name)
+                        for sub in ast.walk(item):
+                            if (
+                                isinstance(sub, ast.Attribute)
+                                and isinstance(sub.ctx, ast.Store)
+                                and isinstance(sub.value, ast.Name)
+                                and sub.value.id == "self"
+                                and not sub.attr.startswith("__")
+                            ):
+                                attrs.add(sub.attr)
+            elif isinstance(node, ast.FunctionDef):
+                repo_funcs.add(node.name)
+    return repo_classes, repo_class_attrs, repo_funcs
+
+
+def _extract_test_contract(
+    tests: list[Path], slug: str, *, repo_dir: Path | None = None
+) -> str:
     """Extract imported symbols, instance/callable APIs, mocks, and exceptions via AST.
 
     Keeps concrete test inputs hidden while surfacing exact API names,
@@ -48,6 +91,30 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
     mocked targets, and ExceptionType('message') pairings.
     """
     import re as _re
+
+    if repo_dir is None and tests:
+        cand_repo = tests[0].parent.parent / "repo"
+        if cand_repo.is_dir():
+            repo_dir = cand_repo
+    repo_classes, repo_class_attrs, repo_funcs = _scan_repo_stubs(repo_dir)
+    method_owners: dict[str, list[str]] = {}
+    for _cname, _meths in repo_classes.items():
+        for _mname in _meths:
+            if not _mname.startswith("__"):
+                method_owners.setdefault(_mname, []).append(_cname)
+    attr_owners: dict[str, list[str]] = {}
+    for _cname, _attrs in repo_class_attrs.items():
+        for _aname in _attrs:
+            attr_owners.setdefault(_aname, []).append(_cname)
+
+    def _is_class_symbol(sym: str) -> bool:
+        if not sym:
+            return False
+        if sym in repo_classes:
+            return True
+        if sym in repo_funcs:
+            return False
+        return sym[0].isupper() and not sym.isupper() and not sym.endswith(("Error", "Exception"))
 
     mod = slug.replace("-", "_")
     imported_names: list[str] = []
@@ -261,15 +328,25 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
                 return local_inst[ek]
             if isinstance(expr, ast.Call):
                 if isinstance(expr.func, ast.Name) and expr.func.id in local_to_exported:
-                    return local_to_exported[expr.func.id]
+                    target = local_to_exported[expr.func.id]
+                    if _is_class_symbol(target):
+                        return target
                 if (
                     isinstance(expr.func, ast.Attribute)
                     and isinstance(expr.func.value, ast.Name)
                     and expr.func.value.id in mod_aliases
+                    and _is_class_symbol(expr.func.attr)
                 ):
                     return expr.func.attr
                 if isinstance(expr.func, ast.Attribute) and expr.func.attr in helper_returns:
-                    return helper_returns[expr.func.attr]
+                    target = helper_returns[expr.func.attr]
+                    if _is_class_symbol(target):
+                        return target
+                # Self-returning chains (e.g. sut.reversed() in simple_linked_list)
+                if isinstance(expr.func, ast.Attribute) and expr.func.attr == "reversed":
+                    inner = _resolve_receiver(expr.func.value, local_inst)
+                    if inner:
+                        return inner
             return ""
 
         def _call_target_key(
@@ -285,9 +362,16 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
                 ):
                     _add_mod_attr(f"{mod}.{call.func.attr}")
                     return f"{mod}.{call.func.attr}", ""
+                method = call.func.attr
                 cls_name = _resolve_receiver(call.func.value, local_inst)
+                if not cls_name and not (
+                    isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in ("self", "unittest", "mock")
+                ):
+                    owners = method_owners.get(method, [])
+                    if len(owners) == 1:
+                        cls_name = owners[0]
                 if cls_name:
-                    method = call.func.attr
                     mkey = f"{cls_name}.{method}"
                     if method not in cls_methods.setdefault(cls_name, []):
                         cls_methods[cls_name].append(method)
@@ -302,6 +386,13 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
                 _add_mod_attr(f"{mod}.{node.attr}")
                 return "", ""
             cls_name = _resolve_receiver(node.value, local_inst)
+            if not cls_name and not (
+                isinstance(node.value, ast.Name)
+                and node.value.id in ("self", "unittest", "mock")
+            ) and not node.attr.startswith("__"):
+                owners = attr_owners.get(node.attr, [])
+                if len(owners) == 1:
+                    cls_name = owners[0]
             if cls_name and not node.attr.startswith("__"):
                 return cls_name, node.attr
             return "", ""
@@ -321,6 +412,22 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
                             and isinstance(sub.args[0].value, str)
                         ):
                             _add_patch(sub.args[0].value)
+                    # Builtin protocol calls on tracked instances: len(x), list(x)/iter(x)/tuple(x)/set(x)
+                    if (
+                        isinstance(sub.func, ast.Name)
+                        and len(sub.args) == 1
+                        and sub.func.id in ("len", "list", "iter", "tuple", "set")
+                    ):
+                        proto_cls = _resolve_receiver(sub.args[0], local_inst)
+                        if proto_cls:
+                            dunder = "__len__" if sub.func.id == "len" else "__iter__"
+                            if dunder not in cls_methods.setdefault(proto_cls, []):
+                                cls_methods[proto_cls].append(dunder)
+                            dkey = f"{proto_cls}.{dunder}"
+                            _ensure_sig(dkey)["min_pos"] = 0
+                            _ensure_sig(dkey)["max_pos"] = 0
+                            if dunder == "__len__":
+                                _record_ret(dkey, "int")
                     tkey, _ = _call_target_key(sub, local_inst)
                     if tkey:
                         _record_call(tkey, sub)
@@ -509,11 +616,16 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
                             )
 
         # Collect decorator patches + scan each test function sequentially
+        class_by_lower = {cn.lower(): cn for cn in repo_classes}
         for fn in ast.walk(tree):
             if isinstance(fn, ast.FunctionDef):
                 for dec in getattr(fn, "decorator_list", ()):
                     _scan_expr(dec, {}, {})
-                _walk_stmts(fn.body, {}, {}, {}, {}, {}, [""], False)
+                init_inst: dict[str, str] = {}
+                for arg in getattr(fn.args, "args", ()):
+                    if arg.arg != "self" and arg.arg.lower() in class_by_lower:
+                        init_inst[arg.arg] = class_by_lower[arg.arg.lower()]
+                _walk_stmts(fn.body, init_inst, {}, {}, {}, {}, [""], False)
             elif isinstance(fn, ast.ClassDef):
                 for dec in getattr(fn, "decorator_list", ()):
                     _scan_expr(dec, {}, {})
@@ -600,6 +712,17 @@ def _extract_test_contract(tests: list[Path], slug: str) -> str:
     return "\n".join(lines)
 
 
+def _task_prompt_footer(files_list: str, mod: str) -> str:
+    """Shared tier-neutral footer for imported and regenerated Polyglot prompts."""
+    return (
+        f"Implement the solution in `{files_list}` (starter stub is already in the workspace). "
+        f"Verify your implementation by importing `{mod}` and running smoke checks via `python -c` "
+        f"(or `run_bash`). The benchmark harness runs the hidden test suite automatically after you "
+        f"finish; do not search for hidden test files outside the workspace. "
+        f"Do not modify or create test files."
+    )
+
+
 def import_exercise(src: Path, out: Path, slug: str) -> dict:
     ex = src / slug
     impl = sorted(p for p in ex.glob("*.py") if not p.name.endswith("_test.py"))
@@ -622,16 +745,10 @@ def import_exercise(src: Path, out: Path, slug: str) -> dict:
         shutil.copy2(p, dst / "tests" / p.name)
     mod = slug.replace("-", "_")
     files_list = ", ".join(p.name for p in impl)
-    contract = _extract_test_contract(tests, slug)
+    contract = _extract_test_contract(tests, slug, repo_dir=dst / "repo")
     contract_block = f"\n\n{contract}" if contract else ""
     prompt = _read_instructions(ex)
-    prompt += (
-        f"{contract_block}\n\n"
-        f"Implement the solution in `{files_list}` (starter stub is already in the workspace). "
-        f"Verify your implementation before completing by importing `{mod}` and running "
-        f"assertions on the examples and edge cases (e.g. via `python -c` or `run_python`). "
-        f"Do not modify or create test files."
-    )
+    prompt += f"{contract_block}\n\n{_task_prompt_footer(files_list, mod)}"
     check = "python -m pytest -q " + " ".join(t.name for t in tests)
     data = {"id": f"polyglot_{slug.replace('-', '_')}", "prompt": prompt,
             "check": check, "timeout_s": 300}

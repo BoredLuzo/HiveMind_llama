@@ -49,13 +49,15 @@ HF_BASE = "https://huggingface.co/{repo}/resolve/main/{name}"
 UA = {"User-Agent": "HiveMind-FetchWhisper"}
 
 _IS_WIN = platform.system() == "Windows"
-os_tag = "win" if _IS_WIN else "ubuntu"
+os_tag = "win" if _IS_WIN else "linux"
 ASSETS = {
     # (platform, backend) -> regex over the release asset names
     ("win", "cpu"): re.compile(r"^whisper-bin-x64\.zip$", re.IGNORECASE),
     ("win", "blas"): re.compile(r"^whisper-blas-bin-x64\.zip$", re.IGNORECASE),
     ("linux", "cpu"): re.compile(r"^whisper-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE),
     ("linux", "blas"): re.compile(r"^whisper-blas-bin-x64\.tar\.gz$", re.IGNORECASE),
+    ("ubuntu", "cpu"): re.compile(r"^whisper-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE),
+    ("ubuntu", "blas"): re.compile(r"^whisper-blas-bin-x64\.tar\.gz$", re.IGNORECASE),
 }
 MIN_BINARY_BYTES = 1 * 1024 * 1024      # a whisper.cpp zip is 8-21 MB
 MIN_MODEL_BYTES = 50 * 1024 * 1024      # the smallest model is 74 MB

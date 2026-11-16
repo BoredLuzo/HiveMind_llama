@@ -524,14 +524,21 @@ with tempfile.TemporaryDirectory(prefix="hm_w4_mock_") as _td:
     check("W4 P0-2 contract-v2 extracts attr reads and mock.patch targets",
           ".size" in _mc and "demo_mod.open" in _mc, _mc)
 
-# W4 P0-3: duo_lean 12 tools + prompts free of hardcoded write_file_append
+# duo_lean 8 orthogonal tools + prompts free of unadvertised tool hardcodes
 from tools.definitions import _TOOL_MODE_ALLOWLISTS  # noqa: E402
-from hive_functions.prompts import DUO_CODER_BASE, DUO_CODER_EXECUTION  # noqa: E402
-check("W4 P0-3 duo_lean includes run_python & undo_last (12 tools)",
-      {"run_python", "undo_last"}.issubset(_TOOL_MODE_ALLOWLISTS["duo_lean"])
-      and len(_TOOL_MODE_ALLOWLISTS["duo_lean"]) == 12)
-check("W4 P0-3 DUO_CODER_BASE & DUO_CODER_EXECUTION omit write_file_append",
-      "write_file_append" not in DUO_CODER_BASE and "write_file_append" not in DUO_CODER_EXECUTION)
+from hive_functions.prompts import DUO_CODER_BASE, DUO_CODER_EXECUTION, DUO_CODER_UNEXPLORED  # noqa: E402
+check("duo_lean has 8 orthogonal core tools",
+      _TOOL_MODE_ALLOWLISTS["duo_lean"] == {
+          "read_file", "edit_file", "write_file", "run_bash",
+          "run_tests", "search_code", "find_files", "task_complete",
+      })
+check("DUO_CODER_BASE/EXECUTION/UNEXPLORED omit unadvertised tools",
+      "write_file_append" not in DUO_CODER_BASE
+      and "write_file_append" not in DUO_CODER_EXECUTION
+      and "get_signatures" not in DUO_CODER_BASE
+      and "run_python" not in DUO_CODER_BASE
+      and "install_package" not in DUO_CODER_EXECUTION
+      and "list_dir" not in DUO_CODER_UNEXPLORED)
 
 # W4 P1-1: test_runner workspace PYTHONPATH & pytest in _is_build
 _tr_src = (ROOT / "hive_functions" / "test_runner.py").read_text(encoding="utf-8")
@@ -584,5 +591,190 @@ check("W4 Anti-Cheat --no-detect-urls + Net-Tok/s + bootstrap wiring",
       and "contract-v2" in _rb_sh_src
       and "contract-v2" in _nb_raw
       and "HM_NO_DUO_PLANNER" in _nb_raw)
+
+
+# ── Sonnet 1.6.0 Review Must-Fixes (M1-M3 + H3/H4) ───────────────────────────
+def _test_m1_busy_slot_guard():
+    import time as _t
+    from unittest import mock as _mock
+    from backend.llama_slots import ModelSlot
+    from backend.manager_load import LlamaLoadMixin
+    from backend.manager_process import LlamaProcessMixin
+
+    class _Proc:
+        def poll(self):
+            return None
+
+    class _Mgr(LlamaLoadMixin, LlamaProcessMixin):
+        def __init__(self):
+            self._slots = [ModelSlot(0)]
+            self._lock = asyncio.Lock()
+            self._last_orphan_scan_ts = _t.time() + 999.0
+            self._load_seq = 0
+            self.metrics = {}
+            self.starts = 0
+
+        def _metric_inc(self, name, amount=1):
+            self.metrics[name] = self.metrics.get(name, 0) + amount
+
+        async def _port_alive(self, _port):
+            return True
+
+        async def _enforce_vram_budget(self, _slot):
+            return None
+
+        async def _find_free_slot(self):
+            return next((s for s in self._slots if not s.is_running and not s._loading), None)
+
+        async def _evict_lru_async(self, exclude_slot=None):
+            return None
+
+        async def _adopt_orphan_slots(self):
+            return 0
+
+        async def _start_process(self, slot, model, num_ctx, vision=False,
+                                 n_parallel=1, **_kw):
+            self.starts += 1
+            slot.model = model
+            slot.process = _Proc()
+            slot._num_ctx = int(num_ctx)
+            slot._n_parallel = int(n_parallel)
+            slot._vision = bool(vision)
+            slot._jinja = True
+            slot._loading = False
+            slot._ready_event.set()
+
+    async def _fake_kill(_slot):
+        raise AssertionError("busy slot must not be killed")
+
+    async def _scenario_in_flight():
+        mgr = _Mgr()
+        await mgr.ensure_loaded("coder:4b", num_ctx=8192, n_parallel=1)
+        mgr._slots[0].mark_in_flight()
+        with _mock.patch("backend.manager_load._kill_slot_async", new=_fake_kill):
+            port = await mgr.ensure_loaded("coder:4b", num_ctx=32768, n_parallel=2)
+        return mgr, port
+
+    mgr_if, port_if = asyncio.run(_scenario_in_flight())
+    check("M1a in-flight slot is reused instead of killed on larger ctx/parallel",
+          mgr_if.starts == 1 and port_if == mgr_if._slots[0].port
+          and mgr_if.metrics.get("evictions_ctx_reload", 0) == 0)
+
+    async def _scenario_pinned():
+        mgr = _Mgr()
+        await mgr.ensure_loaded("coder:4b", num_ctx=8192, pin=True)
+        with _mock.patch("backend.manager_load._kill_slot_async", new=_fake_kill):
+            await mgr.ensure_loaded("coder:4b", num_ctx=32768, pin=False)
+        return mgr
+
+    mgr_pin = asyncio.run(_scenario_pinned())
+    check("M1b pinned slot is reused for unpinned larger-ctx caller",
+          mgr_pin.starts == 1 and mgr_pin.metrics.get("evictions_ctx_reload", 0) == 0)
+
+
+_test_m1_busy_slot_guard()
+
+from core.duo_helpers import _collect_new_explore_paths  # noqa: E402
+
+_seen_m2: set[str] = set()
+_n1 = _collect_new_explore_paths(
+    [{"function": {"name": "search_code", "arguments": {"pattern": "alpha", "path": "."}}}],
+    _seen_m2,
+)
+_n2 = _collect_new_explore_paths(
+    [{"function": {"name": "search_code", "arguments": {"pattern": "beta", "path": "."}}}],
+    _seen_m2,
+)
+_n3 = _collect_new_explore_paths(
+    [{"function": {"name": "search_code", "arguments": {"pattern": "beta", "path": "."}}}],
+    _seen_m2,
+)
+check("M2 search_code keys pattern+scope so varied searches with path='.' count as new",
+      _n1 == ["alpha @ ."] and _n2 == ["beta @ ."] and _n3 == [],
+      f"n1={_n1} n2={_n2} n3={_n3}")
+
+from core.agentic_duo_state import DuoRoundState  # noqa: E402
+from core.tool_exec_helpers import _handle_too_large  # noqa: E402
+from hive_functions.prompts import DUO_CODER_BASE  # noqa: E402
+
+
+class _NoopHooks:
+    async def emit(self, _data):
+        return None
+
+
+def _run_too_large(mode: str) -> str:
+    msgs: list[dict] = []
+    rs = DuoRoundState()
+    asyncio.run(_handle_too_large(
+        "write_file", {"path": "x.py"}, "[write_file error: content too large]",
+        {"id": "c1"}, msgs, [""], rs, _NoopHooks(), tool_mode=mode,
+    ))
+    return "\n".join(str(m.get("content", "")) for m in msgs)
+
+
+_lean_split = _run_too_large("duo_lean")
+_core_split = _run_too_large("duo_core")
+check("M3a _handle_too_large omits write_file_append in duo_lean and keeps it in duo_core",
+      "write_file_append" not in _lean_split and "write_file_append" in _core_split)
+check("M3b DUO_CODER_BASE qualifies ask_user on tool list availability",
+      "If ask_user is in your tool list" in DUO_CODER_BASE)
+
+_runner_src_tail = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+_helpers_src_tail = (ROOT / "core" / "tool_exec_helpers.py").read_text(encoding="utf-8")
+check("H3/H4 gate_vetoed guard, RUN_BASH_NONZERO slice, generic explore limit & README core tier",
+      "_gate_vetoed = not _exec_result.task_complete_called" in _runner_src_tail
+      and "and not _gate_vetoed):" in _runner_src_tail
+      and 'f"Last output: {_dresult[:300]}"' in _helpers_src_tail
+      and "`write_file_append`, `undo_last`" in (ROOT / "README.md").read_text(encoding="utf-8"))
+
+from core.duo_explore_gate import _explore_round_gate  # noqa: E402
+from core.duo_task_complete_gate import _VERIFY_REQUIRED_PROMPT  # noqa: E402
+from core.tool_exec_helpers import _inject_tool_error_hints  # noqa: E402
+from hive_functions.prompts import (  # noqa: E402
+    DUO_CODER_EXECUTION, DUO_CODER_EXPLORED, DUO_CODER_UNEXPLORED,
+)
+
+_lean_forbidden = (
+    "run_python", "list_dir", "get_signatures", "undo_last",
+    "write_file_append", "replace_lines", "edit_ast",
+    "install_package", "find_references", "lsp_diagnostics",
+)
+_eg_res = asyncio.run(_explore_round_gate(
+    _NoopHooks(), round_tool_names={"read_file"},
+    dr_tcs=[{"function": {"name": "read_file", "arguments": {"path": "a.py"}}}],
+    seen_explore_paths={"a.py#rng:full"}, explore_only_rounds=1,
+    contracts_raw=[], explore_ctx="ctx", exec_mdl="m", until_finished=False,
+    snap_before=None, ws_str="/ws", pre_explore_msgs=[], written_files=[],
+    ld_setter=lambda _l: None, snapshot_fn=lambda *_a: {},
+))
+_err_samples = []
+for _ec, _tn in (
+    ("[TOOL_ERROR:EDIT_FILE_OLD_TEXT_NOT_FOUND] miss", "edit_file"),
+    ("[TOOL_ERROR:RUN_BASH_TIMEOUT] timeout", "run_bash"),
+    ("[TOOL_ERROR:RUN_BASH_NONZERO] rc=1", "run_bash"),
+    ("[TOOL_ERROR:FILE_READ_FAILED] missing", "read_file"),
+    ("[TOOL_ERROR:TOOL_NOT_ALLOWED] denied", "write_file_append"),
+):
+    _em: list[dict] = []
+    _dr, _ = _inject_tool_error_hints(_tn, {"path": "x.py"}, _ec, {"id": "c"}, _em, {}, {})
+    _err_samples.append(_dr + "\n" + "\n".join(str(m.get("content", "")) for m in _em))
+
+_lean_surfaces = {
+    "DUO_CODER_BASE": DUO_CODER_BASE,
+    "DUO_CODER_EXECUTION": DUO_CODER_EXECUTION,
+    "DUO_CODER_UNEXPLORED": DUO_CODER_UNEXPLORED,
+    "DUO_CODER_EXPLORED": DUO_CODER_EXPLORED,
+    "_VERIFY_REQUIRED_PROMPT": _VERIFY_REQUIRED_PROMPT,
+    "explore_gate_nudge": _eg_res.nudge_message,
+    "split_too_large_lean": _lean_split,
+    "shared_error_hints": "\n".join(_err_samples),
+}
+_leaked = [
+    f"{_s}:{_t}" for _s, _txt in _lean_surfaces.items()
+    for _t in _lean_forbidden if _t in _txt
+]
+check("lean prompt and gate surfaces contain no core/full-only tool names",
+      not _leaked, f" (leaked={_leaked})")
 
 sys.exit(h.finish("glm_deep_audit_wave2"))

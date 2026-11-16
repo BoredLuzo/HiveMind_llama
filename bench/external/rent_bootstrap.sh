@@ -356,7 +356,7 @@ else:
     target_model_gb = max(4.66, budget_gb - reserve_gb)
     cpu_experts = min(35, max(2, math.ceil((20.2 - target_model_gb) / 0.44)))
 
-ubatch = 512 if (budget_gb < 20.0 or (budget_gb < 24.0 and ctx_tokens >= 98304)) else 1024
+ubatch = 512 if (budget_gb < 14.0 or ("35b" in os.environ.get("HM_MODEL", "").lower() and budget_gb < 24.0 and ctx_tokens >= 98304)) else 1024
 gpu_patch = {
     "moe_cpu_experts": {
         "qwen3.6:35b-a3b": cpu_experts,
@@ -532,6 +532,8 @@ run_bench() {  # $@ = extra args (optional)
   [ "${HM_NO_DUO_PLANNER:-0}" = "1" ] && _extra_args+=(--no-duo-planner)
   log "run_bench: model=$HM_MODEL ctx=$HM_CTX tasks=$HM_TASKS runs=$HM_RUNS conds=$HM_CONDITIONS out=${HM_OUT:-auto} sync=${HM_SYNC_DIR:-off} resume=${HM_RESUME:-0}"
   local _rc=0
+  pkill -9 -f '/tmp/hm_bench_' 2>/dev/null || true
+  pkill -9 -f 'hm_hermes_|hm_pi_' 2>/dev/null || true
   # Cap per-cell time so one stuck agent cannot burn the rental budget.
   ( cd "$HM_DIR" && "$PY" -u bench/runner.py \
       --tasks "$HM_TASKS" \
@@ -545,6 +547,8 @@ run_bench() {  # $@ = extra args (optional)
       --llama "$HM_LLAMA_URL" \
       "${_extra_args[@]}" \
       "$@" ) || _rc=$?
+  pkill -9 -f '/tmp/hm_bench_' 2>/dev/null || true
+  pkill -9 -f 'hm_hermes_|hm_pi_' 2>/dev/null || true
   if [ -d "/content/drive/MyDrive" ]; then
     local _dlogs="/content/drive/MyDrive/hivemind_bench/logs"
     mkdir -p "$_dlogs" 2>/dev/null || true
@@ -667,6 +671,8 @@ stop() {
   sleep 1
   pkill -9 -f llama-server 2>/dev/null || true
   pkill -9 -f "HiveMind_llama.*run.py" 2>/dev/null || true
+  pkill -9 -f '/tmp/hm_bench_' 2>/dev/null || true
+  pkill -9 -f 'hm_hermes_|hm_pi_' 2>/dev/null || true
   [ -f "$HM_DIR/bench_engine.pid" ] && kill "$(cat "$HM_DIR/bench_engine.pid")" 2>/dev/null || true
   for _ in $(seq 1 20); do
     curl --max-time 3 -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || break

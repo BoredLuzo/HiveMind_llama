@@ -43,6 +43,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -757,6 +758,9 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
             _have = 0        # server ignored the range: start over, do not append
         total = int(r.headers.get("Content-Length") or 0) + _have
         done = _have
+        _is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+        _last_pct = -1
+        _last_print_t = 0.0
         with open(dest, "ab" if _append else "wb") as out:
             while True:
                 chunk = r.read(1024 * 512)
@@ -766,13 +770,24 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
                 done += len(chunk)
                 if total:
                     _pct = done * 100 // max(total, 1)
-                    sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
-                    sys.stdout.flush()
+                    _now = time.monotonic()
+                    if _is_tty:
+                        if _pct > _last_pct or (_now - _last_print_t) >= 0.5 or done >= total:
+                            sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
+                            sys.stdout.flush()
+                            _last_pct = _pct
+                            _last_print_t = _now
+                    else:
+                        if _pct >= _last_pct + 5 or (_last_pct < 0) or done >= total:
+                            print(f"    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)", flush=True)
+                            _last_pct = _pct
+                            _last_print_t = _now
         _etag_raw = (_redirect.etag
                      or r.headers.get("ETag")
                      or r.headers.get("X-Linked-Etag") or "").strip()
         _etag_raw = re.sub(r'^W/', "", _etag_raw).strip('"')
-    sys.stdout.write("\n")
+    if _is_tty:
+        sys.stdout.write("\n")
     _final = dest.stat().st_size if dest.exists() else 0
     if _expected and _final != _expected:
         print(f"    [WARNING] size mismatch: {_final} bytes on disk, {_expected} expected "

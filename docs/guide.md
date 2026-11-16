@@ -108,17 +108,17 @@ binary found? Point `HIVEMIND_LLAMA_BIN` at the extracted llama-server.
 
 | Mode | When | What happens |
 |------|------|--------------|
-| Simple / Direct | trivial tasks (default) | single model, direct answer, optional web-search tool calls |
-| Auto | judge-routed | the model assigned to the Judge role (any installed LLM) classifies complexity, routes to Direct / Pipeline / Duo |
+| Simple / Direct | trivial tasks & quick chat (default) | single model, direct answer, optional tool tiers (`off`, `readonly`, `research`, `python`, `mcp`, `full`), `/pause`/`/resume` & mid-run steering |
+| Auto | mixed daily work | rule features, optional CPU GLiNER decider, or LLM Judge route general questions and simple read/list lookups to Direct while sending real coding tasks to Code Duo |
 | Pipeline | analysis, complex docs | Analyst -> Refiner -> Critic -> Synthesizer, optional constraint loop |
 | Map (AutoMap, *experimental*) | mixed tasks | heuristic scorer picks the best model per agent role |
-| Code Duo | coding | Coder + Critic loop, sub-modes Critic-Duo and Agentic |
+| Code Duo | coding | Coder + Critic loop, sub-modes Agentic (default solo coder) and Critic-Duo |
 
 Mode buttons live in the sidebar (Agents tab). AutoMap routing can learn from
 run outcomes (`routing_weights.json`).
 
-Status note: `Auto` and `AutoMap` are untested and not recommended for real
-work yet. Most reliable are Simple/Direct and Code-Duo agentic.
+Status note: `Simple / Direct`, `Auto`, and `Code Duo` (`Agentic` & `Critic-Duo`)
+are supported daily paths; `AutoMap` remains experimental.
 
 ### Direct chat tool tiers
 
@@ -210,10 +210,12 @@ Mode-scoped toolset (`tools/definitions.py`):
 | Misc | `get_datetime`, `remember` (durable key/value memory), `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
 | Web | `web_search`, `web_fetch` (SearXNG, optional `+Websearch` when available) |
 
-Tool scoping per phase: `duo_core` (the default coder set: 18 base + `+Subagent` optional = 19),
-`duo_lean`, `duo_full`, `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
-`mcp_agent`, `openai_agent`. Optional toggles (`+Websearch`, `+Git`, `+Subagent`) live under
-**Tools & Optionals** in the sidebar.
+Tool scoping per phase: `duo_lean` (minimal orthogonal 8-tool set: `read_file`,
+`edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`,
+`task_complete`), `duo_core` (the default coder set: 18 base + `+Subagent`
+optional = 19), `duo_full`, `duo_readonly`, `pre_explore`, `critic_verify`,
+`tool_agent`, `mcp_agent`, `openai_agent`. Optional toggles (`+Websearch`,
+`+Git`, `+Subagent`) live under **Tools & Optionals** in the sidebar.
 
 ### Language servers (LSP)
 
