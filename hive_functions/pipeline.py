@@ -215,13 +215,19 @@ class Pipeline:
     async def _call_raw(self, model: str, system: str, user: str,
                         temperature: float = 0.1, max_tokens: int = 100,
                         agent_role: str | None = None,
-                        max_ctx: int | None = None) -> str:
+                        max_ctx: int | None = None,
+                        think: bool | None = None,
+                        thinking_budget: int | None = None) -> str:
         messages = [{"role": "system", "content": system},
                     {"role": "user",   "content": user}]
         num_ctx = _get_num_ctx(model, agent_role)
         if max_ctx is not None:
             num_ctx = min(int(num_ctx), int(max_ctx)) if num_ctx is not None else int(max_ctx)
-        kwargs = {"ctx": num_ctx} if num_ctx is not None else {}
+        kwargs: dict = {"ctx": num_ctx} if num_ctx is not None else {}
+        if think is not None:
+            kwargs["think"] = think
+        if thinking_budget is not None:
+            kwargs["thinking_budget"] = thinking_budget
         return await self.ollama.chat(model, messages, temperature, max_tokens, **kwargs)
 
     async def _call_stream(self, agent_key: str, user: str,
@@ -418,22 +424,29 @@ class Pipeline:
 
     async def _handle_memory_request(self, text: str) -> str:
         _mem_model, _mem_role, _mem_ctx = self._memory_extractor_target()
+        # Suppress thinking on extraction side-calls (plus headroom if a GGUF ignores enable_thinking=false)
         result = await self._call_raw(
             _mem_model,
-            PROMPTS["memory_extractor"], text, 0.1, 100,
+            PROMPTS["memory_extractor"], text, 0.1, 400,
             agent_role=_mem_role, max_ctx=_mem_ctx,
+            think=False, thinking_budget=0,
         )
         try:
-            match = re.search(r'\{[^{}]+\}', result, re.DOTALL)
+            match = re.search(r'\{[^{}]+\}', result or "", re.DOTALL)
             if match:
                 data  = json.loads(match.group())
-                key   = data.get("key", "").strip()
-                value = data.get("value", "").strip()
+                key   = str(data.get("key", "")).strip()
+                value = str(data.get("value", "")).strip()
                 if key and value:
                     self.memory.remember(key, value)
                     return f"✅ Saved: {value}"
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
             pass
+        from context.chat_util import extract_memory_note_fallback
+        fb_key, fb_val = extract_memory_note_fallback(text)
+        if fb_key and fb_val:
+            self.memory.remember(fb_key, fb_val)
+            return f"✅ Saved: {fb_val}"
         return "⚠️ Could not extract a fact."
 
     # ── Direct agent call ──────────────────────────────────────

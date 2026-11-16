@@ -103,6 +103,112 @@ class TestMemoryRouting(unittest.TestCase):
             asyncio.run(self.p._handle_memory_request("Merk dir das"))
         self.assertEqual(calls, [("minicpm5:2b-sharp", 4096)])
 
+    def test_memory_side_call_suppresses_thinking_and_falls_back(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from context.chat_util import _extract_memory
+
+        self.assertEqual(
+            _extract_memory("my favorite food is pizza remember that"),
+            ("favorite_food", "pizza"),
+        )
+
+        self.p.set_agent_model("direct", "lfm3:1.7b-qad")
+        seen = []
+
+        async def _side_skip(model, messages, temperature=0.1, max_tokens=100, **kw):
+            seen.append((max_tokens, kw.get("think"), kw.get("thinking_budget")))
+            return ""  # simulates [SIDE-SKIP] empty content
+
+        self.p.ollama.chat = AsyncMock(side_effect=_side_skip)
+        fake_mgr = SimpleNamespace(_slots=[])
+
+        msg = "Its a joke about asking the other people smt about joe and then saying joe mama remember that"
+        with patch("backend.llama_server_manager.manager", fake_mgr):
+            res = asyncio.run(self.p._handle_memory_request(msg))
+        self.assertTrue(res.startswith("✅ Saved:"), res)
+        self.assertEqual(seen[0], (400, False, 0))
+        self.p.memory.remember.assert_called()
+        _k, _v = self.p.memory.remember.call_args[0]
+        self.assertTrue(_k.startswith("note_"), _k)
+        self.assertNotIn("remember that", _v.lower())
+
+        # Bare filler without extractable substance still refuses cleanly.
+        self.p.memory.remember.reset_mock()
+        with patch("backend.llama_server_manager.manager", fake_mgr):
+            res_empty = asyncio.run(self.p._handle_memory_request("Merk dir das"))
+        self.assertIn("Could not extract", res_empty)
+        self.p.memory.remember.assert_not_called()
+
+    def test_chat_memory_shortcuts_emit_agent_envelope(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+        import core.state as _st
+        from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
+
+        events = []
+
+        async def _emit(ev):
+            events.append(ev)
+            return ev
+
+        def _done(toks, stop_reason):
+            return {"type": "done", "tokens": toks, "stop_reason": stop_reason}
+
+        class _Mem:
+            def __init__(self):
+                self.items = {}
+                self.sess = []
+
+            def remember(self, k, v):
+                self.items[k] = v
+
+            def forget(self, k):
+                return self.items.pop(k, None) is not None
+
+            def get_all(self):
+                return dict(self.items)
+
+            def list_memories(self):
+                for k, v in self.items.items():
+                    yield k, v, "2026-11-16"
+
+            def add_to_session(self, r, c):
+                self.sess.append((r, c))
+
+        fake_pipe = Pipeline(memory=_Mem(), agent_overrides={"direct": "lfm3:1.7b-qad"})
+        fake_pipe._handle_memory_request = AsyncMock(return_value="⚠️ Could not extract a fact.")
+
+        async def _collect(text):
+            events.clear()
+            ps = _ChatShortcutState(
+                user_input=text,
+                run_id="r1",
+                carry={"emit": _emit, "_done_event": _done},
+            )
+            async for _ in _chat_memory_shortcuts(ps):
+                pass
+            return list(events), ps.handled
+
+        with patch.object(_st, "pipeline", fake_pipe), \
+             patch.object(_st, "memory", fake_pipe.memory):
+            evs_fail, handled_fail = asyncio.run(_collect("remember that nothing"))
+            self.assertTrue(handled_fail)
+            self.assertEqual([e["type"] for e in evs_fail], ["agent", "token", "agent_done", "done"])
+
+            evs_ok, handled_ok = asyncio.run(_collect("remember my name is Alex"))
+            self.assertTrue(handled_ok)
+            self.assertEqual(
+                [e["type"] for e in evs_ok],
+                ["agent", "token", "agent_done", "memory_saved", "done"],
+            )
+            self.assertIn("Stored:", evs_ok[1]["content"])
+
+            evs_list, _ = asyncio.run(_collect("show memory"))
+            self.assertEqual([e["type"] for e in evs_list], ["agent", "token", "agent_done", "done"])
+            self.assertIn("Alex", evs_list[1]["content"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,8 +40,6 @@ class _ChatShortcutState:
 
 
 async def _chat_memory_shortcuts(ps):
-    from server import S_models_cache, THIS_FILE
-    from core.llm_stream import _pipeline_chat_stream
     emit = ps.carry["emit"]
     _done_event = ps.carry["_done_event"]
     user_input = ps.user_input
@@ -58,11 +56,13 @@ async def _chat_memory_shortcuts(ps):
     if _state.pipeline._is_list_memory_request(user_input):
         logger.warning("[RUN-ENTRY] early return: list_memory_request")
         mems = list(_state.memory.list_memories())
-        if not mems:
-            yield await emit({"type": "token", "content": "Nothing stored."})
-        else:
-            for k, v, d in mems:
-                yield await emit({"type": "token", "content": f"{k}: {v} ({d})\n"})
+        body = (
+            "Nothing stored." if not mems
+            else "".join(f"{k}: {v} ({d})\n" for k, v, d in mems)
+        )
+        yield await emit({"type": "agent", "content": "Memory", "model": ""})
+        yield await emit({"type": "token", "content": body})
+        yield await emit({"type": "agent_done", "elapsed": round(time.time() - t_total, 2)})
         yield await emit(_done_event(0, "memory_list"))
         _unregister_abort(run_id)
         _unregister_step_skip(run_id)
@@ -76,7 +76,9 @@ async def _chat_memory_shortcuts(ps):
         for k in deleted:
             _state.memory.forget(k)
         msg = f"Deleted: {', '.join(deleted)}" if deleted else "Nothing found."
+        yield await emit({"type": "agent", "content": "Memory", "model": ""})
         yield await emit({"type": "token", "content": msg})
+        yield await emit({"type": "agent_done", "elapsed": round(time.time() - t_total, 2)})
         yield await emit(_done_event(0, "memory_forget"))
         _unregister_abort(run_id)
         _unregister_step_skip(run_id)
@@ -89,12 +91,17 @@ async def _chat_memory_shortcuts(ps):
         if _mem_key and _mem_val:
             _state.memory.remember(_mem_key, _mem_val)
             result = f"Stored: {_mem_key} = {_mem_val}"
+            _mem_saved = True
         else:
             result = await _state.pipeline._handle_memory_request(user_input)
+            _mem_saved = not result.startswith("⚠️")
         _state.memory.add_to_session("user", user_input)
         _state.memory.add_to_session("assistant", result)
+        yield await emit({"type": "agent", "content": "Memory", "model": ""})
         yield await emit({"type": "token", "content": result})
-        yield await emit({"type": "memory_saved"})
+        yield await emit({"type": "agent_done", "elapsed": round(time.time() - t_total, 2)})
+        if _mem_saved:
+            yield await emit({"type": "memory_saved"})
         yield await emit(_done_event(0, "memory_write"))
         _unregister_abort(run_id)
         _unregister_step_skip(run_id)
@@ -103,6 +110,8 @@ async def _chat_memory_shortcuts(ps):
 
     # Self-query
     if _state.pipeline._is_self_question(user_input):
+        from server import S_models_cache, THIS_FILE
+        from core.llm_stream import _pipeline_chat_stream
         logger.warning("[RUN-ENTRY] early return: self_question")
         reg         = registry_all()
         model_lines = []

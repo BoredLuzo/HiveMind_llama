@@ -210,17 +210,55 @@ def _extract_ws_query(user_input: str) -> str | None:
     return None
 
 
+_MEM_LEAD_RE = re.compile(
+    r'^(?:remember\s+(?:that\s+)?|note\s+(?:that\s+|this\s+down\s*)?|'
+    r'save\s+(?:this|that)\s*|store\s+(?:this|that)\s*|'
+    r'keep\s+(?:this\s+|that\s+)?in\s+mind\s*)[:,\-\s]*',
+    re.I,
+)
+_MEM_TRAIL_RE = re.compile(
+    r'[\s,;.\-]*\b(?:remember\s+(?:that|this)|keep\s+(?:this|that)\s+in\s+mind|'
+    r'note\s+(?:that|this\s+down)|save\s+(?:this|that)|store\s+(?:this|that))\b[.!\s]*$',
+    re.I,
+)
+_MEM_NOTE_STOP = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+    "in", "is", "it", "its", "of", "on", "or", "smt", "so", "that", "the",
+    "then", "this", "to", "with", "you", "your",
+})
+_MEM_BARE_FILLER_RE = re.compile(r'^(?:this|that|it|everything|all|das|es)$', re.I)
+
+
+def strip_memory_command_wrappers(text: str) -> str:
+    """Remove leading or trailing memory command phrases while preserving original casing."""
+    s = (text or "").strip()
+    s = _MEM_LEAD_RE.sub("", s).strip()
+    s = _MEM_TRAIL_RE.sub("", s).strip()
+    return s.strip(" ,:-")
+
+
+def extract_memory_note_fallback(text: str) -> tuple[str | None, str | None]:
+    """Deterministic note fallback when an explicit memory command yields no LLM JSON."""
+    clean = strip_memory_command_wrappers(text)
+    if not clean or _MEM_BARE_FILLER_RE.match(clean):
+        return None, None
+    words = [w for w in re.findall(r"[a-zA-Z0-9]+", clean) if len(w) >= 2]
+    if len(clean) < 16 or len(words) < 4:
+        return None, None
+    sig = [w.lower() for w in words if w.lower() not in _MEM_NOTE_STOP][:4]
+    if len(sig) < 2:
+        return None, None
+    slug = "_".join(sig)
+    return f"note_{slug[:28]}", clean
+
+
 def _extract_memory(text: str):
-
-
-    t  = text.strip()
+    t = strip_memory_command_wrappers(text)
+    if not t:
+        return None, None
     tl = t.lower()
-    core = re.sub(
-        r'^(?:remember\s+(?:that\s+)?|note\s+(?:that\s+)?|save\s+(?:this|that)\s*[,:\s]?)',
-        '', tl, flags=re.I
-    ).strip().lstrip(',: ')
-    offset = tl.find(core[:12]) if len(core) >= 12 else max(0, len(tl) - len(core))
-    corig  = t[offset:] if offset >= 0 else t
+    core = tl
+    corig = t
 
     def _ov(vl):
         vl = vl.strip()
