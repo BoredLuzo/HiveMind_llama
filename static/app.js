@@ -2545,7 +2545,13 @@ function _ttsFillVoices(sel, force, backendOverride) {
     if (d.max_chars) S.ttsMaxChars = d.max_chars;
     var attrEl = document.getElementById('tts-attribution');
     if (attrEl && d.attribution) {
-      attrEl.innerHTML = esc(d.attribution) + ' &middot; <code>docs\\voice_licenses.md</code>';
+      var woofLink = '<a href="https://underdog.ai" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">Underdog Woof</a>';
+      var woofLic = '<a href="https://huggingface.co/ConwayResearch/Underdog-Woof/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">Underdog Non-Commercial License 1.0</a>';
+      if ((_ttsVoicesBackend === 'woof') || (String(d.attribution).indexOf('underdog.ai') >= 0)) {
+        attrEl.innerHTML = 'Voice by ' + woofLink + ' (<a href="https://underdog.ai" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">underdog.ai</a>) &middot; ' + woofLic + ' (non-commercial use only) &middot; <code>docs\\voice_licenses.md</code>';
+      } else {
+        attrEl.innerHTML = esc(d.attribution) + ' &middot; Optional: Voice by ' + woofLink + ' (non-commercial) &middot; <code>docs\\voice_licenses.md</code>';
+      }
     }
     var keep = (S && S.ttsVoice) || sel.value || '';
     sel.textContent = '';

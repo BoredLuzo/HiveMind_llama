@@ -127,7 +127,7 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 
 | Integration | What it provides | Docs |
 |---|---|---|
-| **Voice (STT / TTS)** | Local speech-to-text (`whisper.cpp` / Parakeet) and text-to-speech (`Pocket TTS` / `Underdog Woof`), off by default | [docs/voice_setup.md](docs/voice_setup.md), [docs/voice_licenses.md](docs/voice_licenses.md) |
+| **Voice (STT / TTS)** | Local speech-to-text (`whisper.cpp` / Parakeet) and text-to-speech (`Pocket TTS` or optional Voice by [Underdog Woof](https://underdog.ai) — [Underdog Non-Commercial License 1.0](https://huggingface.co/ConwayResearch/Underdog-Woof/blob/main/LICENSE)), off by default | [docs/voice_setup.md](docs/voice_setup.md), [docs/voice_licenses.md](docs/voice_licenses.md) |
 | **Telegram Gateway** | Remote control from your phone: voice notes, images, PDFs, diff/action approvals | [docs/gateway_setup.md](docs/gateway_setup.md) |
 | **MCP (Server & Client)** | Expose HiveMind tools to IDEs over stdio/HTTP with Origin/auth guards, or consume external MCP servers | [docs/mcp.md](docs/mcp.md), [docs/mcp_client.md](docs/mcp_client.md) |
 | **Language Servers (LSP)** | Auto-attaches compiler/linter diagnostics after edits and enables symbol navigation | [docs/lsp.md](docs/lsp.md) |
@@ -146,7 +146,7 @@ for the complete audit table:
 | Destination | Trigger | Disable |
 |---|---|---|
 | Hugging Face | Downloading a model/voice or `hf auth login` | Point `models/` (`HIVEMIND_MODELS_DIR`) at existing local GGUFs |
-| SearXNG (`->` DuckDuckGo/Mojeek) | Running a web search | Keep SearXNG stopped; leave `+Websearch` off |
+| SearXNG (`->` DuckDuckGo Web / Yahoo / Google CSE) | Running a web search | Keep SearXNG stopped; leave `+Websearch` off |
 | `github.com` / `api.github.com` | `fetch_llamacpp` / `fetch_whisper` updates and startup version check (no personal data) | Provide binaries manually; set `HIVEMIND_NO_UPDATE_CHECK=1` |
 | Telegram Bot API | Telegram gateway enabled | Keep gateway off and revoke bot token |
 

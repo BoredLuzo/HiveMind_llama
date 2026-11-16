@@ -252,8 +252,17 @@ def main() -> int:
                   "--woof" in bat_src and "deploy\\fetch_woof.py" in bat_src)
             check("updater and prune script protect voice_models/",
                   '"voice_models"' in updater_src and "'voice_models'" in prune_src)
-            check("voice docs document Underdog Woof non-commercial terms",
+            readme_doc = (ROOT / "README.md").read_text(encoding="utf-8", errors="replace")
+            check("HTML and JS display clickable Voice by Underdog Woof + underdog.ai + license links",
+                  'href="https://underdog.ai"' in html_src
+                  and 'Underdog Non-Commercial License 1.0' in html_src
+                  and 'href="https://underdog.ai"' in app_src
+                  and 'Underdog Non-Commercial License 1.0' in app_src)
+            check("voice docs and README document Underdog Woof non-commercial terms + links",
                   "Underdog Woof" in lic_doc and "Underdog Non-Commercial License 1.0" in lic_doc
+                  and "https://underdog.ai" in lic_doc
+                  and "https://underdog.ai" in readme_doc
+                  and "ConwayResearch/Underdog-Woof" in readme_doc
                   and "setup_voice.bat --woof" in setup_doc)
     finally:
         _clear_woof_modules()

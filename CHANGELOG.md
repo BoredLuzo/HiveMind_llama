@@ -1,47 +1,10 @@
-## [1.6.2] - 2026-11-16
-
-Patch release adding optional local CPU NumPy text-to-speech via Underdog Woof,
-fixing explicit `"remember that"` long-term memory storage when extraction models
-think aloud, and tidying historical release notes out of the repository root.
-
-### Added & Improved
-- **Optional Underdog Woof TTS backend (`ConwayResearch/Underdog-Woof`):** Added
-  opt-in pure-NumPy int8 CPU synthesis (~40.6 MB, no PyTorch, no Hugging Face
-  token required) with voices `juno` and `mira` alongside the default Pocket TTS
-  backend (`settings_defaults.py` `tts_backend`, `deploy/fetch_woof.py`,
-  `core/tts_woof.py`, `core/tts_engine.py`), `GET /tts/voices` + `POST /tts/fetch`
-  (`server.py`), Voice card backend selector / Download button / Underdog Woof
-  attribution (`index.html`, `static/app.js`), `deploy/setup_voice.bat --woof`,
-  `voice_models/` updater preservation (`deploy/updater.py`,
-  `deploy/update_prune.ps1`), voice/privacy/settings documentation, and
-  regression coverage (`tests/test_tts_woof.py`).
-- **Repository root cleanup:** Moved `RELEASE_NOTES_*.md` files into
-  `docs/releases/` and excluded them from release ZIP archives via
-  `.gitattributes` (`CONTRIBUTING.md`, `deploy/bump_version.py`,
-  `deploy/prepush_check.ps1`).
-
-### Fixed
-- **Websearch quality, relevance & SearXNG engines:** Migrated legacy
-  `"bing,duckduckgo"` + `"all"` pins to clean defaults (`settings.py`), enabled
-  `duckduckgo web` + `yahoo` while keeping CAPTCHA/fallback-spam engines off in
-  `searxng-config/settings.yml.example`, added URL tracking-param stripping +
-  cross-engine deduplication, strict `site:` / `-site:` enforcement,
-  query-overlap relevance filtering/ranking (rejecting zero-match fallback
-  junk), automatic rescue fallback on CAPTCHA/rate-limited default engines,
-  and accurate numbered hit counts in the UI tool summary (`tools/websearch.py`,
-  `static/app.js`, `tests/test_websearch_quality.py`).
-- **Memory Write (`nothing stored` on explicit `"remember that"` prompts):**
-  Suppressed extraction-phase thinking noise before memory parsing, added a
-  note-text fallback when structured extraction returned empty, and emitted the
-  shortcut agent envelope cleanly (`context/chat_util.py`,
-  `core/chat_shortcuts.py`, `hive_functions/pipeline.py`,
-  `tests/test_memory_routing.py`).
-
 ## [1.6.1] - 2026-11-16
 
-Patch release addressing Image Processing UI/backend coherence, mid-load Vulkan
-slot aborts, adaptive MoE CPU-expert offloading under tight VRAM, and Windows
-installer/updater polish on top of `1.6.0`.
+Consolidated 1.6.1 release combining Image Processing UI/backend coherence,
+mid-load Vulkan slot aborts, adaptive MoE CPU-expert offloading under tight VRAM,
+Windows installer/updater fixes, opt-in local CPU TTS via Underdog Woof,
+Websearch/SearXNG quality & reliability fixes, long-term memory extraction
+fixes, and repository root cleanup on top of `1.6.0`.
 
 ### Added & Improved
 - **Coherent Image Processing & docs refresh:** Unified multimodal/preprocess
@@ -62,8 +25,38 @@ installer/updater polish on top of `1.6.0`.
   index, install packages before `deploy/fetch_decider.py`, and recognize
   Hugging Face cached `fastino/GLiNER2.5-Decide` weights written by
   `install.bat`.
+- **Optional Underdog Woof TTS backend (`ConwayResearch/Underdog-Woof`):** Added
+  opt-in pure-NumPy int8 CPU synthesis (~40.6 MB, no PyTorch, no Hugging Face
+  token required; Voice by Underdog Woof, `Underdog Non-Commercial License 1.0`)
+  with voices `juno` and `mira` alongside the default Pocket TTS backend
+  (`settings_defaults.py` `tts_backend`, `deploy/fetch_woof.py`,
+  `core/tts_woof.py`, `core/tts_engine.py`), `GET /tts/voices` + `POST /tts/fetch`
+  (`server.py`), Voice card backend selector / Download button / Underdog Woof
+  links (`index.html`, `static/app.js`), `deploy/setup_voice.bat --woof`,
+  `voice_models/` updater preservation (`deploy/updater.py`,
+  `deploy/update_prune.ps1`), voice/privacy/settings documentation, and
+  regression coverage (`tests/test_tts_woof.py`).
+- **Repository root cleanup:** Moved `RELEASE_NOTES_*.md` files into
+  `docs/releases/` and excluded them from release ZIP archives via
+  `.gitattributes` (`CONTRIBUTING.md`, `deploy/bump_version.py`,
+  `deploy/prepush_check.ps1`).
 
 ### Fixed
+- **Websearch quality, relevance & SearXNG engines:** Converted legacy
+  `"bing,duckduckgo"` + `"all"` pins to clean defaults (`settings.py`), enabled
+  `duckduckgo web` + `yahoo` while keeping CAPTCHA/fallback-spam engines off in
+  `searxng-config/settings.yml.example`, added URL tracking-param stripping +
+  cross-engine deduplication, strict `site:` / `-site:` enforcement,
+  query-overlap relevance filtering/ranking (rejecting zero-match fallback
+  junk), automatic rescue fallback on CAPTCHA/rate-limited default engines,
+  and accurate numbered hit counts in the UI tool summary (`tools/websearch.py`,
+  `static/app.js`, `tests/test_websearch_quality.py`).
+- **Memory Write (`nothing stored` on explicit `"remember that"` prompts):**
+  Suppressed extraction-phase thinking noise before memory parsing, added a
+  note-text fallback when structured extraction returned empty, and emitted the
+  shortcut agent envelope cleanly (`context/chat_util.py`,
+  `core/chat_shortcuts.py`, `hive_functions/pipeline.py`,
+  `tests/test_memory_routing.py`).
 - **240s slot-load deadlock & cross-task slot kill:** Added `SlotAbortedError`
   (`backend/llama_manager_utils.py`), generation-fenced `ModelSlot.abort_wait()`
   (`backend/llama_slots.py`), `force_kill_all()` wake-up

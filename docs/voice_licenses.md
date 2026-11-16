@@ -65,18 +65,25 @@ and the temp WAV is deleted in a `finally` block.
 
 ## Underdog Woof (`ConwayResearch/Underdog-Woof`, opt-in backend)
 
-Underdog Woof provides two pure-NumPy English voices (`juno` and `mira`, int8
-weights ~40.6 MB). It is **opt-in**, downloaded on demand to
-`voice_models/underdog_woof/`, never bundled in the repository or release ZIPs,
-and governed by the **Underdog Non-Commercial License 1.0**:
+Underdog Woof (<https://huggingface.co/ConwayResearch/Underdog-Woof>) provides two
+pure-NumPy English voices (`juno` and `mira`, int8 weights ~40.6 MB). It is
+**opt-in**, downloaded on demand to `voice_models/underdog_woof/`, never bundled
+in the repository or release ZIPs, and governed by the
+[Underdog Non-Commercial License 1.0](https://huggingface.co/ConwayResearch/Underdog-Woof/blob/main/LICENSE):
 
-- **Non-commercial use only.** Personal, academic, and internal non-commercial
-  use is permitted; commercial use requires a separate license from Underdog.
-- **Required credit:** when the Underdog Woof backend is active, the Voice card
-  and `/tts/status` display `"Voice by Underdog Woof (underdog.ai) - Underdog Non-Commercial License 1.0 (non-commercial use only)"`.
-- **Preserved notices:** `deploy/fetch_woof.py` downloads `LICENSE` and `NOTICE`
-  verbatim into `voice_models/underdog_woof/` alongside `woof_int8.npz` and the
-  runtime modules.
+- **Non-commercial use only.** Personal projects, academic research, teaching, and
+  non-profit use are permitted where nothing is sold, licensed, or monetized;
+  commercial or internal business use requires a license from Conway
+  (`license@conway.tech`).
+- **Required credit:** wherever the feature is offered or outputs are played, the
+  Voice card displays `"Voice by Underdog Woof"` with a link to
+  <https://underdog.ai> and the license; `/tts/status` carries the attribution
+  string alongside it.
+- **No model training & preserved notices:** weights, derivatives, and outputs
+  may not be used to train or distill other speech/audio models.
+  `deploy/fetch_woof.py` downloads `LICENSE` and `NOTICE` (including CC-BY 4.0
+  third-party credits for Kyutai Mimi, LibriTTS-R, and Emilia-YODAS) verbatim into
+  `voice_models/underdog_woof/` alongside `woof_int8.npz` and the runtime modules.
 
 ## Attribution text (used in the UI and the README)
 

@@ -1828,7 +1828,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Speaks answers out loud locally (CPU only, English). Pick <strong>Pocket TTS</strong> (Kyutai sidecar via <code>uv</code> + one-time <code>hf auth login</code>, see <code>docs\voice_setup.md</code>) or <strong>Underdog Woof</strong> (pure NumPy, ~41 MB, no HF login, non-commercial only). Then use the speaker button on any answer or let Telegram send voice notes.</div>
+      <div class="fld-hint">Speaks answers out loud locally (CPU only, English). Pick <strong>Pocket TTS</strong> (Kyutai sidecar via <code>uv</code> + one-time <code>hf auth login</code>, see <code>docs\voice_setup.md</code>) or <strong>Voice by <a href="https://underdog.ai" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">Underdog Woof</a></strong> (pure NumPy, ~41 MB, no HF login, <a href="https://huggingface.co/ConwayResearch/Underdog-Woof/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">Underdog Non-Commercial License 1.0</a>). Then use the speaker button on any answer or let Telegram send voice notes.</div>
       <div id="tts-options" class="tgl-sub" style="display:none">
         <div class="tgl-row" style="align-items:flex-start">
           <span class="tgl-text" style="max-width:150px">Engine</span>
@@ -1880,7 +1880,8 @@
           <span id="tts-volume-out" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3;width:38px">100 %</span>
         </div>
         <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>
-        <div class="fld-hint" id="tts-attribution" style="font-size:9px;color:#6b7793">Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) &middot; recordings: VCTK / Alba MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial) &middot; <code>docs\voice_licenses.md</code></div>        <div class="tgl-row" style="margin-top:8px">
+        <div class="fld-hint" id="tts-attribution" style="font-size:9px;color:#6b7793">Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) &middot; recordings: VCTK / Alba MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial) &middot; Optional: Voice by <a href="https://underdog.ai" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">Underdog Woof</a> (non-commercial) &middot; <code>docs\voice_licenses.md</code></div>
+        <div class="tgl-row" style="margin-top:8px">
           <span class="tgl-text">Read aloud</span>
           <span class="fld-hint" style="display:inline;font-size:9px;padding:0">what the UI speaks by itself</span>
         </div>

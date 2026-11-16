@@ -1,12 +1,14 @@
 # Release 1.6.1
 
-Stability, Image Processing, MoE offload, and Windows installer/updater fixes
-on top of 1.6.0.
+Consolidated 1.6.1 release combining Image Processing UI/backend coherence,
+VRAM/MoE offload and slot stability, Windows installer/updater fixes, opt-in
+local CPU TTS via Underdog Woof, Websearch/SearXNG quality improvements,
+long-term memory extraction fixes, and repository root cleanup on top of 1.6.0.
 
 No settings are reset and no existing model has to be re-downloaded. Upgrade
 with `update.bat` (or the startup check offers it), or extract the release zip
-next to your old install — `settings.json`, `models.json`, `sessions\`, `logs\`
-and `.venv` are kept.
+next to your old install — `settings.json`, `models.json`, `sessions\`, `logs\`,
+`voice_models\`, and `.venv` are kept.
 
 ## Image Processing & Docs
 
@@ -15,7 +17,35 @@ and `.venv` are kept.
   Agentic handoffs, vision-capable automap selection, and planner image
   attachment, with clarified UI controls and descriptions.
 - Refreshed `README.md` and `docs/guide.md` with clearer hardware/RAM/disk
-  guidance and Image Processing documentation.
+  guidance, Image Processing documentation, and organized release notes under
+  `docs/releases/` (excluded from release zips via `.gitattributes`).
+
+## Optional Underdog Woof Local CPU TTS
+
+- Added an optional **Underdog Woof** (`woof`) backend under **Settings -> Voice ->
+  Text to speech** alongside the default Pocket TTS backend: pure NumPy on CPU
+  (~40.6 MB int8 weights, voices `juno` and `mira`), with no PyTorch install and
+  no Hugging Face login required (`deploy/fetch_woof.py`, `core/tts_woof.py`,
+  `core/tts_engine.py`, `deploy/setup_voice.bat --woof`).
+- Weights, runtime code, and verbatim `LICENSE` / `NOTICE` files are fetched
+  on demand into `voice_models/underdog_woof/` (never bundled in release zips)
+  and protected during updates (`deploy/updater.py`, `deploy/update_prune.ps1`).
+  Voice by Underdog Woof (<https://underdog.ai>) is licensed under the Underdog
+  Non-Commercial License 1.0 (non-commercial use only; visible credit and links
+  shown in the Voice card and `README.md`).
+
+## Websearch, SearXNG & Long-Term Memory
+
+- Cleared legacy `"bing,duckduckgo"` + `"all"` pins in `settings.py` so upgraded
+  installs use healthy SearXNG engines cleanly (`duckduckgo web`, `yahoo`, and
+  upstream `google cse`, keeping CAPTCHA/fallback-spam engines off in
+  `searxng-config/settings.yml.example`), added strict `site:`/`-site:` checks,
+  query-term relevance ranking/filtering, tracking-parameter cleanup, automatic
+  rescue fallback on CAPTCHA/rate-limited default engines, and accurate `[N]`
+  result counts in `static/app.js`.
+- Fixed explicit memory shortcuts (`"remember that..."`) returning empty writes
+  when model thinking tokens interfered with extraction (`context/chat_util.py`,
+  `core/chat_shortcuts.py`, `hive_functions/pipeline.py`).
 
 ## VRAM, MoE Offload & Slot Stability
 
