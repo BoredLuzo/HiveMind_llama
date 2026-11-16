@@ -110,10 +110,16 @@ def _load_settings_from_disk() -> dict:
                 data["duo_agentic_thinking"] = _tbc
             if data.get("duo_parallel_preexplore") == "auto":
                 data["duo_parallel_preexplore"] = True
+            # MIGRATION (1.6.2): drop legacy pinned "bing,duckduckgo" + "all" defaults
+            # so upgraded installs use healthy SearXNG engines instead of Bing-only spam.
+            if str(data.get("searxng_engines") or "").strip().lower() in ("bing,duckduckgo", "bing, duckduckgo"):
+                data["searxng_engines"] = DEFAULT_SETTINGS["searxng_engines"]
+                if str(data.get("searxng_language") or "").strip().lower() == "all":
+                    data["searxng_language"] = DEFAULT_SETTINGS["searxng_language"]
             for _ws_key in ("searxng_engines", "searxng_language"):
                 _ws_val = data.get(_ws_key)
                 if _ws_val is not None and not str(_ws_val).strip():
-                    data[_ws_key] = None
+                    data[_ws_key] = ""
             data.pop("pre_explore_parallel", None)
             # STALE-KEYS (2026-10-31, audit): keys from older UI/preset
             # exports with no production reader. OUT of DEFAULT_SETTINGS and

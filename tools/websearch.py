@@ -138,16 +138,271 @@ def configure(
     global _SEARXNG_HOST, _SEARXNG_ENABLED, _SEARXNG_ENGINES, _SEARXNG_LANGUAGE
     if host     is not None: _SEARXNG_HOST     = host.rstrip("/")
     if enabled  is not None: _SEARXNG_ENABLED  = enabled
-    # searxng_engines="" and searxng_language="" → engines=&language= in the
-    if engines  is not None and str(engines).strip(): _SEARXNG_ENGINES  = engines
-    if language is not None and str(language).strip(): _SEARXNG_LANGUAGE = language
+    # Allow explicit "" to clear a previously pinned engine list back to instance defaults.
+    if engines  is not None: _SEARXNG_ENGINES  = str(engines).strip()
+    if language is not None and str(language).strip(): _SEARXNG_LANGUAGE = str(language).strip()
+    _SEARCH_CACHE.clear()
 
 
-def _build_search_params(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> dict:
+_RESCUE_ENGINES = "yahoo,duckduckgo web"
+_TRACKING_PARAMS = frozenset({
+    "msockid", "fbclid", "gclid", "mc_cid", "mc_eid", "igshid",
+})
+_LOW_SIGNAL_TITLE_RE = re.compile(r"^link to\s+\S+\.\S+$", re.IGNORECASE)
+_SITE_OP_RE = re.compile(r"(?:^|\s)(-?site):([^\s\"']+)", re.IGNORECASE)
+_QUERY_OP_STRIP_RE = re.compile(r"(?:^|\s)(?:-?site|filetype|inurl|intitle):[^\s\"']+", re.IGNORECASE)
+_WS_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "by", "did", "do",
+    "does", "for", "from", "how", "in", "is", "it", "its", "of", "on", "or",
+    "that", "the", "these", "this", "those", "to", "was", "were", "what",
+    "when", "where", "which", "who", "why", "with", "you", "your",
+    "aber", "am", "an", "auf", "aus", "bei", "das", "dem", "den", "der",
+    "des", "die", "ein", "eine", "einem", "einen", "einer", "eines", "für",
+    "fuer", "im", "in", "ist", "mit", "nach", "oder", "sind", "und", "von",
+    "vor", "wann", "war", "warum", "was", "welche", "welcher", "wer", "wie",
+    "wird", "wo", "zu", "über", "ueber",
+})
+
+
+def _clean_result_url(url: str) -> str:
+    """Strip engine tracking parameters (msockid, utm_*, ...) while keeping real query args."""
+    raw = str(url or "").strip()
+    if not raw or "?" not in raw:
+        return raw
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+    try:
+        parts = urlsplit(raw)
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+    except ValueError:
+        return raw
+    kept = [
+        (k, v) for k, v in pairs
+        if k.lower() not in _TRACKING_PARAMS and not k.lower().startswith("utm_")
+    ]
+    if len(kept) == len(pairs):
+        return raw
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment))
+
+
+def _url_dedup_key(url: str) -> str:
+    from urllib.parse import urlsplit
+    try:
+        p = urlsplit(url)
+        host = (p.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = p.path.rstrip("/") if p.path != "/" else "/"
+        return f"{host}{path}?{p.query}"
+    except ValueError:
+        return url.strip().lower()
+
+
+def _dedup_results(results: list) -> list:
+    """Clean tracking parameters and merge duplicate URLs returned across engines."""
+    by_key: dict[str, dict] = {}
+    ordered: list[dict] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        r = dict(item)
+        url = _clean_result_url(str(r.get("url") or ""))
+        if not url:
+            continue
+        r["url"] = url
+        engines_raw = r.get("engines")
+        if not isinstance(engines_raw, (list, tuple, set)):
+            eng = str(r.get("engine") or "").strip()
+            eng_set = {eng} if eng else set()
+        else:
+            eng_set = {str(e).strip() for e in engines_raw if str(e).strip()}
+        key = _url_dedup_key(url)
+        prev = by_key.get(key)
+        if prev is None:
+            r["_engines_set"] = eng_set
+            by_key[key] = r
+            ordered.append(r)
+        else:
+            prev["_engines_set"].update(eng_set)
+            if len(str(r.get("title") or "")) > len(str(prev.get("title") or "")):
+                prev["title"] = r.get("title", "")
+            if len(str(r.get("content") or "")) > len(str(prev.get("content") or "")):
+                prev["content"] = r.get("content", "")
+            try:
+                prev["score"] = max(float(prev.get("score") or 0.0), float(r.get("score") or 0.0))
+            except (TypeError, ValueError):
+                pass
+    return ordered
+
+
+def _extract_site_constraints(query: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Return ``(positive_sites, negative_sites)`` as ``(host, path_prefix)`` pairs."""
+    pos: list[tuple[str, str]] = []
+    neg: list[tuple[str, str]] = []
+    for m in _SITE_OP_RE.finditer(str(query or "")):
+        op = m.group(1).lower()
+        val = m.group(2).strip().rstrip(".,;:)]}")
+        val = re.sub(r"^https?://", "", val, flags=re.IGNORECASE)
+        host, _, rest = val.partition("/")
+        host = host.lower().strip()
+        if host.startswith("www."):
+            host = host[4:]
+        if not host:
+            continue
+        path_prefix = ("/" + rest.lstrip("/").rstrip("/")).lower() if rest.strip("/") else ""
+        target = (host, path_prefix)
+        if op.startswith("-"):
+            neg.append(target)
+        else:
+            pos.append(target)
+    return pos, neg
+
+
+def _url_matches_site(url: str, host_rule: str, path_rule: str) -> bool:
+    from urllib.parse import urlsplit
+    try:
+        p = urlsplit(str(url or ""))
+        u_host = (p.hostname or "").lower()
+    except ValueError:
+        return False
+    if u_host.startswith("www."):
+        u_host = u_host[4:]
+    if not u_host:
+        return False
+    if u_host != host_rule and not u_host.endswith("." + host_rule):
+        return False
+    if path_rule:
+        u_path = (p.path or "/").lower().rstrip("/")
+        if u_path != path_rule and not u_path.startswith(path_rule + "/"):
+            return False
+    return True
+
+
+def _filter_site_constraints(query: str, results: list) -> tuple[list, bool]:
+    """Enforce explicit ``site:`` / ``-site:`` operators on returned URLs."""
+    pos, neg = _extract_site_constraints(query)
+    if not pos and not neg:
+        return results, False
+    out = []
+    for r in results:
+        u = str(r.get("url") or "")
+        if any(_url_matches_site(u, h, p) for h, p in neg):
+            continue
+        if pos and not any(_url_matches_site(u, h, p) for h, p in pos):
+            continue
+        out.append(r)
+    return out, bool(pos)
+
+
+def _extract_query_terms(query: str) -> list[str]:
+    """Extract deduplicated meaningful content terms from a search query."""
+    cleaned = _QUERY_OP_STRIP_RE.sub(" ", " " + str(query or ""))
+    raw_tokens = [
+        t.strip("._-+#\"'()[]{}:;!?")
+        for t in re.findall(r"[a-z0-9\u00c0-\u024f_.+#-]+", cleaned.lower())
+    ]
+    raw_tokens = [t for t in raw_tokens if t]
+    seen: set[str] = set()
+    core: list[str] = []
+    for t in raw_tokens:
+        if len(t) >= 2 and t not in _WS_STOPWORDS and t not in seen:
+            seen.add(t)
+            core.append(t)
+    if core:
+        return core
+    fallback: list[str] = []
+    for t in raw_tokens:
+        if t not in seen:
+            seen.add(t)
+            fallback.append(t)
+    return fallback
+
+
+def _term_in_text(term: str, text_lower: str) -> bool:
+    """True when ``term`` matches ``text_lower`` (word-bounded for short tokens)."""
+    if not term or not text_lower:
+        return False
+    if len(term) <= 3 and term.isalnum():
+        if re.search(rf"(?<![a-z0-9\u00c0-\u024f]){re.escape(term)}(?![a-z0-9\u00c0-\u024f])", text_lower):
+            return True
+    elif term in text_lower:
+        return True
+    parts = [p for p in re.split(r"[._/+\\-]+", term) if len(p) >= 2]
+    if len(parts) >= 2:
+        return all(_term_in_text(p, text_lower) for p in parts)
+    return False
+
+
+def _rank_and_filter_results(query: str, results: list) -> list:
+    """Reject 0-overlap off-topic fallback junk and rank results by query relevance."""
+    if not results:
+        return []
+    terms = _extract_query_terms(query)
+    if not terms:
+        return results
+    scored: list[tuple[float, int, dict]] = []
+    for idx, r in enumerate(results):
+        title = str(r.get("title") or "")
+        url = str(r.get("url") or "")
+        snippet = str(r.get("content") or "")
+        snippet_clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", snippet)).strip()
+        tl = title.lower()
+        ul = url.lower()
+        sl = snippet_clean.lower()
+
+        title_hits = 0
+        url_hits = 0
+        snip_hits = 0
+        matched_any = 0
+        for term in terms:
+            ht = _term_in_text(term, tl)
+            hu = _term_in_text(term, ul)
+            hs = _term_in_text(term, sl)
+            if ht:
+                title_hits += 1
+            if hu:
+                url_hits += 1
+            if hs:
+                snip_hits += 1
+            if ht or hu or hs:
+                matched_any += 1
+
+        if matched_any == 0:
+            # Drop completely off-topic fallback pages (e.g. generic portal/shopping junk).
+            continue
+
+        try:
+            raw_score = min(float(r.get("score") or 0.0), 8.0)
+        except (TypeError, ValueError):
+            raw_score = 0.0
+        eng_count = len(r.get("_engines_set") or ())
+        coverage = matched_any / len(terms)
+        rank = (
+            coverage * 6.0
+            + title_hits * 2.5
+            + url_hits * 1.2
+            + snip_hits * 0.7
+            + raw_score * 0.25
+            + min(eng_count, 4) * 0.4
+            + (0.5 if len(snippet_clean) >= 25 else 0.0)
+            - (1.5 if _LOW_SIGNAL_TITLE_RE.match(title.strip()) else 0.0)
+        )
+        scored.append((rank, -idx, r))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in scored]
+
+
+def _build_search_params(
+    query: str,
+    max_results: int = _MAX_RESULTS_DEFAULT,
+    *,
+    engines_override: str = "",
+) -> dict:
 
     _params: dict = {"q": query, "format": "json", "safesearch": "1"}
-    if _SEARXNG_ENGINES:
-        _params["engines"] = _SEARXNG_ENGINES
+    _eng = str(engines_override or _SEARXNG_ENGINES or "").strip()
+    if _eng:
+        _params["engines"] = _eng
     if _SEARXNG_LANGUAGE:
         _params["language"] = _SEARXNG_LANGUAGE
     return _params
@@ -287,13 +542,66 @@ async def _wiki_direct(query: str, max_results: int) -> str:
     return "\n".join(lines).strip()
 
 
+async def _fetch_searxng_json(
+    query: str,
+    max_results: int,
+    *,
+    engines_override: str = "",
+) -> tuple[dict | None, str | None]:
+    """Query SearXNG JSON API with one timeout retry. Returns ``(data, error_text)``."""
+    for _attempt in range(2):
+        try:
+            client = await _get_client_async()
+            resp = await client.get(
+                f"{_SEARXNG_HOST}/search",
+                params=_build_search_params(query, max_results, engines_override=engines_override),
+                headers={"Accept": "application/json"},
+                timeout=_httpx.Timeout(
+                    connect=5.0, read=_SEARCH_TIMEOUT, write=5.0, pool=5.0
+                ),
+            )
+            resp.raise_for_status()
+            return resp.json(), None
+        except _httpx.ConnectError:
+            return None, (
+                f"[web_search: SearXNG not reachable ({_SEARXNG_HOST}).\n"
+                f"Start with: docker run -d --name searxng -p 8888:8080 searxng/searxng]"
+            )
+        except _httpx.TimeoutException:
+            if _attempt == 0:
+                logger.warning("web_search: timeout attempt 1 - retry...")
+                continue
+            return None, f"[web_search: timeout after {_SEARCH_TIMEOUT}s (2 attempts) - SearXNG responds too slowly]"
+        except _httpx.HTTPStatusError as e:
+            return None, (
+                f"[web_search: SearXNG HTTP {e.response.status_code} - "
+                f"engines='{engines_override or _SEARXNG_ENGINES}' language='{_SEARXNG_LANGUAGE}'. "
+                f"Check the engines configuration or leave engines/language empty.]"
+            )
+        except Exception as e:
+            return None, f"[web_search: error - {type(e).__name__}: {str(e)[:200]}]"
+    return None, "[web_search: timeout]"
+
+
+def _process_searxng_results(query: str, raw_results: list) -> tuple[list, bool]:
+    """Deduplicate, strip trackers, enforce ``site:``, rank by relevance, and cap per host."""
+    cleaned = _dedup_results(raw_results)
+    site_filtered, has_site = _filter_site_constraints(query, cleaned)
+    ranked = _rank_and_filter_results(query, site_filtered)
+    capped = _cap_per_host(ranked, cap=2)
+    return capped, has_site
+
+
 async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str:
     if not _SEARXNG_ENABLED:
         return "[web_search: SearXNG disabled — enable it in settings or start SearXNG]"
     if not _HAS_HTTPX:
         return "[web_search: httpx not installed]"
 
-    _cache_key = f"{query.strip().lower()}:{max_results}"
+    _cache_key = (
+        f"{_SEARXNG_HOST}|{_SEARXNG_ENGINES}|{_SEARXNG_LANGUAGE}|"
+        f"{max_results}|{query.strip().lower()}"
+    )
     if _cache_key in _SEARCH_CACHE:
         _ts, _cached = _SEARCH_CACHE[_cache_key]
         if time.time() - _ts < _CACHE_TTL:
@@ -311,49 +619,29 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
             _SEARCH_CACHE[_cache_key] = (time.time(), _wd)
             return _wd
 
-    for _attempt in range(2):
-        try:
-            client = await _get_client_async()
-            resp = await client.get(
-                f"{_SEARXNG_HOST}/search",
-                params=_build_search_params(query, max_results),
-                headers={"Accept": "application/json"},
-                timeout=_httpx.Timeout(
-                    connect=5.0, read=_SEARCH_TIMEOUT, write=5.0, pool=5.0
-                ),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except _httpx.ConnectError:
-            return (
-                f"[web_search: SearXNG not reachable ({_SEARXNG_HOST}).\n"
-                f"Start with: docker run -d --name searxng -p 8888:8080 searxng/searxng]"
-            )
-        except _httpx.TimeoutException:
-            if _attempt == 0:
-                logger.warning("web_search: timeout attempt 1 - retry...")
-                continue
-            return f"[web_search: timeout after {_SEARCH_TIMEOUT}s (2 attempts) - SearXNG responds too slowly]"
-        except _httpx.HTTPStatusError as e:
-            return (
-                f"[web_search: SearXNG HTTP {e.response.status_code} - "
-                f"engines='{_SEARXNG_ENGINES}' language='{_SEARXNG_LANGUAGE}'. "
-                f"Check the engines configuration or leave engines/language empty.]"
-            )
-        except Exception as e:
-            return f"[web_search: error - {type(e).__name__}: {str(e)[:200]}]"
+    data, err_msg = await _fetch_searxng_json(query, max_results)
+    if err_msg is not None or data is None:
+        return err_msg or "[web_search: error]"
 
-    results = data.get("results", [])
-    results = _cap_per_host(results, cap=2)
+    raw_results = data.get("results", []) or []
+    unresponsive = data.get("unresponsive_engines", []) or []
+    results, has_site = _process_searxng_results(query, raw_results)
+
+    # Rescue pass: if default instance engines failed (CAPTCHA / 429) or only returned
+    # off-site / zero-overlap spam (e.g. un-updated container), query healthy fallback engines once.
+    if not results and not _SEARXNG_ENGINES and (unresponsive or raw_results):
+        rescue_data, _ = await _fetch_searxng_json(query, max_results, engines_override=_RESCUE_ENGINES)
+        if rescue_data:
+            raw_rescue = rescue_data.get("results", []) or []
+            results, has_site = _process_searxng_results(query, raw_rescue)
+
     if not results:
-        # The configured engines return nothing for some topics (their wikipedia
-        # engine is down on the live instance). Try Wikipedia once before giving
-        # up - an encyclopedia hit beats "No results" for factual questions.
-        _wd = await _wiki_direct(query, max_results)
-        if _wd:
-            _SEARCH_CACHE[_cache_key] = (time.time(), _wd)
-            return _wd
+        # Never substitute Wikipedia articles when the caller explicitly requested another domain.
+        if not has_site:
+            _wd = await _wiki_direct(query, max_results)
+            if _wd:
+                _SEARCH_CACHE[_cache_key] = (time.time(), _wd)
+                return _wd
         return (
             f"[web_search: No results for '{query}']\n"
             "Do NOT retry the same topic with reshuffled words. Either use a much more "

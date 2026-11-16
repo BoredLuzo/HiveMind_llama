@@ -22,6 +22,20 @@ next to your old install — `settings.json`, `models.json`, `sessions\`, `logs\
   Underdog Woof is licensed under the Underdog Non-Commercial License 1.0
   (non-commercial use only; attribution shown automatically when active).
 
+## Websearch Quality & SearXNG Reliability
+
+- Fixed random/off-topic search results caused by legacy `"bing,duckduckgo"`
+  pins on older installs (`settings.py` now clears legacy `"bing,duckduckgo"` +
+  `"all"` settings on load, and `configure(engines="")` properly resets empty
+  engine lists and flushes cached hits in `tools/websearch.py`).
+- Updated `searxng-config/settings.yml.example` to enable `duckduckgo web` and
+  `yahoo` alongside `google cse`, keeping CAPTCHA-blocked `duckduckgo`,
+  inactive `mojeek`, and fallback-spam `bing` disabled.
+- Added strict `site:` / `-site:` domain enforcement, query-term relevance
+  filtering & ranking (rejecting zero-overlap fallback pages), `msockid` /
+  `utm_*` tracking cleanup, automatic healthy-engine rescue when default
+  instance engines fail, and accurate `[N]` result counts in the web UI pill.
+
 ## Memory Extraction & Repo Cleanup
 
 - Fixed explicit memory shortcuts (`"remember that..."`) returning empty writes

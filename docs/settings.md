@@ -238,9 +238,9 @@ its comment) in either file, then re-run the generator.
 | `run_bash_shell` | str | `auto` | - | run_bash shell on Windows: "auto" = Git Bash when present (small models emit POSIX bash; powershell chokes on every line), else powershell. "bash"/"powershell" force one. |
 | `safe_profile_matrix_file` | str | `model_configs/safe_profile_matrix.json` | - |  |
 | `safe_profile_policy` | str | `default_8gb_v1` | - |  |
-| `searxng_engines` | str | `` | - | Only bing + duckduckgo answer reliably on stock SearXNG instances: google sits CAPTCHA-suspended, wikipedia returns 0 under most language tags, github floods the ranking with 30 keyword-matched repos per query. Leave empty: SearXNG then queries every engine it has ENABLED.… |
+| `searxng_engines` | str | `` | - | Leave empty: HiveMind lets SearXNG query its healthy enabled general engines (yahoo, duckduckgo web, google cse — bing/duckduckgo-api stay disabled). Legacy "bing,duckduckgo" pins are auto-cleared on load. |
 | `searxng_host` | str | `http://localhost:8888` | yes |  |
-| `searxng_language` | str | `en` | - | DO NOT set a region/language tag ("en", "en-US", ...): on stock instances that makes every engine return region-fallback garbage (google.fr login pages for a "qwen3 context length" query —. "all" returns English results for English queries, which the… |
+| `searxng_language` | str | `en` | - | Keep "en" by default so technical/developer searches stay in English regardless of host IP geolocation (multilingual engines like yahoo and duckduckgo web still return native results when querying in German). |
 | `server_port` | int | `8001` | - |  |
 | `session_compress_threshold` | int | `20` | - |  |
 | `session_history_budget_tokens` | int | `0` | - | Token budget for the conversation history a run sees . Replaces blind message-count caps: newest turns verbatim, older turns dropped whole once the budget is full. 0 (default) derives the budget from the direct model's context (35% of n_ctx minus a 4096 reserve for… |

@@ -9756,7 +9756,15 @@ function handleEvent(d) {
         }
         _trInner = _trBadge + esc(_trLines + (_trLines === 1 ? ' line' : ' lines'));
       } else if (_trToolName === 'web_search') {
-        _trInner = esc(_trLines + ' results');
+        var _wsHits = (_trFull.match(/^\[\d+\]\s/gm) || []).length;
+        if (_wsHits > 0) {
+          _trInner = esc(_wsHits + (_wsHits === 1 ? ' result' : ' results'));
+        } else {
+          var _wsFirst = '';
+          var _wsArr = _trFull.split('\n');
+          for (var _wsi = 0; _wsi < _wsArr.length; _wsi++) { if (_wsArr[_wsi].trim()) { _wsFirst = _wsArr[_wsi].trim(); break; } }
+          _trInner = '<span class="tr-preview">' + esc(_wsFirst.slice(0, 80) + (_wsFirst.length > 80 ? '\u2026' : '')) + '</span>';
+        }
       } else {
         // Generic: 1-line content preview
         var _trFirst = '';

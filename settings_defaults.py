@@ -547,17 +547,13 @@ DEFAULT_SETTINGS = {
     # Server-side levelling of the sidecar output (measured -15.5 dBFS peak).
     "tts_normalize":             True,
 
-    # Only bing + duckduckgo answer reliably on stock SearXNG instances:
-    # google sits CAPTCHA-suspended, wikipedia returns 0 under most language
-    # tags, github floods the ranking with 30 keyword-matched repos per query.
-    # Leave empty: SearXNG then queries every engine it has ENABLED. Pinning
-    # "bing,duckduckgo" here (the old default) hid the wikipedia/other engines
-    # and every English query came back as German shop pages.
+    # Leave empty: HiveMind lets SearXNG query its healthy enabled general
+    # engines (yahoo, duckduckgo web, google cse — bing/duckduckgo-api stay
+    # disabled). Legacy "bing,duckduckgo" pins are auto-cleared on load.
     "searxng_engines":         "",
-    # DO NOT set a region/language tag ("en", "en-US", ...): on stock instances
-    # that makes every engine return region-fallback garbage (google.fr login
-    # pages for a "qwen3 context length" query — live-tested 2026-09-18).
-    # "all" returns English results for English queries, which the coder emits.
+    # Keep "en" by default so technical/developer searches stay in English
+    # regardless of host IP geolocation (multilingual engines like yahoo and
+    # duckduckgo web still return native results when querying in German).
     "searxng_language":        "en",
     "pipeline_websearch_enabled": True,
     "duo_websearch_enabled":   False,

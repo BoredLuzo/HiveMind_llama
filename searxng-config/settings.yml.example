@@ -114,21 +114,32 @@ categories_as_tabs:
   social media:
 
 engines:
-  # SEARCHXNG-CONFIG-FIX (2026-10-17), measured on the live instance:
-  #   google  -> "access denied" (bot-blocked), disabled
-  #   brave   -> "too many requests" every time, disabled
-  #   wikidata-> timeout every time, disabled
-  #   wikipedia -> handled by the upstream default entry (use_default_settings);
-  #                our own copy overrode it and returned 0 results, so it is gone
-  #   duckduckgo + mojeek -> bot-friendly general engines, added
+  # SEARCHXNG-CONFIG-FIX (2026-11-16), measured live on container:
+  #   bing       -> ignores site:, serves unrelated fallback/shopping/dxdiag pages, disabled
+  #   duckduckgo -> CAPTCHA-blocked on stock IPs, disabled (replaced by duckduckgo web)
+  #   mojeek     -> inactive upstream (PoW CAPTCHA), disabled
+  #   google     -> access denied (bot-blocked), disabled
+  #   brave      -> 429 rate-limited after a couple of queries, disabled
+  #   wikidata   -> frequent timeouts, disabled
+  #   duckduckgo web + yahoo (+ upstream google cse) -> reliable general engines
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     categories: general
+    disabled: true
 
-  # bing disabled: measured 2026-10-17 it answers English queries with another
-  # region's pages ("Berlin population" -> Chinese Zhihu/Copilot posts), even
-  # with language=en. duckduckgo + mojeek are the general engines now.
+  - name: duckduckgo web
+    engine: duckduckgo_web
+    shortcut: ddgw
+    categories: general
+    disabled: false
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    categories: general
+    disabled: false
+
   - name: bing
     engine: bing
     shortcut: bi
@@ -139,6 +150,7 @@ engines:
     engine: mojeek
     shortcut: mj
     categories: general
+    disabled: true
 
   - name: google
     engine: google

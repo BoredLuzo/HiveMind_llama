@@ -21,6 +21,15 @@ think aloud, and tidying historical release notes out of the repository root.
   `deploy/prepush_check.ps1`).
 
 ### Fixed
+- **Websearch quality, relevance & SearXNG engines:** Migrated legacy
+  `"bing,duckduckgo"` + `"all"` pins to clean defaults (`settings.py`), enabled
+  `duckduckgo web` + `yahoo` while keeping CAPTCHA/fallback-spam engines off in
+  `searxng-config/settings.yml.example`, added URL tracking-param stripping +
+  cross-engine deduplication, strict `site:` / `-site:` enforcement,
+  query-overlap relevance filtering/ranking (rejecting zero-match fallback
+  junk), automatic rescue fallback on CAPTCHA/rate-limited default engines,
+  and accurate numbered hit counts in the UI tool summary (`tools/websearch.py`,
+  `static/app.js`, `tests/test_websearch_quality.py`).
 - **Memory Write (`nothing stored` on explicit `"remember that"` prompts):**
   Suppressed extraction-phase thinking noise before memory parsing, added a
   note-text fallback when structured extraction returned empty, and emitted the

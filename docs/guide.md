@@ -842,11 +842,12 @@ Search runs through your local SearXNG, so quality depends on the engines that
 instance can actually serve: on stock instances google sits CAPTCHA-suspended and
 broad language tags bury good hits under localized shop pages. HiveMind therefore
 defaults to `searxng_engines = ""` (use every engine the instance has enabled -
-the bundled `searxng-config` enables duckduckgo and mojeek, bing/google/brave
-stay off) and `searxng_language = "en"`, safesearch on, and caps results per
-hostname. If everything looks like junk, open
-`http://localhost:8888/search?q=test` and adjust both keys to the engines that
-work for you.
+the bundled `searxng-config` enables `duckduckgo web` and `yahoo` alongside
+upstream `google cse`, while `bing`/`duckduckgo`/CAPTCHA-blocked engines stay
+off), `searxng_language = "en"`, safesearch on, enforces `site:` constraints,
+rejects zero-overlap fallback junk, and caps results per hostname. If everything
+looks like junk, open `http://localhost:8888/search?q=test` and adjust both
+keys to the engines that work for you.
 
 ## Scripts
 
