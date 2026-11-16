@@ -72,10 +72,10 @@ benchmark parity.
   and validated `model_configs` agent/model identifiers against path traversal.
 
 ### Fixed
-- Guarded `_phase_claim` peer-slot eviction in `backend/llama_start_phases.py`
 - Reused warm/direct model slots with a 4k context cap for `_handle_memory_request`
   (`hive_functions/pipeline.py`) so memory shortcuts do not cold-load large judge profiles,
   and auto-refreshed dead MCP connections before scheduled runs (`scheduler/manager.py`).
+- Guarded `_phase_claim` peer-slot eviction in `backend/llama_start_phases.py`
   to skip `_loading` peer slots (preventing concurrent weight-load thrash) and
   initialized `complexity` before the Stats closure in `core/chat_run.py` so
   intent-agent early exits complete cleanly without `UnboundLocalError`.
