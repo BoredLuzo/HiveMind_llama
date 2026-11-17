@@ -41,6 +41,10 @@ h = Harness(style="summary", pad=True)
 check = h.check
 
 
+_EMPTY_HOME = Path(tempfile.gettempdir()) / "hmsim_empty_home"
+_EMPTY_HOME.mkdir(exist_ok=True)
+
+
 def build_env(fakebin=None, extra=None):
     windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
     parts = [str(windir / "System32"),
@@ -48,7 +52,12 @@ def build_env(fakebin=None, extra=None):
              str(Path(sys.executable).parent)]
     if fakebin:
         parts.insert(2, str(fakebin))
-    env = {**os.environ, "PATH": os.pathsep.join(parts)}
+    env = {
+        **os.environ,
+        "PATH": os.pathsep.join(parts),
+        "USERPROFILE": str(_EMPTY_HOME),
+        "LOCALAPPDATA": str(_EMPTY_HOME),
+    }
     # The sandbox must see the machine the way a fresh install does: a leaked
     # HIVEMIND_MODELS_DIR would make setup_models.bat skip its folder prompt.
     env.pop("HIVEMIND_MODELS_DIR", None)

@@ -69,8 +69,9 @@ if not defined UV_DIR (
     echo  [uv] Target: %USERPROFILE%\.local\bin ^(added to PATH^)
     where winget >nul 2>&1
     if not errorlevel 1 (
-        REM --source winget supresses the MS store license agreement prompt
-        winget install --id astral-sh.uv --source winget --silent
+        REM --source winget suppresses the MS store license agreement prompt
+        winget install --id astral-sh.uv -e --source winget --silent --accept-package-agreements --accept-source-agreements
+        if errorlevel 1 powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
     ) else (
         powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
     )
@@ -131,7 +132,7 @@ REM UV-PATH-PERSIST (2026-11-05): uv puts the python3.14 shim in
 REM %USERPROFILE%\.local\bin. If that directory is not in the user PATH yet,
 REM add it once (idempotent) so a normal terminal can use uv/Python too.
 if not exist "%USERPROFILE%\.local\bin" goto uv_path_done
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$d = Join-Path $env:USERPROFILE '.local\bin'; $p = [Environment]::GetEnvironmentVariable('Path','User'); if (($p -split ';') -contains $d) { 'present' } else { [Environment]::SetEnvironmentVariable('Path', (($p.TrimEnd(';')) + ';' + $d).TrimStart(';'), 'User'); 'added' }"`) do set "UV_PATH_STATE=%%P"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$d = Join-Path $env:USERPROFILE '.local\bin'; $p = [string][Environment]::GetEnvironmentVariable('Path','User'); if (($p -split ';') -contains $d) { 'present' } else { $new = (($p.TrimEnd(';')) + ';' + $d).TrimStart(';'); [Environment]::SetEnvironmentVariable('Path', $new, 'User'); 'added' }"`) do set "UV_PATH_STATE=%%P"
 if /i "%UV_PATH_STATE%"=="added" echo   [uv] added %USERPROFILE%\.local\bin to the user PATH ^(new terminals only^).
 :uv_path_done
 echo.
@@ -305,6 +306,7 @@ REM the first time - seed the shown defaults from the existing settings.
 set "VRAM="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.vram_budget_gb"`) do set "VRAM=%%V"
 if not defined VRAM set "VRAM=8.0"
+set "VRAM_IN="
 set /p "VRAM_IN=VRAM in GB [Enter = keep %VRAM%]: "
 if defined VRAM_IN set "VRAM=!VRAM_IN!"
 echo.
@@ -313,6 +315,7 @@ REM Optional server port
 set "HM_PORT="
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.server_port"`) do set "HM_PORT=%%P"
 if not defined HM_PORT set "HM_PORT=8001"
+set "PORT_IN="
 set /p "PORT_IN=Server port [Enter = keep %HM_PORT%]: "
 if defined PORT_IN set "HM_PORT=!PORT_IN!"
 echo.
@@ -436,7 +439,7 @@ if not errorlevel 1 goto coreutils_verify
 REM The package id is not in every winget source snapshot. The Store product
 REM id is the documented route and resolves through the msstore source.
 echo   [INFO] The winget id did not resolve - trying the Store product id...
-winget install --source msstore --id 9NBLGGH4R32N --accept-package-agreements --accept-source-agreements
+winget install --source msstore --id 9NBLGGH4R32N --silent --accept-package-agreements --accept-source-agreements
 :coreutils_verify
 REM Verify by package, not only by PATH: when the Store package is already
 REM installed, the App Execution Alias is not yet on the PATH of the running
@@ -513,7 +516,9 @@ if errorlevel 2 (
 )
 REM No folder prompt here - setup_models.bat asks ONCE (download target;
 REM existing GGUFs in that folder get registered automatically).
+set "HIVEMIND_NO_PAUSE=1"
 call setup_models.bat
+set "HIVEMIND_NO_PAUSE="
 
 REM [6b] Routing decider (OPTIONAL, opt-in) ----------------------------------
 REM OPT-IN (2026-10-16, clarified 2026-10-28): the decider is OFF by default
@@ -586,18 +591,20 @@ echo   Nothing is required - the built-in analysis works without them.
 choice /c YN /n /t 30 /d N /m "Install language-server packs now? [y/N] "
 if errorlevel 2 (
     echo   Skipped. Add later: deploy\install_lsp_packs.bat
-    goto searxng_step
+    goto lsp_done
 )
 echo.
 REM no `call` here would end this installer when the list script returns.
 call deploy\install_lsp_packs.bat --list
 echo.
+set "LSP_PICK="
 set /p "LSP_PICK=Pack numbers (e.g. 1,2,3 - Enter = skip): "
-if not defined LSP_PICK goto searxng_step
+if not defined LSP_PICK goto lsp_done
 REM the script takes space-separated numbers; commas are what people type
 set "LSP_PICK=%LSP_PICK:,= %"
 call "%~dp0deploy\install_lsp_packs.bat" %LSP_PICK%
 
+:lsp_done
 echo   [OK] step 6/9 Models - done.
 echo.
 :searxng_step
@@ -679,7 +686,9 @@ echo   (set it up anytime: start_gateway.bat setup).
 echo.
 choice /c YN /n /m "Set up the Telegram gateway now? [Y/N] "
 if errorlevel 2 goto tg_done
+set "HIVEMIND_NO_PAUSE=1"
 call start_gateway.bat setup
+set "HIVEMIND_NO_PAUSE="
 :tg_done
 echo.
 

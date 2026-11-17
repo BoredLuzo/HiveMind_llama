@@ -82,15 +82,22 @@ if errorlevel 2 (
 )
 echo.
 
+if not exist "%PROGRAMDATA%\HiveMind\Logs" mkdir "%PROGRAMDATA%\HiveMind\Logs" >nul 2>&1
+
 echo  [..] Installing HiveMind service...
+set "NSSM_FAIL=0"
 "%NSSM_BIN%" install HiveMind "%HMPY%" "\"%~dp0..\run.py\""
-if %errorlevel% equ 0 (
+if errorlevel 1 set "NSSM_FAIL=1"
+if "%NSSM_FAIL%"=="0" (
     "%NSSM_BIN%" set HiveMind AppDirectory "%~dp0.."
+    if errorlevel 1 set "NSSM_FAIL=1"
     "%NSSM_BIN%" set HiveMind AppStdout "%PROGRAMDATA%\HiveMind\Logs\hivemind.log"
+    if errorlevel 1 set "NSSM_FAIL=1"
     "%NSSM_BIN%" set HiveMind AppStderr "%PROGRAMDATA%\HiveMind\Logs\hivemind.log"
+    if errorlevel 1 set "NSSM_FAIL=1"
 )
 
-if %errorlevel% equ 0 (
+if "%NSSM_FAIL%"=="0" (
     echo.
     echo  === Installation complete ===
     echo.

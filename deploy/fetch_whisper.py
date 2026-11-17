@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import platform
@@ -32,10 +33,19 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -54,10 +64,12 @@ ASSETS = {
     # (platform, backend) -> regex over the release asset names
     ("win", "cpu"): re.compile(r"^whisper-bin-x64\.zip$", re.IGNORECASE),
     ("win", "blas"): re.compile(r"^whisper-blas-bin-x64\.zip$", re.IGNORECASE),
+    # ggml-org/whisper.cpp Linux releases ship a single x64 tarball (`whisper-bin-ubuntu-x64.tar.gz`)
+    # without a separate `blas` tarball — map both cpu and blas to it on Linux.
     ("linux", "cpu"): re.compile(r"^whisper-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE),
-    ("linux", "blas"): re.compile(r"^whisper-blas-bin-x64\.tar\.gz$", re.IGNORECASE),
+    ("linux", "blas"): re.compile(r"^whisper-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE),
     ("ubuntu", "cpu"): re.compile(r"^whisper-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE),
-    ("ubuntu", "blas"): re.compile(r"^whisper-blas-bin-x64\.tar\.gz$", re.IGNORECASE),
+    ("ubuntu", "blas"): re.compile(r"^whisper-bin-ubuntu-x64\.tar\.gz$", re.IGNORECASE),
 }
 MIN_BINARY_BYTES = 1 * 1024 * 1024      # a whisper.cpp zip is 8-21 MB
 MIN_MODEL_BYTES = 50 * 1024 * 1024      # the smallest model is 74 MB
@@ -144,57 +156,75 @@ def _safe_extract(arc: Path, dest: Path) -> None:
             tf.extract(m, dest, set_attrs=False)
 
 
-def _download(url: str, dest: Path, min_bytes: int = 0) -> bool:
-    """Stream a URL to ``dest``. Returns True when the file arrived complete."""
+def _download(url: str, dest: Path, min_bytes: int = 0, max_attempts: int = 3) -> bool:
+    """Stream a URL to ``dest`` with retries. Returns True when the file arrived complete."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
-    got = 0
-    total = 0
-    try:
-        req = urllib.request.Request(url, headers=UA)
-        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
-            total = int(resp.headers.get("Content-Length") or 0)
-            while True:
-                chunk = resp.read(1024 * 256)
-                if not chunk:
-                    break
-                out.write(chunk)
-                got += len(chunk)
-                if total:
-                    pct = 100.0 * got / total
-                    _progress("running", pct, dest.name)
-                    print(f"\r  {dest.name}: {got / 1048576:6.1f} / "
-                          f"{total / 1048576:6.1f} MB ({pct:5.1f} %)", end="")
-                elif got % (10 * 1048576) < 262144:
-                    print(f"\r  {dest.name}: {got / 1048576:6.1f} MB", end="")
-        print()
-    except (urllib.error.URLError, OSError, TimeoutError) as exc:
-        print(f"\n  [ERROR] download failed: {exc}")
-        tmp.unlink(missing_ok=True)
-        return False
-    # TRUNCATION (audit r4): a body that just ENDED early passed the
-    # min_bytes floor (60 MB of a 396 MB model) and was then renamed onto
-    # the good name - the corrupt model counted as "already present"
-    # forever after. The byte count must match Content-Length.
-    if total and got < total:
-        print(f"\n  [ERROR] {dest.name}: truncated download "
-              f"({got} / {total} bytes) - re-run to retry")
-        tmp.unlink(missing_ok=True)
-        return False
-    if got < min_bytes:
-        print(f"  [ERROR] {dest.name} is only {got} bytes - wrong asset?")
-        tmp.unlink(missing_ok=True)
-        return False
-    tmp.replace(dest)
-    return True
+    for attempt in range(1, max_attempts + 1):
+        have = tmp.stat().st_size if tmp.exists() else 0
+        got = have
+        total = 0
+        try:
+            headers = dict(UA)
+            if have:
+                headers["Range"] = f"bytes={have}-"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                cr = resp.headers.get("Content-Range") or ""
+                cr_start = None
+                if resp.getcode() == 206 and cr:
+                    cm = re.match(r"^bytes\s+(\d+)-", cr)
+                    if cm:
+                        cr_start = int(cm.group(1))
+                append = bool(have and resp.getcode() == 206 and (cr_start is None or cr_start == have))
+                if not append:
+                    have = 0
+                    got = 0
+                total = have + int(resp.headers.get("Content-Length") or 0)
+                with open(tmp, "ab" if append else "wb") as out:
+                    while True:
+                        chunk = resp.read(1024 * 256)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        got += len(chunk)
+                        if total:
+                            pct = min(100.0, 100.0 * got / total)
+                            _progress("running", pct, dest.name)
+                            print(f"\r  {dest.name}: {got / 1048576:6.1f} / "
+                                  f"{total / 1048576:6.1f} MB ({pct:5.1f} %)", end="")
+                        elif got % (10 * 1048576) < 262144:
+                            print(f"\r  {dest.name}: {got / 1048576:6.1f} MB", end="")
+            print()
+            if total and got != total:
+                raise IOError(f"truncated download ({got} / {total} bytes)")
+            if got < min_bytes:
+                print(f"  [ERROR] {dest.name} is only {got} bytes - wrong asset?")
+                tmp.unlink(missing_ok=True)
+                return False
+            tmp.replace(dest)
+            return True
+        except urllib.error.HTTPError as exc:
+            if exc.code == 416 and have:
+                tmp.unlink(missing_ok=True)
+                continue
+            print(f"\n  [WARNING] download HTTP {exc.code}: {exc}")
+        except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
+            print(f"\n  [WARNING] download failed (attempt {attempt}/{max_attempts}): {exc}")
+        if attempt < max_attempts:
+            time.sleep(min(10, 2 ** attempt))
+    tmp.unlink(missing_ok=True)
+    return False
 
 
 def install_binaries(backend: str, force: bool = False) -> bool:
     """Fetch the release asset for this platform and unpack it into stt/bin/."""
     dest = stt_root() / "bin"
-    if binary_path("whisper-cli") and not force:
+    if binary_path("whisper-cli") and binary_path("parakeet-cli") and not force:
         print(f"[OK] binaries already present: {dest}")
         return True
+    if not _IS_WIN and backend == "blas":
+        print("[INFO] Linux whisper.cpp ships unified whisper-bin-ubuntu-x64; using Ubuntu x64 build.")
     rx = ASSETS.get((os_tag, backend)) or ASSETS.get((os_tag, "cpu"))
     try:
         releases = _http_json(RELEASE_API)
@@ -221,19 +251,35 @@ def install_binaries(backend: str, force: bool = False) -> bool:
         except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as exc:
             print(f"[ERROR] the downloaded archive is corrupt or unsafe ({exc})")
             return False
-        # The zip nests everything under Release/ (win) or build/bin (linux).
+        # Windows nests binaries under Release/, Ubuntu tarballs under
+        # whisper-bin-ubuntu-x64/ (or build/bin/) - locate the dir carrying whisper-cli.
         src = None
-        for cand in Path(tmp).rglob("whisper-cli*"):
-            if cand.parent.name in ("Release", "bin"):
+        for cand in sorted(Path(tmp).rglob("whisper-cli*")):
+            if cand.is_file() or cand.is_symlink():
                 src = cand.parent
                 break
         if src is None:
             print("[ERROR] unpacked archive has no whisper-cli")
             return False
         for item in src.iterdir():
-            if item.is_file():
-                shutil.copy2(item, dest / item.name)
+            dst_item = dest / item.name
+            if item.is_symlink():
+                # Preserve relative .so symlinks on POSIX instead of triplicating shared libraries
+                target_link = os.readlink(item)
+                if dst_item.exists() or dst_item.is_symlink():
+                    dst_item.unlink()
+                try:
+                    os.symlink(target_link, dst_item)
+                except OSError:
+                    if item.exists() and item.is_file():
+                        shutil.copy2(item, dst_item)
+            elif item.is_file():
+                shutil.copy2(item, dst_item)
+                if not _IS_WIN and dst_item.name in ("whisper-cli", "whisper-server", "parakeet-cli"):
+                    dst_item.chmod(dst_item.stat().st_mode | 0o755)
     ok = bool(binary_path("whisper-cli"))
+    if ok and not binary_path("parakeet-cli"):
+        print("[WARN] parakeet-cli missing from unpacked archive (whisper-cli installed)")
     print(f"[{'OK' if ok else 'ERROR'}] binaries in {dest}")
     return ok
 
@@ -247,18 +293,18 @@ def install_models(keys: list[str], force: bool = False) -> bool:
             ok = False
             continue
         dest = stt_root() / "models" / m.filename
+        min_expected = max(MIN_MODEL_BYTES, int(m.size_mb * 1024 * 1024 * 0.85))
         if dest.is_file() and not force:
-            # PARTIAL (audit r4): existence alone is not "installed" - a
-            # truncated model from an old crashed run would be kept forever
-            # and the Voice card would fail to load it with no hint why.
-            if dest.stat().st_size >= MIN_MODEL_BYTES:
+            # Verify against model's documented size (~85% floor) rather than a flat
+            # 50 MB threshold so truncated 396 MB / 465 MB models are re-fetched.
+            if dest.stat().st_size >= min_expected:
                 print(f"[OK] {key}: {m.filename} already present")
                 continue
             print(f"[..] {key}: {m.filename} exists but only "
                   f"{dest.stat().st_size} bytes - re-downloading the partial file")
         url = HF_BASE.format(repo=m.repo, name=m.filename)
         print(f"[..] {key}: {m.filename} ({m.size_mb} MB)")
-        if not _download(url, dest, MIN_MODEL_BYTES):
+        if not _download(url, dest, min_expected):
             ok = False
     return ok
 

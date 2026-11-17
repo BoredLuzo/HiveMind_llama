@@ -19,6 +19,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
 ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = ROOT / "logs"
 STATS = ROOT / "token_stats.json"
@@ -38,7 +46,7 @@ def _model_tag(logfile: Path) -> str | None:
                 line = fh.readline()
                 if not line:
                     break
-                if "--model" in line and "llama-server.exe" in line:
+                if "--model" in line and ("llama-server" in line):
                     m = _CMD_RE.search(line)
                     if m:
                         return Path(m.group(1).strip('"')).stem
@@ -48,7 +56,7 @@ def _model_tag(logfile: Path) -> str | None:
 
 
 def _tag_map(models_json: Path | None = None) -> dict[str, str]:
-    """GGUF-Stem -> Tag (aus models.json, das {tag: pfad} haelt)."""
+    """GGUF-Stem -> Tag (aus models.json, bevorzugt kanonische Tags vor kurzen Aliasen)."""
     path = models_json or (ROOT / "models.json")
     out: dict[str, str] = {}
     try:
@@ -57,12 +65,16 @@ def _tag_map(models_json: Path | None = None) -> dict[str, str]:
         return out
     if not isinstance(doc, dict):
         return out
-    for tag, value in doc.items():
-        if not isinstance(value, str):
-            continue
+    # Sort canonical (-mtp/-ud/-qad/etc.) tags ahead of short base aliases so the canonical tag wins.
+    items = [
+        (tag, value) for tag, value in doc.items()
+        if isinstance(tag, str) and isinstance(value, str)
+        and not tag.endswith(("_mmproj", "_drafter"))
+    ]
+    items.sort(key=lambda kv: ("-mtp" not in kv[0], -len(kv[0]), kv[0]))
+    for tag, value in items:
         stem = Path(value).stem
         out.setdefault(stem, tag)
-        # derselbe Tag kann unter mehreren Schreibweisen auftauchen
         out.setdefault(stem.lower(), tag)
     return out
 
@@ -70,7 +82,11 @@ def _tag_map(models_json: Path | None = None) -> dict[str, str]:
 def collect(log_dir: Path = LOG_DIR) -> dict[str, list[float]]:
     """Returns {model_stem: [tok/s, ...]} - real decode rates only."""
     samples: dict[str, list[float]] = {}
-    for logfile in sorted(log_dir.glob("llama_server_*.log")):
+    logfiles = list(log_dir.glob("llama_server_*.log"))
+    arch_dir = log_dir / "archive"
+    if arch_dir.is_dir():
+        logfiles.extend(arch_dir.glob("llama_server_*.log"))
+    for logfile in sorted(logfiles):
         tag = _model_tag(logfile)
         if not tag:
             continue
@@ -119,9 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--stats", default=str(STATS))
     args = ap.parse_args(argv)
 
-    samples = collect(Path(args.log_dir))
+    log_dir = Path(args.log_dir)
+    samples = collect(log_dir)
     # auf die in den Stats benutzten Tags umschreiben
-    tags = _tag_map()
+    mj_cand = log_dir.parent / "models.json"
+    tags = _tag_map(mj_cand if mj_cand.is_file() else None)
     if tags:
         mapped: dict[str, list[float]] = {}
         for stem, values in samples.items():

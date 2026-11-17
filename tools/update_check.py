@@ -278,11 +278,17 @@ def check_for_update(root: Path = ROOT, *, timeout: float = 4.0,
     result = select_release(releases, current,
                             include_prereleases=include_prereleases)
     if result.status in ("update", "current"):
-        _write_cache(cache_path, {
+        payload = {
             "checked_at": now,
             "current": current,
             "result": result.as_dict(),
-        })
+        }
+        if (result.status == "update"
+                and str(cache.get("dismissed_version") or "") == result.latest
+                and float(cache.get("dismissed_at") or 0) > 0):
+            payload["dismissed_version"] = cache["dismissed_version"]
+            payload["dismissed_at"] = cache["dismissed_at"]
+        _write_cache(cache_path, payload)
     return result
 
 
@@ -351,6 +357,10 @@ def _download_asset(result: CheckResult, root: Path,
     if not verify_sha256(dest, result.digest):
         print("  [update] release sha256 missing or mismatched - "
               "refusing to install the download.")
+        try:
+            dest.unlink()
+        except OSError:
+            pass
         return None
     return dest
 
@@ -408,15 +418,16 @@ def install_update(result: CheckResult, root: Path = ROOT) -> int:
     if zip_path is None:
         return 0
     print(f"  [update] applying {result.latest} (backup is kept by update.bat) ...")
+    env = dict(os.environ, HIVEMIND_NO_PAUSE="1")
     try:
         rc = subprocess.call(["cmd", "/c", str(update_bat), "--zip", str(zip_path)],
-                             cwd=str(root))
+                             cwd=str(root), env=env)
     except OSError as exc:
         print(f"  [update] could not start update.bat: {exc}")
         return 0
     if rc != 0:
-        print("  [update] update.bat failed - the running installation is unchanged.")
-        return 0
+        print(f"  [update] update.bat failed (exit {rc}) - aborting startup.")
+        return 11
     try:
         zip_path.unlink()   # audit: the verified zip is no longer needed
     except OSError:

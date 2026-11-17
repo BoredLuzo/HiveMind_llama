@@ -1,6 +1,7 @@
 # Optional voice dependencies (speech-to-text audio decode + TTS Opus encode).
 #
-#   python -m pip install -r requirements-voice.txt
+#   uv pip install --python .venv\Scripts\python.exe -r requirements-voice.txt
+#   python -m pip install -r requirements-voice.txt   (non-uv venvs)
 #
 # `soundfile` ships libsndfile inside its wheel (~2 MB) and covers the two
 # formats that matter: Ogg/Opus (what Telegram sends, what sendVoice requires)

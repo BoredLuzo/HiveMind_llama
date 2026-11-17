@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo.
@@ -27,7 +28,7 @@ for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Cont
 if not defined HM_PORT set "HM_PORT=8001"
 
 set "SRV_STOPPED="
-for /f "usebackq delims=" %%X in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { Stop-Process -Id $c -Force -ErrorAction SilentlyContinue; Write-Output 'yes' }"`) do set "SRV_STOPPED=1"
+for /f "usebackq delims=" %%X in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $c) -ErrorAction SilentlyContinue; if ($p -and ($p.CommandLine -match 'server\.py|run\.py|hivemind')) { Stop-Process -Id $c -Force -ErrorAction SilentlyContinue; Write-Output 'yes' } }"`) do set "SRV_STOPPED=1"
 if defined SRV_STOPPED (
     echo  [OK] HiveMind server stopped.
 ) else (

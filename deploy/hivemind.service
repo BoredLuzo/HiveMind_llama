@@ -24,16 +24,18 @@ Environment=PYTHONUNBUFFERED=1
 # request fails; without HF_HOME the model lands in an unpredictable place.
 Environment=HOME=/opt/hivemind
 Environment=UV_CACHE_DIR=/opt/hivemind/.cache/uv
+Environment=UV_PYTHON_INSTALL_DIR=/opt/hivemind/.cache/uv/python
 Environment=HF_HOME=/opt/hivemind/.cache/huggingface
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/hivemind/.cache/ms-playwright
 # The Pocket TTS model is gated. A nologin system user cannot run
 # `hf auth login`, so put the token here (or in a drop-in) if you want TTS:
 #Environment=HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
 
-# Backend: vulkan | cuda | cpu (default: vulkan). For CPU-only hosts uncomment:
+# Backend: vulkan | cuda | rocm | cpu (install_linux.sh substitutes the chosen backend):
 #Environment=HIVEMIND_GPU_BACKEND=cpu
 
-MemoryMax=12G
-TasksMax=64
+MemoryMax=48G
+TasksMax=512
 
 StandardOutput=append:/var/log/hivemind/hivemind.log
 StandardError=append:/var/log/hivemind/hivemind.log

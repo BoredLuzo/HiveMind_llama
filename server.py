@@ -89,7 +89,7 @@ from core.version import HIVEMIND_VERSION
 # version from THIS file (Select-String, first match) before applying a zip.
 # The literal below is text only — core/version.py stays the executable
 # source. Keep it in sync; test_split_audit_fixes (h2) pins the match.
-# HIVEMIND_VERSION = "1.6.1"
+# HIVEMIND_VERSION = "1.6.2"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -728,6 +728,9 @@ async def _startup():
                         _name, _m)
             if _changed:
                 save_settings(_s)
+                if isinstance(_s.get("agents"), dict):
+                    settings["agents"] = _s["agents"]
+                    apply_settings_to_pipeline(settings)
                 logger.warning("[AGENT-MODEL-SANITIZE] settings.json updated")
         except (ImportError, OSError, ValueError) as _san_exc:
             logger.warning("[AGENT-MODEL-SANITIZE] skipped: %s", _san_exc)

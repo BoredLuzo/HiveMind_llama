@@ -152,21 +152,39 @@ def is_non_model_gguf(filename: str) -> bool:
 _FILENAME_TAG_MAP_FILE = _THIS_DIR / "model_configs" / "gguf_filename_tags.json"
 _filename_tag_map: dict[str, str] | None = None
 
+# Built-in fallback for clean installs/clones before fetch_models writes
+# model_configs/gguf_filename_tags.json (on-disk manifest entries override).
+_BUILTIN_FILENAME_TAGS: dict[str, str] = {
+    "qwen3.5-4b-q4_k_m.gguf": "qwen3.5:4b-mtp",
+    "qwen3.5-2b-q4_k_m.gguf": "qwen3.5:2b-mtp",
+    "gemma-4-e4b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e4b-it-qat",
+    "gemma-4-e2b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e2b-it-qat",
+    "gemma-4-e4b-uncensored-hauhaucs-aggressive-q4_k_p.gguf": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+    "sharp-minicpm5-2b-q6_k_xl.gguf": "minicpm5:2b-sharp",
+    "lfm3-1.7b-qad-q4_0.gguf": "lfm3:1.7b-qad",
+    "lfm3-1.7b-uncensored-ad-q6_k.gguf": "lfm3:1.7b-uncensored-ad",
+    "lfm2.5-24b-a2b-q4_k_m.gguf": "lfm2.5:24b-a2b",
+    "spark-x2.6-4b-q4_k_m.gguf": "spark-x2.6:4b",
+    "air-26b-a4b.gguf": "air:26b-a4b",
+    "groot-19b-a3b-261023-q4_k_m.gguf": "groot:19b-a3b-261023",
+    "qwen3.6-35b-a3b-ud-q4_k_xl.gguf": "qwen3.6:35b-a3b-ud",
+    "qwen3.5-0.8b-ud-q4_k_xl.gguf": "qwen3.5:0.8b-ud",
+}
+
 
 def _known_filename_tags() -> dict[str, str]:
     global _filename_tag_map
     if _filename_tag_map is not None:
         return _filename_tag_map
+    merged = dict(_BUILTIN_FILENAME_TAGS)
     try:
         data = json.loads(_FILENAME_TAG_MAP_FILE.read_text(encoding="utf-8"))
+        for k, v in data.items():
+            if not k.startswith("_") and isinstance(v, str) and v:
+                merged[str(k).lower()] = str(v)
     except (OSError, json.JSONDecodeError, ValueError):
-        _filename_tag_map = {}
-        return _filename_tag_map
-    _filename_tag_map = {
-        str(k).lower(): str(v)
-        for k, v in data.items()
-        if not k.startswith("_") and isinstance(v, str) and v
-    }
+        pass
+    _filename_tag_map = merged
     return _filename_tag_map
 
 # ── Ollama-Familien-Exclusion ─────────────────────────────────────────────────
@@ -556,9 +574,9 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
     _base, _tag = (model.split(":", 1) + [""])[:2]
     _nfam = _norm(_base)                       # e.g. "qwen35", "gemma4"
     _nsize = ""
-    _sm = re.match(r"(\d+(?:\.\d+)?b)", _tag.lower())
+    _sm = re.match(r"(e?\d+(?:\.\d+)?b)", _tag.lower())
     if _sm:
-        _nsize = _sm.group(1).replace(".", "")  # e.g. "4b", "35b"
+        _nsize = _sm.group(1).replace(".", "")  # e.g. "4b", "35b", "e4b"
 
     def _relates(path: Path) -> bool:
         """filename actually belongs to this model family (NOT another)."""
@@ -592,7 +610,7 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
     overrides = _load_overrides()
     _okeys = [f"{model}_mmproj"]
     if _tag:
-        _sm = re.match(r"(\d+(?:\.\d+)?)b", _tag.lower())
+        _sm = re.match(r"(e?\d+(?:\.\d+)?)b", _tag.lower())
         if _sm:
             _okeys.insert(1, f"{_base}:{_sm.group(1).replace(".", "")}b_mmproj")
     if _tag:
@@ -621,10 +639,11 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
         for _cp in _cands:
             if _relates(_cp):
                 return _cp
-        # legacy generic-name fallbacks (repos shipping mmproj-BF16.gguf)
+        # legacy generic-name fallbacks (repos shipping unbranded mmproj-BF16.gguf / mmproj-F16.gguf)
         if _nfam in ("qwen36", "hermes36"):
             for _cp in _cands:
-                if "bf16" in _norm(_cp.name):
+                _cn = _norm(_cp.name)
+                if _cn in ("mmprojbf16gguf", "mmprojf16gguf"):
                     return _cp
     return None
 

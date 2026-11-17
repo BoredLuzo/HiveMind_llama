@@ -179,15 +179,14 @@ def section_a():
           len(rearm_calls) == 1, f" got {len(rearm_calls)}")
     co_i = UPD.find("check_optionals.bat")
     swap_i = SHIM.find("FINAL SELF-SWAP")
-    # C3 fix: pause moved BEFORE the swap; the swap line is now the LAST
-    # physical line (nothing may follow it) and carries the exit in both
-    # branches.
+    # Pause stays AFTER the copy/del inside the single final line so closing
+    # the window at "Press any key" still leaves the swapped update.bat on disk.
     last_line = SHIM.rstrip().splitlines()[-1]
     check("A21 re-arm after optional components, shim self-swap is last",
           bool(rearm_calls) and co_i < UPD.find(rearm_calls[0])
           and swap_i > 0 and ".update_new.bat" in last_line
-          and "exit /b" in last_line
-          and SHIM.rfind("pause >nul") < swap_i)
+          and "pause >nul" in last_line and "exit /b" in last_line
+          and last_line.index(".update_new.bat") < last_line.index("pause >nul"))
     check("A22 apply-failure message names the stopped watchdog",
           "watchdog is STOPPED" in UPD)
     check("A28 optional components run in the same console (no capture, no timeout)",

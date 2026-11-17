@@ -441,6 +441,7 @@ SUITES = [
     ("wait_ready_abort",           "tests/test_wait_ready_abort.py",           30),
     ("moe_auto_cpu",               "tests/test_moe_auto_cpu.py",               30),
     ("tts_and_model_wiring",       "tests/test_tts_and_model_wiring_fixes.py", 30),
+    ("installer_updater_1_6_2",    "tests/test_installer_updater_1_6_2.py",    45),
 
 ]
 

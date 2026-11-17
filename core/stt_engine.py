@@ -276,6 +276,21 @@ def is_wav_file(path) -> bool:
     return head[:4] == b"RIFF" and head[8:12] == b"WAVE"
 
 
+def _stt_subprocess_env(exe: Path | str) -> dict[str, str]:
+    """Build subprocess env adding `exe` parent to LD_LIBRARY_PATH on POSIX."""
+    env = dict(os.environ)
+    if os.name != "nt":
+        try:
+            bin_dir = str(Path(exe).parent)
+            cur = env.get("LD_LIBRARY_PATH", "")
+            parts = [p for p in cur.split(":") if p]
+            if bin_dir and bin_dir not in parts:
+                env["LD_LIBRARY_PATH"] = f"{bin_dir}:{cur}".rstrip(":")
+        except (TypeError, ValueError):
+            pass
+    return env
+
+
 def build_argv(engine: str, exe: Path, model: Path, wav: Path, *, threads: int,
                language: str = "en", translate: bool = False) -> list[str]:
     """argv for one transcription (list form only - never a shell string)."""
@@ -349,10 +364,11 @@ def transcribe(wav_path: str | Path, *, settings: dict | None = None,
                       threads=resolve_threads(settings),
                       language=resolve_language(settings),
                       translate=_translate)
+    env = _stt_subprocess_env(exe)
     try:
         proc = subprocess.run(argv, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=resolve_timeout(settings),
-                              check=False)
+                              env=env, check=False)
     except subprocess.TimeoutExpired as exc:
         raise SttError("STT_TIMEOUT",
                        f"transcription took longer than {resolve_timeout(settings):.0f}s") from exc
@@ -463,6 +479,7 @@ def preload(settings: dict | None = None, *, model_key: str | None = None) -> bo
             [str(exe), "-m", str(mp), "--host", "127.0.0.1", "--port", str(port),
              "-t", str(resolve_threads(settings)), "--language", resolve_language(settings)],
             stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+            env=_stt_subprocess_env(exe),
         )
     except OSError as exc:
         logger.warning("[STT] preload failed to start: %s", exc)

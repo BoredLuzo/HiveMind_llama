@@ -70,21 +70,25 @@ def main():
         fail("no dedicated judge-model install step",
              "judge_step / lfm3-only download still present")
 
-    # DECIDER FLOW (2026-10-31): the optional CPU decider stays; both
-    # branches must fall through to SearXNG, with no judge block in between.
+    # DECIDER FLOW (2026-10-31 -> 1.6.2): optional CPU decider branches go
+    # into :lsp_step -> :lsp_done -> :searxng_step with no removed judge block.
     _dec_i = _inst.find(":decider_model_step")
+    _lsp_i = _inst.find(":lsp_step")
+    _done_i = _inst.find(":lsp_done")
     _sx_i = _inst.find(":searxng_step")
-    _dec_block = _inst[_dec_i:_sx_i] if _dec_i >= 0 and _sx_i > _dec_i else ""
-    if _dec_i >= 0 and _sx_i > _dec_i:
-        ok("install.bat asks for the decider, then SearXNG")
+    _dec_block = _inst[_dec_i:_lsp_i] if _dec_i >= 0 and _lsp_i > _dec_i else ""
+    _lsp_block = _inst[_lsp_i:_sx_i] if _lsp_i >= 0 and _sx_i > _lsp_i else ""
+    if _dec_i >= 0 and _lsp_i > _dec_i and _done_i > _lsp_i and _sx_i > _done_i:
+        ok("install.bat asks for the decider, then LSP, then SearXNG")
     else:
-        fail("install.bat asks for the decider, then SearXNG",
+        fail("install.bat asks for the decider, then LSP, then SearXNG",
              "label order is wrong")
-    if _dec_block.count("goto searxng_step") >= 2:
-        ok("both decider branches reach SearXNG")
+    if (_dec_block.count("goto lsp_step") >= 2
+            and _lsp_block.count("goto lsp_done") >= 2):
+        ok("both decider and LSP branches reach lsp_done / SearXNG")
     else:
-        fail("both decider branches reach SearXNG",
-             "a branch still jumps to the removed judge block")
+        fail("both decider and LSP branches reach lsp_done / SearXNG",
+             "missing goto lsp_step or goto lsp_done")
     # /d requires /t (INSTALLER-AUDIT P1): the old /d N without /t made
     # choice error out (errorlevel 255) and the opt-in never displayed.
     if "choice /c YN /n /t 30 /d N" in _inst:

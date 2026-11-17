@@ -18,8 +18,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,13 +95,39 @@ def apply(root: Path, *, dry_run: bool = False) -> list[tuple[str, str, str]]:
 
     changes: list[tuple[str, str, str]] = []
 
+    def _has_vision(tag: str) -> bool:
+        try:
+            from model_configs.models_registry import get_profile
+            prof = get_profile(tag)
+            if isinstance(prof, dict) and isinstance(prof.get("capabilities"), dict):
+                return bool(prof["capabilities"].get("vision"))
+        except (ImportError, OSError, ValueError):
+            pass
+        try:
+            from routing.model_automap import get_model_capabilities
+            return bool((get_model_capabilities(tag) or {}).get("vision"))
+        except (ImportError, OSError, ValueError):
+            return False
+
+    installed_sorted = sorted(installed)
+    vision_installed = [m for m in installed_sorted if _has_vision(m)]
+
     def pick(role: str) -> str:
         for cand in ROLE_PREFERENCE.get(role, []):
             if cand in installed:
                 return cand
-        return ""
+        # Non-essential install (e.g. user picked only twil:8b or custom model):
+        # never leave agent roles blank when usable installed models exist.
+        if role == "vision_agent":
+            return vision_installed[0] if vision_installed else ""
+        if role == "direct" and vision_installed:
+            return vision_installed[0]
+        return installed_sorted[0] if installed_sorted else ""
 
     for role in ROLE_PREFERENCE:
+        if role not in ("analyst", "refiner", "critic", "synthesizer",
+                        "direct", "judge", "duo_coder", "duo_critic"):
+            continue
         cfg = agents.get(role)
         cfg = cfg if isinstance(cfg, dict) else {}
         current = str(cfg.get("model") or "").strip()
@@ -125,21 +160,24 @@ def apply(root: Path, *, dry_run: bool = False) -> list[tuple[str, str, str]]:
             settings["vision_agent_model"] = new
             changes.append(("vision_agent_model", vision, new))
 
-    # subagent ladder: only installed entries, order preserved
+    # subagent ladder: only installed entries, order preserved (fall back to
+    # installed non-essential models if none of SUBAGENT_LADDER is present).
     ladder = settings.get("subagent_lite_model_ladder")
     ladder = ladder if isinstance(ladder, list) else []
     keep = [m for m in ladder if isinstance(m, str) and m in installed]
     if not keep:
-        keep = [m for m in SUBAGENT_LADDER if m in installed]
+        keep = [m for m in SUBAGENT_LADDER if m in installed] or installed_sorted[:3]
         if keep and keep != ladder:
             settings["subagent_lite_model_ladder"] = keep
             changes.append(("subagent_lite_model_ladder",
                             ",".join(map(str, ladder)) or "-", ",".join(keep)))
 
     if changes and not dry_run:
-        settings_path.write_text(
+        tmp = settings_path.with_name(settings_path.name + ".tmp")
+        tmp.write_text(
             json.dumps(settings, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8")
+        os.replace(tmp, settings_path)
     return changes
 
 

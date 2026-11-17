@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableDelayedExpansion
+setlocal DisableDelayedExpansion
 cd /d "%~dp0"
 
 echo.
@@ -17,17 +17,17 @@ REM This is the ONLY place the folder is asked. install.bat calls this script
 REM without arguments, so the prompt appears exactly once during an install.
 set "MODELS_DIR=%~1"
 if "%MODELS_DIR%"=="" set "MODELS_DIR=%HIVEMIND_MODELS_DIR%"
-if "%MODELS_DIR%"=="" (
-    echo  Where should models be downloaded / searched?
-    echo  Existing GGUFs in that folder get registered automatically.
-    echo.
-    set "MODELS_DIR="
-    set /p "MODELS_DIR=Folder [Enter = %~dp0models]: "
-    if "!MODELS_DIR!"=="" set "MODELS_DIR=%~dp0models"
-)
+if not "%MODELS_DIR%"=="" goto models_dir_clean
+echo  Where should models be downloaded / searched?
+echo  Existing GGUFs in that folder get registered automatically.
+echo.
+set "MODELS_DIR="
+set /p "MODELS_DIR=Folder [Enter = %~dp0models]: "
+if "%MODELS_DIR%"=="" set "MODELS_DIR=%~dp0models"
 
-REM strip any quotes from pasted paths (delayed expansion keeps it safe)
-set MODELS_DIR=!MODELS_DIR:"=!
+:models_dir_clean
+REM Strip outer/embedded quotes safely without EnableDelayedExpansion (protects `!` in paths).
+set "MODELS_DIR=%MODELS_DIR:"=%"
 
 echo  Target folder: %MODELS_DIR%
 if not exist "%MODELS_DIR%" (
@@ -85,8 +85,13 @@ if errorlevel 4 goto custom_add
 if errorlevel 3 goto select_single
 if errorlevel 2 goto essential_set
 
+set "STEP_OK=1"
 echo.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing
+if errorlevel 1 (
+    set "STEP_OK=0"
+    echo   [WARN] Model download returned errors - see above.
+)
 goto more_models
 
 :essential_set
@@ -94,6 +99,10 @@ echo.
 echo  Essential set only. Answering "n" to a model skips it completely.
 echo.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
+if errorlevel 1 (
+    set "STEP_OK=0"
+    echo   [WARN] Essential model download returned errors - see above.
+)
 goto more_models
 
 :select_single
@@ -109,6 +118,10 @@ set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "
 if "%MODELS_SEL%"=="" goto import_only
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only "%MODELS_SEL%"
+if errorlevel 1 (
+    set "STEP_OK=0"
+    echo   [WARN] Model download returned errors - see above.
+)
 goto more_models
 
 :custom_add
@@ -121,6 +134,10 @@ echo   Optional: assign it to an agent role in settings.json.
 echo  --------------------------------------------------------------
 echo.
 "%PY%" deploy\add_model.py "%MODELS_DIR%"
+if errorlevel 1 (
+    set "STEP_OK=0"
+    echo   [WARN] Custom model setup returned errors or was aborted.
+)
 goto more_models
 
 :import_only
@@ -128,6 +145,10 @@ echo.
 REM Scan-only: auto-detect own models and register them in models.json.
 REM No download, no network access needed.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --scan-only
+if errorlevel 1 (
+    set "STEP_OK=0"
+    echo   [WARN] Model folder scan returned errors - see above.
+)
 
 :more_models
 REM Step finished. Ask explicitly: more models, or move on. Two named keys beat
@@ -158,8 +179,14 @@ if errorlevel 1 (
     echo          Settings -^> Models or run setup_models.bat again.
 )
 echo.
-echo  Done. models.json was populated from the models folder.
+if "%STEP_OK%"=="0" (
+    echo  Finished with warnings. Check messages above before starting HiveMind.
+) else (
+    echo  Done. models.json was populated from the models folder.
+)
 echo  Then start HiveMind with start_hivemind.bat
 echo.
-echo  Press any key to continue...
-pause >nul
+if not defined HIVEMIND_NO_PAUSE (
+    echo  Press any key to continue...
+    pause >nul
+)

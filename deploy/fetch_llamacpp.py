@@ -31,8 +31,17 @@ import time
 import platform
 import zipfile
 import tarfile
+import urllib.error
 import urllib.request
 from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 ROOT = Path(__file__).resolve().parent.parent
 LLAMA_DIR = ROOT / "llama"
@@ -62,13 +71,28 @@ def _resolve_releases(
     *,
     tag: str = "",
     use_latest: bool = False,
+    cuda_version: str = "",
 ) -> list[dict]:
     """Resolve release metadata: pinned tag first (unless `use_latest`), else newest nightly/latest."""
+    def _has_matching_asset(rel: dict) -> bool:
+        assets = rel.get("assets") or []
+        if not cuda_version:
+            return any(rx.match(str(a.get("name", "") or "")) for a in assets)
+        try:
+            want = tuple(int(x) for x in cuda_version.split(".")[:2])
+        except ValueError:
+            want = None
+        for a in assets:
+            name = str(a.get("name", "") or "")
+            if rx.match(name) and (want is None or _cuda_version_of(name, rx)[:2] == want):
+                return True
+        return False
+
     want_tag = "" if use_latest else (tag or os.environ.get("HIVEMIND_LLAMA_TAG", "") or _read_pinned_tag()).strip()
     if want_tag:
         try:
             pin_rel = http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{want_tag}")
-            if any(rx.match(str(a.get("name", "") or "")) for a in (pin_rel.get("assets") or [])):
+            if _has_matching_asset(pin_rel):
                 print(f"       Using pinned llama.cpp release: {want_tag} (pass --latest for newest nightly)")
                 return [pin_rel]
             print(f"       [INFO] Pinned release '{want_tag}' has no {backend} asset for {_OS_TAG} - falling back to newest nightly")
@@ -82,7 +106,7 @@ def _resolve_releases(
             _tag = str(_rel.get("tag_name") or "")
             if not re.fullmatch(r"b\d{4,}", _tag):
                 continue
-            if any(rx.match(str(a.get("name", "") or "")) for a in (_rel.get("assets") or [])):
+            if _has_matching_asset(_rel):
                 releases = [_rel]
                 break
         if releases:
@@ -143,7 +167,7 @@ def _pick_asset(releases: list[dict], rx, cuda_version: str = "") -> tuple[dict 
     if cuda_version:
         try:
             want = tuple(int(x) for x in cuda_version.split(".")[:2])
-        except Exception:
+        except ValueError:
             want = None
     best = None
     best_key = (0, (0,))
@@ -210,22 +234,36 @@ def download(url: str, dest: Path, max_attempts: int = 6) -> None:
                 if resume_from:
                     _probe = urllib.request.Request(url, headers={
                         "User-Agent": "HiveMind-Installer", "Range": f"bytes={resume_from - 1}-{resume_from - 1}"})
-                    with urllib.request.urlopen(_probe, timeout=60) as pr:
-                        _cr = pr.headers.get("Content-Range") or ""
-                    _m = re.match(r"^bytes \d+-(\d+)/(\d+)$", _cr)
-                    if _m and resume_from == int(_m.group(2)):
-                        return  # fully downloaded already
+                    try:
+                        with urllib.request.urlopen(_probe, timeout=60) as pr:
+                            _cr = pr.headers.get("Content-Range") or ""
+                        _m = re.match(r"^bytes \d+-(\d+)/(\d+)$", _cr)
+                        if _m and resume_from == int(_m.group(2)):
+                            return  # fully downloaded already
+                        if _m and resume_from > int(_m.group(2)):
+                            dest.unlink(missing_ok=True)
+                    except urllib.error.HTTPError as pe:
+                        if pe.code == 416:
+                            dest.unlink(missing_ok=True)
+                        else:
+                            raise
             resume_from = dest.stat().st_size if dest.exists() else 0
             headers = {"User-Agent": "HiveMind-Installer"}
             if resume_from:
                 headers["Range"] = f"bytes={resume_from}-"
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=120) as r:
-                if r.getcode() == 206 and resume_from:
+                _cr_main = r.headers.get("Content-Range") or ""
+                _cr_start = None
+                if r.getcode() == 206 and _cr_main:
+                    _cm = re.match(r"^bytes\s+(\d+)-", _cr_main)
+                    if _cm:
+                        _cr_start = int(_cm.group(1))
+                if r.getcode() == 206 and resume_from and (_cr_start is None or _cr_start == resume_from):
                     total = resume_from + int(r.headers.get("Content-Length") or 0)
                     mode = "ab"
                 else:
-                    # Server ignored Range (200) -> start from scratch.
+                    # Server ignored Range or resumed from wrong offset -> restart cleanly.
                     resume_from = 0
                     total = int(r.headers.get("Content-Length") or 0)
                     mode = "wb"
@@ -309,7 +347,7 @@ def _extract_and_swap(tmp_zip: Path, target: Path, digest: str | None) -> None:
     staging = target.with_name(target.name + ".staging")
     shutil.rmtree(staging, ignore_errors=True)
     try:
-        if isinstance(digest, str) and digest.startswith("sha256:"):
+        if isinstance(digest, str) and digest.lower().startswith("sha256:"):
             _h = _sha256_file(tmp_zip)
             if _h != digest.split(":", 1)[1].strip().lower():
                 raise RuntimeError(
@@ -332,28 +370,52 @@ def _extract_and_swap(tmp_zip: Path, target: Path, digest: str | None) -> None:
         # any failure leaves the OLD build in place (staging goes, target stays)
         shutil.rmtree(staging, ignore_errors=True)
         raise
+    backup = target.with_name(target.name + ".old")
+    shutil.rmtree(backup, ignore_errors=True)
     if target.exists():
         print(f"    Removing old version: {target.name}")
-        shutil.rmtree(target, ignore_errors=True)
+        try:
+            target.rename(backup)
+        except OSError as exc:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise OSError(
+                f"Cannot replace {target} because files are locked (stop llama-server first): {exc}"
+            ) from exc
     try:
         staging.rename(target)
     except OSError:
-        # a scanner may still hold a file inside the old dir: one more sweep
-        shutil.rmtree(target, ignore_errors=True)
-        staging.rename(target)
+        if backup.exists() and not target.exists():
+            try:
+                backup.rename(target)
+            except OSError:
+                pass
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
 
 
-def existing_build() -> tuple[int, Path] | None:
-    """Find the highest already installed build."""
+def _matches_backend(path_str: str, backend: str | None) -> bool:
+    if not backend:
+        return True
+    low = path_str.lower()
+    if backend == "cpu":
+        return not any(tok in low for tok in ("vulkan", "cuda", "rocm"))
+    return backend.lower() in low
+
+
+def existing_build(backend: str | None = None) -> tuple[int, Path] | None:
+    """Find the highest already installed build (optionally matching backend)."""
     best: tuple[int, Path] | None = None
     if LLAMA_DIR.is_dir():
-        for exe in LLAMA_DIR.glob(f"*/{SERVER_NAME}"):
-            # STAGING (audit r4): an interrupted --force run leaves a
-            # half-extracted `.staging` dir - it contains llama-server, but
-            # it is NOT an install and must not satisfy "already installed".
+        for exe in LLAMA_DIR.rglob(SERVER_NAME):
+            # STAGING / OLD (audit r4): half-extracted `.staging` or `.old`
+            # backups are NOT installed builds.
             if ".staging" in exe.parent.name:
                 continue
-            m = re.search(r"b(\d{4,})", exe.parent.name)
+            if any(p.endswith((".staging", ".old")) for p in exe.parts):
+                continue
+            if not _matches_backend(str(exe.parent), backend):
+                continue
+            m = re.search(r"b(\d{4,})", str(exe.parent))
             b = int(m.group(1)) if m else 0
             if best is None or b > best[0]:
                 best = (b, exe.parent)
@@ -406,15 +468,18 @@ def main() -> int:
     ap.add_argument("--latest", action="store_true", help="Ignore pinned build tag and install newest nightly")
     args = ap.parse_args()
 
-    have = existing_build()
+    have = existing_build(args.backend)
     if have and not args.force:
-        print(f"[OK] llama.cpp b{have[0]} already installed: {have[1]}")
+        print(f"[OK] llama.cpp b{have[0]} ({args.backend}) already installed: {have[1]}")
         print("     (use --force to re-download)")
         return 0
 
     print(f"[1/3] Fetching llama.cpp release info ({args.backend})...")
     rx = ASSET_REGEX[args.backend]
-    releases = _resolve_releases(args.backend, rx, tag=args.tag, use_latest=args.latest)
+    releases = _resolve_releases(
+        args.backend, rx, tag=args.tag, use_latest=args.latest,
+        cuda_version=args.cuda_version or "",
+    )
 
     # CUDA-VERSION-SELECTION (2026-08-27, FIX): prefer exactly the driver
     # version (nvidia-smi), otherwise the newest available CUDA runtime.
@@ -493,20 +558,27 @@ def main() -> int:
         exe.chmod(exe.stat().st_mode | 0o755)
 
     # CUDA-RUNTIME-SPLIT (2026-09-02): recent llama.cpp nightlies (b10760+)
-    # stopped bundling the CUDA runtime DLLs in the main
-    # `llama-bNNNN-bin-win-cuda-<ver>-x64.zip`. They now ship in a SEPARATE
-    # `cudart-llama-bin-win-cuda-<ver>-x64.zip` on the same release. Download it
-    # (matching the main asset's CUDA version) and extract the DLLs next to the
-    # exe, otherwise the server fails to start / the installer errors out.
-    if args.backend == "cuda" and _IS_WIN and releases:
+    # stopped bundling the CUDA runtime libs in the main archive on both
+    # Windows (cudart-llama-bin-win-cuda-<ver>-x64.zip) and Linux
+    # (cudart-llama-bNNNN-bin-ubuntu-cuda-<ver>-x64.tar.gz). Download the
+    # matching asset and extract next to llama-server.
+    if args.backend == "cuda" and releases:
         _cuda_ver = ""
-        _m_ver = re.match(r"^llama-b\d+-bin-win-cuda-([\d.]+)-x64\.zip$", str(asset.get("name") or ""), re.IGNORECASE)
+        _m_ver = re.match(
+            rf"^llama-b\d+-bin-{_OS_TAG}-cuda-([\d.]+)-x64{_ASSET_EXT}$",
+            str(asset.get("name") or ""),
+            re.IGNORECASE,
+        )
         if _m_ver:
             _cuda_ver = _m_ver.group(1)
         _cudart = None
+        _cu_rx = re.compile(
+            rf"^cudart-llama(?:-b\d+)?-bin-{_OS_TAG}-cuda-([\d.]+)-x64{_ASSET_EXT}$",
+            re.IGNORECASE,
+        )
         for _a in (releases[0].get("assets") or []):
             _an = str(_a.get("name") or "")
-            _mm = re.match(r"^cudart-llama-bin-win-cuda-([\d.]+)-x64\.zip$", _an, re.IGNORECASE)
+            _mm = _cu_rx.match(_an)
             if _mm and (not _cuda_ver or _mm.group(1) == _cuda_ver):
                 _cudart = _a
                 break
@@ -515,14 +587,8 @@ def main() -> int:
             print(f"       CUDA runtime split detected - downloading {_cudart['name']} ...")
             try:
                 download(str(_cudart["browser_download_url"]), _cu_zip)
-                # I2 completion (audit r3): the cudart zip carries executable
-                # DLLs - verify its digest like the main asset, and fail hard
-                # instead of the catch-all warning below (which would install
-                # an unverified runtime). The mismatch used to be raised into
-                # the broad handler below and downgraded to a WARNING - the
-                # exact thing the comment promised not to do.
                 _cu_digest = str(_cudart.get("digest") or "")
-                if _cu_digest.startswith("sha256:"):
+                if _cu_digest.lower().startswith("sha256:"):
                     _cu_h = _sha256_file(_cu_zip)
                     if _cu_h != _cu_digest.split(":", 1)[1].strip().lower():
                         _cu_zip.unlink(missing_ok=True)
@@ -530,23 +596,27 @@ def main() -> int:
                             f"cudart asset digest mismatch ({_cu_h[:16]}...) - "
                             "refusing to install; do NOT just retry, verify "
                             "the download source")
-                with zipfile.ZipFile(_cu_zip) as _zf:
-                    _bad = _zf.testzip()
-                    if _bad is not None:
-                        raise zipfile.BadZipFile(f"corrupt member: {_bad}")
-                    _zf.extractall(exe.parent)
-                print("       CUDA runtime DLLs installed next to llama-server.exe")
+                if _cu_zip.name.lower().endswith(".tar.gz"):
+                    with tarfile.open(_cu_zip) as _tf:
+                        _safe_tar_extractall(_tf, exe.parent)
+                else:
+                    with zipfile.ZipFile(_cu_zip) as _zf:
+                        _bad = _zf.testzip()
+                        if _bad is not None:
+                            raise zipfile.BadZipFile(f"corrupt member: {_bad}")
+                        _zf.extractall(exe.parent)
+                print(f"       CUDA runtime libraries installed next to {SERVER_NAME}")
             except RuntimeError as _cud_dig:
                 # DIGEST (audit r4): fail hard, do not install unverified code
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 print(f"       [ERROR] {_cud_dig}")
                 return 1
             except Exception as _cud_err:
-                print(f"       [WARNING] CUDA runtime DLL download/extract failed: {_cud_err}")
+                print(f"       [WARNING] CUDA runtime download/extract failed: {_cud_err}")
             finally:
                 _cu_zip.unlink(missing_ok=True)
         elif not _cudart:
-            print("       (no separate cudart zip on this release - runtime DLLs expected in the main build)")
+            print("       (no separate cudart archive on this release - runtime libs expected in the main build)")
 
     # DLL-VERIFY (2026-08-27): `--device CUDA0` needs the bundled CUDA runtime
     # DLLs next to the exe. A ZIP without them would install a build that
@@ -613,9 +683,9 @@ def main() -> int:
         print(f"  ggml DLLs actually on disk: {', '.join(_ggml_present) or '(none)'}")
     if _av_suspected:
         print()
-        print("  The downloaded archive is COMPLETE — antivirus/Defender most likely")
+        print("  The downloaded archive is COMPLETE - antivirus/Defender most likely")
         print("  quarantined the DLL right after extraction. Fix:")
-        print("    1. Windows Security → Protection history → restore/allow the DLL")
+        print("    1. Windows Security -> Protection history -> restore/allow the DLL")
         print("       (or add an exclusion for the llama\\ folder)")
         print("    2. Re-extract manually from the temp ZIP, or run again with --force")
         print(f"       (archive kept at: {tmp_zip})")
@@ -626,13 +696,6 @@ def main() -> int:
         shutil.rmtree(target, ignore_errors=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return 1
-
-    print()
-    print(f"[OK] llama.cpp b{build_num} installed.")
-    print(f"     llama-server: {exe}")
-    if have and build_num < have[0]:
-        print(f"     NOTE: b{have[0]} is newer and stays in place (auto-discovery picks the highest build).")
-    return 0
 
 
 if __name__ == "__main__":

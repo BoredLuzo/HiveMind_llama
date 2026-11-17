@@ -17,7 +17,9 @@ DEV_HINTS = ("audit_", "RELEASE_NOTES_", "scripts/hooks", "ruff.toml",
              ".gitignore", ".gitattributes", ".github/", "docs/plan_",
              "docs/roadmap_", "backlog", "package_release.bat", "bump_version.py",
              "gen_settings_docs.py", "pyright_baseline", "settings_ui_",
-             "docs/integrations.md", "docs/screenshot", "recommend_models.py")
+             "docs/integrations.md", "docs/screenshot", "recommend_models.py",
+             ".coveragerc", "requirements-dev.txt", "tests/", "bench/",
+             "CONTRIBUTING.md", "AGENTS.md")
 
 
 def main(path: str) -> int:
@@ -48,5 +50,9 @@ def main(path: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1
-                  else "../HiveMind_v1.4.0_release.zip"))
+    if len(sys.argv) > 1:
+        target = sys.argv[1]
+    else:
+        from core.version import HIVEMIND_VERSION
+        target = f"../HiveMind_v{HIVEMIND_VERSION}_release.zip"
+    sys.exit(main(target))

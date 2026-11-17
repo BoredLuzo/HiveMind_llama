@@ -73,12 +73,9 @@ def _find_llama_server() -> Path:
                         cuda_ver = tuple(int(x) for x in m2.group(1).split("."))
                     except Exception:
                         cuda_ver = (0,)
-            if _backend_tag == "cpu":
-                # CPU backend: a vulkan/cuda binary won't start on a host
-                # without the backend loader — backend fit outranks build age.
-                key = (backend_match, build, cuda_ver)
-            else:
-                key = (build, backend_match, cuda_ver)
+            # Matching the configured GPU_BACKEND always outranks a higher build
+            # from another backend (e.g. newer vulkan build must not shadow pinned cuda).
+            key = (backend_match, build, cuda_ver)
             if _best is None or key > _best[0]:
                 _best = (key, cand)
     if _best is not None:

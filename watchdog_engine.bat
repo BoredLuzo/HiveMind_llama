@@ -33,7 +33,7 @@ exit /b 0
 
 :maybe_takeover
 if not exist "%WDMARK%" goto duty
-powershell -NoProfile -Command "if (((Get-Date) - (Get-Item '%WDMARK%').LastWriteTime).TotalSeconds -lt 90) { exit 1 }" >nul 2>&1
+powershell -NoProfile -Command "if (((Get-Date) - (Get-Item -LiteralPath $env:WDMARK).LastWriteTime).TotalSeconds -lt 90) { exit 1 }" >nul 2>&1
 if errorlevel 1 goto already_running
 goto duty
 

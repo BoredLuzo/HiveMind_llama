@@ -19,6 +19,14 @@ import json
 import sys
 from pathlib import Path
 
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_JSON = ROOT / "models.json"
 STATS_JSON = ROOT / "token_stats.json"
@@ -75,6 +83,14 @@ def _load_json(path: Path) -> dict:
 
 def _profile_for(tag: str) -> dict:
     """Modellprofil (capabilities, moe_cpu_experts, num_ctx) suchen."""
+    try:
+        sys.path.insert(0, str(ROOT))
+        from model_configs.models_registry import get_profile
+        prof = get_profile(tag)
+        if prof:
+            return prof
+    except (ImportError, OSError, ValueError):
+        pass
     safe = tag.replace(":", "_").replace("/", "_")
     for cand in (ROOT / "model_configs" / "models" / f"{safe}.json",):
         prof = _load_json(cand)
@@ -83,9 +99,28 @@ def _profile_for(tag: str) -> dict:
     return {}
 
 
+def _gguf_total_bytes(p: Path) -> int:
+    try:
+        from backend.llama_models import _SPLIT_SHARD_RE
+        if _SPLIT_SHARD_RE.search(p.stem):
+            prefix = _SPLIT_SHARD_RE.sub("", p.stem)
+            shards = list(p.parent.glob(f"{prefix}-*-of-*.gguf"))
+            if shards:
+                return sum(s.stat().st_size for s in shards if s.is_file())
+    except (ImportError, OSError):
+        pass
+    return p.stat().st_size
+
+
 def collect(vram_gb: float, ram_gb: float) -> list[dict]:
     models = _load_json(MODELS_JSON)
     speeds = (_load_json(STATS_JSON) or {}).get("speeds") or {}
+    try:
+        sys.path.insert(0, str(ROOT))
+        from backend.llama_vram_table import moe_cfg_for, vram_of_moe
+    except (ImportError, OSError):
+        moe_cfg_for = None
+        vram_of_moe = None
     rows: list[dict] = []
     for tag, path in sorted(models.items()):
         p = Path(str(path))
@@ -95,25 +130,39 @@ def collect(vram_gb: float, ram_gb: float) -> list[dict]:
         _low = f"{tag} {p.name}".lower()
         if "mmproj" in _low or "dspark" in _low or "dflash" in _low or Path(p.name).name.lower().startswith("mtp-"):
             continue
-        size_gb = round(p.stat().st_size / (1024 ** 3), 2)
+        size_gb = round(_gguf_total_bytes(p) / (1024 ** 3), 2)
         prof = _profile_for(tag)
         moe = int(prof.get("moe_cpu_experts") or 0)
         ctx = int(prof.get("num_ctx") or 0)
         tps = float((speeds.get(tag) or {}).get("tps") or 0.0)
-        fits_vram = size_gb <= max(1.0, vram_gb * VRAM_FIT_RATIO)
+        vram_est = float(prof.get("vram_gb_override") or 0.0)
+        if not vram_est and moe and vram_of_moe and moe_cfg_for and moe_cfg_for(tag):
+            try:
+                vram_est = float(vram_of_moe(tag, n_cpu_moe=moe) or size_gb)
+            except (TypeError, ValueError):
+                vram_est = size_gb
+        if not vram_est:
+            vram_est = size_gb
+        has_gpu = vram_gb > 0
+        fits_vram = has_gpu and (vram_est <= (vram_gb * VRAM_FIT_RATIO))
+        fits_ram = size_gb <= max(2.0, ram_gb * 0.6) if ram_gb > 0 else (vram_est <= 4.0)
         if fits_vram and not moe:
-            verdict = "passt komplett in den VRAM"
+            verdict = "fits completely in VRAM"
             score = 3
-        elif moe or size_gb <= max(2.0, ram_gb * 0.6):
-            verdict = "Experten/Teile im RAM (langsamer, aber machbar)"
-            score = 2 if moe else 2
+        elif (fits_ram and moe and has_gpu and vram_est <= max(1.0, vram_gb * VRAM_FIT_RATIO)):
+            verdict = "experts offloaded to RAM (fits VRAM + RAM)"
+            score = 2
+        elif fits_ram:
+            verdict = "CPU/RAM offload (slower, fits RAM)"
+            score = 2
         else:
             verdict = "too large for this machine"
             score = 1
         if tps >= 20:
             score += 1
         rows.append({
-            "tag": tag, "gb": size_gb, "moe_cpu_experts": moe, "num_ctx": ctx,
+            "tag": tag, "gb": size_gb, "vram_gb": round(vram_est, 2),
+            "moe_cpu_experts": moe, "num_ctx": ctx,
             "measured_tps": tps, "fits_vram": fits_vram, "verdict": verdict,
             "score": score, "path": str(p),
         })
@@ -133,18 +182,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no models found ({MODELS_JSON}) - run setup_models.bat first")
         return 1
 
-    usable = [r for r in rows if r["score"] >= 2]
+    usable = [r for r in rows if r["score"] >= 2] or rows
     pick = lambda pred: next((r["tag"] for r in usable if pred(r)), "")  # noqa: E731
+    max_direct_gb = max(6.0, vram) if vram > 0 else max(4.0, ram * 0.4)
+    max_judge_gb = max(3.0, vram * 0.5) if vram > 0 else max(2.5, ram * 0.25)
+    max_coder_gb = max(8.0, vram) if vram > 0 else max(6.0, ram * 0.5)
     rec = {
         "detected": {"vram_gb": vram, "ram_gb": ram},
-        "direct": pick(lambda r: r["measured_tps"] >= 20) or pick(lambda r: r["gb"] <= 6) or "",
-        "judge": pick(lambda r: r["gb"] <= max(3.0, vram * 0.5)) or "",
-        # Coder: grosses Modell lohnt, wenn es gemessen schnell genug ist
-        # (MoE mit CPU-Experten ist hier ausdruecklich erlaubt)
+        "direct": pick(lambda r: r["measured_tps"] >= 20) or pick(lambda r: r["gb"] <= max_direct_gb) or usable[0]["tag"],
+        "judge": pick(lambda r: r["gb"] <= max_judge_gb) or usable[0]["tag"],
         "duo_coder": (pick(lambda r: r["measured_tps"] >= 15 and r["gb"] >= 8)
                       or pick(lambda r: r["measured_tps"] >= 15)
-                      or pick(lambda r: r["gb"] <= max(8.0, vram)) or ""),
-        "planner": pick(lambda r: r["measured_tps"] >= 15 and r["gb"] <= max(6.0, vram)) or "",
+                      or pick(lambda r: r["gb"] <= max_coder_gb)
+                      or usable[-1]["tag"]),
+        "planner": (pick(lambda r: r["measured_tps"] >= 15 and r["gb"] <= max_direct_gb)
+                    or pick(lambda r: r["gb"] <= max_direct_gb)
+                    or usable[0]["tag"]),
         "models": rows,
     }
     if args.json:

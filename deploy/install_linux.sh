@@ -43,6 +43,11 @@ if ! id -u hivemind &>/dev/null; then
 else
   echo "[1/8] User hivemind already exists."
 fi
+for _grp in render video; do
+  if getent group "$_grp" >/dev/null 2>&1; then
+    usermod -aG "$_grp" hivemind || echo "  [WARN] could not add hivemind to $_grp group" >&2
+  fi
+done
 
 echo "[2/8] Installing system dependencies..."
 # UV-CONSISTENCY (2026-09-09): uv provisions the interpreter and the venv,
@@ -58,7 +63,7 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
   dnf install -y curl python3 python3-pip || echo "  [WARN] dnf install failed (offline?) - continuing" >&2
 elif command -v pacman >/dev/null 2>&1; then
-  pacman -Sy --noconfirm curl python || echo "  [WARN] pacman install failed (offline?) - continuing" >&2
+  pacman -Sy --noconfirm curl python python-pip || echo "  [WARN] pacman install failed (offline?) - continuing" >&2
 else
   echo "  (unknown package manager — install curl manually)"
 fi
@@ -102,15 +107,20 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude '.git' --exclude '.venv' --exclude '__pycache__' \
       --exclude '/sessions' --exclude '/logs' --exclude '/stt' \
       --exclude '/models' --exclude '/llama' --exclude '/.cache' \
-      --exclude '/.local' \
+      --exclude '/.local' --exclude '/voice_models' --exclude '/tts-venv' \
       --exclude 'node_modules' --exclude 'settings.json' --exclude 'presets.json' \
       --exclude 'gateway.toml' --exclude '/model_configs/gguf_filename_tags.json' \
+      --exclude '/model_configs/learned' \
       --exclude '/models.json' --exclude '/memory.json' --exclude '/vision_model.json' \
-      --exclude '/routing_weights.json' --exclude '/gateway_state.json' \
+      --exclude '/routing_weights.json' --exclude '/soul.json' --exclude '/automations.json' \
+      --exclude '/memories_db.json' --exclude '/gateway_state.json' \
       --exclude '/gateway_audit.jsonl' --exclude '/gateway.disabled' \
       --exclude '/runtime_models.json' --exclude '/token_stats.json' \
       --exclude '/run_counter.json' --exclude '/.env' \
       --exclude '/custom_prompts' --exclude '/.hive_uploads' --exclude '/learning_logs' \
+      --exclude '/learning/sessions' --exclude '/context/projects' \
+      --exclude '/context/last_workspace.json' --exclude '/context/decider_cache.json' \
+      --exclude '/searxng-config/settings.yml' --exclude '/searxng-config/docker-compose.yml' \
       --exclude '/bench/results' --exclude '/bench/.work' \
       --exclude '/_update_tmp' --exclude '/update_backup_*' \
       --exclude 'BUILD_INFO.txt' \
@@ -120,16 +130,21 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude='./.git' --exclude='./.venv' --exclude='__pycache__' \
       --exclude='./sessions' --exclude='./logs' --exclude='./stt' \
       --exclude='./models' --exclude='./llama' --exclude='./.cache' \
-      --exclude='./.local' \
+      --exclude='./.local' --exclude='./voice_models' --exclude='./tts-venv' \
       --exclude='./node_modules' --exclude='./settings.json' \
       --exclude='./presets.json' --exclude='./gateway.toml' \
       --exclude='./model_configs/gguf_filename_tags.json' \
+      --exclude='./model_configs/learned' \
       --exclude='./models.json' --exclude='./memory.json' --exclude='./vision_model.json' \
-      --exclude='./routing_weights.json' --exclude='./gateway_state.json' \
+      --exclude='./routing_weights.json' --exclude='./soul.json' --exclude='./automations.json' \
+      --exclude='./memories_db.json' --exclude='./gateway_state.json' \
       --exclude='./gateway_audit.jsonl' --exclude='./gateway.disabled' \
       --exclude='./runtime_models.json' --exclude='./token_stats.json' \
       --exclude='./run_counter.json' --exclude='./.env' \
       --exclude='./custom_prompts' --exclude='./.hive_uploads' --exclude='./learning_logs' \
+      --exclude='./learning/sessions' --exclude='./context/projects' \
+      --exclude='./context/last_workspace.json' --exclude='./context/decider_cache.json' \
+      --exclude='./searxng-config/settings.yml' --exclude='./searxng-config/docker-compose.yml' \
       --exclude='./bench/results' --exclude='./bench/.work' \
       --exclude='./_update_tmp' --exclude='./update_backup_*' \
       --exclude='./BUILD_INFO.txt' \
@@ -152,6 +167,11 @@ if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
   if UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv python install 3.14 \
      && UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv sync --all-extras --frozen --inexact; then
     _uv_sync_ok=1
+    if [ -x "$INSTALL_DIR/.venv/bin/playwright" ]; then
+      HOME="$INSTALL_DIR" PLAYWRIGHT_BROWSERS_PATH="$INSTALL_DIR/.cache/ms-playwright" \
+        "$INSTALL_DIR/.venv/bin/playwright" install chromium \
+        || echo "  [WARN] playwright chromium install failed - browser tool stays off" >&2
+    fi
   else
     # OFFLINE (audit r4): a uv failure (no network, lock mismatch) used to
     # abort the whole install via set -e even though the pip fallback works.
@@ -191,11 +211,12 @@ if [ "${VOICE}" = "1" ]; then
         _VOICE_PY="$INSTALL_DIR/.venv/bin/python"
     else
         echo "[voice] audio packages missing - installing requirements-voice.txt..."
-        # ERROR-PROPAGATION (audit r4): this was `... || true`, which hid the
-        # pip failure. The download below still runs (fetch_whisper.py is
-        # stdlib-only), but the user must SEE that audio decoding will be
-        # broken until this succeeds.
-        if ! "$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements-voice.txt"; then
+        if command -v uv >/dev/null 2>&1; then
+            if ! uv pip install --python "$INSTALL_DIR/.venv/bin/python" -q -r "$INSTALL_DIR/requirements-voice.txt"; then
+                echo "[voice] [WARN] requirements-voice.txt could not be installed (uv) -" >&2
+                echo "        speech INPUT will fail until it succeeds (the Voice card retries)." >&2
+            fi
+        elif ! "$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements-voice.txt"; then
             echo "[voice] [WARN] requirements-voice.txt could not be installed -" >&2
             echo "        speech INPUT will fail until it succeeds (the Voice card retries)." >&2
         fi
@@ -213,17 +234,15 @@ if [ "${TTS}" = "1" ]; then
     # run as the SERVICE user: uv's cache must be the hivemind user's, not root's
     # (otherwise the first spoken answer re-downloads 200 MB as hivemind).
     _TTS_ENV=(env HOME="$INSTALL_DIR" UV_CACHE_DIR="$INSTALL_DIR/.cache/uv"
+                 UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python"
                  HF_HOME="$INSTALL_DIR/.cache/huggingface")
-    if ! "${_TTS_ENV[@]}" uvx --python 3.12 --index https://download.pytorch.org/whl/cpu \
+    if ! "${_TTS_ENV[@]}" uvx --python 3.12 --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
             --from pocket-tts python -c "import pocket_tts"; then
         echo "[tts] environment prep failed - the UI can retry on first use" >&2
     else
         echo "[tts] fetching the model (needs a Hugging Face token)..."
-        # TEMP-COLLISION (audit r4): a fixed /tmp path is predictable - two
-        # parallel installs clobber each other and a symlink planted there
-        # makes root overwrite a foreign file. mktemp is unique per run.
         _TTS_WAV="$(mktemp "${TMPDIR:-/tmp}/hivemind_tts_check.XXXXXXXX.wav")"
-        if "${_TTS_ENV[@]}" uvx --python 3.12 --index https://download.pytorch.org/whl/cpu \
+        if "${_TTS_ENV[@]}" uvx --python 3.12 --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
                 pocket-tts generate --text "Voice setup complete." \
                 --output-path "$_TTS_WAV"; then
             rm -f "$_TTS_WAV"
@@ -235,7 +254,7 @@ if [ "${TTS}" = "1" ]; then
         fi
     fi
 else
-    echo "  (text to speech skipped - add later from Settings -^> Voice)"
+    echo "  (text to speech skipped - add later from Settings -> Voice)"
 fi
 
 echo "[6/8] Creating log directory..."
@@ -244,6 +263,8 @@ chown -R hivemind:hivemind "$INSTALL_DIR" "$LOG_DIR"
 
 echo "[7/8] Installing systemd service..."
 cp "$INSTALL_DIR/deploy/hivemind.service" "$SERVICE_FILE"
+# Wire chosen backend & uv Python path directly into the installed unit file.
+sed -i -e "s|^#Environment=HIVEMIND_GPU_BACKEND=.*|Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND|" "$SERVICE_FILE"
 # NON-SYSTEMD (audit r4): in a container/WSL1 without a running systemd,
 # `systemctl` used to fail here via set -e AFTER everything else succeeded -
 # a complete install that reported itself broken. Detect instead of crash.
@@ -274,5 +295,5 @@ echo "  - Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND  (vulkan | cuda | rocm
 echo "  - MemoryMax (default 12G, adjust for your RAM)"
 echo ""
 echo "Models: copy GGUFs into the models folder or run, as hivemind:"
-echo "  cd $INSTALL_DIR && ./.venv/bin/python deploy/fetch_models.py"
+echo "  sudo -u hivemind bash -lc 'cd $INSTALL_DIR && ./.venv/bin/python deploy/fetch_models.py'"
 echo "After editing the unit: sudo systemctl daemon-reload && sudo systemctl restart hivemind"

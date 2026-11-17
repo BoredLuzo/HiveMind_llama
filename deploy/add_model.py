@@ -22,10 +22,23 @@ import os
 import sys
 from pathlib import Path
 
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend.llama_models import _parse_gguf_filename, save_model_mapping  # noqa: E402
+from backend.llama_models import (  # noqa: E402
+    _SPLIT_SHARD_RE,
+    _parse_gguf_filename,
+    is_non_model_gguf,
+    save_model_mapping,
+)
 from model_configs.models_registry import save_profile  # noqa: E402
 
 AGENT_ROLES = [
@@ -107,7 +120,15 @@ def _persist_models_dir(mdir: Path) -> None:
 def scan_ggufs(mdir: Path) -> list[Path]:
     if not mdir.is_dir():
         return []
-    return sorted(mdir.rglob("*.gguf"))
+    out: list[Path] = []
+    for p in sorted(mdir.rglob("*.gguf")):
+        if is_non_model_gguf(p.name):
+            continue
+        sm = _SPLIT_SHARD_RE.search(p.stem)
+        if sm and int(sm.group(1)) > 1:
+            continue
+        out.append(p)
+    return out
 
 
 def detect_canonical(path: Path) -> str | None:
@@ -304,6 +325,8 @@ def assign_agent(canonical: str) -> None:
             excl.append(role)
         if role == "duo_coder":
             s["duo_coder_model"] = canonical
+        elif role == "duo_critic":
+            s["duo_critic_model"] = canonical
         save_settings(s)
         print(f"    settings.json: agents[{role}].model = '{canonical}'")
         print("    The model appears automatically in the agent cards (UI refresh).")
@@ -321,8 +344,9 @@ def main() -> int:
     args = ap.parse_args()
 
     mdir = find_models_dir(args.models_dir)
-    mdir.mkdir(parents=True, exist_ok=True)
-    _persist_models_dir(mdir)
+    if args.json:
+        mdir.mkdir(parents=True, exist_ok=True)
+        _persist_models_dir(mdir)
 
     print("=" * 60)
     print("  HiveMind - add your own model")
@@ -358,6 +382,8 @@ def main() -> int:
         if gguf is None:
             print("[Aborted] No GGUF chosen.")
             return 1
+        mdir.mkdir(parents=True, exist_ok=True)
+        _persist_models_dir(mdir)
         canonical = detect_canonical(gguf)
         if not canonical:
             canonical = gguf.stem

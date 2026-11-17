@@ -14,13 +14,23 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable
+
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -98,27 +108,37 @@ def _write_state(target: Path, state: str, percent: float, message: str = "") ->
         pass
 
 
-def _download_file(url: str, dst: Path, *, progress: Callable[[int, int], None] | None = None) -> None:
+def _download_file(url: str, dst: Path, *, progress: Callable[[int, int], None] | None = None,
+                   max_attempts: int = 3) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     part = dst.with_name(dst.name + ".part")
-    req = urllib.request.Request(url, headers=UA)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            total = int(resp.headers.get("Content-Length") or 0)
-            done = 0
-            with open(part, "wb") as out:
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    done += len(chunk)
-                    if progress is not None:
-                        progress(done, total)
-        part.replace(dst)
-    finally:
-        if part.exists():
+    for attempt in range(1, max_attempts + 1):
+        req = urllib.request.Request(url, headers=UA)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                with open(part, "wb") as out:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        done += len(chunk)
+                        if progress is not None:
+                            progress(done, total)
+            if total and done != total:
+                raise IOError(f"truncated download ({done}/{total} bytes) for {dst.name}")
+            part.replace(dst)
+            return
+        except (OSError, urllib.error.URLError, http.client.HTTPException):
             part.unlink(missing_ok=True)
+            if attempt >= max_attempts:
+                raise
+            time.sleep(min(8, 2 ** attempt))
+        finally:
+            if part.exists():
+                part.unlink(missing_ok=True)
 
 
 def download(base: Path | None = None, *, force: bool = False) -> Path:
@@ -150,7 +170,7 @@ def download(base: Path | None = None, *, force: bool = False) -> Path:
             raise RuntimeError("Underdog Woof download finished but woof_int8.npz failed size verification")
         _write_state(target, "done", 100.0, "Underdog Woof ready")
         return target
-    except (OSError, urllib.error.URLError, RuntimeError) as exc:
+    except (OSError, urllib.error.URLError, http.client.HTTPException, RuntimeError) as exc:
         _write_state(target, "error", 0.0, str(exc)[:200])
         raise
 
@@ -172,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         out = download(target, force=args.force)
         print(f"  [OK] Underdog Woof installed in {out}")
         return 0
-    except (OSError, urllib.error.URLError, RuntimeError) as exc:
+    except (OSError, urllib.error.URLError, http.client.HTTPException, RuntimeError) as exc:
         print(f"  [ERROR] Underdog Woof download failed: {exc}", file=sys.stderr)
         return 1
 

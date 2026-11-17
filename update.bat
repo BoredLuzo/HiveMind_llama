@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions
+set "HIVEMIND_CALL_CWD=%CD%"
 cd /d "%~dp0"
 REM HiveMind updater - thin shim (2026-11-06, split 5; ladder fixed 2026-11-07).
 REM The logic lives in deploy\updater.py: a real Python script, testable
@@ -26,13 +27,13 @@ if "%PY%"=="python" (
 )
 "%PY%" "%~dp0deploy\updater.py" %*
 set "UPD_RC=%ERRORLEVEL%"
-echo  Press any key to continue... & pause >nul
-REM FINAL SELF-SWAP (2026-10-03 review): updater.py stages the incoming
-REM update.bat as .update_new.bat; ONE physical line here - cmd parses it
-REM whole before executing - swaps it in and exits. NOTHING may follow
-REM this line: cmd resumes at a byte offset of the OLD file after the
-REM copy, so trailing lines would run stale bytes (audit 2026-11-07).
-REM Only a SUCCESSFUL update may replace update.bat (the old batch exited
-REM before its swap on every error path).
+if not "%UPD_RC%"=="0" if not defined HIVEMIND_NO_PAUSE echo  Press any key to continue...
+if not "%UPD_RC%"=="0" if not defined HIVEMIND_NO_PAUSE pause >nul
 if not "%UPD_RC%"=="0" exit /b %UPD_RC%
-if exist "%~dp0.update_new.bat" (copy /y "%~dp0.update_new.bat" "%~dp0update.bat" >nul & del "%~dp0.update_new.bat" >nul 2>&1 & exit /b %UPD_RC%) else exit /b %UPD_RC%
+REM FINAL SELF-SWAP (2026-10-03 review, post-swap pause 2026-11-17):
+REM updater.py stages the incoming update.bat as .update_new.bat; ONE
+REM physical line here swaps it in, deletes the staging file, optionally
+REM pauses (skipped when HIVEMIND_NO_PAUSE=1), and exits. NOTHING may follow
+REM this line: cmd parses the entire line before running any part of it, so
+REM closing the window with [X] at pause still leaves the new update.bat on disk.
+(if exist "%~dp0.update_new.bat" copy /y "%~dp0.update_new.bat" "%~dp0update.bat" >nul) & (if exist "%~dp0.update_new.bat" del "%~dp0.update_new.bat" >nul 2>&1) & (if not defined HIVEMIND_NO_PAUSE echo  Press any key to continue...) & (if not defined HIVEMIND_NO_PAUSE pause >nul) & exit /b %UPD_RC%

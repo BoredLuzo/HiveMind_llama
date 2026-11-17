@@ -151,11 +151,13 @@ def _load_settings_from_disk() -> dict:
             if not isinstance(data.get("moe_cpu_experts"), dict):
                 data["moe_cpu_experts"] = {}
             for k, v in DEFAULT_SETTINGS.items():
-                data.setdefault(k, v)
+                if k not in data:
+                    data[k] = copy.deepcopy(v)
     # Fix: merge individual agent keys from DEFAULT_AGENT_CFG.
             _sa = data.setdefault("agents", {})
             for _ak, _av in DEFAULT_AGENT_CFG.items():
-                _sa.setdefault(_ak, _av)
+                if _ak not in _sa:
+                    _sa[_ak] = copy.deepcopy(_av)
             for _ak, _av in DEFAULT_AGENT_CFG.items():
                 if _ak in _sa and isinstance(_sa[_ak], dict):
                     _sa[_ak].setdefault("model", _av.get("model", ""))
@@ -166,7 +168,7 @@ def _load_settings_from_disk() -> dict:
             return data
         except Exception:
             pass
-    return dict(DEFAULT_SETTINGS)
+    return copy.deepcopy(DEFAULT_SETTINGS)
 
 _settings_write_lock = threading.RLock()
 

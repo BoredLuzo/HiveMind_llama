@@ -1,3 +1,106 @@
+## [1.6.2] - 2026-11-17
+
+Hardening release resolving remaining clean-install, fetcher, Windows/Linux
+installer, in-place updater, prune, and packaging edge cases on top of `1.6.1`.
+
+### Fixed
+- **Clean-install defaults, safe profile gating & runtime backend sync:**
+  - Deep-copied `DEFAULT_SETTINGS` and `DEFAULT_AGENT_CFG` on initial load so
+    runtime mutations never alias factory defaults (`settings.py`), and
+    propagated sanitized agent settings back into the live settings/pipeline
+    config on startup (`server.py`).
+  - Gated `apply_safe_profile_policy(..., workspace_root=...)` against actually
+    installed models (`list_available_models()` + existing `models.json` files)
+    so fresh installs without downloaded models do not receive unloaded matrix
+    model pins (`hive_functions/safe_profile_policy.py`).
+  - Sorted `_find_llama_server()` candidates by `(backend_match, build, cuda_ver)`
+    across all backends (`backend/llama_config.py`) so newer foreign builds no
+    longer shadow the configured `GPU_BACKEND`.
+  - Added built-in `_BUILTIN_FILENAME_TAGS` fallback before `fetch_models.py`
+    writes `gguf_filename_tags.json`, widened multimodal projector size
+    matching to `e?\d+(?:\.\d+)?b` (e.g. Gemma E2B vs E4B), and restricted
+    legacy un-suffixed `mmproj` fallback (`backend/llama_models.py`).
+  - Fixed dead hyphenated Gemma keys in `routing/model_automap.py` and added
+    executable directory `LD_LIBRARY_PATH` forwarding for POSIX STT subprocesses
+    (`core/stt_engine.py`).
+- **Downloaders & setup CLIs (`deploy/fetch_*.py`, `add_model.py`, `apply_model_defaults.py`, `recommend_models.py`, `backfill_speeds.py`):**
+  - Enabled UTF-8 stdout/stderr reconfiguration across Windows CLIs without
+    introducing broad exception debt.
+  - `deploy/fetch_llamacpp.py`: honored `--cuda-version` during release resolution,
+    handled HTTP 416 / oversized partials & `Content-Range` mismatch restarts,
+    added case-insensitive `sha256:` verification and lock-safe `.old` rename
+    swaps that fail cleanly on running `llama-server.exe` locks, filtered
+    `existing_build(backend)` cleanly while searching nested bins, and supported
+    Linux split `cudart-llama-...-ubuntu-cuda-*.tar.gz` runtimes.
+  - `deploy/fetch_whisper.py`: mapped Linux/Ubuntu `blas` to
+    `whisper-bin-ubuntu-x64.tar.gz`, added resumable retries with exact
+    `Content-Length` validation, located binaries inside nested archive folders
+    while preserving POSIX `.so` symlinks + executable bits, warned if
+    `parakeet-cli` is absent, and enforced an 85% model size floor instead of a
+    flat 50 MB check.
+  - `deploy/fetch_models.py`: URL-encoded Hugging Face paths, added retry/resume
+    recovery with pre-skip SHA256 verification and authenticated 416 `HEAD`
+    checks, dropped unsafe cross-family `mmproj` fallback, guarded workspace
+    mutation during `--list-only`, and ensured `--only-missing` checks remote
+    sizes and projector files accurately.
+  - `deploy/fetch_woof.py`: added retry backoff and strict `Content-Length`
+    completion checks before atomic rename.
+  - `deploy/fetch_decider.py`, `deploy/add_model.py`,
+    `deploy/apply_model_defaults.py`, `deploy/recommend_models.py`,
+    `deploy/backfill_speeds.py`: resolved user `uv`/`uvx` fallback paths,
+    skipped secondary split-GGUF shards and kept `duo_critic_model` synced,
+    added non-essential installed-model fallback + atomic `settings.json` writes,
+    fixed MoE/split-GGUF VRAM estimation on clean boxes, and matched Linux
+    `llama-server` logs + `logs/archive/`.
+- **Windows installer, voice setup, launcher scripts & SearXNG (`install.bat`, `deploy/*.bat`):**
+  - `install.bat`: added `-e --accept-package-agreements --accept-source-agreements`
+    and `uv/install.ps1` fallback for `uv`, fixed `$null` User `Path`
+    `.TrimEnd(';')` crash, cleared `VRAM_IN`/`PORT_IN`/`LSP_PICK` before
+    prompts, added `--silent` on `msstore` Core Utils fallback, wrapped child
+    installers in `HIVEMIND_NO_PAUSE=1`, and wired `:lsp_done`.
+  - `setup_models.bat`, `deploy/check_optionals.bat`, `deploy/setup_voice.bat`:
+    guarded apostrophes/paths (`DisableDelayedExpansion`), detected Underdog Woof
+    + real Chromium install + Git Bash grep, always refreshed `BROWSER-MATCH`,
+    fixed `--woof` chaining after `--tts`, `--help`/`-h` clean exit, CPU PyTorch
+    index flags for Pocket TTS & decider, and isolated `test_installer_sim.py`
+    home env vars.
+  - `update_llama.bat`, `watchdog_engine.bat`, `stop_llama.bat`,
+    `create_shortcut.bat`, `start_hivemind.bat`, `start_gateway*.bat`,
+    `searxng.bat`, `deploy/install_windows.bat`, `deploy/install_lsp_packs.bat`:
+    stopped running `llama-server.exe` locks, preserved `cpu`/`rocm` in
+    `update_llama.bat`, fixed apostrophe-safe `WDMARK`, checked `Win32_Process`
+    `CommandLine` before killing PIDs in `stop_llama.bat`, aborted startup cleanly
+    on failed update exit `11`, validated SearXNG port + env passing + default
+    secret rotation, created `%PROGRAMDATA%\HiveMind\Logs` with NSSM error
+    tracking, and preserved session `PATH` across LSP registry refreshes.
+- **Updater, Prune, Packaging & Linux installer (`update.bat`, `deploy/updater.py`, `deploy/update_prune.ps1`, `deploy/package_release.bat`, `deploy/install_linux.sh`):**
+  - `update.bat` + `deploy/updater.py`: preserved caller working directory via
+    `HIVEMIND_CALL_CWD` for `--zip`, placed conditional pause after final
+    atomic `.update_new.bat` self-swap, excluded `voice_models`/`stt`/`tts-venv`/
+    `learning_logs`/`update_removed_*` from `BACKUP_XD` and runtime subpaths
+    in `APPLY_XF`/`APPLY_SUB_XF`, anchored runtime subdirs in `apply_cmd()`,
+    ordered pre-release stages `dev < alpha < beta < preview < rc` consistently,
+    flagged running HiveMind processes, surfaced failure diagnostics in
+    `refresh_deps`/`run_prune`/`_run_rc`, fixed 90s stale `watchdog.marker`
+    and null User `Path`, pruned legacy orphan files cleanly on first
+    manifest-based upgrade, and cleaned temp state on early `--zip` errors.
+  - `deploy/update_prune.ps1`: normalized paths, protected runtime subpaths
+    without blocking `context/` or `learning/` code cleanup, verified
+    `Move-Item` success, removed empty pruned directories, and avoided creating
+    empty trash directories.
+  - `deploy/package_release.bat`, `scripts/release_zip_report.py`,
+    `deploy/install_linux.sh`, `deploy/hivemind.service`: expanded release leak
+    checks, wired Linux `render`/`video` groups, synced runtime excludes
+    (`voice_models`/`stt`/`tts-venv`/`soul.json`/`automations.json`), added
+    Chromium Playwright setup, injected `HIVEMIND_GPU_BACKEND` into the systemd
+    unit, and raised service `MemoryMax`/`TasksMax`.
+
+### Tests
+- Added standalone regression suite
+  [tests/test_installer_updater_1_6_2.py](tests/test_installer_updater_1_6_2.py)
+  registered in `tests/run_regressions.py`, and updated batch flow checks in
+  `tests/test_bat_encoding.py` and `tests/test_update_flow_audit.py`.
+
 ## [1.6.1] - 2026-11-16
 
 Consolidated 1.6.1 release combining Image Processing UI/backend coherence,

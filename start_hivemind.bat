@@ -123,15 +123,19 @@ REM Quick dependency check (installs missing packages on demand).
 REM UV-CONSISTENCY (2026-09-09): uv-managed .venvs ship WITHOUT pip, so the
 REM old `python -m pip` fallback was dead exactly when it was needed. Prefer
 REM uv, fall back to pip only for legacy system-python setups.
-"%PY%" -c "import httpx, fastapi, uvicorn, rich" >nul 2>&1
+"%PY%" -c "import httpx, fastapi, uvicorn, rich, pydantic, pypdf, keyring, tzdata" >nul 2>&1
 if not errorlevel 1 goto deps_ok
 echo  [..] Installing missing packages...
+set "HM_UV="
 where uv >nul 2>&1
-if not errorlevel 1 goto deps_uv
-"%PY%" -m pip install httpx fastapi uvicorn rich watchfiles pywin32 --quiet
+if not errorlevel 1 set "HM_UV=uv"
+if not defined HM_UV if exist "%USERPROFILE%\.local\bin\uv.exe" set "HM_UV=%USERPROFILE%\.local\bin\uv.exe"
+if not defined HM_UV if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "HM_UV=%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe"
+if defined HM_UV goto deps_uv
+"%PY%" -m pip install httpx fastapi uvicorn rich pydantic pypdf keyring tzdata watchfiles pywin32 --quiet
 goto deps_done
 :deps_uv
-uv pip install --python "%PY%" httpx fastapi uvicorn rich watchfiles pywin32 --quiet
+"%HM_UV%" pip install --python "%PY%" httpx fastapi uvicorn rich pydantic pypdf keyring tzdata watchfiles pywin32 --quiet
 :deps_done
 if errorlevel 1 (
     echo  [WARN] Package install failed - trying to continue with a check.
@@ -160,6 +164,15 @@ REM batch here instead of continuing to parse a file that may just have
 REM been replaced.
 if not defined HIVEMIND_NO_UPDATE_CHECK (
     "%PY%" "%~dp0tools\update_check.py"
+    if errorlevel 11 (
+        echo.
+        echo  [ERROR] Update did not finish cleanly. Inspect the messages above
+        echo          or run update.bat before starting HiveMind.
+        echo.
+        echo  Press any key to continue...
+        pause >nul
+        exit /b 1
+    )
     if errorlevel 10 (
         echo.
         echo  [INFO] Update installed. Start HiveMind again to use it.
@@ -177,8 +190,8 @@ if not exist "llama" (
     echo.
 )
 REM Models available via: env HIVEMIND_MODELS_DIR > settings.json "models_dir"
-REM > repo\models\ > models.json (absolute GGUF paths from setup_models.bat).
-for /f "usebackq delims=" %%M in (`powershell -NoProfile -Command "$ok=$false; if ($env:HIVEMIND_MODELS_DIR) { $ok=$true }; if (Test-Path 'models') { $ok=$true }; try { $s=Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($s.models_dir) { $ok=$true } } catch {}; try { $j=Get-Content 'models.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; $n=0; foreach($p in $j.PSObject.Properties){ if(-not $p.Name.StartsWith('_') -and $p.Value) { $n++ } }; if ($n -gt 0) { $ok=$true } } catch {}; if ($ok) { '1' } else { '0' }"`) do set HM_HAS_MODELS=%%M
+REM > repo\models\ (non-empty) > models.json (absolute GGUF paths from setup_models.bat).
+for /f "usebackq delims=" %%M in (`powershell -NoProfile -Command "$ok=$false; if ($env:HIVEMIND_MODELS_DIR) { $ok=$true }; if (Get-ChildItem -Path 'models' -Recurse -Filter '*.gguf' -ErrorAction SilentlyContinue | Select-Object -First 1) { $ok=$true }; try { $s=Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($s.models_dir) { $ok=$true } } catch {}; try { $j=Get-Content 'models.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; $n=0; foreach($p in $j.PSObject.Properties){ if(-not $p.Name.StartsWith('_') -and $p.Value) { $n++ } }; if ($n -gt 0) { $ok=$true } } catch {}; if ($ok) { '1' } else { '0' }"`) do set HM_HAS_MODELS=%%M
 if not "%HM_HAS_MODELS%"=="1" (
     echo  [NOTE] No models configured. Run setup_models.bat, set
     echo         HIVEMIND_MODELS_DIR, or drop GGUFs into the models\ folder.

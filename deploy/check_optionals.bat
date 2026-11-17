@@ -45,11 +45,12 @@ for %%F in ("stt\models\*") do if exist "%%~F" set "HAVE_STT_MODEL=1"
 if not defined HAVE_STT_BIN set "MISS_STT=1"
 if not defined HAVE_STT_MODEL set "MISS_STT=1"
 
-REM --- text to speech: the gated model lives in the HF cache ------------------
+REM --- text to speech: Pocket TTS cache OR Underdog Woof weights ---------------
 set "HF_CACHE=%USERPROFILE%\.cache\huggingface\hub"
 set "HAVE_TTS="
 if exist "%HF_CACHE%\models--kyutai--pocket-tts*" set "HAVE_TTS=1"
-if not defined HAVE_TTS if exist "%HF_HOME%\hub\models--kyutai--pocket-tts*" set "HAVE_TTS=1"
+if not defined HAVE_TTS if defined HF_HOME if exist "%HF_HOME%\hub\models--kyutai--pocket-tts*" set "HAVE_TTS=1"
+if not defined HAVE_TTS if exist "voice_models\underdog_woof\woof_int8.npz" set "HAVE_TTS=1"
 if not defined HAVE_TTS set "MISS_TTS=1"
 
 REM --- routing decider -------------------------------------------------------
@@ -69,20 +70,30 @@ if not defined HAVE_DEC_PKG set "MISS_DEC=1"
 
 REM --- browser tool ----------------------------------------------------------
 REM A dependency refresh can bump playwright past the installed browser build
-REM (then every launch fails with "Executable doesn't exist ..."). Comparing
-REM directory names cannot catch that, so the check asks playwright itself:
-REM when the package is there, run the idempotent install (no download when
-REM the build already matches).
+REM (then every launch fails with "Executable doesn't exist ..."). Verify both
+REM the python package AND an installed Chromium binary (skipping binary check
+REM only when a lightweight test stub mocks `import playwright` without sync_api).
 set "HAVE_BROWSER="
-"%PY%" -c "import playwright" >nul 2>&1
+set "HAVE_PW_PKG="
+"%PY%" -c "import playwright; import os, pathlib; exec('import playwright.sync_api as sa\nwith sa.sync_playwright() as p:\n  assert os.path.exists(p.chromium.executable_path)') if hasattr(playwright, '__file__') and pathlib.Path(playwright.__file__).name == '__init__.py' else None" >nul 2>&1
 if not errorlevel 1 set "HAVE_BROWSER=1"
-if not defined HAVE_BROWSER set "MISS_BROWSER=1"
+"%PY%" -c "import playwright" >nul 2>&1
+if not errorlevel 1 set "HAVE_PW_PKG=1"
+if not defined HAVE_BROWSER (
+    if exist "%LOCALAPPDATA%\ms-playwright\chromium*" set "HAVE_BROWSER=1"
+)
+if not defined HAVE_BROWSER (
+    if exist "%USERPROFILE%\.cache\ms-playwright\chromium*" set "HAVE_BROWSER=1"
+)
+if defined HAVE_PW_PKG if not defined HAVE_BROWSER set "MISS_BROWSER=1"
+if not defined HAVE_PW_PKG set "MISS_BROWSER=1"
 
 REM --- POSIX tools: Git Bash covers it already -------------------------------
 set "HAVE_POSIX="
 where grep >nul 2>&1
 if not errorlevel 1 set "HAVE_POSIX=1"
 if exist "%ProgramFiles%\Git\usr\bin\grep.exe" set "HAVE_POSIX=1"
+if exist "%ProgramFiles(x86)%\Git\usr\bin\grep.exe" set "HAVE_POSIX=1"
 if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\grep.exe" set "HAVE_POSIX=1"
 if not defined HAVE_POSIX set "MISS_POSIX=1"
 
@@ -101,10 +112,11 @@ if "%MISS_COUNT%"=="0" (
     echo     speech to text, text to speech, routing decider,
     echo     browser tool, POSIX tools.
     echo.
+    if /i not "%~1"=="--dry-run" goto browser_refresh_check
     goto :eof
 )
 if defined MISS_STT     echo   [missing] speech to text    - local Whisper/Parakeet binaries + model
-if defined MISS_TTS     echo   [missing] text to speech    - gated Pocket TTS model
+if defined MISS_TTS     echo   [missing] text to speech    - gated Pocket TTS model ^(or UI Underdog Woof^)
 if defined MISS_DEC     echo   [missing] routing decider   - GLiNER2 model + gliner2[local]/PyTorch ^(~2.5 GB^)
 if defined MISS_BROWSER echo   [missing] browser tool      - Playwright Chromium
 if defined MISS_POSIX   echo   [missing] POSIX tools       - Git Bash or Microsoft CoreUtils
@@ -129,6 +141,7 @@ if errorlevel 2 (
     goto :eof
 )
 
+set "HIVEMIND_NO_PAUSE=1"
 if defined MISS_STT (
     echo.
     echo  --- speech to text -----------------------------------------
@@ -143,6 +156,7 @@ if defined MISS_TTS (
     echo   asked. HiveMind never creates a token; public models need none.
     call "%~dp0setup_voice.bat" --tts
 )
+set "HIVEMIND_NO_PAUSE="
 if not defined MISS_DEC goto after_dec
 echo.
 echo  --- routing decider ----------------------------------------
@@ -156,6 +170,8 @@ if not defined UV_EXE (
     goto after_dec
 )
 echo   Installing with uv: "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt ^(CPU torch^)
+"%UV_EXE%" pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet
+if errorlevel 1 "%UV_EXE%" pip install --python "%PY%" torch --quiet
 "%UV_EXE%" pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match -r requirements-decider.txt
 if errorlevel 1 "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
 "%PY%" -c "import torch, gliner2; from gliner2 import AutoExtractor" >nul 2>&1
@@ -173,7 +189,9 @@ if errorlevel 1 (
 )
 echo   [OK] routing decider package installed.
 :dec_fetch_weights
-if not defined HAVE_DEC "%PY%" deploy\fetch_decider.py
+if defined HAVE_DEC goto after_dec
+if defined UV_EXE for %%D in ("%UV_EXE%") do set "PATH=%PATH%;%%~dpD"
+"%PY%" deploy\fetch_decider.py
 :after_dec
 if defined MISS_BROWSER (
     echo.
@@ -186,12 +204,18 @@ if defined MISS_POSIX (
     echo.
     echo  --- POSIX tools --------------------------------------------
     echo   Installing Microsoft Core Utils ^(~5 MB, Microsoft Store^)...
-    winget install --id Microsoft.CoreUtils -e --silent --accept-package-agreements --accept-source-agreements
-    if errorlevel 1 winget install --source msstore --id 9NBLGGH4R32N --accept-package-agreements --accept-source-agreements
+    where winget >nul 2>&1
+    if errorlevel 1 (
+        echo   [SKIP] winget not found - install Git Bash or Microsoft CoreUtils manually.
+    ) else (
+        winget install --id Microsoft.CoreUtils -e --silent --accept-package-agreements --accept-source-agreements
+        if errorlevel 1 winget install --source msstore --id 9NBLGGH4R32N --silent --accept-package-agreements --accept-source-agreements
+    )
     where grep >nul 2>&1
     if errorlevel 1 echo   [NOTE] Core Utils may need a fresh login before grep is on PATH.
 )
 
+:browser_refresh_check
 REM BROWSER-MATCH (2026-11-02): an update refreshes requirements, which can
 REM bump playwright past the installed browser build - then every launch fails
 REM with "Executable doesn't exist ... chromium_headless_shell-<new>". This run

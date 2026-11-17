@@ -45,6 +45,14 @@ import time
 import zipfile
 from pathlib import Path
 
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
 logger = logging.getLogger("hivemind.updater")
 
 # update.bat runs this file directly (sys.path[0] is deploy/), so the repo
@@ -67,23 +75,55 @@ TMPDIR_NAME = "_update_tmp"
 APPLY_XF = [
     "update.bat", "settings.json", "presets.json", "models.json",
     "vision_model.json", "routing_weights.json", "memory.json",
-    "gateway.toml", "gateway_state.json", "gateway_state.json.corrupt",
-    "gateway.disabled", "gateway.lock", "gateway_audit.jsonl",
-    "gateway_audit.jsonl.*", "gateway_state.tmp",
+    "soul.json", "automations.json", "memories_db.json",
+    "runtime_models.json", "token_stats.json", "run_counter.json",
+    "gateway.toml", "gateway.pid", "gateway_state.json",
+    "gateway_state.json.corrupt", "gateway.disabled", "gateway.lock",
+    "gateway_audit.jsonl", "gateway_audit.jsonl.*", "gateway_state.tmp",
+]
+# Subdir user/config files excluded from robocopy apply without blocking the leak list.
+APPLY_SUB_XF = [
+    "gguf_filename_tags.json", "last_workspace.json", "decider_cache.json",
+    "settings.yml", "docker-compose.yml",
 ]
 # /XD (apply): user data. The models exclude is ANCHORED to the zip's
 # top-level models dir at call time (apply models dir) — a bare "models"
 # also matched model_configs\models, silently skipping the tracked
 # model-config JSONs on every update (XD-ANCHOR, audit 2026-11-04).
-APPLY_XD = ["sessions", ".hive_uploads", "learning_logs", "logs", ".venv",
-            "llama", "voice_models"]
+APPLY_XD = [
+    "sessions", ".hive_uploads", "learning_logs", "logs", ".venv",
+    "llama", "voice_models", "stt", "tts-venv", "custom_prompts",
+]
 
 # ── backup excludes ─────────────────────────────────────────────────────────
 # models excluded: GGUFs can live here in some setups — gigabytes nobody
 # wants in a backup. The exclude is ANCHORED to the install root at call
 # time. update_backup_* is excluded so backups never nest.
-BACKUP_XD = [".venv", "llama", "logs", "sessions", "learning_logs",
-             "voice_models", "__pycache__", TMPDIR_NAME, "update_backup_*"]
+BACKUP_XD = [
+    ".venv", "llama", "logs", "sessions", "learning_logs",
+    "voice_models", "stt", "tts-venv", ".hive_uploads",
+    "__pycache__", TMPDIR_NAME, "update_backup_*", "update_removed_*",
+]
+
+# Legacy release files removed in 1.6.0-1.6.2 (safe to move on first
+# manifest-less upgrade when no longer present in the incoming release tree).
+_LEGACY_PRUNE_FILES = (
+    r"model_configs\models\qwen3.5_9b-ud.json",
+    r"model_configs\models\qwen3.5_4b-ud.json",
+    r"model_configs\models\cybertiel-coder_35b-a3b-mtp-iq4xs.json",
+    r"model_configs\models\hermes3.6_35b-a3b-uncensored-genesis-apex-mini.json",
+    r"model_configs\models\hermes3.6_35b-a3b-uncensored-genesis-final-mtp-apex-compact.json",
+    r"model_configs\models\hermes3.6_35b-a3b-uncensored-genesis-v13-mtp-apex-compact.json",
+    r"model_configs\models\k2-horizon_3.7b.json",
+    r"model_configs\models\k2-horizon_7b.json",
+    r"model_configs\models\lfm2.5_2.6b.json",
+    r"model_configs\models\mellum2.1_12b-a2.5b-thinking.json",
+    r"model_configs\models\minicpm5_2b-sharp-q4.json",
+    r"model_configs\models\minicpm5_2b.json",
+    r"model_configs\models\qwen3.6_35b-a3b-uncensored-genesis-final-apex-compact.json",
+    r"model_configs\models\spark-x2.5_1.7b.json",
+    r"model_configs\models\spark-x2.5_4b.json",
+)
 
 WARN_RE = re.compile(r"(?i)\b(warning|breaking|known issues?|migrat\w*"
                      r"|attention|caution|deprecat\w*)\b")
@@ -170,19 +210,32 @@ def _numeric_triple(v: str) -> list[int] | None:
         return None
 
 
+_PRE_STAGE = {"dev": 0, "alpha": 1, "a": 1, "beta": 2, "b": 2, "preview": 3, "rc": 4}
+_PRE_RE = re.compile(r"-(dev|alpha|beta|preview|rc)(?:\.?(\d+))?$", re.I)
+
+
 def _prerelease_ordinal(v: str) -> int | None:
-    """preview/alpha/beta/rc/dev.N → N+1; a clean release → 999. None when
-    the pre-release tag itself is malformed."""
-    # Alt PS -match was case-insensitive and treated ANY unparseable
-    # suffix as a clean release (999) — unknown suffixes like -hotfix must
-    # not abort the update when the triple differs.
-    m = re.search(r"(?:preview|alpha|beta|rc|dev)(?:\.(\d+))?$", v, re.I)
+    """preview/alpha/beta/rc/dev.N -> N+1; clean release -> 999."""
+    m = _PRE_RE.search(v or "")
     if m:
         try:
-            return int(m.group(1) or 0) + 1
+            return int(m.group(2) or 0) + 1
         except ValueError:
             return 999
+    if "-" in (v or ""):
+        return None
     return 999
+
+
+def _prerelease_key(v: str) -> tuple[int, int] | None:
+    m = _PRE_RE.search(v or "")
+    if m:
+        stage = _PRE_STAGE.get(m.group(1).lower(), 0)
+        num = int(m.group(2) or 0) + 1
+        return (stage, num)
+    if "-" in (v or ""):
+        return None
+    return (999, 999)
 
 
 def compare_versions(current: str, tag: str) -> str | None:
@@ -193,15 +246,15 @@ def compare_versions(current: str, tag: str) -> str | None:
     a, b = _numeric_triple(current), _numeric_triple(tag)
     if a is None or b is None:
         return None
-    ap, bp = _prerelease_ordinal(current), _prerelease_ordinal(tag)
-    if ap is None or bp is None:
+    ak, bk = _prerelease_key(current), _prerelease_key(tag)
+    if ak is None or bk is None:
         return None
     if b > a:
         return "newer"
     if b == a:
-        if bp > ap:
+        if bk > ak:
             return "newer"
-        if bp < ap:
+        if bk < ak:
             return "older"
         return "same"
     return "older"
@@ -256,6 +309,51 @@ def zip_version(exroot: Path) -> str | None:
 
 # ── robocopy commands (built, not quoted — no cmd parsing left) ─────────────
 
+def running_install_processes(base: Path) -> list[str]:
+    """Return active companion/fallback processes rooted inside ``base``."""
+    found: list[str] = []
+    # Check heartbeat PID (handles fallback server ports 8002..8031)
+    hb = base / "logs" / "engine_heartbeat.json"
+    if hb.is_file():
+        try:
+            data = json.loads(hb.read_text(encoding="utf-8"))
+            pid = int((data or {}).get("pid") or 0)
+            if pid > 0:
+                chk = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' "
+                     "-ErrorAction SilentlyContinue; "
+                     "if ($p -and $p.CommandLine -match 'run\\.py|server\\.py|hivemind') { "
+                     "Write-Output ('engine pid ' + $p.ProcessId + ' on port ' + ($env:HM_HB_PORT)) }"],
+                    capture_output=True, text=True, timeout=30,
+                    env={**os.environ, "HM_HB_PORT": str((data or {}).get("port") or "?")},
+                )
+                line = (chk.stdout or "").strip()
+                if line:
+                    found.append(line)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "$b = [IO.Path]::GetFullPath($env:HM_UPD_BASE).TrimEnd('\\').ToLowerInvariant(); "
+             "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+             "Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and "
+             "($_.CommandLine.ToLowerInvariant().Contains($b) -or $_.Name -eq 'llama-server.exe') -and "
+             "$_.CommandLine -match 'hivemind_gateway|mcp_server|run\\.py|server\\.py|llama-server' } | "
+             "ForEach-Object { '{0} (pid {1})' -f $_.Name, $_.ProcessId }"],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "HM_UPD_BASE": str(base)},
+        )
+        for line in (r.stdout or "").splitlines():
+            clean = line.strip()
+            if clean and clean not in found:
+                found.append(clean)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return found
+
+
 def backup_cmd(base: Path, bk_name: str) -> list[str]:
     """Backup the current code (user data excluded). /R:1 /W:1: a single
     locked file must not hang the update for hours (robocopy defaults:
@@ -263,9 +361,7 @@ def backup_cmd(base: Path, bk_name: str) -> list[str]:
     return [
         "robocopy", str(base), str(base / bk_name),
         "/E", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NP", "/NJS",
-        "/XD", ".venv", "llama", "logs", str(base / "models"),
-        "sessions", "learning_logs", "__pycache__", TMPDIR_NAME,
-        "update_backup_*",
+        "/XD", str(base / "models"), *BACKUP_XD,
     ]
 
 
@@ -273,9 +369,12 @@ def apply_cmd(exroot: Path, base: Path) -> list[str]:
     """Apply the extracted release over the install. /XD matches against
     the SOURCE tree, so the models exclude anchors to the zip root."""
     cmd = ["robocopy", str(exroot), str(base),
-           "/E", "/R:1", "/W:1", "/XF"] + APPLY_XF + ["/XD"] + APPLY_XD \
-          + ["/NFL", "/NDL", "/NJH", "/NP", "/NJS"]
-    cmd[-1:-1] = [str(exroot / "models")]
+           "/E", "/R:1", "/W:1", "/XF"] + APPLY_XF + APPLY_SUB_XF + ["/XD"] + APPLY_XD \
+          + [str(exroot / "models"),
+             str(exroot / "context" / "projects"),
+             str(exroot / "learning" / "sessions"),
+             str(exroot / "model_configs" / "learned"),
+             "/NFL", "/NDL", "/NJH", "/NP", "/NJS"]
     return cmd
 
 
@@ -285,6 +384,11 @@ def _run_rc(cmd: list[str]) -> int:
     # __main__ guard.
     r = subprocess.run(cmd, capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
+    if r.returncode >= 8:
+        out_tail = (r.stdout or "").strip().splitlines()[-6:]
+        err_tail = (r.stderr or "").strip().splitlines()[-4:]
+        for line in out_tail + err_tail:
+            print(f"    | {line}")
     return r.returncode
 
 
@@ -319,19 +423,14 @@ def fetch_latest_release(tmpdir: Path) -> tuple[str, str, str] | None:
 
 
 def stop_watchdog(base: Path) -> bool:
-    """Stop the watchdog for the apply; True when it was running.
-
-    WATCHDOG-PAUSE (audit 2026-11-03): the watchdog restarted the engine
-    within its 20 s pass while the apply ran, so robocopy wrote into a live
-    Python process. DYING-GASP (audit 2026-11-04): a pass that was
-    mid-restart when stop landed still boots the engine once inside its
-    20 s window — the caller must give it that window and re-check the
-    port BEFORE anything is applied."""
-    wd_was = (Path(os.environ.get("LOCALAPPDATA", "")) /
-              "HiveMindGateway" / "watchdog.marker").exists()
-    # Belt-and-suspenders (alt behavior): stop whenever the script exists,
-    # marker or not — a watchdog without its marker must not restart the
-    # engine mid-apply either.
+    """Stop the watchdog for the apply; True when it was actively running (<90s marker)."""
+    marker = Path(os.environ.get("LOCALAPPDATA", "")) / "HiveMindGateway" / "watchdog.marker"
+    wd_was = False
+    try:
+        if marker.exists() and (time.time() - marker.stat().st_mtime) < 90.0:
+            wd_was = True
+    except OSError:
+        wd_was = False
     if (base / "watchdog_engine.bat").exists():
         try:
             subprocess.run(["cmd", "/c", str(base / "watchdog_engine.bat"), "stop"],
@@ -342,50 +441,60 @@ def stop_watchdog(base: Path) -> bool:
 
 
 def arm_watchdog(base: Path) -> None:
-    """Re-arm the watchdog (start detached in the install dir).
-
-    Re-arm happens AFTER every post-apply step: the engine must not boot
-    while the verify, prune, dependency refresh and optional components
-    still run (uv swaps .venv packages under a live interpreter)."""
+    """Re-arm the watchdog fully detached from the updater console."""
     if (base / "watchdog_engine.bat").exists():
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                 | getattr(subprocess, "CREATE_NO_WINDOW", 0))
         subprocess.Popen(
-            ["cmd", "/c", "start", "", "/b", "/d", str(base),
-             "watchdog_engine.bat"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            ["cmd", "/c", str(base / "watchdog_engine.bat")],
+            cwd=str(base),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags)
 
 
 def refresh_deps(base: Path) -> None:
-    """Refresh .venv deps into the existing venv (never removes packages).
-
-    FROZEN (2026-10-18, audit): pyproject.toml + uv.lock install exactly
-    the versions this release was tested with. --inexact (2026-11-04):
-    optional decider/voice packages installed after the release are not in
-    the lock; a plain sync deletes them. Older zips carry only
-    requirements.txt; then the pip path is the honest fallback. Failure-
-    tolerant on purpose: without uv the update still stands."""
+    """Refresh .venv deps into the existing venv (never removes packages)."""
     print("  Refreshing deps  : requirements.txt into .venv")
     uv = shutil.which("uv")
     if not uv:
-        cand = Path(os.environ.get("USERPROFILE", "")) / ".local" / "bin" / "uv.exe"
-        if cand.exists():
-            uv = str(cand)
+        for cand in (
+            Path(os.environ.get("USERPROFILE", "")) / ".local" / "bin" / "uv.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "uv.exe",
+        ):
+            if cand.exists():
+                uv = str(cand)
+                break
+    venv_py = base / ".venv" / "Scripts" / "python.exe"
+    target_py = venv_py if venv_py.exists() else Path(sys.executable)
     if not uv:
+        req = base / "requirements.txt"
+        if req.exists():
+            r_pip = subprocess.run(
+                [str(target_py), "-m", "pip", "install", "-r", str(req), "--quiet"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600,
+            )
+            if r_pip.returncode == 0:
+                info("Dependencies current (pip).")
+                return
         print("  [WARN] uv not found - dependencies were NOT refreshed.")
         print("         If the new release needs new packages, run install.bat once.")
         return
     env = dict(os.environ, UV_NO_DEV="1")
-    venv_py = base / ".venv" / "Scripts" / "python.exe"
-    if (base / "uv.lock").exists() and (base / "pyproject.toml").exists():
+    if (base / "uv.lock").exists() and (base / "pyproject.toml").exists() and venv_py.exists():
         cmd = [uv, "sync", "--frozen", "--all-extras", "--inexact",
-               "--python", str(venv_py), "--project", str(base), "--quiet"]
+               "--python", str(target_py), "--project", str(base), "--quiet"]
     else:
-        cmd = [uv, "pip", "install", "--python", str(venv_py),
+        cmd = [uv, "pip", "install", "--python", str(target_py),
                "-r", str(base / "requirements.txt"), "--quiet"]
     r = subprocess.run(cmd, capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=3600, env=env)
     if r.returncode != 0:
         print("  [WARN] Dependency refresh failed. HiveMind may miss new imports.")
+        for line in ((r.stderr or r.stdout or "").strip().splitlines()[-4:]):
+            print(f"         {line}")
         print("         Run: install.bat  (it repairs the venv)")
     else:
         info("Dependencies current.")
@@ -399,10 +508,10 @@ def refresh_uv_path() -> None:
     r = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "$d = Join-Path $env:USERPROFILE '.local\\bin'; "
-         "$p = [Environment]::GetEnvironmentVariable('Path','User'); "
+         "$p = [string][Environment]::GetEnvironmentVariable('Path','User'); "
          "if (($p -split ';') -contains $d) { 'present' } else { "
-         "[Environment]::SetEnvironmentVariable('Path', "
-         "(($p.TrimEnd(';')) + ';' + $d).TrimStart(';'), 'User'); 'added' }"],
+         "$new = (($p.TrimEnd(';')) + ';' + $d).TrimStart(';'); "
+         "[Environment]::SetEnvironmentVariable('Path', $new, 'User'); 'added' }"],
         capture_output=True, text=True, encoding="utf-8",
         errors="replace", timeout=60)
     if (r.stdout or "").strip() == "added":
@@ -435,16 +544,29 @@ def write_build_info_fallback(base: Path, newver: str, tagnum: str) -> None:
             encoding="utf-8")
 
 
-def run_prune(base: Path, exroot: Path, tagnum: str, tmpdir: Path) -> tuple[int, bool]:
-    r"""Prune files the PREVIOUS release shipped but this one dropped.
+def _prune_legacy_orphans(base: Path, exroot: Path, trash: Path) -> int:
+    """Move known moved/removed legacy release files on first manifest-less upgrade."""
+    moved = 0
+    cands: list[str] = list(_LEGACY_PRUNE_FILES)
+    if (exroot / "docs" / "releases").is_dir():
+        for p in base.glob("RELEASE_NOTES_*.md"):
+            if not (exroot / p.name).exists():
+                cands.append(p.name)
+    for rel in cands:
+        src = base / rel
+        if src.is_file() and not (exroot / rel).exists():
+            dst = trash / rel
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                moved += 1
+            except OSError:
+                pass
+    return moved
 
-    robocopy /E only overlays: a module the new release deleted would live
-    on forever as a stale shadow. /MIR is not an option (it would delete
-    user data). The previous manifest lists what the last update applied;
-    files on it that the new zip no longer ships are release files by
-    construction and move to update_removed_<ver>\ (trash, reversible).
-    Only a pure number may become the pruned count (PRUNE-COUNT GUARD:
-    error text must not flow into the count)."""
+
+def run_prune(base: Path, exroot: Path, tagnum: str, tmpdir: Path) -> tuple[int, bool]:
+    r"""Prune files the PREVIOUS release shipped but this one dropped."""
     trash = base / f"update_removed_{tagnum}"
     manifest = base / "update_manifest_installed.txt"
     had_manifest = manifest.exists()
@@ -455,10 +577,15 @@ def run_prune(base: Path, exroot: Path, tagnum: str, tmpdir: Path) -> tuple[int,
          "-Trash", str(trash), "-Manifest", str(manifest)],
         capture_output=True, text=True, encoding="utf-8",
         errors="replace", timeout=600)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
+        print(f"  [WARN] prune script exited {r.returncode}" + (f": {' | '.join(err)}" if err else ""))
     pruned = 0
     m = re.search(r"^\s*(\d+)\s*$", r.stdout or "", re.M)
     if m:
         pruned = int(m.group(1))
+    if not had_manifest:
+        pruned += _prune_legacy_orphans(base, exroot, trash)
     return pruned, had_manifest
 
 
@@ -502,19 +629,32 @@ def main(argv: list[str] | None = None) -> int:
             print("          update.bat --zip ..\\HiveMind_v1.3.9_release.zip")
             return 1
         local_zip = Path(argv[1])
+        if not local_zip.is_absolute():
+            call_cwd = os.environ.get("HIVEMIND_CALL_CWD", "")
+            cand = (Path(call_cwd) / local_zip) if call_cwd else local_zip
+            if cand.exists():
+                local_zip = cand
 
-    # -- 0. curl present? (ships with Windows 10 1803+) ----------------------
-    if shutil.which("curl") is None:
+    # -- 0. curl present? (required for GitHub release mode) ---------------
+    if local_zip is None and shutil.which("curl") is None:
         print("  [ERROR] curl.exe not found. HiveMind updates need Windows 10 1803+")
         print("         or a curl.exe on PATH.")
         return 1
 
-    # -- 1. Is an instance running on the configured port? -------------------
+    # -- 1. Is an instance or companion process running? ---------------------
     hm_port = resolve_port(base)
     if port_listener(hm_port):
         print(f"  [ERROR] A HiveMind instance is listening on port {hm_port}.")
         print("         Stop it first: close the HiveMind console window, then")
         print("         run this update again.")
+        return 1
+    companions = running_install_processes(base)
+    if companions:
+        print("  [ERROR] Active HiveMind processes are still running in this install:")
+        for proc_desc in companions:
+            print(f"         - {proc_desc}")
+        print("         Stop the server/gateway/MCP/llama-server processes first,")
+        print("         then run this update again.")
         return 1
     info(f"No running instance on port {hm_port}.")
 
@@ -533,11 +673,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # -- 2b/3. Get the release zip (local or GitHub) -------------------------
     tag = tagnum = asset_url = asset_digest = ""
+    exroot: Path | None = None
     if local_zip is not None:
         # Layout check BEFORE anything in this folder is touched: extraction
         # lands in _update_tmp\extracted only — a failure here changes nothing.
         if not local_zip.exists():
             print(f"  [ERROR] Zip not found: {local_zip}")
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         print(f"  Local zip         : {local_zip}")
         shutil.copyfile(local_zip, tmpdir / "release.zip")
@@ -546,6 +688,7 @@ def main(argv: list[str] | None = None) -> int:
                                         tmpdir / "extracted")
         except (OSError, zipfile.BadZipFile, RuntimeError):
             print("  [ERROR] Could not extract the zip. Nothing was changed.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         if exroot is None:
             if n == 0:
@@ -553,23 +696,28 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"  [ERROR] Zip layout wrong: {n} root folders in the zip, expected")
                 print("          exactly one HiveMind version folder. Nothing was changed.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         if not (exroot / "core").exists():
             print("  [ERROR] Zip layout wrong: no core\\ folder in the zip. This does not")
             print("          look like a HiveMind release zip. Nothing was changed.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         if not (exroot / "utils").exists():
             print("  [ERROR] Zip layout wrong: no utils\\ folder in the zip. Nothing was changed.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         tagnum = zip_version(exroot) or ""
         if not tagnum:
             print("  [ERROR] Zip carries no core\\version.py HIVEMIND_VERSION. Nothing was changed.")
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         tag = f"v{tagnum}"
         print(f"  Zip version       : {tagnum}")
     else:
         got = fetch_latest_release(tmpdir)
         if not got:
+            shutil.rmtree(tmpdir, ignore_errors=True)
             return 1
         tag, asset_url, asset_digest = got
         if not tag.startswith("v"):
@@ -668,44 +816,46 @@ def main(argv: list[str] | None = None) -> int:
     info("6 done: release zip downloaded + verified.")
 
     # -- 7. Extract (zip carries a version root folder) ----------------------
-    try:
-        nroots, exroot = extract_release(tmpdir / "release.zip",
-                                         tmpdir / "extracted")
-    except (OSError, zipfile.BadZipFile, RuntimeError):
-        print("  [ERROR] Could not extract the zip. Nothing was changed")
-        print(f"         backup is in {bk}")
-        return 1
     if exroot is None:
-        if nroots == 0:
-            print("  [ERROR] Zip contained no folder. Nothing was changed.")
-        else:
-            print(f"  [ERROR] Zip layout wrong: {nroots} root folders in the zip, expected")
-            print("          exactly one HiveMind version folder. Nothing was applied.")
-        print(f"         backup is in {bk}")
-        return 1
-    # PRE-APPLY LAYOUT PROBE (audit 2026-11-04): the GitHub flow used to apply
-    # whatever the zip carried and only NOTICE a wrong/empty layout in the
-    # post-apply verify - by then half the install was overwritten and only a
-    # MANUAL rollback helped. The local --zip flow always had these probes;
-    # they are cheap and idempotent, so the common path enforces them too.
+        try:
+            nroots, exroot = extract_release(tmpdir / "release.zip",
+                                             tmpdir / "extracted")
+        except (OSError, zipfile.BadZipFile, RuntimeError):
+            print("  [ERROR] Could not extract the zip. Nothing was changed")
+            print(f"         backup is in {bk}")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return 1
+        if exroot is None:
+            if nroots == 0:
+                print("  [ERROR] Zip contained no folder. Nothing was changed.")
+            else:
+                print(f"  [ERROR] Zip layout wrong: {nroots} root folders in the zip, expected")
+                print("          exactly one HiveMind version folder. Nothing was applied.")
+            print(f"         backup is in {bk}")
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return 1
     if not (exroot / "core").exists():
         print("  [ERROR] Zip layout wrong: no core\\ folder in the zip. This does not")
         print("          look like a HiveMind release zip. Nothing was applied.")
         print(f"         backup is in {bk}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
     if not (exroot / "utils").exists():
         print("  [ERROR] Zip layout wrong: no utils\\ folder in the zip. Nothing was applied.")
         print(f"         backup is in {bk}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
     zipver = zip_version(exroot) or ""
     if not zipver:
         print("  [ERROR] Zip carries no core\\version.py HIVEMIND_VERSION. Nothing was applied.")
         print(f"         backup is in {bk}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
     if zipver.lower() != tagnum.lower():
         print(f"  [ERROR] Zip carries version {zipver} but the release tag is {tagnum} -")
         print("         the asset does not match the release. Nothing was applied.")
         print(f"         backup is in {bk}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
     stage_new_bat(exroot, base)
     info("7 done: zip extracted.")
@@ -750,8 +900,10 @@ def main(argv: list[str] | None = None) -> int:
     pruned, had_manifest = run_prune(base, exroot, tagnum, tmpdir)
     if had_manifest and pruned:
         print(f"  Pruned          : {pruned} removed release file(s) moved to update_removed_{tagnum}\\")
-    if not had_manifest:
-        print("  Manifest        : first manifest-managed update - nothing to prune.")
+    elif not had_manifest and pruned:
+        print(f"  Pruned          : {pruned} legacy removed file(s) moved to update_removed_{tagnum}\\")
+    elif not had_manifest:
+        print("  Manifest        : initial manifest created (future updates prune removed files).")
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     # -- 9a-3. Desktop shortcut refresh (ICON-FIX 2026-11-01) -----------------

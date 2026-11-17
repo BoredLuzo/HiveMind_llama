@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal DisableDelayedExpansion
 cd /d "%~dp0"
 
 REM --quiet: idempotent refresh, no banner, no pauses (ICON-FIX 2026-11-01:

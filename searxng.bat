@@ -52,9 +52,18 @@ echo    - "external" only writes settings.json (searxng_host) - it never
 echo      touches Docker. Use it for a self-hosted or remote SearXNG.
 echo.
 
-REM Find Python (venv preferred, then system) - for settings.json updates
-set "PY=python"
+REM Find Python (venv preferred, then py -3.14 / known paths / PATH) - for settings.json updates
+set "PY="
 if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if not defined PY (
+    py -3.14 --version >nul 2>&1
+    if not errorlevel 1 (
+        for /f "delims=" %%X in ('py -3.14 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%X"
+    )
+)
+if not defined PY if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Program Files\Python314\python.exe"
+if not defined PY if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
+if not defined PY set "PY=python"
 
 REM ---- Port resolution: arg > SEARXNG_PORT env > existing settings.json > 8888 ----
 set "HM_PORT=%~2"
@@ -65,6 +74,13 @@ if "%HM_PORT%"=="" (
     )
 )
 if "%HM_PORT%"=="" set "HM_PORT=8888"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$p=0; if ([int]::TryParse($env:HM_PORT,[ref]$p) -and $p -ge 1 -and $p -le 65535) { $p } else { 'INVALID' }"`) do set "HM_PORT_CHK=%%V"
+if "%HM_PORT_CHK%"=="INVALID" (
+    echo  [ERROR] Invalid SearXNG port: %HM_PORT% ^(expected 1-65535^).
+    echo.
+    set "RC=1"
+    goto :finish
+)
 
 set "ACTION=%~1"
 if "%ACTION%"=="" set "ACTION=status"
@@ -117,7 +133,7 @@ echo  Pointing HiveMind at: %HM_EXT%
 echo.
 REM settings.py lives in the repo ROOT - run Python from there.
 pushd "%~dp0"
-"%PY%" -c "from settings import load_settings, save_settings; s = load_settings(); s['searxng_host'] = '%HM_EXT%'; save_settings(s); print('   searxng_host -> ' + s['searxng_host'])"
+"%PY%" -c "import os; from settings import load_settings, save_settings; s = load_settings(); s['searxng_host'] = os.environ['HM_EXT']; save_settings(s); print('   searxng_host -> ' + s['searxng_host'])"
 popd
 if errorlevel 1 (
     echo.
@@ -186,11 +202,12 @@ powershell -NoProfile -Command "$p='%HM_PORT%'; $f='docker-compose.yml'; $c=[Sys
 REM Point settings.json searxng_host at the new port. settings.py lives in the
 REM repo ROOT, so run Python from there (this script cd's into searxng-config).
 pushd "%~dp0"
-"%PY%" -c "from settings import load_settings, save_settings; s = load_settings(); s['searxng_host'] = 'http://localhost:%HM_PORT%'; save_settings(s); print('   searxng_host -> ' + s['searxng_host'])"
+"%PY%" -c "import os; from settings import load_settings, save_settings; s = load_settings(); s['searxng_host'] = 'http://localhost:' + os.environ['HM_PORT']; save_settings(s); print('   searxng_host -> ' + s['searxng_host'])"
 popd
+if errorlevel 1 echo  [WARN] Could not update settings.json searxng_host.
 echo.
 echo  [..] Building image + starting container (port %HM_PORT%)...
-docker compose -f docker-compose.yml up -d --build --renew-anon-volumes --force-recreate --renew-anon-volumes --renew-anon-volumes
+docker compose -f docker-compose.yml up -d --build --renew-anon-volumes --force-recreate
 if errorlevel 1 (
     echo.
     echo  [ERROR] docker compose failed. Is Docker Desktop running?
@@ -211,17 +228,19 @@ if errorlevel 2 (
     goto :finish
 )
 echo.
-REM Seed gitignored runtime files from *.example templates if absent.
+REM Seed gitignored runtime files from *.example templates if absent, and never
+REM boot with the hardcoded CHANGE_ME placeholder secret from templates.
 if not exist "docker-compose.yml" (
     if exist "docker-compose.yml.example" copy /y "docker-compose.yml.example" "docker-compose.yml" >nul
 )
 if not exist "settings.yml" (
     if exist "settings.yml.example" copy /y "settings.yml.example" "settings.yml" >nul
 )
+powershell -NoProfile -Command "$need=$false; foreach($f in @('docker-compose.yml','settings.yml')){ if((Test-Path $f) -and ([System.IO.File]::ReadAllText($f) -match 'CHANGE_ME_42f0b9c1')){ $need=$true } }; if($need){ $hex = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) }); foreach ($f in @('docker-compose.yml','settings.yml')) { if(Test-Path $f){ $c=[System.IO.File]::ReadAllText($f); $c=$c -replace 'SEARXNG_SECRET=.*', ('SEARXNG_SECRET=' + $hex) -replace 'secret_key: \".*\"', ('secret_key: \"' + $hex + '\"'); [System.IO.File]::WriteAllText($f, $c) } } }"
 docker start hivemind-searxng >nul 2>&1
 if errorlevel 1 (
     echo  [INFO] Container does not exist - creating it...
-    docker compose -f docker-compose.yml up -d --build --renew-anon-volumes --force-recreate --renew-anon-volumes --renew-anon-volumes
+    docker compose -f docker-compose.yml up -d --build --renew-anon-volumes --force-recreate
     if errorlevel 1 (
         echo.
         echo  [ERROR] docker compose failed. Is Docker Desktop running?

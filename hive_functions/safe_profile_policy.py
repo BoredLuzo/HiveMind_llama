@@ -278,6 +278,27 @@ def apply_safe_profile_policy(settings: dict, workspace_root: Path) -> dict:
         _dfl = (_dfl_entry or {}).get("model", "")
         if _cur and _cur != _dfl:
             _user_choice[_role] = _cur
+    _installed: set[str] | None = None
+    if workspace_root is not None:
+        _installed = set()
+        try:
+            from backend.llama_models import list_available_models as _lam
+            _installed.update(m for m in (_lam() or []) if isinstance(m, str) and m)
+        except (ImportError, OSError, ValueError):
+            pass
+        try:
+            _mj_p = Path(workspace_root) / "models.json"
+            if _mj_p.is_file():
+                _mj = json.loads(_mj_p.read_text(encoding="utf-8"))
+                if isinstance(_mj, dict):
+                    for _mk, _mv in _mj.items():
+                        if (isinstance(_mk, str) and isinstance(_mv, str) and _mv
+                                and not _mk.endswith(("_mmproj", "_drafter"))
+                                and Path(_mv).is_file()):
+                            _installed.add(_mk)
+        except (OSError, ValueError):
+            pass
+
     _agent_patch = patch.get("agents")
     _user_sampling = settings.get("agents_user_sampling_choice")
     _user_sampling = _user_sampling if isinstance(_user_sampling, dict) else {}
@@ -293,7 +314,10 @@ def apply_safe_profile_policy(settings: dict, workspace_root: Path) -> dict:
                 if isinstance(_entry, dict) and not _entry:
                     del _agent_patch[_role]
                 continue
-            if _user_choice.get(_role):
+            _skip_model = bool(_user_choice.get(_role)) or (
+                _installed is not None and str(_entry.get("model") or "") not in _installed
+            )
+            if _skip_model:
                 _agent_patch[_role] = {k: v for k, v in _entry.items() if k != "model"}
                 if not _agent_patch[_role]:
                     del _agent_patch[_role]

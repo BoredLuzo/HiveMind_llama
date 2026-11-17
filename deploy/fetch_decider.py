@@ -20,10 +20,19 @@ Installation und wird ueber uv installiert:
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models" / "decider"
@@ -31,12 +40,26 @@ DEFAULT_MODEL = "fastino/GLiNER2.5-Decide"
 
 
 def _hf_cli() -> list[str] | None:
-    """Bevorzugt die hf-CLI, sonst uvx, sonst huggingface-cli."""
+    """Bevorzugt die hf-CLI, sonst uvx / uv tool run, sonst huggingface-cli."""
     for candidate in (["hf"], ["uvx", "--from", "huggingface_hub", "hf"],
                       ["huggingface-cli"]):
         exe = shutil.which(candidate[0])
         if exe:
             return [exe] + candidate[1:]
+    # Probe well-known user uv/uvx install locations when PATH was not reloaded.
+    user_dirs = [
+        Path(os.environ.get("USERPROFILE", "")) / ".local" / "bin",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links",
+    ]
+    for d in user_dirs:
+        if not d.is_dir():
+            continue
+        uvx = d / ("uvx.exe" if os.name == "nt" else "uvx")
+        if uvx.is_file():
+            return [str(uvx), "--from", "huggingface_hub", "hf"]
+        uv = d / ("uv.exe" if os.name == "nt" else "uv")
+        if uv.is_file():
+            return [str(uv), "tool", "run", "--from", "huggingface_hub", "hf"]
     return None
 
 

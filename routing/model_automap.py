@@ -81,9 +81,9 @@ MODEL_PROFILES: dict[str, dict] = {
     "gemma3":        {"thinking": False, "vision": False, "tool_call": True},
     # VISION-FIX (2026-08-19): gemma-4 is based on gemma2/3 arch -> embedded
     "gemma-4:e4b-it-obliterated": {"thinking": True, "vision": False, "tool_call": True},
-    "gemma-4-e4b-it": {"thinking": True, "vision": True,  "tool_call": True},
+    "gemma-4:e4b-it": {"thinking": True, "vision": True,  "tool_call": True},
     "gemma-4":        {"thinking": True, "vision": True,  "tool_call": True},
-    "gemma-4-e4b-it-qat": {"thinking": False, "vision": True, "tool_call": True},
+    "gemma-4:e4b-it-qat": {"thinking": False, "vision": True, "tool_call": True},
     # NVIDIA Nemotron-3.5-Bolt-E4B-4GB (Gemma-4 E4B post-trained: thinking + multi-turn tools, text GGUF)
     "nvidia-nemotron-3.5-bolt": {"thinking": True, "vision": False, "tool_call": True},
     "nemotron-3.5-bolt":        {"thinking": True, "vision": False, "tool_call": True},

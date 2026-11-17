@@ -44,8 +44,17 @@ import shutil
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    _reconf = getattr(_s, "reconfigure", None)
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -368,6 +377,48 @@ SPECS: list[dict] = [
                 "note": "DSpark spec-dec drafter (F16, ~620MB)",
             },
         ],
+        # Seeded automatically when downloaded so clean installs configure DSpark + CPU experts.
+        "default_profile": {
+            "model": "lfm2.5:24b-a2b",
+            "capabilities": {"thinking": False, "vision": False, "tool_call": True},
+            "vision_preprocessing": False,
+            "num_ctx": 32768,
+            "num_ctx_analyst": None,
+            "num_ctx_duo_coder": 32768,
+            "num_ctx_vision": None,
+            "chat_template": None,
+            "jinja": True,
+            "reasoning": None,
+            "distilled": False,
+            "moe": True,
+            "moe_cpu_experts": 24,
+            "mtp": False,
+            "gpu_layers": None,
+            "dspark_draft_filename": "LFM2.5-24B-A2B-DSpark-F16.gguf",
+            "mmproj_filename": None,
+            "vram_gb_override": None,
+            "dspark_draft_n_max": 2,
+            "sampling": {
+                "sampling_text": {
+                    "temperature": 0.1,
+                    "top_p": 1.0,
+                    "top_k": 50,
+                    "min_p": 0.0,
+                    "presence_penalty": 0.0,
+                    "repetition_penalty": 1.05,
+                    "cache_prompt": True,
+                },
+                "non_thinking": {
+                    "temperature": 0.1,
+                    "top_p": 1.0,
+                    "top_k": 50,
+                    "min_p": 0.0,
+                    "presence_penalty": 0.0,
+                    "repetition_penalty": 1.05,
+                    "cache_prompt": True,
+                },
+            },
+        },
     },
     # ── Hermes3.6 Genesis Final "MTP-APEX-Compact" (2026-09-19) ───────────
     # Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
@@ -378,7 +429,7 @@ SPECS: list[dict] = [
     # top_k 20, seed 42, repeat 1.05). Link updated from the V13 repo to
     # the author's Final re-release.
     # ── Gemma-4 E4B "Uncensored HauhauCS Aggressive" (2026-09-21) ─────────
-    # Uncensored fine-tune of Gemma-4-E4B-IT (text-only repo, no mmproj).
+    # Uncensored fine-tune of Gemma-4-E4B-IT (ships with paired F16 mmproj).
     # Card sampling temp 1.0 / top_p 0.95 / top_k 64 lives in the gemma-4
     # family sampling profile; --jinja is enabled by the per-model config.
     {
@@ -482,8 +533,7 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^qwen3\.5-0\.8b-ud-q4_k_xl\.gguf$",
         ],
-        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        "mmproj_dest": "mmproj-qwen3.5-0.8b-f16.gguf",
+        "mmproj_regex": [],
     },
     {
         "key": "qwen3.5:4b-mtp",
@@ -615,7 +665,7 @@ def _sha256_file(path: Path) -> str:
 
 def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
                   _no_resume: bool = False, dest_name: str | None = None) -> bool:
-    url = HF_RESOLVE.format(repo=repo, path=f["path"])
+    url = HF_RESOLVE.format(repo=repo, path=urllib.parse.quote(str(f["path"]), safe="/"))
     size_gb = int(f.get("size") or 0) / (1024 ** 3)
     dest = dest_dir / (dest_name or f.get("dest_name") or Path(f["path"]).name)
     if size_gb > 8.0 and not auto_yes:
@@ -641,111 +691,134 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
     _have = 0 if _no_resume else (dest.stat().st_size if dest.exists() else 0)
     _had_partial = bool(_have)
     _expected = int(f.get("size") or 0)
-    if _have and _expected and _have >= _expected:
-        print(f"    Already complete: {dest.name} ({_have / (1024**3):.2f} GB)")
-        return True
-    print(f"    Downloading -> {dest} ({size_gb:.1f} GB)"
-          + (f" - resuming at {_have / (1024**3):.2f} GB" if _have else "") + "...")
-    headers = {"User-Agent": "HiveMind-Installer", **_hf_auth_headers()}
-    if _have:
-        headers["Range"] = f"bytes={_have}-"
-    req = urllib.request.Request(url, headers=headers)
-    _redirect = _EtagRedirectHandler()
-    _opener = urllib.request.build_opener(_redirect)
-    try:
-        resp = _opener.open(req, timeout=120)
-    except urllib.error.HTTPError as he:
-        if he.code in (401, 403):
-            print("    [ERROR] access denied (gated/private repo). Create a "
-                  "token at huggingface.co/settings/tokens and run "
-                  "`hf auth login` or set HF_TOKEN.")
-            return False
-        if he.code == 416 and _have:
-            # 416 means the server has no bytes past _have. The pre-check
-            # above already returned when _have >= _expected, so a 416 here
-            # means the upstream file shrank or changed: the partial file is
-            # NOT complete (audit 2026-10-30).
-            if not _expected:
-                # HEAD-CHECK (2026-10-31, audit): without a catalog size the
-                # old code could only warn. Ask the server for Content-Length.
-                _remote = 0
-                try:
-                    with urllib.request.urlopen(
-                            urllib.request.Request(url, method="HEAD"),
-                            timeout=30) as _hr:
-                        _remote = int(_hr.headers.get("Content-Length") or 0)
-                except (urllib.error.URLError, OSError, ValueError):
-                    _remote = 0
-                if _remote and _have < _remote:
-                    print(f"    [WARNING] 416 with {_have} of {_remote} bytes "
-                          f"(HEAD) - deleting partial file")
-                    try:
-                        dest.unlink()
-                    except OSError:
-                        pass
-                    return False
-                print(f"    [WARNING] 416 with an unknown expected size - "
-                      f"keeping {dest.name} as-is; verify it before use")
-            if _expected and _have < _expected:
-                print(f"    [WARNING] 416 with {_have} of {_expected} bytes on "
-                      f"disk - upstream file changed; deleting partial file")
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
-                return False
-            print(f"    Already complete: {dest.name}")
+    if _have and _expected and _have > _expected:
+        print(f"    [WARNING] oversized file on disk ({_have} > {_expected}) - restarting clean")
+        dest.unlink(missing_ok=True)
+        _have = 0
+        _had_partial = False
+    if _have and _expected and _have == _expected:
+        _oid_pre = _hf_lfs_sha256(repo, str(f.get("path") or ""))
+        if re.fullmatch(r"[a-f0-9]{64}", _oid_pre.lower()):
+            if _sha256_file(dest) != _oid_pre.lower():
+                print(f"    [WARNING] checksum mismatch on existing {dest.name} - re-downloading")
+                dest.unlink(missing_ok=True)
+                _have = 0
+                _had_partial = False
+            else:
+                print(f"    Already complete (verified): {dest.name} ({_have / (1024**3):.2f} GB)")
+                return True
+        else:
+            print(f"    Already complete: {dest.name} ({_have / (1024**3):.2f} GB)")
             return True
-        raise
-    with resp as r:
-        # B7 (audit 2026-11-03): a 206 must start exactly at our partial size;
-        # anything else appends new bytes onto old ones. Restart clean instead.
-        _cr = r.headers.get("Content-Range") or ""
-        if _have and r.status == 206 and _cr:
-            _crm = re.match(r"bytes\s+(\d+)-", _cr)
-            if _crm and int(_crm.group(1)) != _have:
-                print(f"    [WARNING] server resumed at byte {_crm.group(1)}, "
-                      f"partial is {_have} - restarting from scratch")
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
-                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True, dest_name=dest_name)
-        _append = bool(_have and r.status == 206)
-        if not _append:
-            _have = 0        # server ignored the range: start over, do not append
-        total = int(r.headers.get("Content-Length") or 0) + _have
-        done = _have
-        _is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-        _last_pct = -1
-        _last_print_t = 0.0
-        with open(dest, "ab" if _append else "wb") as out:
-            while True:
-                chunk = r.read(1024 * 512)
-                if not chunk:
+    _etag_raw = ""
+    _is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    for _attempt in range(1, 5):
+        _have = 0 if (_no_resume and _attempt == 1) else (dest.stat().st_size if dest.exists() else 0)
+        _had_partial = _had_partial or bool(_have)
+        print(f"    Downloading -> {dest} ({size_gb:.1f} GB)"
+              + (f" - resuming at {_have / (1024**3):.2f} GB" if _have else "") + "...")
+        headers = {"User-Agent": "HiveMind-Installer", **_hf_auth_headers()}
+        if _have:
+            headers["Range"] = f"bytes={_have}-"
+        req = urllib.request.Request(url, headers=headers)
+        _redirect = _EtagRedirectHandler()
+        _opener = urllib.request.build_opener(_redirect)
+        try:
+            resp = _opener.open(req, timeout=120)
+        except urllib.error.HTTPError as he:
+            if he.code in (401, 403):
+                print("    [ERROR] access denied (gated/private repo). Create a "
+                      "token at huggingface.co/settings/tokens and run "
+                      "`hf auth login` or set HF_TOKEN.")
+                return False
+            if he.code == 416 and _have:
+                if not _expected:
+                    _remote = 0
+                    try:
+                        with urllib.request.urlopen(
+                                urllib.request.Request(url, headers={"User-Agent": "HiveMind-Installer", **_hf_auth_headers()}, method="HEAD"),
+                                timeout=30) as _hr:
+                            _remote = int(_hr.headers.get("Content-Length") or 0)
+                    except (urllib.error.URLError, OSError, ValueError):
+                        _remote = 0
+                    if _remote and _have == _remote:
+                        print(f"    Already complete: {dest.name}")
+                        return True
+                    if _remote and _have != _remote:
+                        print(f"    [WARNING] 416 with {_have} of {_remote} bytes "
+                              f"(HEAD) - restarting clean")
+                        dest.unlink(missing_ok=True)
+                        return download_file(repo, f, dest_dir, auto_yes, _no_resume=True, dest_name=dest_name)
+                    print(f"    [WARNING] 416 with an unknown expected size - "
+                          f"keeping {dest.name} as-is; verify it before use")
+                    return True
+                if _expected and _have < _expected:
+                    print(f"    [WARNING] 416 with {_have} of {_expected} bytes on "
+                          f"disk - upstream file changed; restarting clean")
+                    dest.unlink(missing_ok=True)
+                    return download_file(repo, f, dest_dir, auto_yes, _no_resume=True, dest_name=dest_name)
+                print(f"    Already complete: {dest.name}")
+                return True
+            if _attempt < 4:
+                time.sleep(min(15, 2 ** _attempt))
+                continue
+            raise
+        try:
+            with resp as r:
+                _cr = r.headers.get("Content-Range") or ""
+                if _have and r.status == 206 and _cr:
+                    _crm = re.match(r"bytes\s+(\d+)-", _cr)
+                    if _crm and int(_crm.group(1)) != _have:
+                        print(f"    [WARNING] server resumed at byte {_crm.group(1)}, "
+                              f"partial is {_have} - restarting from scratch")
+                        dest.unlink(missing_ok=True)
+                        return download_file(repo, f, dest_dir, auto_yes, _no_resume=True, dest_name=dest_name)
+                _append = bool(_have and r.status == 206)
+                if not _append:
+                    _have = 0
+                total = int(r.headers.get("Content-Length") or 0) + _have
+                done = _have
+                _last_pct = -1
+                _last_print_t = 0.0
+                with open(dest, "ab" if _append else "wb") as out:
+                    while True:
+                        chunk = r.read(1024 * 512)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            _pct = done * 100 // max(total, 1)
+                            _now = time.monotonic()
+                            if _is_tty:
+                                if _pct > _last_pct or (_now - _last_print_t) >= 0.5 or done >= total:
+                                    sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
+                                    sys.stdout.flush()
+                                    _last_pct = _pct
+                                    _last_print_t = _now
+                            else:
+                                if _pct >= _last_pct + 5 or (_last_pct < 0) or done >= total:
+                                    print(f"    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)", flush=True)
+                                    _last_pct = _pct
+                                    _last_print_t = _now
+                _etag_raw = (_redirect.etag
+                             or r.headers.get("ETag")
+                             or r.headers.get("X-Linked-Etag") or "").strip()
+                _etag_raw = re.sub(r'^W/', "", _etag_raw).strip('"')
+                if _is_tty:
+                    sys.stdout.write("\n")
+                if total and done == total:
                     break
-                out.write(chunk)
-                done += len(chunk)
-                if total:
-                    _pct = done * 100 // max(total, 1)
-                    _now = time.monotonic()
-                    if _is_tty:
-                        if _pct > _last_pct or (_now - _last_print_t) >= 0.5 or done >= total:
-                            sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
-                            sys.stdout.flush()
-                            _last_pct = _pct
-                            _last_print_t = _now
-                    else:
-                        if _pct >= _last_pct + 5 or (_last_pct < 0) or done >= total:
-                            print(f"    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)", flush=True)
-                            _last_pct = _pct
-                            _last_print_t = _now
-        _etag_raw = (_redirect.etag
-                     or r.headers.get("ETag")
-                     or r.headers.get("X-Linked-Etag") or "").strip()
-        _etag_raw = re.sub(r'^W/', "", _etag_raw).strip('"')
-    if _is_tty:
-        sys.stdout.write("\n")
+                if not total:
+                    break
+        except (OSError, http.client.HTTPException) as exc:
+            if _is_tty:
+                sys.stdout.write("\n")
+            if _attempt >= 4:
+                raise
+            _wait = min(15, 2 ** _attempt)
+            print(f"    [WARNING] interrupted ({exc}) - retrying in {_wait}s (attempt {_attempt + 1}/4)")
+            time.sleep(_wait)
     _final = dest.stat().st_size if dest.exists() else 0
     if _expected and _final != _expected:
         print(f"    [WARNING] size mismatch: {_final} bytes on disk, {_expected} expected "
@@ -800,7 +873,7 @@ def _download_extra_file(repo: str, ef: dict) -> bool:
     dest = ROOT / ef["dest"]
     part = dest.with_name(dest.name + ".part")
     try:
-        url = HF_RESOLVE.format(repo=repo, path=ef["path"])
+        url = HF_RESOLVE.format(repo=repo, path=urllib.parse.quote(str(ef["path"]), safe="/"))
         print(f"    Downloading extra file: {ef['path']} -> {ef['dest']}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         req = urllib.request.Request(url, headers=_hf_auth_headers())
@@ -904,8 +977,6 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
             continue
         low = g.name.lower().replace(".", "")
         family = next((fam for fam in families if fam.replace(".", "") in low), None)
-        if family is None and families:
-            family = sorted(families)[0]
         if family:
             # SIZE-KEYED (2026-10-03): families with per-size projectors
             # (mmproj-Qwen3.5-{0.8B,2B,4B,9B}-F16) get a ":<size>b" key so
@@ -914,7 +985,7 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
             # Size token comes from the ORIGINAL filename (dots/dashes are
             # boundaries) - the dot-stripped `low` broke the boundary match.
             mapping[f"{family}_mmproj"] = str(g)
-            _sm = re.search(r"(?:^|[-_.])(\d+(?:\.\d+)?)b(?:[-_.]|$)", g.name.lower())
+            _sm = re.search(r"(?:^|[-_.])(e?\d+(?:\.\d+)?)b(?:[-_.]|$)", g.name.lower())
             if _sm:
                 _size = _sm.group(1).replace(".", "") + "b"
                 mapping[f"{family}:{_size}_mmproj"] = str(g)
@@ -1040,9 +1111,10 @@ def main() -> int:
 
     mdir = Path(args.models_dir).expanduser() if args.models_dir else \
         Path(os.environ.get("HIVEMIND_MODELS_DIR", "") or (ROOT / "models"))
-    mdir.mkdir(parents=True, exist_ok=True)
-    _persist_models_dir(mdir)
-    local_files = {g.name.lower(): g for g in mdir.rglob("*.gguf")}
+    if not args.list_only:
+        mdir.mkdir(parents=True, exist_ok=True)
+        _persist_models_dir(mdir)
+    local_files = {g.name.lower(): g for g in mdir.rglob("*.gguf")} if mdir.is_dir() else {}
     print(f"Models folder: {mdir}")
     if local_files:
         print(f"Existing GGUFs: {len(local_files)}")
@@ -1063,7 +1135,7 @@ def main() -> int:
 
     specs = [s for s in SPECS
                if not getattr(args, 'essential', False)
-               or s.get('key') in ESSENTIAL_KEYS] or SPECS
+               or s.get('key') in ESSENTIAL_KEYS]
     if getattr(args, 'only_keys', ''):
         _ok = [k.strip() for k in args.only_keys.split(',') if k.strip()]
         _found = set(sp.get('key') for sp in SPECS)
@@ -1072,6 +1144,9 @@ def main() -> int:
             print('[ERROR] unknown model keys: ' + ', '.join(_missing))
             raise SystemExit(2)
         specs = [sp for sp in specs if sp.get('key') in set(_ok)]
+        if not specs:
+            print('[ERROR] no models left after applying --essential + --only-keys')
+            return 2
 
     if args.only:
         specs = _resolve_only(args.only)
@@ -1131,16 +1206,11 @@ def main() -> int:
             except Exception as e:
                 print(f"    [WARNING] Sidecar download failed ({e})")
 
-        # Already present?
+        # Already present? Match across ALL spec file_regex patterns (not only [0]).
         if spec.get("file_dest"):
             have = [n for n in local_files if n == str(spec["file_dest"]).lower()]
         else:
-            have = [n for n in local_files if re.search(spec["file_regex"][0], n)]
-        if args.only_missing and have:
-            print(f"    Already present: {have[0]} — skipping (--only-missing)")
-            if not args.list_only:
-                _seed_spec_default_profile(spec)
-            continue
+            have = [n for n in local_files if any(re.search(rx, n) for rx in spec["file_regex"])]
 
         if spec.get("repo"):
             # PINNED REPO (2026-09-11): no HF search at all — the catalog pins
@@ -1175,6 +1245,11 @@ def main() -> int:
                 repo, files, main_file = cand, cand_files, cand_file
                 break
         if not main_file:
+            if args.only_missing and have:
+                print(f"    Already present: {have[0]} — skipping (--only-missing, offline fallback)")
+                if not args.list_only:
+                    _seed_spec_default_profile(spec)
+                continue
             print("    [ERROR] No matching GGUF in the candidate repos:")
             for f in first_files[:15]:
                 if f.get("type") == "file":
@@ -1188,7 +1263,21 @@ def main() -> int:
         _main_dest = spec.get("file_dest") or Path(main_file["path"]).name
         if spec.get("file_dest"):
             main_file = {**main_file, "dest_name": _main_dest}
-        if args.list_only:
+        _existing_complete = False
+        if args.only_missing and have:
+            _existing_path = local_files[have[0]]
+            _expected_bytes = int(main_file.get("size") or 0)
+            _on_disk = _existing_path.stat().st_size if _existing_path.exists() else 0
+            if _on_disk > 0 and (not _expected_bytes or _on_disk == _expected_bytes):
+                _existing_complete = True
+                print(f"    Already present: {have[0]} — skipping (--only-missing)")
+                if not args.list_only:
+                    _seed_spec_default_profile(spec)
+            elif _on_disk > 0:
+                print(f"    Partial file found ({have[0]}: {_on_disk}/{_expected_bytes} bytes) — resuming...")
+        if _existing_complete:
+            _main_ok = True
+        elif args.list_only:
             if spec.get("file_dest"):
                 print(f"    Would download: {main_file['path']} -> {_main_dest}")
             else:
@@ -1236,7 +1325,7 @@ def main() -> int:
                     _fam = _tag.split(":")[0]
                     _okeys = [f"{_tag}_mmproj"]
                     if ":" in _tag:
-                        _sm = re.match(r"(\d+(?:\.\d+)?)b", _tag.split(":")[-1].lower())
+                        _sm = re.match(r"(e?\d+(?:\.\d+)?)b", _tag.split(":")[-1].lower())
                         if _sm:
                             _okeys.insert(1, f"{_fam}:{_sm.group(1).replace('.', '')}b_mmproj")
                     for _ok_key in _okeys:
@@ -1250,36 +1339,28 @@ def main() -> int:
             mm = None if _mm_skip else pick_file(files, spec["mmproj_regex"], exclude_mmproj=False)
             # MMPROJ DEST (2026-10-03): several repos ship their projector
             # under the SAME generic filename (mmproj-BF16.gguf in unsloth
-            # gemma-4 e4b/e2b AND qwen3.6 repos). Downloading 1:1 made the
-            # last download overwrite the others and every non-matching
-            # model resolved the WRONG projector. A spec may pin a unique
-            # destination name (mmproj_dest); the skip check runs on that
-            # name so --only-missing works per model.
-            _mm_dest = spec.get("mmproj_dest") or Path(mm["path"]).name if mm else None
-            if mm and _mm_dest and _mm_dest.lower() not in local_files:
+            # gemma-4 e4b/e2b AND qwen3.6 repos). Downloading directly to _mm_dest
+            # ensures models never collide or resume each other's generic projector.
+            _mm_dest = spec.get("mmproj_dest") or (Path(mm["path"]).name if mm else None)
+            _mm_expected = int(mm.get("size") or 0) if mm else 0
+            _mm_have = (local_files[_mm_dest.lower()].stat().st_size
+                        if (_mm_dest and _mm_dest.lower() in local_files and local_files[_mm_dest.lower()].exists())
+                        else 0)
+            _mm_done = bool(_mm_dest and _mm_have > 0 and (not _mm_expected or _mm_have == _mm_expected) and args.only_missing)
+            if mm and _mm_dest and not _mm_done:
                 if args.list_only:
                     print(f"    Would download (Vision): {mm['path']} -> {_mm_dest}")
                 else:
-                    # INTEGRITY (audit r4): the download result used to be
-                    # ignored - a PARTIAL projector was renamed onto the good
-                    # destination name and registered. Only a verified
-                    # download may be renamed/registered.
                     _mm_ok = False
                     try:
-                        _mm_ok = download_file(repo, mm, mdir, args.yes)
+                        _mm_ok = download_file(repo, mm, mdir, args.yes, dest_name=_mm_dest)
                     except (OSError, http.client.HTTPException) as _mm_err:
                         print(f"    [ERROR] projector download failed: {_mm_err}")
-                    _src = mdir / Path(mm["path"]).name
                     _dstp = mdir / _mm_dest
-                    if _mm_ok:
-                        if _mm_dest != Path(mm["path"]).name and _src.exists():
-                            if _dstp.exists():
-                                _src.unlink()
-                            else:
-                                _src.rename(_dstp)
+                    if _mm_ok and _dstp.exists():
                         local_files[_mm_dest.lower()] = _dstp
                     else:
-                        print(f"    [WARNING] projector not downloaded - keeping the destination untouched")
+                        print("    [WARNING] projector not downloaded - keeping the destination untouched")
 
     if args.list_only:
         return 0

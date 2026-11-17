@@ -27,11 +27,34 @@ REM          deploy\install_lsp_packs.bat --list
 REM ===========================================================================
 cd /d "%~dp0.."
 
-set "PY=.venv\Scripts\python.exe"
-if not exist "%PY%" set "PY=python"
+set "PY="
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+if not defined PY (
+    py -3.14 --version >nul 2>&1
+    if not errorlevel 1 (
+        for /f "delims=" %%X in ('py -3.14 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%X"
+    )
+)
+if not defined PY if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Program Files\Python314\python.exe"
+if not defined PY if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
+if not defined PY (
+    where python >nul 2>&1
+    if not errorlevel 1 set "PY=python"
+)
 
-if /i "%~1"=="--list" goto list_packs
+if /i "%~1"=="--list" goto list_packs_only
 if not "%~1"=="" goto install_args
+
+call :list_packs
+set "PICK="
+set /p "PICK=Pack numbers (e.g. 1 2 3 - Enter = skip): "
+if not defined PICK goto no_pick
+set "PICK=%PICK:,= %"
+goto install_run
+
+:list_packs_only
+call :list_packs
+goto :eof
 
 :list_packs
 echo.
@@ -147,13 +170,18 @@ echo   Checking which language servers actually answer
 echo  ------------------------------------------------------------
 echo.
 REM PATH-REFRESH (2026-11-05): winget/rustup update the machine/user PATH,
-REM but this cmd process still has the old one. Without this refresh a
-REM freshly installed clangd was reported MISS even though winget succeeded.
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%P"
-set "PATH=%PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\LLVM\bin"
+REM but this cmd process still has the old one. Preserve current session PATH too.
+set "OLD_PATH=%PATH%"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[string][Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [string][Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%P"
+set "PATH=%PATH%;%OLD_PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\LLVM\bin"
 REM A server counts as usable only when it completes the LSP handshake and
 REM returns diagnostics - an existing executable is not enough.
+if not defined PY (
+    echo   [WARN] No Python interpreter found - skipping deploy\lsp_selftest.py.
+    goto verify_footer
+)
 "%PY%" deploy\lsp_selftest.py
+:verify_footer
 echo.
 echo   Executable check without a server start:
 echo     "%PY%" deploy\lsp_selftest.py ^<lang^>
