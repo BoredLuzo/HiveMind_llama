@@ -12,7 +12,9 @@ from .llama_slots import ModelSlot
 from .llama_config import DEFAULT_IDLE_TIMEOUT_SECONDS, ubatch_extra_mib
 from typing import Optional
 from .llama_models import _strip_alias
-from .llama_vram_table import vram_of as _vram_of, vram_of_moe, get_live_gpu_free_mib
+from .llama_vram_table import (
+    get_live_gpu_free_mib, slot_mmproj_vram_mib, vram_of as _vram_of, vram_of_moe,
+)
 import asyncio
 import time
 import logging
@@ -134,6 +136,7 @@ class LlamaEvictMixin:
         if free_mib is None:
             _committed_gb = sum(
                 vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
+                + (slot_mmproj_vram_mib(s.model, bool(getattr(s, "_vision", False))) / 1024.0)
                 for s in self._slots
                 if s.model and (exclude_slot_id is None or s.slot_id != exclude_slot_id)
             )

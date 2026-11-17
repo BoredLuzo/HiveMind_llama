@@ -44,7 +44,8 @@ from .llama_manager_utils import (
 from .llama_models import _strip_alias, resolve_model_path
 from .llama_vram_table import (
     TOTAL_VRAM_MIB,
-    get_live_gpu_free_mib, vram_of_moe, wait_for_vram_reclaim,
+    get_live_gpu_free_mib, mmproj_surcharge_mib, slot_mmproj_vram_mib,
+    vram_of_moe, wait_for_vram_reclaim,
 )
 from .manager_process import _slot_in_flight
 
@@ -388,21 +389,66 @@ def _external_draft_footprint_mib(cmd: list[str]) -> float:
     return max(600.0, file_mib + 550.0)
 
 
-def _strip_external_drafter_flags(cmd: list[str]) -> list[str]:
-    """Return a copy of cmd with external drafter flags stripped (keeps MTP)."""
-    if "--model-draft" not in cmd:
-        return list(cmd)
+_FIT_VALUE_FLAGS = frozenset({"--fit", "--fit-target"})
+_LOAD_MODE_VALUE_FLAGS = frozenset({"--load-mode", "--lazy-mode"})
+
+
+def _strip_flag_pairs(cmd: list[str], value_flags: frozenset[str]) -> list[str]:
+    """Return a copy of cmd dropping any flag in value_flags and its argument."""
     out: list[str] = []
     skip_next = False
     for tok in cmd:
         if skip_next:
             skip_next = False
             continue
-        if tok in _EXTERNAL_DRAFT_VALUE_FLAGS:
+        if tok in value_flags:
             skip_next = True
             continue
         out.append(tok)
     return out
+
+
+def _strip_external_drafter_flags(cmd: list[str]) -> list[str]:
+    """Return a copy of cmd with external drafter flags stripped (keeps MTP)."""
+    if "--model-draft" not in cmd:
+        return list(cmd)
+    return _strip_flag_pairs(cmd, _EXTERNAL_DRAFT_VALUE_FLAGS)
+
+
+async def _refresh_load_mode_on_draft_drop(
+    cmd: list[str], model: str, load_mode_cfg: dict | None,
+) -> str | None:
+    """Re-resolve --load-mode/--lazy-mode if dropping an external drafter leaves no spec."""
+    if (
+        not load_mode_cfg
+        or not load_mode_cfg.get("load_mode_supported")
+        or load_mode_cfg.get("mtp_planned")
+        or "--load-mode" not in cmd
+    ):
+        return None
+    from backend.manager_load import (  # lazy: module cycle
+        _free_ram_gb, _help_supports, _resolve_load_mode,
+    )
+    large_moe = bool(load_mode_cfg.get("large_moe"))
+    new_lm = _resolve_load_mode(
+        model,
+        spec_planned=False,
+        mlock_now=bool(load_mode_cfg.get("mlock_now")),
+        profile_lm=str(load_mode_cfg.get("profile_lm") or ""),
+        free_ram_gb=_free_ram_gb(),
+        large_moe=large_moe,
+    )
+    cmd[:] = _strip_flag_pairs(cmd, _LOAD_MODE_VALUE_FLAGS) + ["--load-mode", new_lm]
+    lazy_mode = str(load_mode_cfg.get("lazy_mode") or "")
+    if not lazy_mode and new_lm.startswith("mmap") and not large_moe:
+        lazy_mode = "off"
+    if lazy_mode and await _help_supports("--lazy-mode"):
+        cmd += ["--lazy-mode", lazy_mode]
+    logger.info(
+        "[PRE-FLIGHT-DROP-DRAFTER] refreshed --load-mode -> %s%s",
+        new_lm, f" (--lazy-mode {lazy_mode})" if lazy_mode else "",
+    )
+    return new_lm
 
 
 def _try_drop_external_drafter(self, slot, cmd: list[str], model: str,
@@ -707,7 +753,8 @@ class _MoePhase:
 
 async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                      moe_cache: bool, _def_threads,
-                     _def_threads_batch: int | None = None) -> _MoePhase:
+                     _def_threads_batch: int | None = None, *,
+                     gpu_layers: object = None) -> _MoePhase:
     from backend.manager_load import _help_supports  # lazy: module cycle
     from . import llama_config as _llama_cfg
     _moe_model_key = _strip_alias(model).removesuffix("-ud")
@@ -849,6 +896,18 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
         pass
     if _moe_count > 0 and GPU_BACKEND != "cpu":
         if type(self)._moe_flag_supported:
+            # --fit aborts in llama.cpp whenever tensor_buft_overrides /
+            # --n-cpu-moe are active ("already set by user, abort", ~1.1s waste).
+            if "--fit" in cmd:
+                cmd[:] = _strip_flag_pairs(cmd, _FIT_VALUE_FLAGS)
+                if "--n-gpu-layers" not in cmd:
+                    _pin_gl = gpu_layers if gpu_layers is not None else GPU_LAYERS
+                    cmd += ["--n-gpu-layers", str(_pin_gl)]
+                logger.info(
+                    "--fit skipped (incompatible with --n-cpu-moe=%d; pinning -ngl %s)",
+                    _moe_count,
+                    cmd[cmd.index("--n-gpu-layers") + 1] if "--n-gpu-layers" in cmd else "auto",
+                )
             cmd += ["--n-cpu-moe", str(_moe_count)]
             logger.info(
                 f"MoE offloading active: {_moe_count} experts on CPU "
@@ -1362,7 +1421,8 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                                      _evicted_here: bool, *,
                                      ub_base: int = 0, ub_eff: int = 0,
                                      ub_src: str = "",
-                                     ub_delta_mib: float = 0.0) -> _SpawnPhase:
+                                     ub_delta_mib: float = 0.0,
+                                     load_mode_cfg: dict | None = None) -> _SpawnPhase:
     # `_moe_cache_used` is the pre-flight extra_needed_mib: the MoE expert
     # cache (MiB) PLUS the MoE-UBATCH-RAISE compute-buffer delta (see
     # manager_load._start_process) — both must gate the load together.
@@ -1375,6 +1435,10 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     from . import llama_config as _llama_cfg
     from .llama_models import list_available_models, _strip_alias
     from model_configs.models_registry import get_vram_gb_override as _get_vram_ovr
+    # Vision projector + CLIP buffer (4.1) + external drafter surcharge:
+    _mmproj_mib = mmproj_surcharge_mib(_mmproj_resolved)
+    if _mmproj_mib > 0.0:
+        _moe_cache_used = float(_moe_cache_used) + _mmproj_mib
     # External drafter (DFlash/DSpark): if the profile carries a calibrated
     # vram_gb_override (measured with drafter loaded), avoid double-counting;
     # otherwise add its estimated footprint upfront so pre-flight never silently
@@ -1511,35 +1575,63 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 _fit_base.free_mib, ub_base,
             )
             ub_delta_mib = 0.0
-    _active_moe_count = None
-    if not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE and "--n-cpu-moe" in cmd:
-        _fit, _moe_cache_used, ub_delta_mib, _active_moe_count = _auto_step_moe_cpu_offload(
-            self, slot, cmd, model, gguf_path, num_ctx,
-            _fit, _moe_cache_used, ub_base, ub_eff, ub_src, ub_delta_mib,
-        )
     if not _fit.ok and _draft_save_mib > 0.0:
         _fit, _moe_cache_used, _draft_dropped = _try_drop_external_drafter(
             self, slot, cmd, model, num_ctx, _fit, _moe_cache_used, _draft_save_mib,
         )
         if _draft_dropped:
             _draft_save_mib = 0.0
+            _new_lm = await _refresh_load_mode_on_draft_drop(cmd, model, load_mode_cfg)
+            if _new_lm:
+                _load_mode = _new_lm
+    _active_moe_count = None
+    if not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE and "--n-cpu-moe" in cmd:
+        _fit, _moe_cache_used, ub_delta_mib, _active_moe_count = _auto_step_moe_cpu_offload(
+            self, slot, cmd, model, gguf_path, num_ctx,
+            _fit, _moe_cache_used, ub_base, ub_eff, ub_src, ub_delta_mib,
+        )
+        if (
+            not _fit.ok and _draft_save_mib > 0.0 and "--model-draft" in cmd
+        ):
+            # If stepping all MoE experts couldn't fit with the sidecar drafter,
+            # drop the drafter and retry MoE stepping on the target alone.
+            cmd[:] = _strip_external_drafter_flags(cmd)
+            _moe_cache_used = float(_moe_cache_used) - float(_draft_save_mib)
+            _draft_save_mib = 0.0
+            _new_lm = await _refresh_load_mode_on_draft_drop(cmd, model, load_mode_cfg)
+            if _new_lm:
+                _load_mode = _new_lm
+            logger.warning(
+                "[PRE-FLIGHT-DROP-DRAFTER] %s @ctx=%d: dropping external drafter "
+                "before retrying MoE expert step-up", model, num_ctx,
+            )
+            _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                                extra_needed_mib=_moe_cache_used)
+            if not _fit.ok:
+                _fit, _moe_cache_used, ub_delta_mib, _active_moe_count = _auto_step_moe_cpu_offload(
+                    self, slot, cmd, model, gguf_path, num_ctx,
+                    _fit, _moe_cache_used, ub_base, ub_eff, ub_src, ub_delta_mib,
+                )
     if not _fit.ok:
         # AUDIT-FIX 2026-08-03: Diagnose-Attribute + Zeitreihen-Log.
         # external_usage_est = Total - frei - eigene geladene Slots (Fremdbelegung).
         _current_own = sum(
             vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096) * 1024
+            + slot_mmproj_vram_mib(s.model, bool(getattr(s, "_vision", False)))
             for s in self._slots if s.is_running and s.model
         )
         _ext_est = max(0, int(TOTAL_VRAM_MIB - _fit.free_mib - _current_own))
         # FIXED-DOMINANT (2026-09-06): the model's base load must fit at least
         # at minimal context WITH reduced margin, else every resolution is
         # pointless (old: 768 margin → hidden false blocks).
+        _fit_ub_base_mib = ubatch_extra_mib(int(getattr(_llama_cfg, "LLAMA_UBATCH", 256) or 256))
+        _ctx_extra_mib = _fit_ub_base_mib + float(_moe_cache_used)
         _base_4k_gb = (
             vram_of_moe(_strip_alias(model), 4096, n_cpu_moe=_active_moe_count)
             if _active_moe_count is not None
             else vram_of_moe(_strip_alias(model), 4096)
         )
-        _min_needed = (_base_4k_gb * 1024) + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
+        _min_needed = (_base_4k_gb * 1024) + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB + _ctx_extra_mib
         _fixed_dominant = _min_needed > _fit.free_mib
         # CTX/MARGIN RESOLUTION (2026-09-06): previously a fixed 768-MiB
         # margin silently degraded to 4096 when the full context just barely
@@ -1558,11 +1650,14 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 _free_res = _fit.free_mib
             _res = resolve_ctx_fit(
                 num_ctx, _free_res,
-                lambda _c: (
-                    vram_of_moe(_strip_alias(model), int(_c), n_cpu_moe=_active_moe_count)
-                    if _active_moe_count is not None
-                    else vram_of_moe(_strip_alias(model), int(_c))
-                ) * 1024,
+                lambda _c: max(
+                    0.0,
+                    (
+                        vram_of_moe(_strip_alias(model), int(_c), n_cpu_moe=_active_moe_count)
+                        if _active_moe_count is not None
+                        else vram_of_moe(_strip_alias(model), int(_c))
+                    ) * 1024 + _ctx_extra_mib,
+                ),
                 allow_graceful=ctx_graceful,
             )
             if _res is not None:
@@ -1580,23 +1675,37 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
                                         exclude_slot_id=slot.slot_id,
                                         extra_needed_mib=_moe_cache_used)
-                    logger.warning(
-                        "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d does not fit with full margin "
-                        "(%dMiB free) — using ctx=%d with margin %dMiB (graceful=%s)",
-                        model, _old_req, int(_free_res), num_ctx, _chosen_margin,
-                        ctx_graceful,
-                    )
-                    _downgraded = True
+                    if _fit.ok:
+                        logger.warning(
+                            "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d does not fit with full margin "
+                            "(%dMiB free) — using ctx=%d with margin %dMiB (graceful=%s)",
+                            model, _old_req, int(_free_res), num_ctx, _chosen_margin,
+                            ctx_graceful,
+                        )
+                        _downgraded = True
+                    else:
+                        num_ctx = _old_req
+                        slot._num_ctx = _old_req
+                        for _ci, _ca in enumerate(cmd):
+                            if _ca == "--ctx-size" and _ci + 1 < len(cmd):
+                                cmd[_ci + 1] = str(_old_req)
+                                break
+                        logger.warning(
+                            "[PRE-FLIGHT-CTX-DOWN] %s downgraded ctx=%d still fails can_fit "
+                            "(needed=%.0fMiB + margin=%dMiB > free=%.0fMiB)",
+                            model, _chosen_ctx, _fit.needed_mib, _fit.margin_mib, _fit.free_mib,
+                        )
                 else:
                     _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
                                         exclude_slot_id=slot.slot_id,
                                         extra_needed_mib=_moe_cache_used)
-                    logger.warning(
-                        "[PRE-FLIGHT-REDUCED-MARGIN] %s @ctx=%d does not fit with full margin "
-                        "(%dMiB free < %dMiB needed) — loading with reduced margin %dMiB (VRAM tight)",
-                        model, num_ctx, int(_fit.free_mib), int(_fit.needed_mib), _chosen_margin,
-                    )
-                    _downgraded = True
+                    if _fit.ok:
+                        logger.warning(
+                            "[PRE-FLIGHT-REDUCED-MARGIN] %s @ctx=%d does not fit with full margin "
+                            "(%dMiB free < %dMiB needed) — loading with reduced margin %dMiB (VRAM tight)",
+                            model, num_ctx, int(_fit.free_mib), int(_fit.needed_mib), _chosen_margin,
+                        )
+                        _downgraded = True
         if not _downgraded:
             # MODEL-SUGGEST (2026-09-01): when nothing fits at any ctx, name
             # fitting alternatives (verified via can_fit, availability-checked)
@@ -1643,7 +1752,9 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                         if _active_moe_count is not None
                         else vram_of_moe(_strip_alias(model), _cand_c)
                     )
-                    if _cand_c < num_ctx and (_cand_gb * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB) <= _fb_free:
+                    if _cand_c < num_ctx and (
+                        _cand_gb * 1024 + _ctx_extra_mib + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
+                    ) <= _fb_free:
                         _max_fit_ctx = _cand_c
                         break
             except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
@@ -1671,6 +1782,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                             )
                             if _draft_dropped:
                                 _draft_save_mib = 0.0
+                                _new_lm = await _refresh_load_mode_on_draft_drop(
+                                    cmd, model, load_mode_cfg,
+                                )
+                                if _new_lm:
+                                    _load_mode = _new_lm
                         logger.info(
                             "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
                             model, num_ctx, "OK" if _fit.ok else "BLOCK",

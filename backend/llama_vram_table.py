@@ -769,3 +769,36 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
         f"{_first_free:.0f} MiB" if _first_free is not None else "unknown",
     )
     return False
+
+
+_MMPROJ_COMPUTE_MULT = 1.15
+
+
+def mmproj_surcharge_mib(mmproj_path: object) -> float:
+    """Estimated VRAM footprint (MiB) for a vision projector plus CLIP compute buffer."""
+    if not mmproj_path:
+        return 0.0
+    import os as _os
+    p = (_os.fspath(mmproj_path)
+         if isinstance(mmproj_path, (str, _os.PathLike))
+         else str(mmproj_path))
+    if isinstance(p, bytes):
+        p = _os.fsdecode(p)
+    try:
+        if not p or not _os.path.isfile(p):
+            return 0.0
+        size_mib = _os.path.getsize(p) / (1024.0 * 1024.0)
+        return round(size_mib * _MMPROJ_COMPUTE_MULT, 1) if size_mib > 0.0 else 0.0
+    except OSError:
+        return 0.0
+
+
+def slot_mmproj_vram_mib(model_name: str, is_vision: bool) -> float:
+    """Return estimated mmproj VRAM (MiB) for an active vision slot/peer."""
+    if not is_vision or not model_name:
+        return 0.0
+    try:
+        from .llama_models import resolve_mmproj_path as _rmp
+        return mmproj_surcharge_mib(_rmp(model_name))
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError):
+        return 0.0

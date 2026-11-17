@@ -1231,9 +1231,9 @@ class LlamaLoadMixin:
             raise RuntimeError("slot died during the vision upgrade")
         return True
 
-    def _speculation_planned(self, model: str) -> bool:
+    def _speculation_planned(self, model: str, *, include_external: bool = True) -> bool:
         """True when speculative decoding WILL run for this model (draft-mtp
-        with the env switch on, or a DSpark drafter in the profile).
+        with the env switch on, or a DSpark/DFlash drafter in the profile).
         Uncertainty answers True: the mmap fallback is the known-good path
         (spec + eager load = Vulkan OOM, live 2026-10-24)."""
         try:
@@ -1247,6 +1247,8 @@ class LlamaLoadMixin:
                     _mtp = True   # registry unreadable: assume spec (safe path)
             if _mtp and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off"):
                 return True
+            if not include_external:
+                return False
             try:
                 from .llama_config import (
                     _try_registry_dflash_draft as _df,
@@ -1392,6 +1394,7 @@ class LlamaLoadMixin:
         _caps = await _phase_capabilities(self, cmd, _all_flags_uncached)
         cmd = _caps.cmd
         _load_mode = _caps.load_mode
+        _load_mode_cfg: dict | None = None
         if type(self)._load_mode_supported:
             _spec_planned = self._speculation_planned(model)
             _mlock_now = _llama_cfg.MLOCK_MODEL
@@ -1507,6 +1510,14 @@ class LlamaLoadMixin:
                 _lazy_mode = _get_lazy_mode(model) or ""
             except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
                 _lazy_mode = ""
+            _load_mode_cfg = {
+                "load_mode_supported": True,
+                "profile_lm": _profile_lm,
+                "mlock_now": bool(_mlock_now),
+                "large_moe": bool(_large_moe),
+                "mtp_planned": self._speculation_planned(model, include_external=False),
+                "lazy_mode": _lazy_mode,
+            }
             if not _lazy_mode and _load_mode.startswith("mmap") and not _large_moe:
                 _lazy_mode = "off"
             if _lazy_mode and await _help_supports("--lazy-mode"):
@@ -1521,7 +1532,8 @@ class LlamaLoadMixin:
 
         # OUTSOURCED (split 4.4): MoE expert offload + cache flags → _phase_moe().
         _moe = await _phase_moe(self, slot, cmd, model, num_ctx, moe_cache,
-                                _def_threads, _def_threads_batch)
+                                _def_threads, _def_threads_batch,
+                                gpu_layers=_gpu_layers)
         cmd = _moe.cmd
         _moe_cache_used = _moe.moe_cache_used
         # The MoE-UBATCH-RAISE compute-buffer surcharge rides into the same
@@ -1542,5 +1554,6 @@ class LlamaLoadMixin:
             _fit_extra_mib, _evicted_here,
             ub_base=_ub_base, ub_eff=_ub_eff, ub_src=_ub_src,
             ub_delta_mib=_ub_extra_delta_mib,
+            load_mode_cfg=_load_mode_cfg,
         )
         num_ctx = _sp.num_ctx

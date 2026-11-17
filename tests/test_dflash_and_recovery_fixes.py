@@ -329,4 +329,199 @@ async def _test_single_slot_retry():
 
 asyncio.run(_test_single_slot_retry())
 
+
+# ── 5) Quick wins: --fit strip on MoE, mmproj pre-flight, ctx-ladder guard,
+#       drafter-before-autostep + load-mode refresh, heavy test classification ──
+async def _test_moe_and_vision_preflight_fixes():
+    import backend.llama_vram_table as lvt
+    from backend.llama_manager_utils import VRAMPreFlightError
+    from backend.manager_evict import LlamaEvictMixin
+    import tests.run_regressions as rr
+
+    # 5a) --fit stripped and -ngl pinned when --n-cpu-moe is appended
+    class _MoePhaseMgr:
+        _moe_flag_supported = True
+        _load_mode_supported = True
+        _kv_flag_supported = True
+
+    moe_slot = SimpleNamespace(_moe_cache_used=False)
+    in_cmd = [
+        "llama-server", "--ctx-size", "16384",
+        "--threads", "16", "--threads-batch", "8",
+        "--fit", "on", "--fit-target", "1024",
+    ]
+    with (
+        mock.patch.object(lsp, "_strip_alias", return_value="groot:19b-a3b"),
+        mock.patch.object(lsp, "_MOE_EXPERT_COUNTS", {"groot:19b-a3b": 32}),
+        mock.patch.object(lc, "MOE_CPU_EXPERTS", {}),
+        mock.patch.object(lc, "_try_registry_moe", return_value=0),
+        mock.patch.object(lsp, "GPU_BACKEND", "vulkan"),
+        mock.patch.object(lsp, "moe_kv_cache_types", return_value="q4_0"),
+        mock.patch("backend.llama_vram_table.moe_cfg_for", return_value={}),
+    ):
+        mph = await lsp._phase_moe(
+            _MoePhaseMgr(), moe_slot, list(in_cmd), "groot:19b-a3b",
+            16384, False, 16, 8, gpu_layers=99,
+        )
+    check("MoE --n-cpu-moe strips --fit and --fit-target and pins -ngl 99",
+          "--fit" not in mph.cmd and "--fit-target" not in mph.cmd
+          and "--n-cpu-moe" in mph.cmd
+          and "--n-gpu-layers" in mph.cmd
+          and mph.cmd[mph.cmd.index("--n-gpu-layers") + 1] == "99",
+          f"({mph.cmd})")
+
+    # 5b) mmproj_surcharge_mib + pre-flight + formula-fallback peer accounting
+    with tempfile.TemporaryDirectory(prefix="hm_mm_") as td:
+        mm_path = Path(td) / "mmproj-test-F16.gguf"
+        mm_path.write_bytes(b"M" * (2 * 1024 * 1024))
+        with mock.patch("os.path.getsize", return_value=858 * 1024 * 1024):
+            surcharge = lvt.mmproj_surcharge_mib(mm_path)
+        check("mmproj_surcharge_mib adds 15% CLIP headroom over F16 projector size",
+              abs(surcharge - round(858 * 1.15, 1)) < 0.2, f"(got {surcharge})")
+
+        pf_extras: list[float] = []
+
+        def _mm_can_fit(_m: str, _c: int, safety_margin_mib: int = 768,
+                        exclude_slot_id=None, extra_needed_mib: float = 0.0) -> CanFitResult:
+            pf_extras.append(float(extra_needed_mib))
+            return CanFitResult(True, 3000.0 + extra_needed_mib, 6000.0, safety_margin_mib, "live")
+
+        mm_mgr = SimpleNamespace(can_fit=_mm_can_fit, _slots=[])
+        mm_slot = SimpleNamespace(slot_id=0, port=8199, model="m:4b", _ready_event=asyncio.Event())
+        with (
+            mock.patch.object(lsp, "mmproj_surcharge_mib", return_value=986.7),
+            mock.patch.object(lsp.time, "strftime", side_effect=RuntimeError("stop-before-log")),
+        ):
+            try:
+                await lsp._phase_preflight_and_spawn(
+                    mm_mgr, mm_slot, ["llama", "--ctx-size", "4096"], "m:4b",
+                    Path("m.gguf"), 4096, True, 1, True, "m", "none", mm_path, 0.0, False,
+                )
+            except RuntimeError:
+                pass
+        check("_phase_preflight_and_spawn includes mmproj surcharge in can_fit",
+              bool(pf_extras) and abs(pf_extras[0] - 986.7) < 0.2,
+              f"(extras={pf_extras})")
+
+    class _FormulaMgr(LlamaEvictMixin):
+        def __init__(self, peers):
+            self._slots = peers
+
+    peer_vis = SimpleNamespace(slot_id=1, model="qwen3.5:4b", _num_ctx=4096, _vision=True)
+    with (
+        mock.patch("backend.manager_evict.get_live_gpu_free_mib", return_value=None),
+        mock.patch("backend.manager_evict.VRAM_BUDGET_GB", 7.5),
+        mock.patch("backend.manager_evict.vram_of_moe", return_value=3.0),
+        mock.patch("backend.manager_evict.slot_mmproj_vram_mib", return_value=1024.0),
+    ):
+        fb_res = _FormulaMgr([peer_vis]).can_fit("other:2b", 4096)
+    # Free = (7.5 - (3.0 + 1.0)) * 1024 = 3584 MiB (without peer mmproj it was 4608 MiB).
+    check("formula-fallback counts active vision peer mmproj against committed VRAM",
+          fb_res.source == "formula-fallback" and abs(fb_res.free_mib - 3584.0) < 1.0,
+          f"(fb={fb_res})")
+
+    # 5c) Ctx-ladder accounts for extras AND validates downgraded _fit.ok before continuing
+    def _ladder_can_fit(_m: str, ctx: int, safety_margin_mib: int = 768,
+                        exclude_slot_id=None, extra_needed_mib: float = 0.0) -> CanFitResult:
+        # Base table stays 3000 MiB (fits 4000 free at reduced 256 margin WITHOUT extras),
+        # but real load carries 900 MiB extra -> 3900 + 256 = 4156 > 4000 (MUST block!).
+        needed = round(3000.0 + float(extra_needed_mib), 1)
+        ok = (needed + safety_margin_mib) <= 4000.0
+        return CanFitResult(ok, needed, 4000.0, safety_margin_mib, "live")
+
+    lad_mgr = SimpleNamespace(
+        can_fit=_ladder_can_fit,
+        _slots=[],
+        _metric_inc=lambda *_a: None,
+        _adopt_orphan_slots=mock.AsyncMock(return_value=0),
+        _pre_flight_grace_recheck=mock.AsyncMock(
+            side_effect=lambda m, c, s, **kw: _ladder_can_fit(m, c, **kw)
+        ),
+    )
+    lad_slot = SimpleNamespace(slot_id=0, port=8199, model="hermes:35b", _num_ctx=32768)
+    blocked = False
+    with (
+        mock.patch.object(lc, "VRAM_PREFLIGHT_GATE", True),
+        mock.patch.object(lc, "LLAMA_UBATCH", 256),
+        mock.patch.object(lsp, "get_live_gpu_free_mib", return_value=4000.0),
+        mock.patch.object(lsp, "vram_of_moe", return_value=3000.0 / 1024.0),
+        mock.patch.object(lsp, "wait_for_vram_reclaim", new=mock.AsyncMock(return_value=False)),
+        mock.patch("backend.manager_load._pre_flight_evict_candidates", return_value=[]),
+    ):
+        try:
+            await lsp._phase_preflight_and_spawn(
+                lad_mgr, lad_slot, ["llama", "--ctx-size", "32768"], "hermes:35b",
+                Path("m.gguf"), 32768, False, 1, True, "hermes", "none", None, 900.0, False,
+            )
+        except VRAMPreFlightError:
+            blocked = True
+    check("Ctx-ladder refuses silent spill when base fits but extras break VRAM budget",
+          blocked is True)
+
+    # 5d) External drafter drops BEFORE MoE auto-step AND refreshes --load-mode
+    def _dspark_moe_can_fit(_m: str, _c: int, safety_margin_mib: int = 768,
+                            exclude_slot_id=None, extra_needed_mib: float = 0.0) -> CanFitResult:
+        # Target alone @35 fits 5200 free (4750+256=5006 <= 5200); with +870 drafter fails.
+        needed = round(4750.0 + float(extra_needed_mib), 1)
+        ok = (needed + safety_margin_mib) <= 5200.0
+        return CanFitResult(ok, needed, 5200.0, safety_margin_mib, "live")
+
+    dm_mgr = SimpleNamespace(
+        can_fit=_dspark_moe_can_fit,
+        _slots=[],
+        _metric_inc=lambda *_a: None,
+        _adopt_orphan_slots=mock.AsyncMock(return_value=0),
+        _pre_flight_grace_recheck=mock.AsyncMock(
+            side_effect=lambda m, c, s, **kw: _dspark_moe_can_fit(m, c, **kw)
+        ),
+    )
+    dm_slot = SimpleNamespace(slot_id=0, port=8199, model="minicpm-v-4.7:35b-a3b-mix", _num_ctx=16384)
+    dm_cmd = [
+        "llama-server", "--ctx-size", "16384", "--n-cpu-moe", "35",
+        "--load-mode", "mmap+mlock",
+        "--spec-type", "draft-dspark", "--model-draft", "dspark.gguf",
+        "--spec-draft-n-max", "2", "--spec-draft-n-min", "0", "--spec-draft-ngl", "999",
+    ]
+    lm_cfg = {
+        "load_mode_supported": True,
+        "profile_lm": "none",
+        "mlock_now": False,
+        "large_moe": True,
+        "mtp_planned": False,
+        "lazy_mode": "",
+    }
+    with (
+        mock.patch.object(lc, "VRAM_PREFLIGHT_GATE", True),
+        mock.patch.object(lsp, "_external_draft_footprint_mib", return_value=870.0),
+        mock.patch.object(mr, "get_vram_gb_override", return_value=None),
+        mock.patch.object(lsp, "_auto_step_moe_cpu_offload") as mock_autostep,
+        mock.patch.object(ml, "_resolve_load_mode", return_value="none"),
+        mock.patch.object(ml, "_free_ram_gb", return_value=24.0),
+        mock.patch.object(ml, "_help_supports", new=mock.AsyncMock(return_value=True)),
+        mock.patch.object(lsp.time, "strftime", side_effect=RuntimeError("stop-before-log")),
+    ):
+        try:
+            await lsp._phase_preflight_and_spawn(
+                dm_mgr, dm_slot, dm_cmd, "minicpm-v-4.7:35b-a3b-mix",
+                Path("m.gguf"), 16384, False, 1, True, "minicpm-v-4.7", "mmap+mlock",
+                None, 0.0, False, load_mode_cfg=lm_cfg,
+            )
+        except RuntimeError:
+            pass
+    check("MoE drops external drafter before stepping CPU experts and refreshes --load-mode",
+          "--model-draft" not in dm_cmd
+          and dm_cmd[dm_cmd.index("--n-cpu-moe") + 1] == "35"
+          and dm_cmd[dm_cmd.index("--load-mode") + 1] == "none"
+          and not mock_autostep.called,
+          f"(cmd={dm_cmd}, autostep_called={mock_autostep.called})")
+
+    # 5e) Regression runner subprocess contention split
+    check("Heavy subprocess suite helper separates git/temp-repo suites from fast suites",
+          rr._is_heavy_spawn_suite("git_gate")
+          and rr._is_heavy_spawn_suite("apply_patch")
+          and not rr._is_heavy_spawn_suite("dflash_and_recovery_fixes"))
+
+
+asyncio.run(_test_moe_and_vision_preflight_fixes())
+
 sys.exit(h.finish("dflash_and_recovery_fixes"))

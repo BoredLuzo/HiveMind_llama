@@ -456,6 +456,24 @@ _EXCLUSIVE_SUITES = {
     "lsp_real_pyright", "lsp_real_rust",
 }
 
+# Suites that spawn git/nested python subprocesses or stage temp workspaces
+# suffer severe Windows NTFS/process contention when >2 run concurrently under
+# LPT. Cap them to 2 workers while fast in-process suites use the main pool.
+_SUBPROCESS_HEAVY_SUITES = {
+    "apply_patch", "multi_edit", "searxng_bat", "edit_tool_layer",
+    "bench_runner", "bench_external", "load_mode_ram_guard",
+    "35b_perf_levers", "read_after_write", "swebench_hivemind",
+    "feature_search_core", "update_flow_audit", "installer_updater_1_6_2",
+    "installer_sim", "update_zip_layout", "chat_real_roundtrip",
+    "tts_engine", "stt_audio", "agentic_audit",
+    "write_guard_and_explore_truth", "preflight_matrix",
+    "run_bash_drive_paths", "duo_e2e_smoke", "gateway_lint_gate",
+}
+
+
+def _is_heavy_spawn_suite(name: str) -> bool:
+    return name.startswith("git_") or name in _SUBPROCESS_HEAVY_SUITES
+
 # Suites whose fixtures only exist on a developer box. `--ci-subset` drops
 # them; a normal local run still executes them (2026-11-07 CI audit).
 _CI_EXCLUDED_SUITES = {
@@ -898,15 +916,25 @@ def main() -> int:
             for l in errtail:
                 print(f"    ! {l}")
 
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        _est_durs = _suite_est_durations()
-        _submit_order = sorted(
-            pending, key=lambda item: _est_durs.get(item[1], 0.0), reverse=True
-        )
+    _est_durs = _suite_est_durations()
+    _heavy_pending = sorted(
+        (item for item in pending if _is_heavy_spawn_suite(item[1])),
+        key=lambda item: _est_durs.get(item[1], 0.0),
+        reverse=True,
+    )
+    _light_pending = sorted(
+        (item for item in pending if not _is_heavy_spawn_suite(item[1])),
+        key=lambda item: _est_durs.get(item[1], 0.0),
+        reverse=True,
+    )
+    with ThreadPoolExecutor(max_workers=min(2, max(1, jobs))) as heavy_pool, \
+         ThreadPoolExecutor(max_workers=jobs) as pool:
         _fut_by_pos = {
-            pos: pool.submit(_run_suite, pos, rel, timeout)
-            for pos, _name, rel, timeout in _submit_order
+            pos: heavy_pool.submit(_run_suite, pos, rel, timeout)
+            for pos, _name, rel, timeout in _heavy_pending
         }
+        for pos, _name, rel, timeout in _light_pending:
+            _fut_by_pos[pos] = pool.submit(_run_suite, pos, rel, timeout)
         for pos, name, _rel, _timeout in pending:
             ok, dur, r = _fut_by_pos[pos].result()
             _report(pos, name, ok, dur, r)

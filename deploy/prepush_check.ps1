@@ -94,7 +94,7 @@ $pyrightProc = Start-Process -FilePath $py -ArgumentList @("deploy\pyright_basel
 if ($pyrightProc) { $null = $pyrightProc.Handle }
 
 # -- g) full regression suite ------------------------------------------------
-$suiteOut = & $py tests\run_regressions.py --jobs 6 2>&1
+$suiteOut = & $py tests\run_regressions.py --jobs 4 2>&1
 $suiteLine = ($suiteOut | Select-String -Pattern "Suites:" | Select-Object -Last 1)
 Check "g) regression suite" ($LASTEXITCODE -eq 0) $(if ($suiteLine) { $suiteLine.ToString().Trim() } else { "" })
 
