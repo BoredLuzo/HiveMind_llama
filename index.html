@@ -1861,7 +1861,7 @@
         <div class="tgl-row">
           <span class="tgl-text">Speed <em>(pitch stays the same)</em></span>
           <input id="tts-speed-inp" type="number" min="0.8" max="1.5" step="0.02" value="1.08"
-            onchange="var v=parseFloat(this.value)||1.08; S.ttsSpeed=v; postSettings({tts_speed:v});"
+            onchange="var v=_clampTtsSpeed(this.value); this.value=String(v); S.ttsSpeed=v; postSettings({tts_speed:v});"
             style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:80px;flex-shrink:0">
         </div>
         <div class="tgl-row" style="align-items:flex-start">
@@ -1874,12 +1874,12 @@
         <div class="tgl-row">
           <span class="tgl-text">Volume</span>
           <input id="tts-volume-inp" type="range" min="0" max="1" step="0.05" value="1"
-            oninput="S.ttsVolume=parseFloat(this.value); (document.getElementById('tts-volume-out')||{}).textContent=Math.round(this.value*100)+' %';"
-            onchange="postSettings({tts_volume:parseFloat(this.value)})"
+            oninput="_ttsApplyVolume(this.value);"
+            onchange="var v=_ttsApplyVolume(this.value); postSettings({tts_volume:v})"
             style="width:150px;flex-shrink:0;accent-color:#e5a13a">
           <span id="tts-volume-out" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3;width:38px">100 %</span>
         </div>
-        <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>
+        <div class="fld-hint">Both engines (Pocket TTS and Underdog Woof) use pitch-preserving WSOLA time-stretch (0.8x&ndash;1.5x). 1.08x is the default.</div>
         <div class="fld-hint" id="tts-attribution" style="font-size:9px;color:#6b7793">Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) &middot; recordings: VCTK / Alba MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial) &middot; Optional: Voice by <a href="https://underdog.ai" target="_blank" rel="noopener noreferrer" style="color:#8ab4f8">Underdog Woof</a> (non-commercial) &middot; <code>docs\voice_licenses.md</code></div>
         <div class="tgl-row" style="margin-top:8px">
           <span class="tgl-text">Read aloud</span>
@@ -2620,6 +2620,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261113-03"></script>
+        <script src="/static/app.js?v=20261117-01"></script>
 </body>
 </html>

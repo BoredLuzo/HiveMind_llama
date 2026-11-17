@@ -378,22 +378,39 @@ def _try_registry_mtp(model_key: str) -> bool | None:
         return None
 
 
-def _try_registry_dspark_draft(model_key: str) -> str | None:
-    """Per-Model-Registry (model_configs/models/*.json) → DSpark drafter GGUF filename."""
+def _try_registry_draft_attr(model_key: str, getter_name: str) -> str | None:
     try:
-        from model_configs.models_registry import get_dspark_draft as _reg_dd
-        v = _reg_dd(model_key)
+        import model_configs.models_registry as _mr
+        getter = getattr(_mr, getter_name, None)
+        v = getter(model_key) if callable(getter) else None
         if v:
             return str(v).strip()
-    except Exception:
-        pass
+    except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError) as _e:
+        _logger.debug("[DRAFT] %s lookup skipped for %s: %s", getter_name, model_key, _e)
     return None
+
+
+def _try_registry_dspark_draft(model_key: str) -> str | None:
+    """Per-Model-Registry (model_configs/models/*.json) → DSpark drafter GGUF filename."""
+    return _try_registry_draft_attr(model_key, "get_dspark_draft")
+
+
+def _try_registry_dflash_draft(model_key: str) -> str | None:
+    """Per-Model-Registry (model_configs/models/*.json) → DFlash drafter GGUF filename."""
+    return _try_registry_draft_attr(model_key, "get_dflash_draft")
 
 
 def detect_moe_count(model_key: str) -> int:
     import re as _re_moe2
     _key = _re_moe2.sub(r"#\d+$", "", str(model_key or "").strip().lower()).removesuffix(":latest")
     _tbl = _MOE_EXPERT_COUNTS.get(_key)
+    if not _tbl:
+        # Variant suffixes from GGUF filenames (e.g. lfm2.5:24b-a2b-qad) match
+        # their calibrated catalog prefix row in _MOE_EXPERT_COUNTS.
+        for _tk, _tv in _MOE_EXPERT_COUNTS.items():
+            if _key.startswith(f"{_tk}-"):
+                _tbl = _tv
+                break
     if _tbl:
         return int(_tbl)
     m = _re_moe2.search(r"(\d+)\s*b[-_.]?a(\d+)\s*b", _key)
@@ -591,6 +608,11 @@ DSPARK_SPEC_TYPE = "draft-dspark"
 DSPARK_DRAFT_N_MAX = 10
 DSPARK_DRAFT_N_MIN = 0
 DSPARK_MIN_BUILD = 10173   # llama.cpp mainline #25173 (--spec-type …draft-dspark)
+
+DFLASH_SPEC_TYPE = "draft-dflash"
+DFLASH_DRAFT_N_MAX = 7
+DFLASH_DRAFT_N_MIN = 0
+DFLASH_MIN_BUILD = 12001   # llama.cpp mainline (--spec-type …draft-dflash)
 
 #   _MTP_MODELS = {"qwen3.6:35b-a3b-mtp"}
 _MTP_MODELS: set[str] = {

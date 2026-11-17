@@ -67,3 +67,11 @@ next to your old install — `settings.json`, `models.json`, `sessions\`, `logs\
   recognizes Hugging Face cached `GLiNER2.5-Decide` weights from `install.bat`,
   and verifies `torch` + `gliner2` (`AutoExtractor`) imports after `uv` with an
   automatic `--reinstall` repair pass instead of falsely reporting `[OK]`.
+- Consolidated the model catalog (`deploy/fetch_models.py`, `docs/guide.md`,
+  dropping `minicpm5:2b-sharp-q4` and redundant non-MTP `qwen3.6:35b-a3b-ud`,
+  cleaning 15 obsolete JSON profiles), added/aligned model configs (`lfm3:1.7b-qad`,
+  `lfm3-omni:2b`, `ternary-bonsai-2:27b`, `gemma-4`, `spark-x2.6:4b-uncensored-gsq-rco`,
+  `minicpm-v-4.7`, `qwen3.5:9b`, `nvidia-nemotron-3.5-bolt:e4b` with `--spec-type
+  draft-dflash` & `dflash` exclusion, plus `--lazy-mode off` on non-large-MoE
+  `mmap` loads), fixed `routing/model_automap.py` MoE parameter/VRAM/role
+  scoring, and fixed TTS Speed/Volume UI sync, clamping, and live slider volume.

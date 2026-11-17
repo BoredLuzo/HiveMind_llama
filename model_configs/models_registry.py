@@ -182,12 +182,35 @@ def _registry_key(reg: dict[str, dict], key: str) -> str | None:
 # "caps-probe:35b-a3b-x" must NOT match the shorter tag.
 _QUANT_VARIANT_SEGMENT_RE = re.compile(
     r"^(?:"
-    r"i?q\d+|mxfp\d+|ptq\d+|bf16|fp?16|fp?32|ud|qat|qad|im|imatrix|"
+    r"i?q\d+(?:_(?:[kmsl01]|xs|xl|xxl|nl|xxs|im))*|mxfp\d+|ptq\d+(?:_\d+)?|bf16|fp?16|fp?32|"
+    r"ud|qat|qad|im|imatrix|moe|gsq|rco|\d+gb|"
     r"[kmsl]|xs|xl|xxl|nl|[01]|"
     r"verbose|balanced|heretic|abliterated|obliterated|uncensored"
     r")$",
     re.IGNORECASE,
 )
+
+
+def _walkback_variant_profile(reg: dict[str, dict], canonical: str):
+    """Walk back trailing quant/variant tokens to match a catalog profile."""
+    if ":" in canonical:
+        fam, _, tag = canonical.partition(":")
+        parts = tag.split("-")
+        for end in range(len(parts) - 1, 0, -1):
+            if not _QUANT_VARIANT_SEGMENT_RE.match(parts[end]):
+                break
+            cand_key = _registry_key(reg, f"{fam}:{'-'.join(parts[:end])}")
+            if cand_key is not None:
+                return reg.get(cand_key)
+        return None
+    parts = canonical.split("-")
+    for end in range(len(parts) - 1, 0, -1):
+        if not _QUANT_VARIANT_SEGMENT_RE.match(parts[end]):
+            break
+        cand_key = _registry_key(reg, "-".join(parts[:end]))
+        if cand_key is not None:
+            return reg.get(cand_key)
+    return None
 
 
 def get_profile(model_name: str) -> dict:
@@ -207,23 +230,19 @@ def get_profile(model_name: str) -> dict:
     base = canonical.split(":")[0] if ":" in canonical else canonical
 
     _reg = _ensure_cache()
-    _canon_key = _registry_key(_reg, canonical)
-    _base_key = _registry_key(_reg, base)
-    direct = _reg.get(_canon_key) if _canon_key is not None else None
-    if direct is None and ":" in canonical:
-        # Variant/quant suffixes from dropped-in GGUFs (e.g. twil:8b-q4-k-m-verbose-heretic)
-        # walk back toward the catalog tag (twil:8b) before bare family fallback.
-        _fam, _, _tag = canonical.partition(":")
-        _parts = _tag.split("-")
-        for _end in range(len(_parts) - 1, 0, -1):
-            if not _QUANT_VARIANT_SEGMENT_RE.match(_parts[_end]):
-                break
-            _cand_key = _registry_key(_reg, f"{_fam}:{'-'.join(_parts[:_end])}")
-            if _cand_key is not None:
-                direct = _reg.get(_cand_key)
-                if direct is not None:
-                    break
-    fallback = _reg.get(_base_key) if _base_key is not None else None
+
+    def _resolve_pair(canon_name: str, base_name: str):
+        ck = _registry_key(_reg, canon_name)
+        bk = _registry_key(_reg, base_name)
+        d = _reg.get(ck) if ck is not None else None
+        if d is None:
+            d = _walkback_variant_profile(_reg, canon_name)
+        f = _reg.get(bk) if bk is not None else None
+        return d, f
+
+    direct, fallback = _resolve_pair(canonical, base)
+    if direct is None and not fallback and base.lower().startswith("nemotron-"):
+        direct, fallback = _resolve_pair(f"nvidia-{canonical}", f"nvidia-{base}")
 
     if direct and fallback is not None and direct is not fallback:
         return copy.deepcopy(_merge(fallback, direct))
@@ -315,19 +334,13 @@ def is_mtp(model_name: str) -> bool | None:
     return bool(v) if v is not None else None
 
 
-def get_dspark_draft(model_name: str) -> str | None:
-    v = get_profile(model_name).get("dspark_draft_filename")
+def _get_str_key(model_name: str, key: str) -> str | None:
+    v = get_profile(model_name).get(key)
     return str(v).strip() if v else None
 
 
-def get_dspark_draft_n_max(model_name: str) -> int | None:
-    """Per-model draft budget for DSpark. None = use the engine default.
-
-    The field existed in sharp-minicpm5_2b.json but nothing read it, so every
-    DSpark model ran with the global default (10) no matter what the profile
-    said. 1...DSPARK_BLOCK is the useful range; anything <= 0 is ignored.
-    """
-    v = get_profile(model_name).get("dspark_draft_n_max")
+def _get_pos_int_key(model_name: str, key: str) -> int | None:
+    v = get_profile(model_name).get(key)
     if v is None:
         return None
     try:
@@ -335,6 +348,29 @@ def get_dspark_draft_n_max(model_name: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if n > 0 else None
+
+
+def get_dspark_draft(model_name: str) -> str | None:
+    return _get_str_key(model_name, "dspark_draft_filename")
+
+
+def get_dspark_draft_n_max(model_name: str) -> int | None:
+    """Per-model draft budget for DSpark. None = use the engine default."""
+    return _get_pos_int_key(model_name, "dspark_draft_n_max")
+
+
+def get_dflash_draft(model_name: str) -> str | None:
+    return _get_str_key(model_name, "dflash_draft_filename")
+
+
+def get_dflash_draft_n_max(model_name: str) -> int | None:
+    """Per-model draft budget for DFlash. None = use the engine default."""
+    return _get_pos_int_key(model_name, "dflash_draft_n_max")
+
+
+def get_lazy_mode(model_name: str) -> str | None:
+    v = (_get_str_key(model_name, "lazy_mode") or "").lower()
+    return v if v in ("on", "off", "auto") else None
 
 
 def get_moe_pin(model_name: str) -> bool | None:

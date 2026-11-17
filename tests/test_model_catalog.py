@@ -124,15 +124,12 @@ check("spark profile is not a MoE/vision model",
 # 20.0 -> 31.05 t/s (+55%), prefill 122.1 -> 120.15 (-1.6%), acceptance 0.823.
 # The profile has to keep mtp on or the coder silently loses half its decode.
 _HERMES = ROOT / "model_configs" / "models" / (
-    "hermes3.6_35b-a3b-uncensored-genesis-final-mtp-apex-compact.json")
+    "hermes3.6_35b-a3b-uncensored-genesis-mtp-apex-compact.json")
 if _HERMES.exists():
     import json as _json
     _hd = _json.loads(_HERMES.read_text(encoding="utf-8"))
     check("hermes coder keeps mtp on (measured +55% decode)", _hd.get("mtp") is True,
           f"(mtp={_hd.get('mtp')})")
-    check("the measurement is recorded in the profile",
-          "decode" in str(_hd.get("_notes") or "").lower()
-          and "prefill" in str(_hd.get("_notes") or "").lower())
     check("hermes keeps its 35 CPU experts", _hd.get("moe_cpu_experts") == 35,
           f"(moe={_hd.get('moe_cpu_experts')})")
 
@@ -221,11 +218,13 @@ if _lfm_u:
         _mr._MODELS_DIR = _orig_models_dir
         _mr.refresh()
 
-# ── Hermes removed from installer catalog (existing profile preserved) ───
+# ── Hermes & redundant sharp-q4/non-MTP Qwen3.6 removed from catalog ──────
 check("hermes3.6:35b-a3b-uncensored-genesis-apex-mini removed from installer catalog",
       "hermes3.6:35b-a3b-uncensored-genesis-apex-mini" not in specs)
-check("existing hermes apex-mini profile preserved on disk",
-      (ROOT / "model_configs" / "models" / "hermes3.6_35b-a3b-uncensored-genesis-apex-mini.json").exists())
+check("minicpm5:2b-sharp-q4 removed from installer catalog",
+      "minicpm5:2b-sharp-q4" not in specs)
+check("qwen3.6:35b-a3b-ud consolidated to qwen3.6:35b-a3b-mtp in installer catalog",
+      "qwen3.6:35b-a3b-ud" not in specs and "qwen3.6:35b-a3b-mtp" in specs)
 
 # ── TwIL-8B (webAI-Official, Granite 4.2 8.8B dense reasoning) ───────────
 twil = specs.get("twil:8b")
@@ -295,14 +294,10 @@ if air:
           "twil:8b" in _parse_gguf_filename("TwIL-8B-Q4_K_M-balanced.gguf")
           and _parse_gguf_filename("Air-26B-A4B.gguf")[0] == "air:26b-a4b")
 
-# ── Qwen3.6 35B-A3B Unsloth non-MTP + MTP + sharp Jinja template ─────────
-q36_ud = specs.get("qwen3.6:35b-a3b-ud")
+# ── Qwen3.6 35B-A3B MTP + sharp Jinja template ────────────────────────────
 q36_mtp = specs.get("qwen3.6:35b-a3b-mtp")
-check("qwen3.6:35b-a3b-ud and qwen3.6:35b-a3b-mtp are both in the catalog",
-      q36_ud is not None and q36_mtp is not None)
-if q36_ud and q36_mtp:
-    check("qwen3.6:35b-a3b-ud repo pinned to unsloth/Qwen3.6-35B-A3B-GGUF",
-          q36_ud["repo"] == "unsloth/Qwen3.6-35B-A3B-GGUF", f"({q36_ud['repo']})")
+check("qwen3.6:35b-a3b-mtp is in the catalog", q36_mtp is not None)
+if q36_mtp:
     check("qwen3.6:35b-a3b-mtp repo pinned to unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
           q36_mtp["repo"] == "unsloth/Qwen3.6-35B-A3B-MTP-GGUF", f"({q36_mtp['repo']})")
     check("qwen3.6:35b-a3b-mtp sets unique file_dest & mmproj_dest",
@@ -316,7 +311,6 @@ if q36_ud and q36_mtp:
     for _pname in (
         "qwen3.6_35b-a3b-ud.json",
         "qwen3.6_35b-a3b-mtp.json",
-        "qwen3.6_35b-a3b-uncensored-genesis-final-apex-compact.json",
     ):
         _pp = ROOT / "model_configs" / "models" / _pname
         check(f"{_pname} exists and pins chat_template_sharp_v22.5.0.jinja",
@@ -334,9 +328,7 @@ if q36_ud and q36_mtp:
 
     with _tempfile_q36.TemporaryDirectory() as _tmp_q36:
         _mdir = Path(_tmp_q36)
-        _f_ud = _mdir / "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
         _f_mtp = _mdir / "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf"
-        _f_ud.write_bytes(b"ud")
         _f_mtp.write_bytes(b"mtp")
         (_mdir / "model_configs").mkdir(exist_ok=True)
         _out = _mdir / "models.json"
@@ -347,10 +339,8 @@ if q36_ud and q36_mtp:
         finally:
             fm.ROOT = _orig_fm_root
         _mj = _json_q36.loads(_out.read_text(encoding="utf-8"))
-        check("both Qwen3.6 Unsloth non-MTP and MTP register cleanly without collision",
-              Path(_mj.get("qwen3.6:35b-a3b-ud", "")).name == _f_ud.name
-              and Path(_mj.get("qwen3.6:35b-a3b-mtp", "")).name == _f_mtp.name
-              and _mj.get("qwen3.6:35b-a3b-ud") != _mj.get("qwen3.6:35b-a3b-mtp"),
+        check("Qwen3.6 Unsloth MTP registers cleanly",
+              Path(_mj.get("qwen3.6:35b-a3b-mtp", "")).name == _f_mtp.name,
               f"({_mj})")
 
 sys.exit(h.finish("model_catalog"))

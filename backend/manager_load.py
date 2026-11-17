@@ -1229,8 +1229,13 @@ class LlamaLoadMixin:
             if _mtp and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off"):
                 return True
             try:
-                from .llama_config import _try_registry_dspark_draft as _dd
-                if _dd(_key):
+                from .llama_config import (
+                    _try_registry_dflash_draft as _df,
+                    _try_registry_dspark_draft as _dd,
+                )
+                if _dd(_key) and os.environ.get("HIVEMIND_DSPARK_SPEC", "1") not in ("0", "false", "off"):
+                    return True
+                if _df(_key) and os.environ.get("HIVEMIND_DFLASH_SPEC", "1") not in ("0", "false", "off"):
                     return True
             except Exception:
                 return True   # unreadable: assume spec
@@ -1477,6 +1482,18 @@ class LlamaLoadMixin:
                         "set llama_mlock=false in settings."
                     )
             cmd += ["--load-mode", _load_mode]
+            _lazy_mode = ""
+            try:
+                from model_configs.models_registry import get_lazy_mode as _get_lazy_mode
+                _lazy_mode = _get_lazy_mode(model) or ""
+            except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                _lazy_mode = ""
+            if not _lazy_mode and _load_mode.startswith("mmap") and not _large_moe:
+                _lazy_mode = "off"
+            if _lazy_mode and await _help_supports("--lazy-mode"):
+                cmd += ["--lazy-mode", _lazy_mode]
+                logger.info("--lazy-mode %s (load_mode=%s, large_moe=%s)",
+                            _lazy_mode, _load_mode, bool(_large_moe))
             # log line already emitted above (profile-override vs normal path)
         elif (type(self)._binary_build_number or 0) >= NO_MMAP_MIN_BUILD:
             cmd += ["--no-mmap"]

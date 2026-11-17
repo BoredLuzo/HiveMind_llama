@@ -572,7 +572,6 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `gemma-4:e4b-it-qat` | unsloth/gemma-4-E4B-it-qat-GGUF | all-rounder / vision (+ MTP drafter) | 4.2 GB + 1.0 GB mmproj |
 | `gemma-4:e2b-it-qat` | unsloth/gemma-4-E2B-it-qat-GGUF | small all-rounder / vision (+ MTP drafter) | 2.6 GB + 1.0 GB mmproj |
 | `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
-| `qwen3.6:35b-a3b-ud` | unsloth/Qwen3.6-35B-A3B-GGUF | coder / planner (MoE) | 22.4 GB + 0.9 GB mmproj |
 | `qwen3.6:35b-a3b-mtp` | unsloth/Qwen3.6-35B-A3B-MTP-GGUF | coder / planner (MoE + MTP spec-decode) | 22.8 GB + 0.9 GB mmproj |
 | `twil:8b` | webAI-Official/TwIL-8B | dense 8.8B Granite 4.2 reasoning (math/code/IF, balanced Q4_K_M, 40K default ctx) | 5.3 GB |
 | `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | MoE 26B/4B active Gemma 4 reasoning (128K ctx, q8_0 KV, CPU expert offload) | 13.5 GB |
@@ -587,7 +586,6 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
 | `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast direct helper (dense 4B) | 3.0 GB |
 | `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
-| `minicpm5:2b-sharp-q4` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | same model, smaller/weaker tier (Q4_K_XL) | 1.6 GB |
 
 Text-only models (`minicpm5`, `lfm2.5`, `spark-x2.6`, `twil`, `air`) download a single GGUF; the
 vision models pull their projector automatically, and `gemma-4` additionally gets a

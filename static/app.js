@@ -1340,7 +1340,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     S.ttsEnabled = s.tts_enabled === true;
     S.ttsBackend = String(s.tts_backend || 'pocket');
     S.ttsVoice = String(s.tts_voice || 'cosette');
-    S.ttsSpeed = parseFloat(s.tts_speed || 1.08) || 1.08;
+    S.ttsSpeed = _clampTtsSpeed(s.tts_speed);
     S.tgVoiceIn = s.telegram_voice_in === true;
     S.tgImageIn = s.telegram_image_in !== false;
     var _tgImg = document.getElementById('tg-image-in-toggle');
@@ -1390,7 +1390,9 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     var _volInp = document.getElementById('tts-volume-inp');
     if (_volInp) _volInp.value = String(S.ttsVolume);
     var _volOut = document.getElementById('tts-volume-out');
-    if (_volOut) _volOut.textContent = Math.round((S.ttsVolume || 1) * 100) + ' %';
+    if (_volOut) _volOut.textContent = Math.round((typeof S.ttsVolume === 'number' ? S.ttsVolume : 1) * 100) + ' %';
+    var _spdInp = document.getElementById('tts-speed-inp');
+    if (_spdInp) _spdInp.value = String(S.ttsSpeed);
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
     var dcttlEl = document.getElementById('duo-coder-ttl');
@@ -2214,7 +2216,7 @@ async function voicePlaySample() {
     _voiceStopAudio();
     _ttsAudio = _ttsAudioFromBlob(blob);
     await _ttsAudio.play();
-    if (out) out.textContent = 'Playing ' + voice + ' at speed ' + (S.ttsSpeed || 1.08) + 'x';
+    if (out) out.textContent = 'Playing ' + voice + ' at speed ' + _clampTtsSpeed(S.ttsSpeed) + 'x';
   } catch (e) {
     if (out) out.textContent = 'Sample failed: ' + (e && e.message ? e.message : e);
   }
@@ -2377,6 +2379,24 @@ function _answerTextOnly(bodyEl) {
   return String(txt).replace(/\n{3,}/g, '\n\n').trim();
 }
 
+
+// Clamp TTS speed to backend bounds [0.8, 1.5] (1.08 default).
+function _clampTtsSpeed(raw) {
+  var v = parseFloat(raw);
+  if (isNaN(v) || v <= 0) return 1.08;
+  return Math.round(Math.max(0.8, Math.min(1.5, v)) * 100) / 100;
+}
+
+// Update UI volume state, label, and active audio element live (preserves 0%).
+function _ttsApplyVolume(raw) {
+  var parsed = parseFloat(raw);
+  var v = isNaN(parsed) ? 1.0 : Math.max(0, Math.min(1, parsed));
+  S.ttsVolume = v;
+  var out = document.getElementById('tts-volume-out');
+  if (out) out.textContent = Math.round(v * 100) + ' %';
+  if (_ttsAudio) _ttsAudio.volume = v;
+  return v;
+}
 
 // One place that creates the audio element, so the volume setting applies to
 // every path (read aloud, the per-answer speaker, the sample button).
@@ -2623,7 +2643,7 @@ function _syncTtsCard() {
     }
   }
   var spd = document.getElementById('tts-speed-inp');
-  if (spd && !spd.value) spd.value = (S.ttsSpeed || 1.08);
+  if (spd && document.activeElement !== spd) spd.value = String(_clampTtsSpeed(S.ttsSpeed));
 }
 
 var _ttsFetchPoll = null;

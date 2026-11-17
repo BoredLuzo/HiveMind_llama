@@ -1,0 +1,78 @@
+{
+  "model": "lfm3:1.7b-qad",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 32768,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 32768,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": 99,
+  "mmproj_filename": null,
+  "vram_gb_override": 1.0,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.1,
+      "top_p": 1.0,
+      "top_k": 50,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.1,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 0.1,
+      "top_p": 1.0,
+      "top_k": 50,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.1,
+      "cache_prompt": true
+    },
+    "sampling_text": {
+      "temperature": 0.1,
+      "top_p": 1.0,
+      "top_k": 50,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.1,
+      "cache_prompt": true
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.1,
+      "top_p": 1.0,
+      "top_k": 50,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.1,
+      "cache_prompt": true
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.1,
+      "top_p": 1.0,
+      "top_k": 50,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.1,
+      "cache_prompt": true
+    },
+    "sampling_math": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    }
+  }
+}

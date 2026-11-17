@@ -1,24 +1,24 @@
 {
   "model": "gemma-4:e4b-it-qat",
   "capabilities": {
-    "thinking": false,
+    "thinking": true,
     "vision": true,
     "tool_call": true
   },
   "vision_preprocessing": true,
-  "num_ctx": 4096,
-  "num_ctx_analyst": null,
+  "num_ctx": 16384,
+  "num_ctx_analyst": 16384,
   "num_ctx_duo_coder": 16384,
   "num_ctx_vision": 8192,
   "chat_template": null,
-  "jinja": false,
-  "reasoning": null,
+  "jinja": true,
+  "reasoning": "on",
   "distilled": false,
   "moe_cpu_experts": 0,
   "mtp": true,
   "gpu_layers": null,
   "mmproj_filename": "mmproj-gemma-4-e4b-it-qat-f16.gguf",
-  "vram_gb_override": 3.0,
+  "vram_gb_override": 4.24,
   "sampling": {
     "thinking": {
       "temperature": 1.0,

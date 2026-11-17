@@ -20,13 +20,18 @@
   "vram_gb_override": 1.5,
   "sampling": {
     "thinking": {
-      "temperature": 0.7,
-      "top_p": 0.9,
+      "temperature": 0.0,
+      "top_p": 1.0,
       "top_k": 0
     },
     "non_thinking": {
-      "temperature": 0.7,
-      "top_p": 0.9,
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "sampling_text": {
+      "temperature": 0.0,
+      "top_p": 1.0,
       "top_k": 0
     }
   }

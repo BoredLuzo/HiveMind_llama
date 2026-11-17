@@ -74,6 +74,25 @@ fixes, and repository root cleanup on top of `1.6.0`.
   `import torch, gliner2; from gliner2 import AutoExtractor` after `uv pip install`
   with an automatic `--reinstall` repair pass instead of printing `[OK]` on
   broken `.venv` imports.
+- **TTS Speed/Volume UI wiring & dual-engine parity:** Fixed the `0 %` volume
+  falsy-zero display bug, `#tts-speed-inp` reload sync and `[0.8, 1.5]` clamping,
+  live audio volume updates while speaking, and dual-engine WSOLA speed hints
+  (`index.html`, `static/app.js`, `tests/test_tts_and_model_wiring_fixes.py`).
+- **Automap MoE/size scoring & model catalog/profile cleanup:** Fixed boundary
+  parameter parsing, calibrated VRAM lookups, and small-role scoring in
+  `routing/model_automap.py` (preventing 35B MoEs from mapping to `refiner` or
+  `judge`); expanded quant/variant profile walkback in
+  `model_configs/models_registry.py` and MoE prefix matching in
+  `backend/llama_config.py`; added missing profiles for `lfm3:1.7b-qad`,
+  `ternary-bonsai-2:27b`, `lfm2.5:8b-a1b`, `spark-x2.6:4b-uncensored-gsq-rco`,
+  `qwen3.5:9b`, and `nvidia-nemotron-3.5-bolt:e4b` (with `draft-dflash`
+  speculative drafter support in `backend/llama_start_phases.py` /
+  `backend/manager_load.py` and `dflash` exclusion in `backend/llama_models.py`,
+  plus `--lazy-mode off` for non-large-MoE `mmap` loads); aligned `lfm3-omni:2b`,
+  `gemma-4`, `hermes3.6`, `minicpm-v-4.7`, and context defaults with official model
+  cards; consolidated the installer catalog (`deploy/fetch_models.py`,
+  `docs/guide.md`, pruning `minicpm5:2b-sharp-q4`, redundant non-MTP
+  `qwen3.6:35b-a3b-ud`, and 15 obsolete model JSONs).
 
 ## [1.6.0] - 2026-11-15
 

@@ -28,8 +28,12 @@ MODEL_PROFILES: dict[str, dict] = {
     # calls and structured output. Reasoning is on by default in the
     # template (enable_thinking=False to opt out).
     "lfm3":        {"thinking": True,  "vision": False, "tool_call": True},
+    "lfm3-omni":   {"thinking": False, "vision": True,  "tool_call": True},
     # Ling-3.0-tiny (InclusionAI, 2026-08-19): MoE, Thinking per Default an.
     "ling-3.0-tiny": {"thinking": True, "vision": False, "tool_call": True},
+    "k2-horizon":  {"thinking": True,  "vision": False, "tool_call": True},
+    "mellum2.1":   {"thinking": True,  "vision": False, "tool_call": True},
+    "groot":       {"thinking": True,  "vision": False, "tool_call": True},
     # MiniCPM5-2B (openbmb): LlamaForCausalLM, thinking via template
     # (enable_thinking), XML-style tool calls handled by --jinja.
     "minicpm5":    {"thinking": True, "vision": False, "tool_call": True},
@@ -43,6 +47,7 @@ MODEL_PROFILES: dict[str, dict] = {
     "spark-x2.5-1.7b": {"thinking": True, "vision": False, "tool_call": True},
     "qwq":         {"thinking": True,  "vision": False, "tool_call": True},
     "bonsai":      {"thinking": True,  "vision": False, "tool_call": False},
+    "ternary-bonsai-2": {"thinking": True, "vision": False, "tool_call": True},
     "magistral":   {"thinking": True,  "vision": False, "tool_call": True},
     "thinker":     {"thinking": True,  "vision": False, "tool_call": False},
     # ── webAI TwIL & Air (2026-11) ───────────────────────────────────────
@@ -74,10 +79,14 @@ MODEL_PROFILES: dict[str, dict] = {
     "phi3.5":        {"thinking": False, "vision": False, "tool_call": True},
     "phi4":          {"thinking": False, "vision": False, "tool_call": True},
     "gemma3":        {"thinking": False, "vision": False, "tool_call": True},
-    # VISION-FIX (2026-08-19): gemma-4 is based on gemma2/3 arch → embedded
-    "gemma-4-e4b-it":{"thinking": False, "vision": True,  "tool_call": True},  # Obliterated Fine-Tune
-    "gemma-4":       {"thinking": False, "vision": True,  "tool_call": True},
+    # VISION-FIX (2026-08-19): gemma-4 is based on gemma2/3 arch -> embedded
+    "gemma-4:e4b-it-obliterated": {"thinking": True, "vision": False, "tool_call": True},
+    "gemma-4-e4b-it": {"thinking": True, "vision": True,  "tool_call": True},
+    "gemma-4":        {"thinking": True, "vision": True,  "tool_call": True},
     "gemma-4-e4b-it-qat": {"thinking": False, "vision": True, "tool_call": True},
+    # NVIDIA Nemotron-3.5-Bolt-E4B-4GB (Gemma-4 E4B post-trained: thinking + multi-turn tools, text GGUF)
+    "nvidia-nemotron-3.5-bolt": {"thinking": True, "vision": False, "tool_call": True},
+    "nemotron-3.5-bolt":        {"thinking": True, "vision": False, "tool_call": True},
     "qwen":          {"thinking": False, "vision": False, "tool_call": False},
     # ── Command-R / Hermes / Dolphin ────────────────────────────────────
     "command-r":     {"thinking": False, "vision": False, "tool_call": True},
@@ -93,20 +102,30 @@ MODEL_PROFILES: dict[str, dict] = {
 }
 
 # ── VRAM-Estimation: Modellname → geschaetzte Parameterzahl (Milliarden) ────
+# Boundary regex avoids substring collisions ("35b-a3b" != 5B, "24b-a2b" != 4B,
+# "1.7b" != 7B, "0.8b" != 8B) and handles Gemma edge tags ("e4b" -> 4.0B).
+_PARAM_TOKEN_RE = re.compile(r"(?<![a0-9.])(?:e)?(\d+(?:\.\d+)?)b(?![a-z0-9])")
+
 _SIZE_PATTERNS: list[tuple[str, float]] = [
-    ("1.5b", 1.5), ("70b", 70), ("32b", 32), ("27b", 27), ("26b", 26),
-    ("15b", 15), ("14b", 14), ("12b", 12), ("9b", 9),
-    ("8b", 8), ("7b", 7), ("5b", 5), ("4b", 4),
-    ("3b", 3), ("2b", 2), ("1b", 1),
+    ("70b", 70), ("35b", 35), ("32b", 32), ("27b", 27), ("26b", 26),
+    ("24b", 24), ("19b", 19), ("15b", 15), ("14b", 14), ("12b", 12),
+    ("9b", 9), ("8b", 8), ("7b", 7), ("4.7b", 4.7), ("4b", 4),
+    ("3.7b", 3.7), ("3b", 3), ("2.6b", 2.6), ("2b", 2),
+    ("1.7b", 1.7), ("1.5b", 1.5), ("1b", 1), ("0.8b", 0.8),
 ]
 
 
 def _estimate_param_b(model_name: str) -> float:
-    """Estimate parameter count from model name (e.g. 'qwen3.5:4b' → 4.0)."""
+    """Estimate parameter count from model name (e.g. '35b-a3b' -> 35.0, '1.7b' -> 1.7)."""
     lo = model_name.lower()
+    if lo.startswith("ling-3.0-tiny"):
+        return 7.9
     tag = lo.split(":")[-1] if ":" in lo else lo
+    m = _PARAM_TOKEN_RE.search(tag) or _PARAM_TOKEN_RE.search(lo)
+    if m:
+        return float(m.group(1))
     for pattern, param_b in _SIZE_PATTERNS:
-        if pattern in tag:
+        if re.search(rf"(?<![0-9.]){re.escape(pattern)}(?![a-z0-9])", tag):
             return param_b
     return 4.0  # Default: medium
 
@@ -147,7 +166,7 @@ def _estimate_vram_gb(param_b: float, quant: str = "q4", is_moe: bool = False, a
 
 
 def _estimate_vram_gb_for_model(model_name: str, quant: str = "q4") -> float:
-    """Convenience wrapper: detects MoE architecture and applies correction automatically."""
+    """Estimate resident VRAM (GB), honoring calibrated tables/profiles/GGUF sizes first."""
     try:
         from model_configs.models_registry import get_vram_gb_override as _reg_vram
         _ovr = _reg_vram(model_name)
@@ -155,6 +174,22 @@ def _estimate_vram_gb_for_model(model_name: str, quant: str = "q4") -> float:
             return _ovr
     except Exception:
         pass
+    try:
+        from backend import llama_vram_table as _vt
+        from backend.gguf_meta import read_gguf_metadata as _gguf_meta
+        _low = model_name.strip().lower()
+        _base = _low.split(":")[0] if ":" in _low else _low
+        if _vt.moe_cfg_for(model_name) or _low in _vt._VRAM_TABLE or any(
+            k.split(":")[0] == _base and (_low.split(":")[1] if ":" in _low else "") in (k.split(":")[1] if ":" in k else "")
+            for k in _vt._VRAM_TABLE
+        ):
+            return float(_vt.vram_of(model_name))
+        _meta = _gguf_meta(model_name)
+        _fsize = float((_meta or {}).get("file_size_gb") or 0)
+        if _fsize > 0:
+            return round(_fsize * 1.08, 2)
+    except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
+        logger.debug("vram_table/gguf_meta skipped for %s: %s", model_name, _e)
     _pb = _estimate_param_b(model_name)
     _moe = _is_moe_model(model_name)
     _ab = _moe_active_b(model_name, _pb) if _moe else None
@@ -280,13 +315,17 @@ def get_automap(query: str = "", available: list | None = None, *,
                 score += 1  # No penalty for no TC when not needed
             if reqs["prefer_tool_call"] and not caps.get("tool_call"):
                 score -= 2
-            # Size heuristic from model name
-            _name_lower = m.lower()
-            if reqs["size"] == "small" and any(s in _name_lower for s in ("2b", "1.5b", "3b", "1b")):
+            # Size heuristic from parsed parameter count (avoids substring hits like "3b" in "35b-a3b")
+            _pb = _estimate_param_b(m)
+            _is_moe = _is_moe_model(m)
+            if reqs["size"] == "small":
+                if not _is_moe and _pb <= 3.5:
+                    score += 2
+                elif _is_moe and _pb >= 12.0:
+                    score -= 3  # large CPU-offloaded MoEs are poor low-latency refiner/judge fits
+            elif reqs["size"] == "medium" and 3.5 < _pb <= 9.5:
                 score += 2
-            elif reqs["size"] == "medium" and any(s in _name_lower for s in ("4b", "5b", "7b", "8b")):
-                score += 2
-            elif reqs["size"] == "large" and any(s in _name_lower for s in ("9b", "12b", "14b", "15b")):
+            elif reqs["size"] == "large" and _pb >= 8.0:
                 score += 2
             # z.B. qwen3.6:27b auf 8GB GPU → -8 Penalty
             if _vram_per_model > 0:
@@ -473,8 +512,8 @@ def get_model_capabilities(model_name: str) -> dict:
             return _user_caps
     except Exception:
         pass
-    # Exact prefix match first, then full name, then generic defaults
-    profile = MODEL_PROFILES.get(base, MODEL_PROFILES.get(model_name, {}))
+    # Specific tag match first (case-insensitive), then family base
+    profile = MODEL_PROFILES.get(model_name.lower(), MODEL_PROFILES.get(base.lower(), {}))
     if profile:
         return dict(profile)
     # GGUF header metadata for arbitrary dropped models (thinking/vision/chat_template)

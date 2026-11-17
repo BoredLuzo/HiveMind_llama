@@ -6,8 +6,7 @@ populates models.json with all GGUFs found in the models folder.
 
 Recommended set (as of release, = default-settings alignment 2026-08-26):
   gemma-4:e4b-it          Q4_K_M        — Direct/Vision/Allrounder
-  qwen3.6:35b-a3b-ud      UD-Q4_K_XL    — Coder/Planner (MoE, needs ~16GB RAM)
-  qwen3.6:…-genesis-final-apex-compact     APEX-Compact  — Coder/Hermes agent (MoE+MTP)
+  qwen3.6:35b-a3b-mtp     UD-Q4_K_XL    — Coder/Planner (MoE+MTP, needs ~16GB RAM)
   (catalog is authoritative - this block lists only the highlights)
   lfm3-omni:2b            Q4_0          — Subagent/Vision-Worker (+mmproj)
   lfm3:1.7b-qad           QAD Q4_0      — text-only subagent
@@ -233,20 +232,6 @@ SPECS: list[dict] = [
         ],
     },
     {
-        "key": "qwen3.6:35b-a3b-ud",
-        "tag": "qwen3.6:35b-a3b-ud",
-        "desc": "Qwen3.6 35B A3B unsloth UD (Coder/Planner MoE, ~20GB download)",
-        "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
-        "file_regex": [
-            r"(?i)^qwen3\.6-35b-a3b-ud-q4_k_xl\.gguf$",
-        ],
-        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        # unique dest: the repo ships generic mmproj-BF16/F16/F32 names that
-        # collide with the gemma-4 projectors; the per-model name also fits
-        # the resolve_mmproj_path base match ("qwen36" in filename).
-        "mmproj_dest": "mmproj-qwen3.6-35b-a3b-f16.gguf",
-    },
-    {
         "key": "qwen3.6:35b-a3b-mtp",
         "tag": "qwen3.6:35b-a3b-mtp",
         "desc": "Qwen3.6 35B A3B MTP unsloth UD (Coder/Planner MoE + MTP spec-decode, ~22.8GB download)",
@@ -254,9 +239,7 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^qwen3\.6-35b-a3b-ud-q4_k_xl\.gguf$",
         ],
-        # Both unsloth/Qwen3.6-35B-A3B-GGUF and unsloth/Qwen3.6-35B-A3B-MTP-GGUF
-        # name the remote asset Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf; pin a distinct
-        # local filename so both variants can coexist in models/ without colliding.
+        # Name locally so the MTP quant never collides if a non-MTP UD file is also present.
         "file_dest": "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf",
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
         "mmproj_dest": "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
@@ -412,12 +395,8 @@ SPECS: list[dict] = [
     },
     # ── Sharp-MiniCPM5-2B (2026-09-26) ─────────────────────────────────────
     # Light dense all-rounder (plain llama arch, text-only, embedded jinja
-    # template with OpenAI tool_calls). TWO download tiers, ONE identity:
-    # both specs pin the same tag "minicpm5:2b-sharp", so the single model
-    # config (minicpm5_2b-sharp.json) applies to whichever tier is installed
-    # — settings and template are identical by construction. Q6_K_XL is the
-    # recommended tier (99% KL 0.024 vs its own BF16, near-lossless);
-    # Q4_K_XL is the smaller alternative, noticeably weaker (KL 0.274).
+    # template with OpenAI tool_calls). Q6_K_XL is near-lossless (99% KL 0.024
+    # vs BF16).
     {
         "key": "minicpm5:2b-sharp",
         "tag": "minicpm5:2b-sharp",
@@ -437,27 +416,6 @@ SPECS: list[dict] = [
         # "dflash"). Sidecar GGUF: never registered as a model (write_models_json
         # and llama_models exclude every *dspark* name). The model config
         # (minicpm5_2b-sharp.json) points at this exact filename.
-        "sidecar": [
-            {
-                "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",
-                "path": "MiniCPM5-2.6B-DSpark.gguf",
-                "note": "DSpark spec-dec drafter (~650MB)",
-            },
-        ],
-    },
-    {
-        "key": "minicpm5:2b-sharp-q4",
-        "tag": "minicpm5:2b-sharp",
-        "desc": "Sharp-MiniCPM5-2B Q4_K_XL (same model, smaller tier — noticeably weaker than Q6, ~1.5GB)",
-        "repo": "peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF",
-        "file_regex": [
-            r"(?i)^sharp-minicpm5-2b-q4_k_xl\.gguf$",
-        ],
-        "mmproj_regex": [],
-        "extra_files": [
-            {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
-        ],
-        # Same drafter for the Q4 tier — one tag, one profile, one sidecar.
         "sidecar": [
             {
                 "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",

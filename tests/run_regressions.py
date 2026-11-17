@@ -440,6 +440,7 @@ SUITES = [
     ("image_coherence",            "tests/test_image_coherence.py",            45),
     ("wait_ready_abort",           "tests/test_wait_ready_abort.py",           30),
     ("moe_auto_cpu",               "tests/test_moe_auto_cpu.py",               30),
+    ("tts_and_model_wiring",       "tests/test_tts_and_model_wiring_fixes.py", 30),
 
 ]
 
@@ -449,7 +450,8 @@ SUITES = [
 # 2026-11-07: the real LSP servers and the HTTP-poll suite joined the lane
 # for the same reason (CI runners are slower and share two cores).
 _EXCLUSIVE_SUITES = {
-    "mcp_client", "lsp_client", "wait_ready", "lsp_real_pyright", "lsp_real_rust",
+    "mcp_client", "lsp_client", "wait_ready", "wait_ready_abort",
+    "lsp_real_pyright", "lsp_real_rust",
 }
 
 # Suites whose fixtures only exist on a developer box. `--ci-subset` drops

@@ -39,9 +39,16 @@ _VRAM_TABLE: dict[str, float] = {
     "qwen3-vl:2b-instruct": 1.6,
 
     # Gemma
-    "gemma-4:e4b-it-obliterated": 3.0,
-    "gemma-4:e4b-it":         3.0,
-    "google-gemma-3:4b-it":   2.8,
+    "gemma-4:e4b-it-obliterated": 5.8,
+    "gemma-4:e4b-it-qat":         4.24,
+    "gemma-4:e4b-it":             3.0,
+    "gemma-4:e2b-it-qat":         2.8,
+    "google-gemma-3:4b-it":       2.8,
+    # NVIDIA Nemotron-3.5-Bolt-E4B-4GB (Gemma-4-E4B base: 8B total / 4B effective)
+    "nvidia-nemotron-3.5-bolt:e4b":     4.4,
+    "nvidia-nemotron-3.5-bolt:e4b-4gb": 4.4,
+    "nemotron-3.5-bolt:e4b":            4.4,
+    "nemotron-3.5-bolt:e4b-4gb":        4.4,
 
     # Ministral
     "ministral:3b-instruct-2410": 2.0,
@@ -55,7 +62,8 @@ _VRAM_TABLE: dict[str, float] = {
     "granite-4.1:3b":       2.1,
 
     # Ternary-Bonsai
-    "ternary-bonsai:8b": 4.8,
+    "ternary-bonsai:8b":   4.8,
+    "ternary-bonsai-2:27b": 5.98,
 
     # Ling-3.0-tiny (InclusionAI): hybrid MoE, 7.9B total / 1.3B active,
     # 128 routed + 1 shared expert (8 active), KDA/MLA. Q4_K_L ~4.75GB weights

@@ -1,25 +1,44 @@
 {
-  "model": "qwen3.5:4b-ud",
+  "model": "qwen3.5:9b",
   "capabilities": {
     "thinking": true,
     "vision": true,
     "tool_call": true
   },
-  "vision_preprocessing": true,
-  "num_ctx": 4096,
+  "vision_preprocessing": false,
+  "num_ctx": 16384,
   "num_ctx_analyst": 8192,
-  "num_ctx_duo_coder": 8192,
+  "num_ctx_duo_coder": 32768,
   "num_ctx_vision": 8192,
   "chat_template": "chat_template22.5.jinja",
   "jinja": true,
-  "reasoning": "off",
+  "reasoning": "on",
   "distilled": false,
   "moe_cpu_experts": 0,
   "mtp": false,
   "gpu_layers": null,
-  "mmproj_filename": "mmproj-Qwen3.5-4B-F16.gguf",
-  "vram_gb_override": 2.9,
+  "mmproj_filename": "mmproj-Qwen3.5-9B-F16.gguf",
+  "vram_gb_override": null,
   "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
     "sampling_text": {
       "temperature": 0.6,
       "top_p": 0.95,
@@ -51,25 +70,6 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0
-    },
-    "thinking": {
-      "temperature": 0.6,
-      "top_p": 0.95,
-      "top_k": 20,
-      "min_p": 0.0,
-      "presence_penalty": 0.0,
-      "repetition_penalty": 1.0,
-      "preserve_thinking": true,
-      "cache_prompt": true
-    },
-    "non_thinking": {
-      "temperature": 0.6,
-      "top_p": 0.95,
-      "top_k": 20,
-      "min_p": 0.0,
-      "presence_penalty": 0.0,
-      "repetition_penalty": 1.0,
-      "cache_prompt": true
     }
   }
 }

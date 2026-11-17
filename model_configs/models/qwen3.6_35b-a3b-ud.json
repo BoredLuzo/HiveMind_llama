@@ -6,8 +6,8 @@
     "tool_call": true
   },
   "vision_preprocessing": true,
-  "num_ctx": 8192,
-  "num_ctx_analyst": 8192,
+  "num_ctx": 16384,
+  "num_ctx_analyst": 16384,
   "num_ctx_duo_coder": 16384,
   "num_ctx_vision": 8192,
   "chat_template": "chat_template_sharp_v22.5.0.jinja",

@@ -1,30 +1,31 @@
 {
-  "model": "minicpm5:2b-sharp-q4",
+  "model": "ternary-bonsai-2:27b",
   "capabilities": {
     "thinking": true,
     "vision": false,
     "tool_call": true
   },
   "vision_preprocessing": false,
-  "num_ctx": 131072,
-  "num_ctx_analyst": null,
-  "num_ctx_duo_coder": null,
+  "num_ctx": 32768,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 32768,
   "num_ctx_vision": null,
-  "chat_template": "sharp_minicpm5_chat_template.jinja",
+  "chat_template": null,
   "jinja": true,
   "reasoning": "on",
   "distilled": false,
+  "moe": false,
   "moe_cpu_experts": 0,
   "mtp": false,
-  "gpu_layers": 99,
+  "gpu_layers": null,
   "mmproj_filename": null,
-  "vram_gb_override": 1.5,
+  "vram_gb_override": 5.98,
   "sampling": {
-    "sampling_text": {
+    "thinking": {
       "temperature": 1.0,
       "top_p": 0.95,
       "top_k": 20,
-      "min_p": 0.0,
+      "min_p": 0.05,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
       "cache_prompt": true
@@ -33,41 +34,37 @@
       "temperature": 1.0,
       "top_p": 0.95,
       "top_k": 20,
-      "min_p": 0.0,
+      "min_p": 0.05,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
-      "preserve_thinking": true,
       "cache_prompt": true
     },
     "sampling_thinking_code": {
       "temperature": 1.0,
       "top_p": 0.95,
       "top_k": 20,
-      "min_p": 0.0,
-      "presence_penalty": 0.0,
-      "repetition_penalty": 1.05,
-      "cache_prompt": true
-    },
-    "thinking": {
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "top_k": 20,
-      "min_p": 0.0,
+      "min_p": 0.05,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
-      "preserve_thinking": true,
       "cache_prompt": true
     },
     "non_thinking": {
-      "temperature": 1.0,
-      "top_p": 0.95,
+      "temperature": 0.7,
+      "top_p": 0.8,
       "top_k": 20,
       "min_p": 0.0,
-      "presence_penalty": 0.0,
+      "presence_penalty": 1.5,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
+    "sampling_text": {
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 1.5,
       "repetition_penalty": 1.0,
       "cache_prompt": true
     }
-  },
-  "dspark_draft_filename": "MiniCPM5-2.6B-DSpark.gguf",
-  "dspark_draft_n_max": 2
+  }
 }

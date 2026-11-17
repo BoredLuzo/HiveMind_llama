@@ -1,56 +1,42 @@
 {
-  "model": "qwen3.5:9b-ud",
+  "model": "spark-x2.6:4b-uncensored-gsq-rco",
   "capabilities": {
     "thinking": true,
-    "vision": true,
+    "vision": false,
     "tool_call": true
   },
-  "vision_preprocessing": true,
-  "num_ctx": 4096,
-  "num_ctx_analyst": 8192,
-  "num_ctx_duo_coder": 8192,
+  "vision_preprocessing": false,
+  "num_ctx": 32768,
+  "num_ctx_analyst": 32768,
+  "num_ctx_duo_coder": 32768,
   "num_ctx_vision": 8192,
-  "chat_template": "chat_template22.5.jinja",
   "jinja": true,
   "reasoning": "on",
-  "distilled": true,
+  "distilled": false,
   "moe_cpu_experts": 0,
   "mtp": false,
   "gpu_layers": null,
-  "mmproj_filename": "mmproj-Qwen3.5-9B-F16.gguf",
-  "vram_gb_override": 5.6,
+  "mmproj_filename": null,
+  "vram_gb_override": 2.61,
+  "kv_cache_type": "q8_0",
   "sampling": {
     "sampling_text": {
-      "temperature": 0.6,
+      "temperature": 1.0,
       "top_p": 0.95,
-      "top_k": 20,
+      "top_k": 0,
       "min_p": 0.0,
       "presence_penalty": 0.0,
-      "repetition_penalty": 1.0
-    },
-    "sampling_vl": {
-      "temperature": 0.7,
-      "top_p": 0.8,
-      "top_k": 20,
-      "min_p": 0.0,
-      "presence_penalty": 1.5,
-      "repetition_penalty": 1.0
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
     },
     "sampling_thinking_text": {
       "temperature": 1.0,
       "top_p": 0.95,
-      "top_k": 20,
-      "min_p": 0.0,
-      "presence_penalty": 1.5,
-      "repetition_penalty": 1.0
-    },
-    "sampling_thinking_code": {
-      "temperature": 0.6,
-      "top_p": 0.95,
-      "top_k": 20,
+      "top_k": 0,
       "min_p": 0.0,
       "presence_penalty": 0.0,
-      "repetition_penalty": 1.0
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
     },
     "thinking": {
       "temperature": 0.6,
@@ -58,12 +44,20 @@
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
-      "preserve_thinking": true,
       "cache_prompt": true
     },
     "non_thinking": {
-      "temperature": 0.6,
+      "temperature": 0.95,
       "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,

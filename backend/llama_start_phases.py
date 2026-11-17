@@ -20,8 +20,10 @@ from pathlib import Path
 
 from . import llama_config as _llama_cfg
 from .llama_config import (
-    BINARY_MIN_BUILD, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
-    DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE, GPU_BACKEND, KV_CACHE_TYPE,
+    BINARY_MIN_BUILD,
+    DFLASH_DRAFT_N_MAX, DFLASH_DRAFT_N_MIN, DFLASH_MIN_BUILD, DFLASH_SPEC_TYPE,
+    DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE,
+    GPU_BACKEND, KV_CACHE_TYPE,
     LLAMA_BIN, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VULKAN_DEVICE, VRAM_PREFLIGHT_GATE,
     _GPU_LAYERS_TABLE, _MTP_MODELS, _MOE_EXPERT_COUNTS,
@@ -810,20 +812,42 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     # 10.6 (49% acceptance), n-max 4 7.7 (34%). Slower at every setting,
     # hence switchable.
     _draft_fn = None
+    _draft_spec_type = DSPARK_SPEC_TYPE
     _draft_nmax = None
+    _draft_nmin = DSPARK_DRAFT_N_MIN
+    _draft_min_build = DSPARK_MIN_BUILD
+    _draft_label = "DSpark"
+    _draft_env_off = False
     try:
-        from .llama_config import _try_registry_dspark_draft as _reg_dd2
-        _draft_fn = _reg_dd2(_strip_alias(model))
-        # Per-model draft budget from the profile (dspark_draft_n_max); the
-        # field used to be ignored and everything ran with the global default.
+        from .llama_config import (
+            _try_registry_dflash_draft as _reg_df2,
+            _try_registry_dspark_draft as _reg_dd2,
+        )
         from model_configs.models_registry import (
+            get_dflash_draft_n_max as _reg_df_nmax,
             get_dspark_draft_n_max as _reg_nmax,
         )
-        _draft_nmax = _reg_nmax(_strip_alias(model))
+        _m_alias = _strip_alias(model)
+        _draft_fn = _reg_dd2(_m_alias)
+        if _draft_fn:
+            _draft_nmax = _reg_nmax(_m_alias) or DSPARK_DRAFT_N_MAX
+            _draft_env_off = os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
+        else:
+            _draft_fn = _reg_df2(_m_alias)
+            if _draft_fn:
+                _draft_spec_type = DFLASH_SPEC_TYPE
+                _draft_nmax = _reg_df_nmax(_m_alias) or DFLASH_DRAFT_N_MAX
+                _draft_nmin = DFLASH_DRAFT_N_MIN
+                _draft_min_build = DFLASH_MIN_BUILD
+                _draft_label = "DFlash"
+                _draft_env_off = (
+                    os.environ.get("HIVEMIND_DFLASH_SPEC", "1") in ("0", "false", "off")
+                    or os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
+                )
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
         _draft_fn = None
         _draft_nmax = None
-    if os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off"):
+    if _draft_env_off:
         _draft_fn = None
     if _draft_fn:
         _draft_path = None
@@ -843,32 +867,37 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
                     logger.debug("[MTP] draft-path probe skipped: %s", _e)
         if _draft_path is None:
             logger.warning(
-                "DSpark drafter configured for '%s' (%s) but not found in %s "
+                "%s drafter configured for '%s' (%s) but not found in %s "
                 "— running without the drafter.",
-                model, _draft_fn, MODELS_DIR,
+                _draft_label, model, _draft_fn, MODELS_DIR,
             )
         else:
-            _dspark_ok = type(self)._dspark_flag_supported
-            if _dspark_ok is None:
-                _dspark_ok = (type(self)._binary_build_number or 0) >= DSPARK_MIN_BUILD
-            if not _dspark_ok:
+            if _draft_spec_type == DFLASH_SPEC_TYPE:
+                _draft_ok = await _help_supports(DFLASH_SPEC_TYPE)
+                if not _draft_ok and (type(self)._binary_build_number or 0) >= _draft_min_build:
+                    # Fallback if --help output was unavailable/mocked on a matching build.
+                    from backend.manager_load import _binary_help as _bin_help
+                    _draft_ok = not await _bin_help()
+            else:
+                _draft_ok = type(self)._dspark_flag_supported
+                if _draft_ok is None:
+                    _draft_ok = (type(self)._binary_build_number or 0) >= _draft_min_build
+            if not _draft_ok:
                 logger.warning(
-                    f"DSpark speculative decoding not supported for '{model}' by "
-                    f"{LLAMA_BIN.name} (needs --spec-type draft-dspark, build "
-                    f"{DSPARK_MIN_BUILD}+) — skipping the drafter."
+                    f"{_draft_label} speculative decoding not supported for '{model}' by "
+                    f"{LLAMA_BIN.name} (needs --spec-type {_draft_spec_type}, build "
+                    f"{_draft_min_build}+) — skipping the drafter."
                 )
             else:
-                if not _draft_nmax:
-                    _draft_nmax = DSPARK_DRAFT_N_MAX
                 cmd += [
-                    "--spec-type", DSPARK_SPEC_TYPE,
+                    "--spec-type", _draft_spec_type,
                     "--model-draft", str(_draft_path),
                     "--spec-draft-n-max", str(_draft_nmax),
-                    "--spec-draft-n-min", str(DSPARK_DRAFT_N_MIN),
+                    "--spec-draft-n-min", str(_draft_nmin),
                 ]
                 logger.info(
-                    "DSpark active: %s → drafter %s (n-max=%d, n-min=%d)",
-                    model, _draft_path.name, _draft_nmax, DSPARK_DRAFT_N_MIN,
+                    "%s active: %s → drafter %s (n-max=%d, n-min=%d)",
+                    _draft_label, model, _draft_path.name, _draft_nmax, _draft_nmin,
                 )
 
     # ── Jinja-Chat-Template ───────────────────────────────────────────────

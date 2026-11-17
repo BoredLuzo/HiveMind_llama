@@ -54,7 +54,7 @@ _keys = {s["key"] for s in SPECS}
 check("2a essential keys exist in the catalog", ESSENTIAL_KEYS <= _keys,
       f"(unknown: {ESSENTIAL_KEYS - _keys})")
 check("2b essential set is small", len(ESSENTIAL_KEYS) <= 5, f"({len(ESSENTIAL_KEYS)})")
-check("2c the 20 GB model is NOT essential", "qwen3.6:35b-a3b-ud" not in ESSENTIAL_KEYS)
+check("2c the 20 GB model is NOT essential", "qwen3.6:35b-a3b-mtp" not in ESSENTIAL_KEYS)
 for _need in ("qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "lfm3:1.7b-qad",
               "minicpm5:2b-sharp"):
     check(f"2d default route in the essential set: {_need}", _need in ESSENTIAL_KEYS)
@@ -92,7 +92,7 @@ for _k in ESSENTIAL_KEYS:
     check(f"5b printed: {_k}", _k in _txt)
 _opt = _txt.split("ALSO AVAILABLE")[-1] if "ALSO AVAILABLE" in _txt else ""
 check("5c the big model is listed as optional, not as essential",
-      "qwen3.6:35b-a3b-ud" in _opt)
+      "qwen3.6:35b-a3b-mtp" in _opt)
 check("5d the listing is roomy (blank line between models)",
       _txt.count("\n\n") >= len(ESSENTIAL_KEYS))
 

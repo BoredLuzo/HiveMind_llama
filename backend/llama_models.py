@@ -130,7 +130,7 @@ def _parse_gguf_filename(filename: str) -> list[str]:
 
 # ── GGUF-Index ─────────────────────────────────────────────────────────────────
 
-_NON_MODEL_PATTERNS = {"mmproj", "projector", "vision_encoder", "vl-encoder", "dspark"}
+_NON_MODEL_PATTERNS = {"mmproj", "projector", "vision_encoder", "vl-encoder", "dspark", "dflash"}
 
 
 def is_non_model_gguf(filename: str) -> bool:

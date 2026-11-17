@@ -1,0 +1,70 @@
+{
+  "model": "lfm2.5:8b-a1b",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 32768,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 32768,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe": true,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": 24,
+  "mmproj_filename": null,
+  "vram_gb_override": 2.7,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    },
+    "sampling_text": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.2,
+      "top_p": 1.0,
+      "top_k": 80,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "cache_prompt": true
+    }
+  }
+}

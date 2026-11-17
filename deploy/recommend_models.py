@@ -91,9 +91,9 @@ def collect(vram_gb: float, ram_gb: float) -> list[dict]:
         p = Path(str(path))
         if not p.exists():
             continue
-        # mmproj-Projektoren, DSpark-/MTP-Drafter sind keine eigenstaendigen Modelle
+        # Projectors and DSpark/DFlash/MTP drafters are not standalone models
         _low = f"{tag} {p.name}".lower()
-        if "mmproj" in _low or "dspark" in _low or Path(p.name).name.lower().startswith("mtp-"):
+        if "mmproj" in _low or "dspark" in _low or "dflash" in _low or Path(p.name).name.lower().startswith("mtp-"):
             continue
         size_gb = round(p.stat().st_size / (1024 ** 3), 2)
         prof = _profile_for(tag)
