@@ -440,10 +440,16 @@ _MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b"] = 35
 # the entry.
 _MOE_EXPERT_COUNTS["lfm2.5:24b-a2b"] = 24
 
-# Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, 128 experts top-8, ~13.5 GB):
-# below the >=30B generic autodetect threshold; offload 20/30 blocks to CPU so 10 MoE
-# blocks stay on GPU (~5.8 GB active VRAM on 8GB+ GPUs).
-_MOE_EXPERT_COUNTS["air:26b-a4b"] = 20
+# Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, 128 experts top-8, ~12.55 GiB):
+# measured on b12001/Vulkan: ncmoe=20 spilled 2.66 GiB shared (29.9/8.3 t/s); ncmoe=26
+# hits 113/13.1 t/s at full 131k ctx with q4_0 KV.
+_MOE_EXPERT_COUNTS["air:26b-a4b"] = 26
+
+# Mellum2.1-12B-A2.5B-Thinking (28 blocks, 64 experts top-8, ~11.0 GiB Q6_K_L):
+# below the >=30B autodetect floor; N=3 b12001 sweep: ncmoe=18 beats 8 & 20
+# reproducibly (19.9 vs 8.2/18.7 t/s, 123.4 t/s prefill, ~4.74 GB base).
+_MOE_EXPERT_COUNTS["mellum2.1:12b-a2.5b"] = 18
+_MOE_EXPERT_COUNTS["mellum2.1:12b-a2.5b-thinking"] = 18
 
 _HERMES_V7_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact"
 
@@ -454,9 +460,7 @@ _MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
 _HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
 _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
-_MOE_KV_CACHE_TYPES: dict[str, str] = {
-    "air:26b-a4b": "q8_0",
-}
+_MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
 def _strip_ud_suffix(model_key: str) -> str:

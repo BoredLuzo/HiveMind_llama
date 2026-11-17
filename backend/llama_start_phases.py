@@ -368,15 +368,23 @@ async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = Fa
     )
 
 
-def _external_draft_footprint_mib(cmd: list[str]) -> float:
+def _external_draft_footprint_mib(cmd: list[str], model: str = "") -> float:
     """Estimated total VRAM footprint (MiB) of the external --model-draft.
 
-    On Nemotron-3.5-Bolt-E4B + DFlash (b12001 Vulkan), the BF16 drafter GGUF
-    is ~694 MiB and adds ~1,248 MiB live peak VRAM over the undrafted target
-    (file MiB + ~550 MiB drafter KV/compute buffer).
+    Uses profile `draft_overhead_mib` when calibrated (e.g. MiniCPM DSpark Q6:
+    ~1600 MiB measured delta at 16k), otherwise falls back to file_mib + 550 MiB
+    (Nemotron DFlash BF16: ~694 MiB file -> ~1248 MiB live peak delta).
     """
     if "--model-draft" not in cmd:
         return 0.0
+    if model:
+        try:
+            from model_configs.models_registry import get_draft_overhead_mib as _gdov
+            prof_mib = _gdov(_strip_alias(model))
+            if prof_mib is not None and prof_mib > 0.0:
+                return float(prof_mib)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            pass
     file_mib = 0.0
     try:
         idx = cmd.index("--model-draft")
@@ -897,14 +905,18 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     if _moe_count > 0 and GPU_BACKEND != "cpu":
         if type(self)._moe_flag_supported:
             # --fit aborts in llama.cpp whenever tensor_buft_overrides /
-            # --n-cpu-moe are active ("already set by user, abort", ~1.1s waste).
-            if "--fit" in cmd:
+            # --n-cpu-moe are active ("already set by user, abort", ~1.1s waste);
+            # replace any --fit on + --fit-target with explicit --fit off.
+            _fit_idx = cmd.index("--fit") if "--fit" in cmd else -1
+            _fit_was_on = _fit_idx >= 0 and _fit_idx + 1 < len(cmd) and cmd[_fit_idx + 1] == "on"
+            if _fit_was_on or "--fit-target" in cmd:
                 cmd[:] = _strip_flag_pairs(cmd, _FIT_VALUE_FLAGS)
+                cmd += ["--fit", "off"]
                 if "--n-gpu-layers" not in cmd:
                     _pin_gl = gpu_layers if gpu_layers is not None else GPU_LAYERS
                     cmd += ["--n-gpu-layers", str(_pin_gl)]
                 logger.info(
-                    "--fit skipped (incompatible with --n-cpu-moe=%d; pinning -ngl %s)",
+                    "--fit off (incompatible with --n-cpu-moe=%d; pinning -ngl %s)",
                     _moe_count,
                     cmd[cmd.index("--n-gpu-layers") + 1] if "--n-gpu-layers" in cmd else "auto",
                 )
@@ -1444,7 +1456,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     # otherwise add its estimated footprint upfront so pre-flight never silently
     # overflows VRAM. Record _draft_save_mib so tight VRAM can drop the drafter
     # before degrading ctx or failing.
-    _draft_save_mib = _external_draft_footprint_mib(cmd)
+    _draft_save_mib = _external_draft_footprint_mib(cmd, model)
     if _draft_save_mib > 0.0 and _get_vram_ovr(_strip_alias(model)) is None:
         _moe_cache_used = float(_moe_cache_used) + _draft_save_mib
     # ── HARTER PRE-FLIGHT-VRAM-GATE ───────────────────────────────────────

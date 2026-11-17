@@ -6,7 +6,8 @@
     "tool_call": true
   },
   "vision_preprocessing": true,
-  "load_mode": "none",
+  "load_mode": "mmap",
+  "cache_ram_mib": 2048,
   "num_ctx": 16384,
   "num_ctx_analyst": 16384,
   "num_ctx_duo_coder": 16384,

@@ -95,11 +95,11 @@ _MOE_TABLE: dict[str, dict] = {
         "calibrated_n_cpu_moe":     35,
     },
     "mellum2.1:12b-a2.5b-thinking": {
-        "active_gpu_gb": 4.0,
-        # SWA-MoE: 7/28 full-attention layers, measured 4.1 KB/token q4_0
-        # (was only in _CTX_KV_KB_PER_TOKEN, which the MoE delegation
-        # never reaches — audit 2026-10-30).
-        "measured_bytes_per_token": 4100,
+        # N=3 b12001/Vulkan measurement @ncmoe=18, q4_0 KV: model 4498 + compute 331 MiB,
+        # KV 80.7 MiB @16k (~5.2 KB/token), pid_ded_peak 4986 MiB (~4.74 GB @4k).
+        "active_gpu_gb": 4.74,
+        "measured_bytes_per_token": 5200,
+        "calibrated_n_cpu_moe": 18,
     },
     "qwen3.6:35b-a3b-ud": {
         "active_gpu_gb":            4.66,
@@ -130,24 +130,19 @@ _MOE_TABLE: dict[str, dict] = {
         "active_gpu_gb":            4.8,
         "measured_bytes_per_token": 12288,
     },
-    # MiniCPM-V 4.7 35B-A3B (qwen35moe, 256x2.6B, TEXT-ONLY on b11456 — the
-    # minicpmv4_7 projector type is unknown to this build, mmproj fails to
-    # load). Measured 2026-10-14 (-lv 5 fit projection @c4096, f16 KV):
-    # n-cpu-moe 35 -> 4754 MiB projected, 2337 MiB left free.
-    # KV: 10/40 layers carry KV (2 kv-heads x 256). Live loads run q4_0 KV
-    # (MoE default in manager_load) -> ~10240 bytes/token; the f16-probe
-    # numbers below keep the pre-flight gate on the conservative side.
+    # MiniCPM-V 4.7 35B-A3B (qwen35moe, 256x2.6B). Calibrated on b12001/Vulkan
+    # @ncmoe=35, q4_0 KV (undrafted): model 2953 + RS 63 + compute 260 MiB (~3.25 GB @4k),
+    # KV 90/180 MiB @16k/32k (~6.8 KB/tok peak delta). DSpark Q6 adds ~1600 MiB
+    # (via profile draft_overhead_mib); F16 mmproj loads cleanly (+1153 MiB peak).
     "minicpm-v-4.7:35b": {
-        "active_gpu_gb":            4.64,
-        "measured_bytes_per_token": 20480,
+        "active_gpu_gb":            3.25,
+        "measured_bytes_per_token": 6800,
         "calibrated_n_cpu_moe":     35,
     },
-    # Same architecture class as minicpm-v-4.7:35b above; the mix quant keeps its
-    # tag with dashes (the filename is MiniCPM-V-4_7-...), so the dot form never
-    # matched and the pre-flight asked for the whole 14.4 GB on the GPU.
+    # Same architecture class as minicpm-v-4.7:35b above; dash-tagged mix quant.
     "minicpm-v-4-7:35b-a3b-mix": {
-        "active_gpu_gb":            4.64,
-        "measured_bytes_per_token": 20480,
+        "active_gpu_gb":            3.25,
+        "measured_bytes_per_token": 6800,
         "calibrated_n_cpu_moe":     35,
     },
     # LFM2.5-24B-A2B (lfm2moe, 64x1.4B: 2 dense + 38 MoE blocks). The catalog
@@ -163,11 +158,13 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 20480,
         "calibrated_n_cpu_moe":     24,
     },
-    # Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, n-cpu-moe 20 keeps 10 blocks on GPU, q8_0 KV ~1.48 GiB @ 128K):
+    # Air-26B-A4B (Gemma 4 26B-A4B MoE, 30 blocks, b12001/Vulkan): @ncmoe=26 with q4_0 KV
+    # avoids the 2.66 GiB shared-VRAM spill (3836 model + 460 compute ≈ 4.26 GB @4k,
+    # 804 MiB KV @131k ≈ 6.45 KB/token).
     "air:26b-a4b": {
-        "active_gpu_gb":            5.8,
-        "measured_bytes_per_token": 12288,
-        "calibrated_n_cpu_moe":     20,
+        "active_gpu_gb":            4.26,
+        "measured_bytes_per_token": 6450,
+        "calibrated_n_cpu_moe":     26,
     },
 }
 

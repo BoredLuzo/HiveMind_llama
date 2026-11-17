@@ -42,7 +42,7 @@ with mock.patch.object(GM, "read_gguf_metadata", return_value=_AIR_META), \
     v_cpu30_50k = LVT.vram_of_moe("air:26b-a4b", 50000, n_cpu_moe=30)
     v_cpu10_4k = LVT.vram_of_moe("air:26b-a4b", 4096, n_cpu_moe=10)
     check("1a default air@4096 and @50000 preserved",
-          v_def_4k == 5.8 and v_def_50k == 6.37,
+          v_def_4k == 4.26 and v_def_50k == 4.56,
           f" (4k={v_def_4k}, 50k={v_def_50k})")
     check("1b raising n_cpu_moe to 30 reduces GPU VRAM below 4 GB safely",
           2.6 <= v_cpu30_4k < 3.8 and 3.0 <= v_cpu30_50k < 4.3,
@@ -61,17 +61,17 @@ with mock.patch.object(GM, "read_gguf_metadata", return_value=_AIR_META), \
 with mock.patch.object(GM, "read_gguf_metadata", return_value={}), \
      mock.patch.object(LC, "MOE_CPU_EXPERTS", {"air:26b-a4b": 30}):
     check("1e missing GGUF metadata stays conservative at calibrated base",
-          LVT.vram_of_moe("air:26b-a4b", 4096) == 5.8)
+          LVT.vram_of_moe("air:26b-a4b", 4096) == 4.26)
 
 
-# ── 2. Auto MoE CPU-expert step-up on tight live VRAM (~6117 MiB free) ───────
+# ── 2. Auto MoE CPU-expert step-up on tight live VRAM (~5000 MiB free) ───────
 def _run_stepup(free_mib: float, *, ub_eff: int = 512, ub_base: int = 256):
     slot = ModelSlot(0)
     mgr = _Mgr(slot)
     ub_delta = 72.0 if ub_eff > ub_base else 0.0
     cmd = [
         "llama-server", "--ctx-size", "50000", "--batch-size", "1024",
-        "--ubatch-size", str(ub_eff), "--n-cpu-moe", "20",
+        "--ubatch-size", str(ub_eff), "--n-cpu-moe", "26",
     ]
     with mock.patch.object(GM, "read_gguf_metadata", return_value=_AIR_META), \
          mock.patch.object(LC, "MOE_CPU_EXPERTS", {}), \
@@ -85,28 +85,29 @@ def _run_stepup(free_mib: float, *, ub_eff: int = 512, ub_base: int = 256):
     return init_fit, res_fit, cmd, res_extra, res_ub_delta, res_moe
 
 
-init_fit, res_fit, cmd_ok, _, _, res_moe = _run_stepup(6117.0)
-check("2a air:26b-a4b @50k fails at 20 experts with 6117 MiB free",
-      init_fit.ok is False and init_fit.needed_mib > 6117.0,
+init_fit, res_fit, cmd_ok, _, _, res_moe = _run_stepup(5000.0)
+check("2a air:26b-a4b @50k fails at 26 experts with 5000 MiB free",
+      init_fit.ok is False
+      and init_fit.needed_mib + VRAM_PRE_FLIGHT_MARGIN_MIB > 5000.0,
       f" (needed={init_fit.needed_mib})")
 check("2b auto MoE CPU step-up fits @50k with full margin by bumping --n-cpu-moe",
       res_fit.ok is True
       and res_fit.margin_mib == VRAM_PRE_FLIGHT_MARGIN_MIB
-      and 20 < res_moe <= 30
+      and 26 < res_moe <= 30
       and cmd_ok[cmd_ok.index("--n-cpu-moe") + 1] == str(res_moe)
       and cmd_ok[cmd_ok.index("--ubatch-size") + 1] == "512",
       f" (moe={res_moe}, needed={res_fit.needed_mib}, margin={res_fit.margin_mib})")
 
-# Tighter VRAM (~4250 MiB): uses full 30/30 CPU offload + base ubatch / reduced margin
-_, tight_fit, cmd_tight, _, tight_ub_delta, tight_moe = _run_stepup(4250.0)
-check("2c tighter 4250 MiB free still fits full 50k context at <=30/30 experts",
-      tight_fit.ok is True and 20 < tight_moe <= 30,
+# Tighter VRAM (~4050 MiB): uses full 30/30 CPU offload + base ubatch / reduced margin
+_, tight_fit, cmd_tight, _, tight_ub_delta, tight_moe = _run_stepup(4050.0)
+check("2c tighter 4050 MiB free still fits full 50k context at <=30/30 experts",
+      tight_fit.ok is True and 26 < tight_moe <= 30,
       f" (moe={tight_moe}, needed={tight_fit.needed_mib}, margin={tight_fit.margin_mib}, ubatch={cmd_tight[cmd_tight.index('--ubatch-size') + 1]})")
 
-# Impossible VRAM (1500 MiB free): leaves cmd at 20, does not pretend fit
+# Impossible VRAM (1500 MiB free): leaves cmd at 26, does not pretend fit
 _, bad_fit, cmd_bad, _, _, _ = _run_stepup(1500.0)
 check("2d impossibly low VRAM stays blocked and does not corrupt cmd",
-      bad_fit.ok is False and cmd_bad[cmd_bad.index("--n-cpu-moe") + 1] == "20",
+      bad_fit.ok is False and cmd_bad[cmd_bad.index("--n-cpu-moe") + 1] == "26",
       f" (ok={bad_fit.ok}, cmd={cmd_bad})")
 
 # Unit check: L1214 fixed_cost_dominant uses MiB (* 1024), not raw GB (e.g. 5.8 + 256)

@@ -363,8 +363,10 @@ async def _test_moe_and_vision_preflight_fixes():
             _MoePhaseMgr(), moe_slot, list(in_cmd), "groot:19b-a3b",
             16384, False, 16, 8, gpu_layers=99,
         )
-    check("MoE --n-cpu-moe strips --fit and --fit-target and pins -ngl 99",
-          "--fit" not in mph.cmd and "--fit-target" not in mph.cmd
+    check("MoE --n-cpu-moe emits --fit off, strips --fit-target, and pins -ngl 99",
+          "--fit" in mph.cmd
+          and mph.cmd[mph.cmd.index("--fit") + 1] == "off"
+          and "--fit-target" not in mph.cmd
           and "--n-cpu-moe" in mph.cmd
           and "--n-gpu-layers" in mph.cmd
           and mph.cmd[mph.cmd.index("--n-gpu-layers") + 1] == "99",
@@ -520,6 +522,157 @@ async def _test_moe_and_vision_preflight_fixes():
           rr._is_heavy_spawn_suite("git_gate")
           and rr._is_heavy_spawn_suite("apply_patch")
           and not rr._is_heavy_spawn_suite("dflash_and_recovery_fixes"))
+
+    # 5f..5j) Schritt-2 MoE/cache/draft_overhead/--fit-off calibration & loader flags
+    from backend.llama_vram_table import moe_cfg_for
+
+    # 5g) MiniCPM-V-4.7 DSpark profile draft_overhead_mib=1600 without double-counting
+    check("MiniCPM-V-4.7 profile exposes draft_overhead_mib=1600.0",
+          mr.get_draft_overhead_mib("minicpm-v-4-7:35b-a3b-mix") == 1600.0,
+          f"(got {mr.get_draft_overhead_mib('minicpm-v-4-7:35b-a3b-mix')})")
+    _mc_cmd = ["llama-server", "--model-draft", "MiniCPM-V-4.7-DSpark-Q6.gguf", "--spec-type", "draft-dspark"]
+    check("_external_draft_footprint_mib honors profile draft_overhead_mib=1600.0",
+          lsp._external_draft_footprint_mib(_mc_cmd, "minicpm-v-4-7:35b-a3b-mix") == 1600.0,
+          f"(got {lsp._external_draft_footprint_mib(_mc_cmd, 'minicpm-v-4-7:35b-a3b-mix')})")
+
+    _mc_calls: list[float] = []
+
+    def _mc_can_fit(_model: str, _ctx: int, safety_margin_mib: int = 768,
+                    exclude_slot_id=None, extra_needed_mib: float = 0.0) -> CanFitResult:
+        _mc_calls.append(float(extra_needed_mib))
+        return CanFitResult(True, 3250.0 + extra_needed_mib, 6500.0, safety_margin_mib, "live")
+
+    _mc_mgr = SimpleNamespace(can_fit=_mc_can_fit, _slots=[])
+    _mc_slot = SimpleNamespace(slot_id=0, port=8199, model="minicpm-v-4-7:35b-a3b-mix",
+                               _ready_event=asyncio.Event())
+    with (
+        mock.patch.object(mr, "get_vram_gb_override", return_value=None),
+        mock.patch.object(lsp.time, "strftime", side_effect=RuntimeError("stop-before-log")),
+    ):
+        try:
+            await lsp._phase_preflight_and_spawn(
+                _mc_mgr, _mc_slot, list(_mc_cmd), "minicpm-v-4-7:35b-a3b-mix", Path("m.gguf"),
+                16384, False, 1, True, "minicpm-v-4-7", "mmap", None, 0.0, False,
+            )
+        except RuntimeError:
+            pass
+    check("Uncalibrated MiniCPM DSpark adds 1600 MiB draft_overhead_mib in pre-flight",
+          bool(_mc_calls) and abs(_mc_calls[0] - 1600.0) < 1e-3,
+          f"(calls={_mc_calls})")
+
+    _mc_calls.clear()
+    with (
+        mock.patch.object(mr, "get_vram_gb_override", return_value=4.8),
+        mock.patch.object(lsp.time, "strftime", side_effect=RuntimeError("stop-before-log")),
+    ):
+        try:
+            await lsp._phase_preflight_and_spawn(
+                _mc_mgr, _mc_slot, list(_mc_cmd), "minicpm-v-4-7:35b-a3b-mix", Path("m.gguf"),
+                16384, False, 1, True, "minicpm-v-4-7", "mmap", None, 0.0, False,
+            )
+        except RuntimeError:
+            pass
+    check("MiniCPM DSpark avoids double-counting 1600 MiB when vram_gb_override is set",
+          bool(_mc_calls) and _mc_calls[0] == 0.0,
+          f"(calls={_mc_calls})")
+
+    # 5i & 5j) Profile & static table calibrations (Hermes, Mellum, Air)
+    _hermes_tag = "hermes3.6:35b-a3b-uncensored-genesis-mtp-apex-compact"
+    _groot_tag = "groot:19b-a3b-261023"
+    _mellum_tag = "mellum2.1:12b-a2.5b-thinking"
+    _air_tag = "air:26b-a4b"
+    _mellum_cfg = moe_cfg_for(_mellum_tag) or {}
+    _air_cfg = moe_cfg_for(_air_tag) or {}
+    check("Hermes APEX uses load_mode=mmap and cache_ram_mib=2048; global CACHE_RAM_MIB stays 1024",
+          mr.get_load_mode(_hermes_tag) == "mmap"
+          and mr.get_cache_ram_mib(_hermes_tag) == 2048
+          and mr.get_cache_ram_mib(_groot_tag) == 2048
+          and lc.CACHE_RAM_MIB == 1024,
+          f"(load={mr.get_load_mode(_hermes_tag)}, hermes_cr={mr.get_cache_ram_mib(_hermes_tag)}, "
+          f"groot_cr={mr.get_cache_ram_mib(_groot_tag)}, global={lc.CACHE_RAM_MIB})")
+    check("Mellum 2.1 resolves ncmoe=18 across table, registry, and _MOE_EXPERT_COUNTS",
+          lc._MOE_EXPERT_COUNTS.get(_mellum_tag) == 18
+          and mr.get_moe_cpu_experts(_mellum_tag) == 18
+          and _mellum_cfg.get("calibrated_n_cpu_moe") == 18
+          and abs(float(_mellum_cfg.get("active_gpu_gb") or 0) - 4.74) < 1e-6,
+          f"(cnt={lc._MOE_EXPERT_COUNTS.get(_mellum_tag)}, reg={mr.get_moe_cpu_experts(_mellum_tag)}, cfg={_mellum_cfg})")
+    check("Air-26B-A4B resolves ncmoe=26, kv=q4_0, calibrated active_gpu_gb=4.26",
+          mr.get_moe_cpu_experts(_air_tag) == 26
+          and lc.moe_kv_cache_types(_air_tag) == "q4_0"
+          and _air_cfg.get("calibrated_n_cpu_moe") == 26
+          and abs(float(_air_cfg.get("active_gpu_gb") or 0) - 4.26) < 1e-6,
+          f"(reg={mr.get_moe_cpu_experts(_air_tag)}, kv={lc.moe_kv_cache_types(_air_tag)}, cfg={_air_cfg})")
+
+    # 5f & 5h) Real _start_process CLI builder: --fit off & per-model --cache-ram
+    class _StopAfterCmd(RuntimeError):
+        def __init__(self, built_cmd: list[str]):
+            super().__init__("captured")
+            self.built_cmd = list(built_cmd)
+
+    class _StartHarnessMgr(ml.LlamaLoadMixin):
+        _binary_build_number = 12001
+        _device_flag_supported = True
+        _kv_flag_supported = True
+        _moe_flag_supported = True
+        _load_mode_supported = True
+        _dspark_flag_supported = False
+        _backend_dlls_ok = True
+        _backend_devices_ok = True
+        _reasoning_override = None
+
+        def __init__(self):
+            self._slots = []
+
+    async def _capture_start_cmd(model_name: str, *, fit_enabled: bool, help_fit: bool = True) -> list[str]:
+        with tempfile.TemporaryDirectory(prefix="hm_start_") as td:
+            gguf = Path(td) / "model.gguf"
+            gguf.write_bytes(b"GGUF")
+            mgr_s = _StartHarnessMgr()
+            slot_s = SimpleNamespace(
+                slot_id=0, port=8299, model=model_name, is_running=False,
+                pinned=False, _num_ctx=0, _loading=False, _moe_cache_used=False,
+                _orphan_port=None, last_used=0.0, _ready_event=asyncio.Event(),
+            )
+
+            async def _fake_moe(_self, _slot, cmd, *_args, **_kw):
+                raise _StopAfterCmd(cmd)
+
+            async def _fake_help(flag: str) -> bool:
+                if flag == "--fit":
+                    return help_fit
+                return True
+
+            with (
+                mock.patch.object(lsp, "resolve_model_path", return_value=str(gguf)),
+                mock.patch.object(lc, "LLAMA_FIT", fit_enabled),
+                mock.patch.object(lsp, "llama_gpu_layers_auto", return_value=not fit_enabled),
+                mock.patch.object(ml, "_help_supports", side_effect=_fake_help),
+                mock.patch.object(ml, "_probe_all", return_value=(12001, True, True, True, True, False)),
+                mock.patch.object(lsp, "_probe_backend_dlls", return_value=True),
+                mock.patch.object(lsp, "_probe_backend_devices", return_value=True),
+                mock.patch.object(ml, "_phase_moe", side_effect=_fake_moe),
+            ):
+                try:
+                    await mgr_s._start_process(slot_s, model_name, 8192)
+                except _StopAfterCmd as caught:
+                    return caught.built_cmd
+        raise AssertionError(f"_start_process did not reach _phase_moe for {model_name}")
+
+    cmd_fit_off = await _capture_start_cmd("gemma-4:e4b", fit_enabled=False, help_fit=True)
+    cmd_fit_on = await _capture_start_cmd("gemma-4:e4b", fit_enabled=True, help_fit=True)
+    cmd_groot = await _capture_start_cmd(_groot_tag, fit_enabled=False, help_fit=True)
+    cmd_hermes = await _capture_start_cmd(_hermes_tag, fit_enabled=False, help_fit=True)
+    cmd_plain = await _capture_start_cmd("m:1b", fit_enabled=False, help_fit=True)
+
+    check("_start_process emits --fit off whenever _fit_supported is False and --fit supported",
+          "--fit" in cmd_fit_off and cmd_fit_off[cmd_fit_off.index("--fit") + 1] == "off"
+          and "--fit" in cmd_fit_on and cmd_fit_on[cmd_fit_on.index("--fit") + 1] == "on",
+          f"(off={cmd_fit_off}, on={cmd_fit_on})")
+    check("_start_process emits per-model --cache-ram 2048 for Groot/Hermes vs 1024 default",
+          cmd_groot[cmd_groot.index("--cache-ram") + 1] == "2048"
+          and cmd_hermes[cmd_hermes.index("--cache-ram") + 1] == "2048"
+          and cmd_plain[cmd_plain.index("--cache-ram") + 1] == "1024",
+          f"(groot={cmd_groot}, hermes={cmd_hermes}, plain={cmd_plain})")
 
 
 asyncio.run(_test_moe_and_vision_preflight_fixes())

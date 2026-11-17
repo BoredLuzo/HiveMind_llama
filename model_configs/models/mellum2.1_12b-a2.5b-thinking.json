@@ -1,0 +1,67 @@
+{
+  "model": "mellum2.1:12b-a2.5b-thinking",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 32768,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 32768,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe": true,
+  "moe_cpu_experts": 18,
+  "kv_cache_type": "q4_0",
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "non_thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_text": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    }
+  },
+  "_notes": "Mellum2.1-12B-A2.5B-Thinking (28 blocks, 64 experts top-8, 10.99 GiB Q6_K_L). N=3 b12001/Vulkan sweep @16k q4_0: ncmoe=18 delivers median 19.90 t/s decode, 123.37 t/s prefill, 4.99 GB peak (~4.74 GB base) vs 8.17 t/s @ncmoe=8 and 18.74 t/s @ncmoe=20."
+}

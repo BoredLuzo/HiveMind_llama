@@ -83,6 +83,16 @@ check("10 boundary at gguf+8GB passes",
                          mlock_now=False, profile_lm="none",
                          free_ram_gb=11.0) == "none")
 
+# Large-MoE + speculation: use mmap (never lock 14-17 GiB nor spill via none)
+check("12 large_moe + spec defaults to mmap even when profile says none",
+      _resolve_load_mode(_M, spec_planned=True, mlock_now=True,
+                         profile_lm="none", free_ram_gb=30.0,
+                         large_moe=True) == "mmap")
+check("13 large_moe + spec still honors explicit profile mmap+mlock",
+      _resolve_load_mode(_M, spec_planned=True, mlock_now=False,
+                         profile_lm="mmap+mlock", free_ram_gb=30.0,
+                         large_moe=True) == "mmap+mlock")
+
 print(f"\nload_mode_ram_guard: {passed} passed, {failed} failed")
 check("11 fail-closed: unknown model never gets none",
       _resolve_load_mode("definitely-not-a-model-xyz", spec_planned=False,

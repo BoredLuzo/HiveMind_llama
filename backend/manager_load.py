@@ -344,22 +344,18 @@ def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
     """The one load-mode decision (pure; unit-tested in
     tests/test_load_mode_ram_guard.py).
 
-    Order: the SPEC+NONE-CRASH-GUARD (2026-10-24) and the mlock intent keep
-    mmap+mlock; a valid profile override is honored; the remaining default
-    is none. The RAM-GUARD rejects none whenever free RAM is unknown or
-    below GGUF size + 8 GB headroom - the fallback is plain mmap (NOT
-    mlock: locking 18 GB with tight RAM pages and sinks itself; plain mmap
-    lets Windows drop the file-backed pages).
-
-    LARGE-MOE SKIP: `large_moe=True` (GGUF > LARGE_MOE_MLOCK_SKIP_GB and
-    MoE per is_moe_model) stops the GLOBAL llama_mlock setting from forcing
-    mmap+mlock — the decision then falls through to the profile / RAM guard
-    (none or plain mmap). The spec guard and an explicit profile load_mode
-    still win, and small models keep the historical mlock behavior.
+    Order:
+    - Large-MoE (>= LARGE_MOE_MLOCK_SKIP_GB) with speculation: plain mmap avoids
+      both locking 14-17 GiB in RAM (40+ GB commit) and load-mode none (13+ GiB
+      shared-VRAM mapping). Explicit profile "mmap+mlock" still wins.
+    - Non-large-MoE with speculation or mlock intent keeps mmap+mlock.
+    - Valid profile override > RAM guard (mmap vs none).
     """
+    profile = profile_lm if profile_lm in _LOAD_MODES else ""
+    if spec_planned and large_moe:
+        return profile if profile == "mmap+mlock" else "mmap"
     if spec_planned or (mlock_now and not large_moe):
         return "mmap+mlock"
-    profile = profile_lm if profile_lm in _LOAD_MODES else ""
     if profile and not (profile == "none"
                         and _ram_guard_blocks(model, free_ram_gb)):
         return profile
@@ -1341,6 +1337,21 @@ class LlamaLoadMixin:
             logger.info(
                 "--fit on%s (--n-gpu-layers omitted, layers/ctx sized to VRAM)",
                 f", target={_fit_target}MiB" if _fit_target else "")
+        elif await _help_supports("--fit"):
+            # llama-server b12001+ defaults --fit to 'on' when omitted; pass
+            # --fit off explicitly so pinned/drafter/MoE loads avoid the ~1.1s abort.
+            cmd += ["--fit", "off"]
+            logger.info("--fit off (binary default overridden)")
+
+        _eff_cache_ram = int(CACHE_RAM_MIB)
+        if CACHE_RAM_MIB > 0:
+            try:
+                from model_configs.models_registry import get_cache_ram_mib as _gcr
+                _prof_cr = _gcr(_strip_alias(model))
+                if _prof_cr is not None and _prof_cr > _eff_cache_ram:
+                    _eff_cache_ram = int(_prof_cr)
+            except (ImportError, AttributeError, TypeError, ValueError):
+                pass
 
         # CACHE-BUDGET-WARN (2026-10-30): the prompt-cache entry grows with
         # the context and is ~18 KiB per token. If --cache-ram cannot hold
@@ -1353,13 +1364,13 @@ class LlamaLoadMixin:
             _thr = _rct(ctx_tokens=int(num_ctx or 0), num_predict=4096,
                         auto_floor=_floor, overflow_reserve=1024)
             _need_cache = _crm(_thr)
-            if int(CACHE_RAM_MIB) < _need_cache:
+            if _eff_cache_ram < _need_cache:
                 logger.warning(
                     "[CACHE-RAM] %d MiB < %d MiB needed for ctx %d "
                     "(compression at %d tokens, ~18 KiB/token): every compression "
                     "will re-prefill the whole prompt. Raise llama_cache_ram_mib "
                     "or lower the coder ctx.",
-                    int(CACHE_RAM_MIB), _need_cache, int(num_ctx or 0), _thr,
+                    _eff_cache_ram, _need_cache, int(num_ctx or 0), _thr,
                 )
         except (ImportError, ValueError, TypeError) as _cb_err:
             logger.debug("cache-budget check skipped: %s", _cb_err)
@@ -1368,20 +1379,19 @@ class LlamaLoadMixin:
             cmd += ["--cache-reuse", str(int(CACHE_REUSE))]
             logger.info("Prompt cache reuse active: --cache-reuse %d", int(CACHE_REUSE))
 
-        # ── HOST-RAM-CAP (2026-10-14): the b11456-era context features default
-        # to host-RAM-heavy values — prompt cache up to --cache-ram 8192 MiB
-        # (idle-slot snapshots are NOT cleared with per-slot KV, which is how
-        # HiveMind slots run: --parallel 1), plus 32 context checkpoints per
-        # slot. On long-running installs this filled RAM and then swap; a
-        # compression rewrites the prefix, so the cached old state is dead
-        # weight anyway. Bound both; env-overridable for A/B.
+        # ── HOST-RAM-CAP (2026-10-14): bound host RAM prompt cache & checkpoints.
         if CACHE_RAM_MIB > 0:
             cmd += ["--cache-ram", str(int(CACHE_RAM_MIB))]
+            if _eff_cache_ram != int(CACHE_RAM_MIB):
+                cmd[cmd.index("--cache-ram") + 1] = str(_eff_cache_ram)
+                logger.info("Profile prompt cache override: --cache-ram %d MiB (global %d MiB)",
+                            _eff_cache_ram, int(CACHE_RAM_MIB))
         if CTX_CHECKPOINTS >= 0:
             cmd += ["--ctx-checkpoints", str(int(CTX_CHECKPOINTS))]
             logger.info(
                 "Host-RAM caps active: --cache-ram %d MiB, --ctx-checkpoints %d (defaults were 8192/32)",
-                int(CACHE_RAM_MIB), int(CTX_CHECKPOINTS),
+                _eff_cache_ram if CACHE_RAM_MIB > 0 else int(CACHE_RAM_MIB),
+                int(CTX_CHECKPOINTS),
             )
 
         # ── --device Flag (Vulkan-Device-Auswahl) ────────────────────────────

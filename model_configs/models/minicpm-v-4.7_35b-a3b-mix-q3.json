@@ -21,6 +21,7 @@
   "vram_gb_override": null,
   "dspark_draft_filename": "dspark-MiniCPM-V-4_7-35B-A3B-Q6_K.gguf",
   "dspark_draft_n_max": 2,
+  "draft_overhead_mib": 1600,
   "sampling": {
     "sampling_text": {
       "temperature": 0.7,

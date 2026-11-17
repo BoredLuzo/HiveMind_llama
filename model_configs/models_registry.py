@@ -380,6 +380,24 @@ def get_dflash_draft_p_min(model_name: str) -> float | None:
     return max(0.0, min(0.95, p))
 
 
+def get_draft_overhead_mib(model_name: str) -> float | None:
+    """Calibrated external drafter VRAM overhead (MiB) for models without vram_gb_override."""
+    v = get_profile(model_name).get("draft_overhead_mib")
+    if v is None:
+        return None
+    try:
+        mib = float(v)
+    except (TypeError, ValueError):
+        return None
+    return min(16384.0, mib) if mib > 0.0 else None
+
+
+def get_cache_ram_mib(model_name: str) -> int | None:
+    """Optional per-model --cache-ram MiB override (e.g. 2048 for high-ctx MoEs)."""
+    v = _get_pos_int_key(model_name, "cache_ram_mib")
+    return min(32768, v) if v is not None else None
+
+
 def get_lazy_mode(model_name: str) -> str | None:
     v = (_get_str_key(model_name, "lazy_mode") or "").lower()
     return v if v in ("on", "off", "auto") else None
