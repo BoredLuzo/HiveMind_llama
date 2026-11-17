@@ -999,6 +999,13 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
             f"'{file_glob}' is a protected secret file.",
             tool="search_code")
 
+    def _cap_rows(raw_out: str) -> str:
+        filtered = _filter_secret_rows(raw_out.strip())
+        if not filtered:
+            return "(no matches)"
+        rows = filtered.splitlines()
+        return "\n".join(rows[:50]) + (f"\n... ({len(rows) - 50} more)" if len(rows) > 50 else "")
+
     # 1. ripgrep (Windows: rg.exe, Unix: rg)
     rg_bin = "rg.exe" if IS_WINDOWS else "rg"
     try:
@@ -1009,14 +1016,9 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
             stderr=asyncio.subprocess.PIPE,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        result = _decode(out).strip()
-        if result:
-            result = _filter_secret_rows(result)
-            if not result:
-                return "(no matches)"
-            rows = result.split("\n")
-            return "\n".join(rows[:50]) + (f"\n... ({len(rows) - 50} more)" if len(rows) > 50 else "")
-        return "(no matches)"
+        if proc.returncode in (0, 1):
+            result = _decode(out).strip()
+            return _cap_rows(result) if result else "(no matches)"
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -1025,31 +1027,66 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
     if IS_WINDOWS:
         try:
             glob_pat = file_glob if file_glob != "*" else "*.*"
-            # ARGV-ONLY (2026-10-31 handoff S5): a quote in the pattern
-            # escaped the shell quoting and injected commands.
+            fs_target = str(p) if p.is_file() else f"{p}\\{glob_pat}"
             proc = await asyncio.create_subprocess_exec(
-                "findstr", "/s", "/n", "/i", pattern, f"{p}\\{glob_pat}",
+                "findstr", "/s", "/n", "/i", "/L", f"/C:{pattern}", fs_target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=str(p),
+                cwd=str(p.parent if p.is_file() else p),
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-            return _filter_secret_rows(_decode(out).strip()) or "(no matches)"
+            return _cap_rows(_decode(out))
+        except FileNotFoundError:
+            pass
         except Exception as e:
             return f"[findstr error: {e}]"
+    else:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "grep", "-rn", "--", pattern, str(p),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+            return _cap_rows(out.decode("utf-8", errors="replace"))
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            return f"[grep error: {e}]"
 
-    # 3. Unix: grep
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "grep", "-rn", pattern, str(p),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        return _filter_secret_rows(
-            out.decode("utf-8", errors="replace").strip()) or "(no matches)"
-    except Exception as e:
-        return f"[grep error: {e}]"
+    # 4. Pruned Python fallback (no external grep/rg/findstr needed)
+    import fnmatch
+    skip = {".git", "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache", ".ruff_cache"}
+    hits: list[str] = []
+    targets: list[Path] = [p] if p.is_file() else []
+    if p.is_dir():
+        for dp, dns, fns in os.walk(p):
+            dns[:] = [d for d in sorted(dns) if d not in skip]
+            for fn in sorted(fns):
+                if file_glob != "*" and not fnmatch.fnmatch(fn, file_glob):
+                    continue
+                targets.append(Path(dp) / fn)
+                if len(targets) >= 2000:
+                    break
+            if len(targets) >= 2000:
+                break
+    for fp in targets:
+        try:
+            if fp.stat().st_size > 512_000:
+                continue
+            raw_b = fp.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw_b[:4096]:
+            continue
+        for ln, line in enumerate(raw_b.decode("utf-8", errors="replace").splitlines(), 1):
+            if pattern in line:
+                hits.append(f"{fp}:{ln}: {line.strip()[:200]}")
+                if len(hits) >= 200:
+                    break
+        if len(hits) >= 200:
+            break
+    return _cap_rows("\n".join(hits)) if hits else "(no matches)"
 
 
 async def tool_find_files(pattern: str = "**/*", path: str = ".", max_results: int = 150) -> str:

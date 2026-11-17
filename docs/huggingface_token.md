@@ -5,8 +5,9 @@ HiveMind downloads every model itself; nothing is bundled. One of them is
 engine). Gated means: you must accept its terms on the model page **and** prove
 who you are with a Hugging Face access token. That is a one-time setup.
 
-Whisper and Parakeet (speech to text) are **not** gated - they download without a
-token. The token only matters for text to speech.
+Whisper/Parakeet (STT), **Underdog Woof** (optional CPU TTS), and
+**GLiNER2.5-Decide** (optional CPU routing decider) are **not** gated — they
+download without a token. The token only matters for **Pocket TTS**.
 
 > A token is a **secret**. It is never part of `settings.json`, never written into
 > a preset, and never sent anywhere except `huggingface.co`.

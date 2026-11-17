@@ -134,9 +134,9 @@ DEFAULT_SETTINGS = {
     # be able to write files; 0 silently disabled the whole tool loop and
     # chunking then produced text-only "implementations".
     "duo_tool_rounds":         50,
-    # CORE CODER TIER (2026-11-08): default "core" (18 tools: read/edit/run/
-    # tests + lsp_diagnostics + apply_patch) instead of "full" (33 incl.
-    # git/web/MCP/browser/LSP extras). Full is opt-in when a task needs them.
+    # CORE CODER TIER: default "core" (19 base tools incl. read/edit/apply_patch/
+    # write/run/tests/lsp_diagnostics + optional subagent) instead of "full"
+    # (33 base + git/web/MCP/browser/LSP extras). Full is opt-in.
     "duo_coder_tool_tier":     "core",
     "duo_use_pipeline":        False,
     "duo_critic_tools":        False,
@@ -438,14 +438,10 @@ DEFAULT_SETTINGS = {
     # NO-OP hint (2026-09-07): injects a read_file nudge after 2x ineffective
     # edits on the same path (Python run-state, compression-proof).
     "duo_noop_hint_enabled":    True,
-    # WEDGE-HANDOFF (2026-09-17): when the coder fails the same edit on one
-    # file repeatedly (streak threshold, or the identical call twice within a
-    # streak), the run delegates that ONE edit to a fresh-context fix agent
-    # (same model weights, clean window) and continues. Off by default until
-    # WEDGE-DEFAULT (audit 2026-10-24): the handoff converts the #1 small-
-    # model death spiral (repeating a failing edit) into a fresh-context fix
-    # agent — default on. Includes run_bash wedges (see EDIT_FAMILY_TOOLS
-    # counterpart in the gate).
+    # WEDGE-HANDOFF: when the coder fails the same edit on one file repeatedly
+    # (streak threshold, or identical call twice within a streak), delegates
+    # that edit to a fresh-context fix agent (same model weights, clean window).
+    # Default ON (includes run_bash wedges; see EDIT_FAMILY_TOOLS).
     "duo_wedge_handoff_enabled":         True,
     "duo_wedge_handoff_streak_threshold": 4,
     "duo_wedge_handoff_max_per_run":     2,
@@ -486,22 +482,20 @@ DEFAULT_SETTINGS = {
     # J) WEBSEARCH & SEARXNG
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
-    # --- Voice: speech-to-text (1.4, English only) -----------------------
-    # Scope for 1.4 (see docs/voice_setup.md): English only, one
-    # CLI call per request, model tier chosen by RAM unless set explicitly.
+    # --- Voice: speech-to-text (English only) ----------------------------
+    # English only: one CLI call per request, tier chosen by RAM unless set.
     "stt_enabled":              False,
     "stt_model":                "",      # "" = RAM default (parakeet q4_k >= 8 GB)
-    "stt_language":             "en",    # 1.4 ships en only
+    "stt_language":             "en",    # English only
     "stt_translate":            False,   # whisper --translate (English target; whisper tiers only)
     "stt_threads":              0,        # 0 = min(4, cpu//2)
     "stt_preload":              False,    # warm whisper-server (whisper models only)
     "stt_max_seconds":          300,
     "stt_timeout_s":            120,
     "stt_log_transcripts":      False,
-    # --- Voice: text-to-speech (1.4, English, Pocket TTS via uvx) --------
-    # Opt-in like STT: the sidecar (torch) only starts when tts_enabled is on.
-    # Cosette + 1.08x speed are the owner's picks (2026-10-17); Pocket TTS has
-    # no speed parameter, so the factor is applied by HiveMind (WSOLA).
+    # --- Voice: text-to-speech (Pocket TTS via uvx or Underdog Woof) ---
+    # Opt-in like STT: nothing starts until tts_enabled is on.
+    # Default voice is anna (CC BY 4.0) at 1.08x; WSOLA applies speed factor.
     "tts_enabled":               False,
     # TTS engine: "pocket" (Kyutai Pocket TTS via uvx, CC BY 4.0) or "woof"
     # (ConwayResearch/Underdog-Woof CPU NumPy ~41 MB, non-commercial only).
@@ -572,7 +566,7 @@ DEFAULT_SETTINGS = {
     # models emit POSIX bash; powershell chokes on every line), else
     # powershell. "bash"/"powershell" force one.
     "run_bash_shell":          "auto",
-    "direct_tools_tier":       "readonly",   # off | readonly(websearch) | research(web+read) | python(read+python) | full
+    "direct_tools_tier":       "readonly",   # off | readonly | research | python | mcp | full
     "direct_tools_max_rounds": 12,
 
     # ════════════════════════════════════════════════════════════════════════
@@ -664,20 +658,12 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # P2) ACTION APPROVAL (user confirms code/cmd execution) + ERROR CAP
     # ════════════════════════════════════════════════════════════════════════
-    # When on, the run pauses before everything that changes the project —
-    # code/cmd execution (run_bash, run_python, install_package,
-    # start_background, run_tests), file writes (write_file, edit_file,
-    # write_file_append), git_commit and dynamic MCP tools. "Approve" buttons:
-    # once, or remember EXACTLY this call for the CURRENT CHAT (writes per
-    # file, commands 1:1 per exact arguments — anything new or a new chat asks
-    # again). The toggle applies mid-run and is the only approval control:
-    # with it off no card is forced, even after untrusted web/MCP content
-    # (those results are still marked in the transcript). RISK-NOTE
-    # (2026-10-21, audit): False = write/exec tools run WITHOUT
-    # approval out of the box. Mitigations ship (destructive gate,
-    # workspace confinement, loopback-only bind + external-bind token
-    # guard) - keep this False only on machines where that layer is
-    # enough, and flip to True for exposed or shared setups.
+    # When on, pauses before mutating/exec tools (run_bash, run_python,
+    # install_package, start_background, run_tests, write_file, edit_file,
+    # apply_patch, write_file_append, undo_last, browser, lsp_rename,
+    # lsp_format, git_commit, dynamic MCP tools). Approve once, remember per
+    # exact call/file for the current chat, or deny. Works mid-run. False =
+    # destructive gate + workspace confinement + loopback guards still apply.
     "duo_action_approval_enabled": False,
     # Auto-DENY an unanswered approval card after N seconds (0 = off,
     # attended runs wait as before). With N > 0 and nobody at the desk the
@@ -742,8 +728,8 @@ DEFAULT_SETTINGS = {
     # streamable-HTTP server; infra/mcp_client.py reads this list, and
     # docs/mcp_client.md documents the shape.
     "mcp_servers":             [],
-    # MCP client (beta): use external MCP servers over stdio. Off by default;
-    # phone runs stay blocked by the phone restriction gate.
+    # MCP client (beta): connect external MCP servers over stdio or HTTP.
+    # Off by default; phone runs stay gated by telegram_phone_restricted.
     "mcp_client_enabled":      False,
     "mcp_client_timeout_s":    30,
     "mcp_client_max_calls_per_run": 40,

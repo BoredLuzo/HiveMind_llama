@@ -8,15 +8,14 @@ non-commercial and two models carry attribution obligations.
 
 | Piece | License | Obligation |
 |---|---|---|
-| HiveMind's own voice code (`core/tts_*.py`, `core/stt_*.py`) | the repo's own license | none |
-| `pocket-tts` **code** (installed by `uvx`) | **MIT** (`kyutai-labs/pocket-tts`) | keep the copyright notice with substantial copies (we do not vendor it) |
-| **Pocket TTS model weights** (`kyutai/pocket-tts`) | **CC BY 4.0** | **attribution**, plus the gated "prohibited use" terms |
-| **Underdog Woof** (`ConwayResearch/Underdog-Woof`, opt-in backend) | **Underdog Non-Commercial License 1.0** | **non-commercial only**; display credit `"Voice by Underdog Woof"` (`underdog.ai`) and keep `LICENSE` + `NOTICE` alongside downloaded weights (downloaded on demand to `voice_models/underdog_woof/`, never vendored) |
-| whisper models (`ggerganov/whisper.cpp` → `ggml-*.bin`) | **MIT** (the HF repos for the ggml weights - incl. openai/whisper-* and Systran/faster-whisper-* - are tagged MIT) | notice |
-| whisper.cpp + parakeet binaries (`ggml-org/whisper.cpp`) | MIT | notice |
-| Parakeet weights (`ggml-org/parakeet-GGUF`) | repo says MIT, upstream `nvidia/parakeet-tdt-0.6b-v3` says **CC BY 4.0** | treat as **CC BY 4.0** (the stricter one) |
-| TinyDecide (decision-model candidate) | Apache-2.0 | notice |
-| GLiNER2.5-Decide (decision-model candidate) | Apache-2.0 | notice |
+| HiveMind's own voice code (`core/tts_*.py`, `core/stt_*.py`) | **Business Source License 1.1** (`LICENSE`, converts to MIT 2030-09-01) | non-commercial Additional Use Grant; retain `LICENSE` notice |
+| `pocket-tts` **code** (installed by `uvx`) | **MIT** (`kyutai-labs/pocket-tts`) | keep copyright notice with substantial copies (not vendored) |
+| **Pocket TTS model weights** (`kyutai/pocket-tts`) | **CC BY 4.0** | **attribution**, plus gated "prohibited use" terms |
+| **Underdog Woof** (`ConwayResearch/Underdog-Woof`, opt-in backend) | **Underdog Non-Commercial License 1.0** | **non-commercial only**; display credit `"Voice by Underdog Woof"` (`underdog.ai`) and keep `LICENSE` + `NOTICE` in `voice_models/underdog_woof/` |
+| Whisper models (`ggerganov/whisper.cpp` → `ggml-*.bin`) | **MIT** (HF ggml repos) / **Apache-2.0** (upstream `openai/whisper-*`) | notice |
+| whisper.cpp + parakeet binaries (`ggml-org/whisper.cpp`) | **MIT** | notice |
+| Parakeet weights (`ggml-org/parakeet-GGUF`) | **CC BY 4.0** (upstream NVIDIA `nvidia/parakeet-tdt-0.6b-v3`; GGUF repo tags MIT) | attribution (follow stricter license) |
+| GLiNER2.5-Decide (`fastino/GLiNER2.5-Decide`, optional decider) | **Apache-2.0** | notice |
 
 ## The voices (the part that matters)
 
@@ -94,10 +93,9 @@ in the repository or release ZIPs, and governed by the
 > Voice by Underdog Woof (underdog.ai) - Underdog Non-Commercial License 1.0
 > (non-commercial use only) [shown when the Underdog Woof backend is selected]
 
-Speech to text: OpenAI Whisper models (Apache-2.0) and NVIDIA Parakeet
-(CC BY 4.0) via whisper.cpp (MIT).
+Speech to text: OpenAI Whisper models (Apache-2.0 / HF ggml MIT) and NVIDIA Parakeet (CC BY 4.0) via whisper.cpp (MIT).
 
 ## If you want a zero-obligation setup
 
-- Voice: `bill_boerst` (CC0) - no attribution, no restriction.
-- Speech to text: `tiny`/`base`/`small` (Whisper, Apache-2.0) instead of Parakeet.
+- Voice: `bill_boerst` (CC0) — no attribution, no restriction.
+- Speech to text: `tiny`/`base`/`small` (Whisper, MIT/Apache-2.0) instead of Parakeet (CC BY 4.0).

@@ -62,7 +62,8 @@ sudo deploy/install_linux.sh                    # HIVEMIND_GPU_BACKEND=vulkan|cu
 
 # Or manual setup:
 uv python install 3.14
-uv sync --all-extras
+uv sync --all-extras --frozen --inexact
+./.venv/bin/playwright install chromium
 ./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan   # vulkan | cuda | cpu | rocm
 ./.venv/bin/python deploy/fetch_models.py                      # optional preset catalog
 ./.venv/bin/python run.py
@@ -89,8 +90,8 @@ a message. Drop any extra `.gguf` weights into `models/` (or
   `qwen3.5:4b-mtp`, `gemma-4:e4b-it-qat`, `minicpm5:2b-sharp`, `lfm3:1.7b-qad`)
   is about 12 GB including vision projectors. Adding one 24B–35B MoE model adds
   roughly 14–24 GB, so about 25–40 GB in total. The full optional installer
-  catalog (19 models, including projectors and speculative-decoding drafters) is
-  about 130 GB. Sizes are listed in the
+  catalog (`17` models, including projectors and speculative-decoding drafters) is
+  about 106 GB. Sizes are listed in the
   [download catalog](docs/guide.md#download-catalog); `python deploy/fetch_models.py --list-only`
   is the authoritative answer.
 - **Optional tooling:** Git, Docker Desktop (for local SearXNG web search),
@@ -104,13 +105,13 @@ a message. Drop any extra `.gguf` weights into `models/` (or
 | **Auto** | Mixed daily queries & coding | Routes non-coding questions and simple read/list lookups to `Direct`, and real coding tasks to `Code Duo` (via keyword rules, optional CPU GLiNER decider, or LLM Judge). |
 | **Simple / Direct** *(default)* | Fast chat & single-turn tools | Single model with configurable tool tier (`off`, `readonly`, `research`, `python`, `mcp`, `full`), `/pause`/`/resume`, and mid-run steering. |
 | **Code Duo (`Agentic` / `Critic-Duo`)** | Autonomous coding & multi-step fixes | `Agentic` runs one solo coder loop in VRAM (`Explore -> Edit -> Test -> Fix`); `Critic-Duo` adds a dedicated review loop. Optional Planner, chunking (chunks resume across restarts), and `🛡 Action Approval` gate. |
-| **Pipeline** & **AutoMap** | Structured synthesis / experimental routing | `Analyst -> Refiner -> Critic -> Synthesizer` multi-stage flow; `AutoMap` *(experimental)* scores model assignments per role. |
+| **Pipeline** | Structured synthesis | `Analyst -> Refiner -> Critic -> Synthesizer` multi-stage flow with optional constraint verification. |
 
 Three coder tool tiers trade schema overhead against breadth (`Tools & Optionals` sidebar):
 
-- **Lean (`duo_lean`, 8 tools):** Orthogonal minimal core (`read_file`, `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`, `task_complete`).
-- **Core (`duo_core`, default — 18 base tools + optional `+Subagent` = 19):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
-- **Full (`duo_full`):** Adds `replace_lines`, `edit_ast`, `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, MCP client tools, and `remember`.
+- **Lean (`duo_lean`, 8 tools):** Minimal orthogonal core (`read_file`, `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`, `task_complete`).
+- **Core (`duo_core`, default — 18 desktop tools + `+Subagent` = 19; `+send_file` on Telegram):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
+- **Full (`duo_full`, 33 base + extras):** Adds `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, MCP client tools, and `remember`.
 
 Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 [docs/architecture.md](docs/architecture.md).

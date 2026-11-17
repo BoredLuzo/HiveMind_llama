@@ -138,17 +138,16 @@ system message under a `[REPO-MAP — pinned, byte-stable]` marker
 request, gated by `duo_pin_static_map` (default on). Re-pinning an
 already-pinned system is a no-op.
 
-The map is frozen for the life of a run. There is no delta generator, so files
-created or deleted mid-run do not appear in the pinned map until the next run.
-That is a known, deliberate gap: a delta generator would add cache-invalidating
-state for a case the next run already covers.
+The map stays cache-stable across normal rounds via `duo_pin_static_map`
+(default on). When compression runs and files were created/modified/deleted mid-run,
+`append_repo_map_delta` (`core/repomap_pin.py`, invoked from
+`core/duo_compress_cycle.py`) appends up to `MAX_DELTA_LINES=12` (`[REPO-MAP-DELTA]`)
+to the delta block.
 
-The point of the pinning is cache stability: the stable prefix grows from
-system + tool definitions (~7.1k tokens) to system + tools + map (~8k+),
-measured live. After a compression the `[MSGSIG-CHANGE]` diagnostic
-(duo_runner.py) may only ever flag `user[1]`, never `system[0]`; a historical
-incident where compression wrote into the system message is preserved as a
-proof comment in `core/duo_runner.py`.
+The point of pinning is prefix stability: the stable prefix covers system +
+tool definitions + static map (~8k+ tokens). After a compression the
+`[MSGSIG-CHANGE]` diagnostic (`core/duo_helpers.py`) may only ever flag
+`user[1]`, never `system[0]`.
 
 The `## Codebase Architecture Map` block (partitions and contracts) is
 deliberately not pinned. It stays in the compressible tier and is protected
@@ -204,13 +203,11 @@ A forced compression (`trigger=force`) has three causes:
 
 ### Model selection
 
-First choice is the configured light model (`duo_compress_model`, default `""` /
-auto-selected from installed light models). If it does not fit into free VRAM, the coder model runs the
-compression instead. That fallback is the common case on tight VRAM and costs
-about 100 to 140 seconds per compression, measured. The trade-off to know
-about: loading the light model can evict the coder (Vulkan serialization) and
-throw away the whole KV cache. Candidate mitigations are partial compression
-(the default first resort, below) and pinning the coder during a run.
+First choice is the configured light model (`duo_compress_model`, default `"auto"`
+— selects from installed light models). If it does not fit free VRAM, the coder
+runs the compression instead (on tight VRAM, loading another model can evict
+the coder's KV cache). Opt-in mitigation: enable `duo_partial_compression`
+(off by default) or pin the coder during runs.
 
 ### Summary generation
 
@@ -246,24 +243,17 @@ different route.
 - The rebuild keeps the live system message (with the pinned map) instead of
   re-deriving it from a template. That is what keeps `system[0]` byte-stable.
 
-### Partial compression (default first resort)
+### Partial compression (`duo_partial_compression`, opt-in, default off)
 
-`duo_partial_compression` (default off) adds a cache-friendly pass before any
-full rewrite. A cut index splits the raw tail: everything before the cut is
-replaced by the summary, while the most recent messages (at least eight) stay
-byte-identical, targeting 60 percent or less of the pre-compression context.
-Because the tail after the summary is unchanged, llama.cpp's suffix shift
-(`--cache-reuse`) can re-apply and the prompt cache survives far better than
-after a full compression. If the partial pass shrank nothing meaningful, it
-escalates to a full compression.
+When enabled, adds a cache-friendly pass before any full rewrite: everything before
+the cut index is summarized while the recent tail (at least 8 messages, <=60% of
+context) stays byte-identical so `--cache-reuse` survives far better. If the
+partial pass shrinks too little, it escalates to full compression.
 
-Full compression remains the fallback and has two structural costs, both
-measured: the suffix shift is anchored at the point of divergence, and models
-with hybrid attention (Ling's KDA linear-attention layers, for example) have no
-KV matrix to shift at all, so their state is recomputed. After every full
-compression, cache reuse drops to roughly 30 to 50 percent and climbs back to
-90 to 100 percent over the next rounds. That is expected, not a bug, and it is
-the main reason partial compression runs first.
+Full compression is the default and has two structural costs: suffix shift
+recomputes from the divergence point, and hybrid attention models (e.g. linear
+KDA layers) recompute full state. Afterwards cache reuse starts around 30–50%
+and recovers over the next rounds.
 
 ### Emergency eviction
 
@@ -319,17 +309,15 @@ applied to any oversized tool output.
 
 Two deterministic guards live in `tools/runner.py`.
 
-The narrow `duo_full` guard (gate `duo_write_guard_enabled`, default on)
-blocks `write_file`, and only `write_file`, when it targets an existing file
-that has not, in this run, been read (via `_read_set` or the
-compression-resilient `_any_read_set`), written by the agent itself, genuinely
-present in context from real pre-explore content, or explicitly allowed via
-`allow_overwrite`.
+The narrow Duo guard (gate `duo_write_guard_enabled`, default on) applies to
+`duo_full`, `duo_core`, and `duo_lean`. It blocks `write_file` (only) when
+targeting an existing file not yet read/seen in the run (`_read_set` /
+`_any_read_set`, agent-written, real pre-explore content, or `allow_overwrite`).
 
-Outside `duo_full`, the relaxed guard (gate `read_guard_enabled`) blocks the
-whole write and edit family (`edit_file`, `patch_file`, `write_file`,
-`write_file_append`, `replace_lines`) on existing, never-seen files with the
-same `READ_REQUIRED` mechanics.
+Outside those three Duo tiers, the relaxed guard (`read_guard_enabled`) blocks
+the full write/edit family (`edit_file`, `patch_file`, `apply_patch`,
+`write_file`, `write_file_append`, `replace_lines`) on unseen existing files
+with `READ_REQUIRED`.
 
 A note on `patch_file`: the handler is still registered, but the dispatch
 rejects it as TOOL_NOT_FOUND. Every prompt and doc points at `edit_file`.
@@ -402,17 +390,13 @@ least the Coder's requirement. On mismatch (`[PLANNER=CODER-CTX-MISMATCH]`)
 the Coder loads fresh at full ctx, strictly. If the slot's real ctx cannot be
 queried, reuse is skipped conservatively.
 
-### Model-level VRAM fallback
+### Coder VRAM exhaustion (`NO-SILENT-FALLBACK`)
 
-If the primary coder model cannot be loaded at all, even at the ctx floor, the
-system falls back to a smaller model (`_resolve_fallback_model`: preferred
-candidate, then a deterministic preference list, then the smallest fitting
-installed model). The actually-loaded fallback ctx is captured as an override
-(`[CODER-FALLBACK-CTX]`) and clamped into every downstream ctx decision for
-the rest of the run, so the smaller slot is never compared against the
-original larger target, which previously caused a spurious ctx-mismatch stop.
-The override does not persist across runs; a fresh run always retries the full
-target ctx first.
+If the primary coder model cannot fit VRAM, `core/duo_coder_preloop.py`
+progressively halves context on the **same** coder model down to the floor and
+aborts loudly (`[CODER-VRAM] ... — aborting, no fallback`) if it still does not
+fit — a different smaller model never silently takes over the coder role.
+(`_resolve_fallback_model` in `core/duo_runner.py` is used only for the Planner.)
 
 ### Reclaim wait
 
@@ -436,8 +420,7 @@ mathematically unreachable given the GPU load at the time.
 | `[PRE-FLIGHT-EVICT]` | Pre-flight evicted a slot to make room |
 | `[PRE-FLIGHT-GRACE]` | Post-eviction recheck, stall-abort capable |
 | `[VRAM-RECLAIM]` | Reclaim wait result, reached or stall-aborted |
-| `[CODER-VRAM-FALLBACK]` | Primary coder model did not fit, smaller fallback loaded |
-| `[CODER-FALLBACK-CTX]` | Fallback ctx override applied to downstream guards |
+| `[CODER-VRAM]` | Coder load failed even at ctx floor (aborts; no silent model swap) |
 | `[CTX-FLOOR-STOP]` | Degraded slot below floor plus baseline does not fit, abort |
 | `[CTX-FULL] skip=N/4` | Not enough headroom for a safe round, compressing first |
 | `[CTX-COMPRESS] trigger=...` | Compression start (force, 90pct or threshold) |

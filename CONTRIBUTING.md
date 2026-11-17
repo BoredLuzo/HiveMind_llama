@@ -55,9 +55,9 @@ git at it once:
 git config core.hooksPath scripts/hooks
 ```
 
-`ruff` is expected in `.venv\Scripts\ruff.exe` or on `PATH`; without it the hook
-skips linting with a notice instead of failing. To bypass it in an emergency:
-`git commit --no-verify` (and say so in the commit message).
+`ruff` is expected in `.venv\Scripts\ruff.exe` or on `PATH`; if missing, the
+hook blocks the commit (`exit 1`). Emergency bypass: `git commit --no-verify`
+(note in commit message).
 
 ## Type checking
 
@@ -96,19 +96,17 @@ runs and the release zip are untouched: `.coveragerc`, the helper scripts and
 
 ## Before a release
 
-1. `python tests\run_regressions.py` - the whole suite, no LLM, no models.
-2. `C:\Users\...\prepush_check.ps1` (the local gate) - 13 checks including a clean
-   working tree, so it has to run **after** the commit.
-3. Bump `HIVEMIND_VERSION` in `core/version.py` and make the CHANGELOG heading match -
-   the gate compares them.
-4. `deploy\package_release.bat` builds the zip from `git archive HEAD`, so the tag
-   must exist first (`BUILD_INFO.txt` records it).
-5. Publish: `gh release create <tag> <zip> --title "HiveMind <ver>"
-   --notes-file docs/releases/RELEASE_NOTES_<ver>.md --target main`.
+1. `python tests\run_regressions.py` — offline suite (no LLM, no models).
+2. `powershell -NoProfile -File deploy\prepush_check.ps1` — local gate (**17 checks**, incl. clean tree — runs **after** committing).
+3. `python deploy\bump_version.py <ver>` — syncs `core/version.py`, `server.py` anchor, `pyproject.toml`, and `uv.lock`; add `CHANGELOG.md` + `docs/releases/RELEASE_NOTES_<ver>.md` to match.
+4. `deploy\package_release.bat` — packs `git archive HEAD` into `..\HiveMind_v<ver>_release.zip`.
+5. Publish: `gh release create <tag> <zip> --title "HiveMind <ver>" --notes-file docs/releases/RELEASE_NOTES_<ver>.md --target main`.
 
 ## What does not ship
 
-`tests/`, `scripts/`, `docs/releases/`, `CONTRIBUTING.md`, `.gitignore`
-and `.gitattributes` are `export-ignore` - the release zip contains the
-program, the launchers and the user docs only. Internal audit/handoff and
-benchmark notes are kept outside the checkout (`../local_docs/`), not tracked.
+`export-ignore` in `.gitattributes` excludes `tests/`, `scripts/`, `bench/`,
+`docs/releases/`, `docs/architecture.md`, `docs/integrations.md`, screenshots,
+`CONTRIBUTING.md`, dev config/scripts (e.g. `prepush_check.ps1`, `promote_main.bat`,
+`ruff.toml`, `.coveragerc`), and repo dotfiles — the release ZIP ships only the
+runtime app, launchers, and end-user docs (`AGENTS.md` stays included). Internal
+audit/handoff notes live outside the repo (`../local_docs/`).

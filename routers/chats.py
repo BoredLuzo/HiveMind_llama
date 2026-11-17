@@ -631,9 +631,9 @@ async def search_chats(q: str = "", limit: int = 20):
 
     def _scan():
         hits = []
-        if _state._SESSIONS_DIR is None:
+        if _state._SESSIONS_DIR is None or not _state._SESSIONS_DIR.exists():
             return hits
-        for entry in sorted(_state._SESSIONS_DIR.iterdir(), reverse=True):
+        for entry in _state._SESSIONS_DIR.iterdir():
             if not entry.name.endswith(".json") or entry.name.endswith(".context.json"):
                 continue
             m = _RE_CHAT_ID_PATTERN.search(entry.name)
@@ -649,8 +649,6 @@ async def search_chats(q: str = "", limit: int = 20):
                 hits.append({"id": cid, "title": title,
                              "updated_at": data.get("updated_at", ""),
                              "match_in": "title", "snippet": title[:120]})
-                if len(hits) >= _limit:
-                    return hits
                 continue
             for msg in data.get("messages") or []:
                 c = msg.get("content")
@@ -667,9 +665,8 @@ async def search_chats(q: str = "", limit: int = 20):
                                  "snippet": ("…" if start > 0 else "")
                                             + c[start:start + 120].replace("\n", " ")})
                     break
-            if len(hits) >= _limit:
-                return hits
-        return hits
+        hits.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        return hits[:_limit]
 
     results = await asyncio.to_thread(_scan)
     return {"ok": True, "query": q, "results": results[:_limit]}

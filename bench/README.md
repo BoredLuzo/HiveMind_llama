@@ -12,7 +12,8 @@ token cost reported together.
 | Condition | What runs |
 |---|---|
 | `hivemind_direct` | HiveMind `/stream`, `mode=simple`, direct tools tier `full`. |
-| `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`, `duo_core` tier (18 base + `+Subagent` = 19 default). |
+| `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`, `duo_core` tier (`18` desktop + `+Subagent` = 19). |
+| `hivemind_duo_lean` | Same, `duo_lean` minimal orthogonal tier (8 tools). |
 | `hivemind_duo_full` | Same, `duo_coder_tool_tier=full` (git/web/MCP/browser/LSP extras). |
 | `aider` | Aider CLI against the same OpenAI-compatible llama-server. |
 | `hermes` | Hermes agent CLI against the same endpoint; tokens read from its `state.db`. |
@@ -54,12 +55,11 @@ python bench/runner.py --conditions aider ^
   --aider-bin %USERPROFILE%\aider-venv\Scripts\aider.exe
 ```
 
-Aider may live in its own venv (recommended, see
-`HiveMind_bench_tools/aider`); pass `--aider-bin` or set
-`HIVEMIND_AIDER_BIN`. The runner adds the workspace files to Aider's chat
-automatically. Agentic defaults are pinned per request (`until_finished=true`,
-`duo_planner=true`, `duo_chunking=false`), so an install's settings cannot
-silently change what a condition measures.
+Aider may live in its own venv (pass `--aider-bin` or set `HIVEMIND_AIDER_BIN`).
+The runner adds workspace files to Aider's chat automatically and pins agentic
+defaults (`until_finished=true`, `duo_planner=true` unless `--no-duo-planner`,
+`duo_chunking=false`, `--num-ctx 32768`, `--cell-timeout 1800`) so local settings
+cannot alter what a condition measures. (`bench/watch.py` monitors live progress.)
 
 `--runs N` repeats every task/condition N times; local models are noisy, so
 use 3–5 and compare pass rates, not single runs. Results go to
@@ -103,16 +103,12 @@ green after it:
 - **multi-file:** `multi_move`, `multi_wire`, `multi_config`, `multi_shape`
 - **hard:** `hard_cycle_detect`, `hard_lru_cache`
 
-Still missing for D1: 5–10 tasks from real repositories (where "correct" is
-known) and, optionally, Aider's public benchmark tasks as a shared yardstick.
+External suites are also wired under `bench/tasks_polyglot/` (10 Exercism tasks via `bench/import_polyglot.py`) and `bench/external/` (`deepswe_hivemind.py`, `swebench_hivemind.py`).
 
 ## Notes and limits
 
-- `raw` is intentionally weak: a single-shot diff without file contents or
-  tools. It fails on corpus access alone, so it says nothing about HiveMind or
-  Aider; use `raw_files` if a one-shot file-context diagnostic is needed.
-- `aider` is optional; if the CLI is missing the run is recorded as failed
-  with `aider is not installed`.
+- `raw` is intentionally weak: a single-shot diff without file contents or tools (not a harness score).
+- Missing CLI binaries (`aider` / `hermes` / `pi`) fail preflight cleanly with exit code `3` before any cell runs.
 - Runs are sequential on purpose: one local server, one model slot.
 - The HiveMind conditions give the model real tools. Use a disposable
   install/workspace, keep secrets out of the environment, and review the

@@ -1,21 +1,18 @@
-# Voice setup (optional, 1.4)
+# Voice setup (optional)
 
 HiveMind runs without any of this. Voice is opt-in in every direction: nothing is
 downloaded, started or recorded until you enable it.
 
 | Piece | What it costs | Who fetches it |
 |---|---|---|
-| Audio codecs (`soundfile`, `numpy`) | ~20 MB wheels | **the installer** (`requirements.txt`), silently - also used by TTS for Ogg/Opus and Underdog Woof |
-| Speech-to-text engine + model | ~21 MB binaries + 74-465 MB model | **you choose**: the installer asks once, `deploy\setup_voice.bat` later, or the Download button in *Settings → Voice* |
-| Text-to-speech (Pocket TTS, default) | PyTorch CPU in `uv`'s own cache (~200 MB) + ~200 MB model | **you choose**: the installer can prepare it (opt-in), `deploy\setup_voice.bat --tts`, or first request from the UI; needs a one-time `hf auth login` because the model is gated |
-| Text-to-speech (Underdog Woof, optional) | ~41 MB (`woof_int8.npz` + pure-NumPy runtime) in `voice_models/underdog_woof/` | **you choose**: switch *Backend* to `Underdog Woof` in *Settings → Voice* and click *Download*, run `deploy\setup_voice.bat --woof`, or let it download on first synthesis; **no PyTorch, no Hugging Face token**, non-commercial license |
+| Audio codecs (`soundfile`, `numpy`) | ~20 MB wheels | **the installer** (`pyproject.toml` `[voice]` extra via `uv sync`, fallback `requirements.txt`) — also used by Underdog Woof |
+| Speech-to-text engine + model | ~21 MB binaries + 74–465 MB model | **you choose**: installer step `[8/9]`, `deploy\setup_voice.bat`, or Download in *Settings → Voice* |
+| Text-to-speech (Pocket TTS, default) | PyTorch CPU in `uv`'s cache (~200 MB) + ~200 MB model | **you choose**: installer step `[8/9]` (`--tts`/`--both`), `deploy\setup_voice.bat --tts`, or first request; needs `hf auth login` (gated) |
+| Text-to-speech (Underdog Woof, optional) | ~41 MB (`woof_int8.npz` + pure-NumPy runtime) in `voice_models/underdog_woof/` | **you choose**: *Voice model* → `Underdog Woof` + *Download (~41 MB)*, `deploy\setup_voice.bat --woof`, or first synthesis (**no PyTorch, no HF token**, non-commercial) |
 
 Full guide for gated Hugging Face downloads (accepting the gate, token types, `HF_TOKEN`, systemd, 401/403 troubleshooting): [huggingface_token.md](huggingface_token.md).
 
-The installer asks once, with four choices: speech to text only, both, text to
-speech only, or skip. **Skipping never means reinstalling**: `deploy\setup_voice.bat`
-(or the buttons in *Settings → Voice*) adds either part later, it only touches
-`stt/`, uv's cache and the Hugging Face cache - no HiveMind file is replaced.
+The installer asks once (`[1]` STT, `[2]` STT + Pocket TTS, `[3]` Pocket TTS, `[4]` Skip); add STT, Pocket TTS, or Underdog Woof any time later via `deploy\setup_voice.bat` or *Settings → Voice* (`stt/`, `voice_models/underdog_woof/`, `logs/pocket_tts.log`, plus `uv`/HF caches; overridable via `HIVEMIND_STT_DIR`, `HIVEMIND_WOOF_DIR`, `HIVEMIND_TTS_URL`).
 
 ## Speech to text
 
@@ -24,7 +21,7 @@ English only in this release. The model tiers (all CPU):
 | Tier | Size | Measured English WER | When |
 |---|---|---|---|
 | `parakeet-q4k` (default) | 396 MB | **3.6 %** | best accuracy per byte, >= 8 GB RAM |
-| `base` | 141 MB | 9.9 % | light default, multilingual |
+| `base` | 141 MB | 9.9 % | light tier, fast CPU fallback |
 | `tiny` | 74 MB | 12.4 % | weak CPUs |
 | `small` | 465 MB | 7.3 % | slower, accurate |
 
@@ -61,24 +58,26 @@ PyTorch and fetch the model, but not accept the terms for you:
 
 1. `hf auth login` (once, with your Hugging Face account) and accept the terms on
    <https://huggingface.co/kyutai/pocket-tts>.
-2. *Settings → Voice → Text to speech*, keep *Backend* on `Pocket TTS`, pick a
-   voice (default `anna`; `cosette` is a non-commercial recording, see
-   [voice_licenses.md](voice_licenses.md)) and a speed (default `1.08`).
-3. The first request starts `uvx pocket-tts serve` in an isolated environment
-   (PyTorch never enters HiveMind's venv) and takes a few seconds; afterwards it
-   is warm (~1.5 s for a sentence) and stops itself after 15 minutes idle.
+2. *Settings → Voice → Text to speech*: keep *Voice model* on `Pocket TTS`, pick a
+   voice (default `anna`; `cosette` is non-commercial — see
+   [voice_licenses.md](voice_licenses.md)), speed (`1.08`), and volume (`1.0`).
+3. First request starts `uvx --python 3.12 pocket-tts serve` in an isolated cache
+   (warm ~1.5 s per sentence; evicted after idle timeout `tts_idle_stop_s`).
 
 ### Option B: Underdog Woof (pure NumPy, ~41 MB, no token)
 
-1. In *Settings → Voice → Text to speech*, set *Backend* to `Underdog Woof` and
-   click *Download* (or run `deploy\setup_voice.bat --woof`).
-2. Pick `juno` (default) or `mira` and your preferred speed.
-3. No Hugging Face account, no PyTorch download, and no sidecar process are
-   needed — `ConwayResearch/Underdog-Woof` (~41 MB int8 weights + `LICENSE` /
-   `NOTICE`) is fetched once into `voice_models/underdog_woof/` and unloaded
-   from RAM automatically after the idle timeout. Underdog Woof is licensed
-   under the **Underdog Non-Commercial License 1.0** (non-commercial use only;
-   see [voice_licenses.md](voice_licenses.md)).
+1. In *Settings → Voice → Text to speech*, set *Voice model* to `Underdog Woof`
+   and click *Download (~41 MB)* (or run `deploy\setup_voice.bat --woof`).
+2. Pick `juno` (default) or `mira`, speed, and volume.
+3. No Hugging Face login, PyTorch, or sidecar process needed —
+   `ConwayResearch/Underdog-Woof` weights + `LICENSE`/`NOTICE` fetch once into
+   `voice_models/underdog_woof/` and unload when idle (`Underdog Non-Commercial
+   License 1.0`, see [voice_licenses.md](voice_licenses.md)).
 
-Answers are never autoplayed: use the speaker button on a message, the sample
-button in the card, or enable *Answers as voice notes* in the Telegram card.
+### Playback & preload
+
+- **Manual & Telegram:** speaker button on messages, *Play sample* in *Settings →
+  Voice*, and *Answers as voice notes* (`telegram_voice_out`) in Telegram Gateway.
+- **Read aloud (UI, all off by default):** optional toggles per surface (`Direct`,
+  `Agentic`, `Questions`, `Approvals`) + *Pre-load the engine when a run starts*
+  (`tts_preload_run`, default on; *Keep engine warm* for Whisper STT).

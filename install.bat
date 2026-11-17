@@ -640,7 +640,7 @@ echo.
 echo   This step is OPTIONAL and can be run at any time later -
 echo   NO reinstall needed, nothing else in the install changes:
 echo     - Settings -^> Voice -^> Download  (UI, with progress)
-echo     - or deploy\setup_voice.bat [model] [--tts^|--both]
+echo     - or deploy\setup_voice.bat [model] [--tts^|--woof^|--both]
 echo   Text-to-speech is separate and uses a gated model ^(Pocket TTS^).
 echo   One-time setup, three steps:
 echo     1. Accept the terms:  huggingface.co/kyutai/pocket-tts
@@ -701,7 +701,7 @@ echo   Start:        start_hivemind.bat
 echo   UI:           http://localhost:%HM_PORT%
 echo   Optional:     Telegram gateway - start_gateway.bat setup
 echo                 (docs\gateway_setup.md, off by default)
-echo   Optional:     Voice - deploy\setup_voice.bat [--tts^|--both]
+echo   Optional:     Voice - deploy\setup_voice.bat [--tts^|--woof^|--both]
 echo                 (no reinstall needed, or use Settings -^> Voice)
 echo.
 echo   IMPORTANT: Before the first run, set a workspace

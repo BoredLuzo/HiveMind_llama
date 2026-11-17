@@ -67,16 +67,21 @@ check("no multi-word alias packed into one string",
 for needle in ("Voice output (TTS)", "TTS voice", "Read aloud: direct answers (TTS)",
                "Voice input (STT)", "STT model", "STT language",
                "Routing: decider", "Routing: judge", "Routing: plan step",
-               "Mode: Auto / Chat / Pipeline / AutoMap / Code-Duo"):
+               "Mode: Auto / Chat / Pipeline / Code Duo (Agentic)",
+               "AUTOMATIONS panel", "Image Processing (Direct / Describe first)"):
     check(f"index entry {needle!r}", needle in APP)
 
 for el_id in ("tts-enabled-toggle", "stt-enabled-toggle", "routing-decider-sel",
-              "routing-planner-sel", "mode-btns-row"):
+              "routing-planner-sel", "mode-btns-row", "tg-voice-in-toggle",
+              "mcp-client-toggle", "chat-search-input"):
     check(f"index points at {el_id}", f"'{el_id}'" in APP)
 
-check("entries carry the acronym as search term",
-      "voice tts text to speech output enabled" in APP and "voice stt speech to text input" in APP)
-check("entries are registered in the agents panel", "'Voice / Routing'" in APP)
+check("voice entries carry acronyms + Underdog Woof terms",
+      "voice tts text to speech output enabled" in APP
+      and "voice stt speech to text input" in APP
+      and "pocket woof underdog numpy" in APP)
+check("voice entries point to configs panel and routing to agents",
+      "_push('configs', d[1], el, 'Voice'" in APP and "'Voice / Routing'" in APP)
 
 # ── 4. Die Suche selbst matcht Teiltreffer je Begriff ──────────────────
 check("matcher tests each term as a substring",

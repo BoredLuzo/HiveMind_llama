@@ -23,7 +23,7 @@ Each task has:
 
 - `repo/` — the exercise stub and any non-test support files
 - `tests/` — the hidden test file, installed only at check time
-- `task.json` — prompt (the official instructions) and the pytest check
+- `task.json` — prompt (official instructions + AST-extracted `[Test suite API contract] (contract-v2)` harness footer) and pytest check (`--names all` expands to all 34 tasks; this folder checks in 10)
 
 `.meta/example.py` from the source repo is **never copied**; it was only used
 once to prove red-before/green-after. All 10 tasks were validated: stub fails,

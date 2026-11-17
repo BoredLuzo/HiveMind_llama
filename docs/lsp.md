@@ -38,13 +38,16 @@ server runs). Phone runs exclude every `lsp_*` tool while the default
 | `lsp_format` | `path` | Formats the file with `textDocument/formatting` and rewrites it atomically (server must advertise `documentFormattingProvider`). Approval-gated. |
 
 Read-only modes (`duo_readonly`, `pre_explore`, `critic_verify`,
-`direct_python`) get the eight read tools plus `lsp_code_actions`.
-`lsp_rename` and `lsp_format` (the two mutating tools) are only in the full
-modes. With `lsp_enabled=false` all `lsp_*` schemas are removed.
+`direct_python`) get the eight read tools plus `lsp_code_actions`; default
+`duo_core` gets `lsp_diagnostics` only; `duo_lean`/`fix_agent`/`direct`/
+`direct_research`/`duo_mcp`/`direct_mcp` get none; `lsp_rename` and
+`lsp_format` (mutating) are in `duo_full`/`direct` full modes. With
+`lsp_enabled=false` (UI: *Configs → Language Servers & Auto-Lint*) all
+`lsp_*` schemas are removed.
 
 ## Automatic diagnostics
 
-After a successful `write_file`, `edit_file`, `patch_file`,
+After a successful `write_file`, `edit_file`, `patch_file`, `apply_patch`,
 `replace_lines` or `write_file_append`, the dispatcher appends a compact
 `[LSP auto-diagnostics after writing …]` block (8-line cap) and fires
 `workspace/didChangeWatchedFiles` for the written path (an index hint for
@@ -79,17 +82,20 @@ therefore reaches rust-analyzer; broken or missing files answer `{}`.
 | `lsp_auto_warm_on_write` | `true` | Warm a cold server from the write path (bounded 3 s wait). |
 | `lsp_max_diagnostics` | `50` | Diagnostics per call. |
 | `lsp_max_results` | `50` | Locations/symbols/actions per call. |
+| `lsp_forward_workspace_settings` | `false` | Opt-in forwarding of `<workspace>/.vscode/settings.json` to LSP servers. |
 
 ## Server registry
+
+(Batch installer: `deploy\install_lsp_packs.bat`; quick probe: `python deploy\lsp_selftest.py`.)
 
 | Language | Default candidates | Install |
 |---|---|---|
 | Python | `pyright-langserver --stdio`, `pylsp`, `jedi-language-server` | `npm install -g pyright` (or `pip install python-lsp-server`) |
-| TypeScript / JavaScript | `typescript-language-server --stdio` | `npm install -g typescript typescript-language-server` |
+| TypeScript / JavaScript | `typescript-language-server --stdio` | `npm install -g typescript@5 typescript-language-server` |
 | TSX / JSX | same server; `didOpen` uses `typescriptreact` / `javascriptreact` | same |
 | Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
 | Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
-| C / C++ | `clangd` | `winget install LLVM.LLVM` or distro package |
+| C / C++ | `clangd` | `winget install LLVM.clangd` or distro package |
 | Bash | `bash-language-server start` | `npm install -g bash-language-server` |
 | Lua | `lua-language-server` | distro / `luarocks` |
 | JSON / HTML / CSS | `vscode-json-language-server --stdio`, `vscode-html-language-server --stdio`, `vscode-css-language-server --stdio` | `npm install -g vscode-langservers-extracted` |

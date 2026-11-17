@@ -56,7 +56,18 @@
     internet: ['websearch'],
     sandbox: ['sandbox tool spawns'],
     linter: ['auto-lint', 'lint'],
-    lint: ['auto-lint', 'linting']
+    lint: ['auto-lint', 'linting'],
+    automations: ['cron', 'schedule', 'recurring', 'timer'],
+    cron: ['automations', 'schedule', 'recurring'],
+    zeitplan: ['automations', 'schedule'],
+    woof: ['underdog', 'voice', 'tts'],
+    underdog: ['woof', 'voice', 'tts'],
+    parakeet: ['stt', 'voice', 'transcribe'],
+    gliner: ['decider', 'routing'],
+    mcp: ['mcp', 'tools'],
+    moe: ['experts', 'cpu experts'],
+    experten: ['moe', 'experts'],
+    mmproj: ['vision', 'projector', 'image']
   };
 
   function expandTerms(q, aliases) {

@@ -138,9 +138,9 @@ def configure(
     global _SEARXNG_HOST, _SEARXNG_ENABLED, _SEARXNG_ENGINES, _SEARXNG_LANGUAGE
     if host     is not None: _SEARXNG_HOST     = host.rstrip("/")
     if enabled  is not None: _SEARXNG_ENABLED  = enabled
-    # Allow explicit "" to clear a previously pinned engine list back to instance defaults.
+    # Allow explicit "" to clear pinned engine/language overrides back to instance defaults.
     if engines  is not None: _SEARXNG_ENGINES  = str(engines).strip()
-    if language is not None and str(language).strip(): _SEARXNG_LANGUAGE = str(language).strip()
+    if language is not None: _SEARXNG_LANGUAGE = str(language).strip()
     _SEARCH_CACHE.clear()
 
 
@@ -435,9 +435,9 @@ def _cap_per_host(results: list, cap: int = 2) -> list:
 # The MediaWiki search API needs no engine at all, so a ``site:wikipedia.org``
 # query - and any query where SearXNG returns nothing - goes there directly.
 
-_WIKI_SITE_RE = re.compile(r"site:\s*([a-z-]{2,3})\.wikipedia\.org", re.IGNORECASE)
+_WIKI_SITE_RE = re.compile(r"site:\s*([a-z0-9-]{2,12})\.wikipedia\.org", re.IGNORECASE)
 _WIKI_SITE_ANY = re.compile(r"site:\s*[a-z.-]*wikipedia\.org", re.IGNORECASE)
-_WIKI_UA = ("HiveMind/1.4 (local assistant; +"
+_WIKI_UA = ("HiveMind/1.6 (local assistant; +"
             "https://github.com/BoredLuzo/HiveMind_llama)")
 # Errors the fallback may swallow (httpx is optional at import time).
 _WIKI_ERR = ((_httpx.HTTPError, ValueError, KeyError, TypeError, OSError)
@@ -611,8 +611,12 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
     # A query that names Wikipedia is an encyclopedia lookup: the MediaWiki API
     # answers it without any search engine, which is exactly the case that used
     # to return shop/homepage links (see _wiki_direct above).
-    if (_WIKI_SITE_ANY.search(query or "")
-            or re.search(r"\bwikipedia\b", query or "", re.I)):
+    _has_non_wiki_site = bool(
+        _SITE_OP_RE.search(query or "") and not _WIKI_SITE_ANY.search(query or "")
+    )
+    if (not _has_non_wiki_site
+            and (_WIKI_SITE_ANY.search(query or "")
+                 or re.search(r"\bwikipedia\b", query or "", re.I))):
         _wd = await _wiki_direct(query, max_results)
         if _wd:
             logger.info("web_search: answered %r from wikipedia direct", query[:80])
@@ -913,7 +917,7 @@ async def check_status() -> dict:
     try:
         r = await client.get(
             f"{_SEARXNG_HOST}/search",
-            params={"q": "test", "format": "json"},
+            params=_build_search_params("test"),
             timeout=_httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
         )
         if r.status_code < 400:

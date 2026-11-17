@@ -50,6 +50,7 @@ _LSP_FALLBACKS: dict = {
     "lsp_auto_warm_on_write": True,
     "lsp_max_diagnostics": 50,
     "lsp_max_results": 50,
+    "lsp_forward_workspace_settings": False,
 }
 
 
@@ -145,6 +146,7 @@ def _get_manager(workspace: Path):
             "lsp_servers": settings.get("lsp_servers") or {},
             "lsp_client_timeout_s": settings.get("lsp_client_timeout_s"),
             "lsp_idle_timeout_s": settings.get("lsp_idle_timeout_s"),
+            "lsp_forward_workspace_settings": bool(settings.get("lsp_forward_workspace_settings", False)),
         })
         if len(_MANAGERS) >= _MANAGERS_CAP:
             # Closing the evicted managers is not optional: clearing the

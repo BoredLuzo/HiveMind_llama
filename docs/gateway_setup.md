@@ -25,7 +25,7 @@ the bot passes through Telegram's servers and stays in that chat history.
 |---|---|
 | your texts, voice notes, photos and PDFs | Telegram, then to your engine over loopback |
 | answers, plans, tool-call summaries and approval cards | engine -> Telegram -> your phone |
-| the bot token | stored in `gateway.toml`, only used against `api.telegram.org` |
+| the bot token | stored in **Windows Credential Manager (`keyring`)** or `$env:HIVEMIND_TG_TOKEN` — **never** in `gateway.toml` (rejected by `_FORBIDDEN_KEYS`) |
 
 Nothing is sent to the developer, and no analytics are involved. Keep secrets
 out of phone prompts, use a private chat (the gateway answers nothing else),
@@ -55,57 +55,24 @@ $env:HIVEMIND_TG_TOKEN = [System.Net.NetworkCredential]::new('', $s).Password
 The token now lives in the memory of this one shell window. Not in the
 history, not in a file, not in any log.
 
-**Recommended: store it ONCE instead (Windows Credential Manager).**
-The shell variable above dies with the window — for everyday use you
-would repeat this before every start. The gateway can instead read the
-token from the Windows Credential Manager, which survives restarts and
-updates. One-time setup (token stays invisible, nothing is written to
-disk or history):
+**One-step setup (recommended):** run `start_gateway.bat setup` (or answer `Y` at installer step `[9/9]`). It validates your token, saves it invisibly in Windows Credential Manager (`keyring`, already installed in `.venv`), writes `gateway.toml`, sets `telegram_enabled = true`, and syncs `hive_base_url`. Or store via PowerShell into Credential Manager directly (input masked):
 
 ```powershell
-pip install keyring
-python -c "import keyring, getpass; keyring.set_password('hivemind_gateway', 'bot_token', getpass.getpass('Bot token: '))"
+.venv\Scripts\python.exe -c "import keyring, getpass; keyring.set_password('hivemind_gateway', 'bot_token', getpass.getpass('Bot token: '))"
 ```
 
-After that, no env var is needed: `start_gateway.bat` (or
-`python -m hivemind_gateway.main`) picks the token up by itself. The
-gateway never prints the token and never accepts one from a file.
-Rotating it: BotFather `/revoke`, then repeat the one-liner. Deleting
-it: remove the `hivemind_gateway` entry in the Windows Credential
-Manager (Systemsteuerung → Anmeldeinformationsverwaltung).
+After that, `start_gateway.bat` (or `start_gateway_headless.bat`, or **Settings → Telegram Gateway → Process → Start/Stop** in the UI) picks up the token automatically without env vars. Rotate via `@BotFather` `/revoke` + re-running `start_gateway.bat setup`; delete via Windows Credential Manager (`hivemind_gateway`).
 
-## 3. Start the gateway (same shell)
+## 3. Start the gateway
 
-The gateway is **off by default** — a master switch must be on before it
-touches Telegram. Either create a one-line `gateway.toml` next to the
-gateway:
-
-```toml
-telegram_enabled = true
-```
-
-or set the switch for this shell only:
+`gateway.toml` (checked in repo root, `%LOCALAPPDATA%\HiveMindGateway\gateway.toml`, or `$env:HIVEMIND_GATEWAY_CONFIG`) must enable `telegram_enabled = true` (or set `$env:HIVEMIND_GATEWAY_ENABLED = "1"`).
 
 ```powershell
-$env:HIVEMIND_GATEWAY_ENABLED = "1"
+start_gateway.bat            # interactive window (Ctrl+C stops)
+start_gateway_headless.bat   # background process (stop via `start_gateway.bat stop` or UI)
 ```
 
-Then start:
-
-```powershell
-# adjust the path to YOUR HiveMind folder first:
-cd C:\Tools\HiveMind
-python -m hivemind_gateway.main
-```
-
-If it answers with "another gateway instance seems to run", an older
-gateway is still alive: close that window (Ctrl+C) or end its PID
-(`taskkill /PID <number> /F`), then start again. Only one instance per
-bot token is allowed — the second one refuses on purpose.
-
-The console prints a **pairing code** (uppercase letters and digits
-only, valid for five minutes). Keep this window open — the window *is*
-the gateway. Ctrl+C stops it.
+Only one poller per token can run (a second instance aborts loudly). On first start, the console prints a **pairing code** (valid 5 minutes).
 
 ## 4. Pair your phone
 
@@ -128,17 +95,10 @@ token; stop that other instance and start again.
 - Sending a **plain message** starts a run on your PC.
 - You get status updates while it works, then the result. Anything
   longer than three messages arrives as a `.txt` file.
-- Commands: `/new` (fresh chat) · `/stop` (abort) · `/status` ·
-  `/verbose` (show more detail) · `/mode` (run mode for phone runs
-  only — auto/chat/pipeline/automap, `/mode off` follows the engine
-  settings again) · `/models` (numbered model list) · `/setModel <nr>`
-  (pick a model; the bot then asks one line: preset, ctx_thinking,
-  ctx_model — preset load is global, ctx applies to duo/agentic phone
-  runs) · `/cancel` (abort that flow) · `/help`.
-- One run at a time. If something is already running — including from
-  the browser — the bot tells you so instead of queueing.
-- Bot conversations land as their own `[TG]` chats inside HiveMind and
-  don't mix with your browser chats.
+- **Chat & control:** `/new` (fresh chat), `/follow <on|off>` (default `on`: follows active PC browser chat for up to 1h; `off` isolates `[TG]`), `/stop`, `/status`, `/verbose`, `/workspace <path>`, `/send <path>`, `/cron` (automations), `/purge`, `/shutdown`.
+- **Mode & models:** `/mode <auto|agentic|chat|pipeline|off>`, `/models`, `/setModel <nr>` (applies immediately), `/preset <nr>`, `/ctx <nr|off>`, `/cancel` (clears phone model/ctx overrides), `/planner`, `/decider`.
+- **Security & approvals:** `/restrict <on|off>`, `/gate <ask|deny|off>`, `/tools`, `/lock`, `/help`.
+- **Single run queue:** If a browser or phone run is already active, the bot tells you instead of queueing.
 
 ## Stopping and emergencies
 
@@ -182,21 +142,16 @@ webhook and nothing listens. To HiveMind it talks over 127.0.0.1 only.
 A second poller on the same token makes it quit loudly instead of
 fighting.
 
-**What the agent can reach from the phone.** File access stays inside
-the chat's workspace — paths outside, including `../` tricks, are
-rejected by the engine (verified against the real handler). Tools that
-change anything (shell commands, file writes, git commits) run behind
-the engine's approval gate, and the gateway forces that gate ON for its
-own runs and answers every approval request with an automatic deny —
-such tools cannot execute from the phone, no matter how the engine's
-own approval toggle is set (`/status` states this). Tappable approvals
-("1" once / "3" deny from the phone) exist for mirrored PC runs.
+**What the agent can reach from the phone.** File access stays workspace-confined
+(escapes/traversal are blocked by the engine). By default (`telegram_phone_restricted: true`,
+toggle via `/restrict`), phone runs stay restricted to read-only safe tools (`read_file`,
+`search_code`, `web_search`, etc.). When you lift restriction (`/restrict off`),
+tappable inline approval cards (`✅ Once` / `📁 Always (chat)` / `⛔ Deny`) govern
+writes and execution per `/gate <ask|deny|off>` / **Phone approvals** in UI (default
+`deny`; mirrored PC runs allow `Once` or `Deny`, never `Always`).
 
-**Manipulated content.** The agent reads repos and web pages, and those
-can contain text that tries to steer it. Pairing doesn't protect
-against that — the workspace boundary does, and the hardened remote
-profile coming next goes further: no shell, no push, no deletions from
-the phone.
+**Manipulated content.** Untrusted repos/web pages stay bounded by workspace
+confinement, `/restrict`, and the approval gate.
 
 **Replays and double runs.** Updates older than 60 seconds are dropped,
 duplicates recognized, and the position in Telegram's queue is saved
@@ -221,19 +176,16 @@ asks instead of continuing by itself.
   a new command or a new chat asks again. There is no blanket
   "always allow everything" switch.
 
-## Voice notes (opt-in, 1.4)
+## Voice notes & media (opt-in)
 
-`voice_in = true` in `gateway.toml` lets the bot accept voice notes: the note is
-downloaded (20 MB cap, 300 s cap), transcribed by HiveMind's `/stt` and the
-transcript runs exactly like typed text, with the same approval gate.
+- **Voice input (`telegram_voice_in` in UI / `settings.json`, or `voice_in = true` in `gateway.toml`):** downloads Telegram voice notes (20 MB / 300 s cap), transcribes via `/stt`, and runs the transcript with the same gates/approvals.
+- **Voice answers (`telegram_voice_out` in UI / `settings.json`, or `voice_out = true` in `gateway.toml`):** returns answers as Ogg/Opus voice notes using HiveMind TTS (`anna` default via Pocket TTS or `juno` via Underdog Woof; both disabled until enabled in *Settings → Voice*). Audio codecs (`soundfile`, `numpy`) come with `uv sync --all-extras` (fallback `requirements-voice.txt`).
+- **Images & documents:** incoming photos attach to runs (`telegram_image_in` default `true`, or `image_in` in `gateway.toml`); PDFs/text files respect 20 MB / `120,000` chars / `40` pages extraction limits.
 
-`voice_out = true` sends answers back as a voice note. It needs HiveMind's TTS
-enabled (`tts_enabled` in `settings.json`, Pocket TTS via uvx, voice cosette at
-1.08x). Both switches default to false, and both require the engine's audio
-dependencies (`pip install -r requirements-voice.txt`).
+Additional **`settings.json`** keys (configured in *Settings → Telegram Gateway* / *Voice* — **do not** place these in `gateway.toml`):
 
-| Setting | Default | Meaning |
+| `settings.json` key | Default | Meaning |
 |---|---|---|
-| `telegram_result_mode` | `both` | How the final answer of a phone run arrives: `both` (text + voice note), `text`, or `voice` (results-only channel - the progress lines stay text; falls back to text if the engine is off or the synthesis fails). |
-| `telegram_progress_msgs` | `true` | OFF silences the status line and the tool-call lines. Approval cards and the final result still arrive - they are safety and result, not progress. |
-| `tts_preload_run` | `true` | Warm the speech engine when a run starts, so the first spoken sentence costs ~1 s instead of a cold start. Set by the Voice card. |
+| `telegram_result_mode` | `both` | `both` (text + voice note), `text`, or `voice` (falls back to text if TTS fails) |
+| `telegram_progress_msgs` | `true` | OFF hides status/tool progress lines (keeps approvals and final answer) |
+| `tts_preload_run` | `true` | Pre-warms TTS when a run starts to avoid cold-start delay |

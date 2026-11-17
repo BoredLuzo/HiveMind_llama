@@ -38,7 +38,7 @@ python bench/external/deepswe_hivemind.py \
 The runner:
 
 1. clones the task repo at `base_commit_hash`,
-2. sends `instruction.md` to HiveMind in `code_duo` / agentic mode,
+2. sends `instruction.md` to HiveMind in `code_duo` / agentic mode (`duo_planner=false`, default `--ctx 16384`),
 3. stages the workspace and writes `model.patch`,
 4. builds `tests/Dockerfile` and runs `/tests/test.sh` in the pristine
    verifier image (locally via Docker, or on Modal with `--verifier modal`),
@@ -156,9 +156,9 @@ Open `deepswe_qwen36_colab.ipynb` in Colab:
    `llama-server`, opens a cloudflared tunnel, and runs 5 DeepSWE tasks with
    `--env modal`.
 
-Never paste the token into a cell or commit it. The notebook prints only the
-first 8 characters of the token ID. `MODAL_TOKEN_*` is for the sandbox
-provider; the model download is public and needs no HF token.
+Never commit any token (`deepswe_qwen36_colab.ipynb` uses Colab Secrets; the
+simplified `deepswe_qwen36_colab_simple.ipynb` provides empty cell placeholders).
+Only the first 8 characters of the token ID are printed, and the model download is public.
 
 If the A100 run OOMs, lower `--ctx-size` from 16384 to 8192; do not use the T4
 runtime for this model.

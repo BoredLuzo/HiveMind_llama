@@ -65,6 +65,12 @@ if not defined PY if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Pr
 if not defined PY if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
 if not defined PY set "PY=python"
 
+set "ACTION=%~1"
+if "%ACTION%"=="" set "ACTION=status"
+
+REM "external" takes a URL in arg2 (not a bare port) and needs no Docker.
+if /i "%ACTION%"=="external" goto external
+
 REM ---- Port resolution: arg > SEARXNG_PORT env > existing settings.json > 8888 ----
 set "HM_PORT=%~2"
 if "%HM_PORT%"=="" set "HM_PORT=%SEARXNG_PORT%"
@@ -81,13 +87,6 @@ if "%HM_PORT_CHK%"=="INVALID" (
     set "RC=1"
     goto :finish
 )
-
-set "ACTION=%~1"
-if "%ACTION%"=="" set "ACTION=status"
-
-REM "external" points at an already-running SearXNG - no Docker required.
-REM It only writes settings.json (searxng_host). Runs BEFORE the docker check.
-if /i "%ACTION%"=="external" goto external
 
 REM DAEMON-CHECK (2026-10-17): "docker" on PATH is not enough - Docker Desktop
 REM being stopped is the common case and produced a raw error + instant close.

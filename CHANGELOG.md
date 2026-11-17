@@ -94,12 +94,37 @@ installer, in-place updater, prune, and packaging edge cases on top of `1.6.1`.
     (`voice_models`/`stt`/`tts-venv`/`soul.json`/`automations.json`), added
     Chromium Playwright setup, injected `HIVEMIND_GPU_BACKEND` into the systemd
     unit, and raised service `MemoryMax`/`TasksMax`.
+- **Search, UI & documentation alignment:**
+  - Feature Search (`static/app.js`, `static/feature_search_core.js`): routed
+    the 15 Voice entries cleanly to `#p-configs` (instead of `#p-agents`),
+    replaced broken `configs` element IDs with real control IDs, added the
+    `#p-automations` panel/tab and `#vision-accordion` / `#moe-model-select`
+    entries, resolved `#duo-img-planner` vs `#duo-planner-toggle` dedup
+    collision, removed retired `AutoMap` / `cosette` / `lfm2.5:2.6b` references,
+    expanded DE/EN aliases, and wired `#chat-search-input` in `index.html` +
+    `static/app.js` to `GET /chats/search` (sorted by `updated_at` in
+    `routers/chats.py`).
+  - Websearch & code search: fixed `searxng.bat external <url>` rejecting URLs at
+    port validation, allowed `configure(language="")` in `tools/websearch.py` +
+    prevented `_wiki_direct` from hijacking explicit non-Wikipedia `site:`
+    queries, stopped `_inline_tool_search_code` from falling back to `findstr /i`
+    on clean zero-hit `rg` runs, filtered secrets before line capping, pruned
+    `.git`/`.venv`/`node_modules` in `_inline_tool_find_files` and
+    `_python_content_search`, hardened `infra/mcp_server.py` `tool_search_code`,
+    and forwarded `lsp_forward_workspace_settings` in `tools/handlers/lsp.py`.
+  - Documentation refresh (`README.md`, `docs/guide.md`, `docs/architecture.md`,
+    `docs/settings.md`, `docs/voice_setup.md`, `docs/voice_licenses.md`,
+    `docs/privacy.md`, `docs/gateway_setup.md`, `docs/integrations.md`,
+    `docs/lsp.md`, `docs/mcp.md`, `docs/mcp_client.md`,
+    `docs/huggingface_token.md`, `CONTRIBUTING.md`, `AGENTS.md`, `bench/` docs):
+    updated catalog counts/sizes (`17` models / ~106 GB), installer/updater/script
+    details, Telegram/Voice/LSP/MCP/Privacy facts, and architecture accuracy.
 
 ### Tests
 - Added standalone regression suite
   [tests/test_installer_updater_1_6_2.py](tests/test_installer_updater_1_6_2.py)
-  registered in `tests/run_regressions.py`, and updated batch flow checks in
-  `tests/test_bat_encoding.py` and `tests/test_update_flow_audit.py`.
+  registered in `tests/run_regressions.py`, and updated `tests/test_bat_encoding.py`,
+  `tests/test_feature_search_coverage.py`, and `tests/test_update_flow_audit.py`.
 
 ## [1.6.1] - 2026-11-16
 

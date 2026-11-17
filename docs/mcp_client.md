@@ -89,6 +89,7 @@ Either use the **MCP client** card in the config page (toggle, server list as JS
 |---|---|
 | `mcp_client_enabled` | master switch, default `false` |
 | `mcp_client_timeout_s` | per request, default 30 s (the handshake is additionally capped at 20 s) |
+| `mcp_client_max_calls_per_run` | max MCP calls allowed per agent run, default `40` (`MCP_BUDGET_EXHAUSTED`) |
 | `mcp_servers[].name` | short name, becomes part of the tool name |
 | `mcp_servers[].command` | executable, resolved via `PATH` |
 | `mcp_servers[].args` | argument list, no shell interpretation |
@@ -195,8 +196,7 @@ so a dead server does not end the run.
 
 ## Behaviour and limits
 
-- One child process per server, started on the first refresh, killed on
-  shutdown, on a timeout and when the client is disabled.
+- One child process per server, started automatically at engine boot (`_mcp_startup_refresh()`) when `mcp_client_enabled` is true, killed on shutdown, on timeout, or when disabled.
 - A server that hangs, crashes or prints garbage never breaks a run: the call
   returns `[TOOL_ERROR: MCP_*]` and the connection is marked dead until the
   next reload. The exception is HTTP 401/403: the connection stays alive (see
@@ -269,7 +269,8 @@ Keep in mind:
 | `MCP_SERVER_DOWN` | the process exited or timed out; check `GET /mcp/servers` |
 | `MCP_DISABLED` | `mcp_client_enabled` is false |
 | `MCP_AUTH_FAILED` | the server rejected the token (HTTP 401/403): missing, wrong or expired; check `token_env` / `headers` |
-| `MCP_BUDGET_EXCEEDED` | the server hit its `mcp_server_budgets` limit for the rolling 1-hour window; the message says when it resets - wait, or raise the limit |
+| `MCP_BUDGET_EXCEEDED` | the server hit its `mcp_server_budgets` limit for the rolling 1-hour window |
+| `MCP_BUDGET_EXHAUSTED` | a run hit `mcp_client_max_calls_per_run` (default 40) |
 | `token_env '...' is set but the environment variable is empty or missing` | set the variable before starting the engine, or remove `token_env` from the entry |
 | `command not found` | the executable is not on `PATH`; use an absolute path |
 | `is busy with another call` | a second call arrived while the first is still running; the server is fine |

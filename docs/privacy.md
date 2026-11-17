@@ -7,16 +7,17 @@ logs live in the install folder. (Short summary in the
 
 | Destination | Trigger | What is sent | Switch it off |
 |---|---|---|---|
-| Hugging Face (`huggingface.co`) | you download a model or voice (installer menu, model manager); one-time `hf auth login` for gated models | model/voice name, HF token for gated downloads | download nothing and point the model folder at files you already have |
-| PyPI (`pypi.org`) | first use of text to speech: `uv` installs `pocket-tts` + PyTorch | package names, Python/platform | leave TTS off |
-| `github.com` release assets | install/update fetches llama.cpp and whisper.cpp binaries | file names | use the release ZIP and place the binaries yourself |
-| `api.github.com` | Git publish (only when you use the Git tool) or the startup update check (no personal data) | repo name, commit and token when publishing; current version for the update check | do not publish / remove the token; `HIVEMIND_NO_UPDATE_CHECK=1` |
-| your SearXNG → DuckDuckGo/Mojeek | a web search the agent (or you) runs | the search terms | keep SearXNG down; use a tool profile without web search |
-| Docker Hub (`searxng/searxng`) | `searxng.bat` pulls the image once | image name | pull it yourself / do not start the container |
-| arbitrary URLs | `web_fetch` / `browser` tool calls | the URL and the request | tool profile without web/browser |
-| Playwright CDN | browser optional setup/update (`playwright install chromium`) | platform + Chromium version | skip the browser optional |
-| Telegram | gateway on: every message, answer, photo, voice note and file | the conversation and its attachments | gateway off (and revoke the bot token) |
-| external MCP servers | a tool call on a server you configured | tool name + arguments | remove the server |
+| Hugging Face (`huggingface.co`) | you download a model, voice, or optional GLiNER2.5 routing decider (`hf auth login` for gated models) | model/voice/decider name, HF token for gated downloads | download nothing and point `models/` at existing local GGUFs; keep decider off |
+| PyPI & PyTorch (`pypi.org`, `download.pytorch.org/whl/cpu`) | installer/updater Python deps, Pocket TTS (`uvx`), or optional GLiNER2.5 decider (`gliner2` + CPU torch) | package names, Python/platform | use existing `.venv`, leave Pocket TTS and GLiNER decider off |
+| `github.com` release assets | installer/updater fetches HiveMind release ZIPs (`update.bat`), `llama.cpp`, and `whisper.cpp` binaries | asset/release filenames | place binaries manually / upgrade via local ZIP (`update.bat --zip`) |
+| `api.github.com` | startup update check, Git validation/repo-create/publish (`routers/git.py`), or `git` tool | version tag check, repo/commit + token when using Git setup/publish | `HIVEMIND_NO_UPDATE_CHECK=1`; leave Git credentials unset |
+| your SearXNG → DuckDuckGo Web / Yahoo (plus direct `*.wikipedia.org/w/api.php` on Wikipedia queries / empty non-`site:` fallback) | web search enabled (`web_search`) | the search query terms | keep SearXNG stopped / `+Websearch` off (disables both SearXNG & Wikipedia fallback) |
+| Docker Hub (`searxng/searxng`) | `searxng.bat` builds/pulls the image once | image tag | pull manually / do not start the container |
+| arbitrary URLs | `web_fetch` / `browser` tool calls | requested URL + headers | disable `web`/`browser` tools |
+| Playwright CDN | installer core sync (`install.bat`, `deploy/install_linux.sh`, `check_optionals.bat`) installs headless Chromium | OS platform + Chromium build | do not invoke `browser` tool at runtime |
+| Package registries (`npmjs.org`, `static.rust-lang.org`, `winget`/MS Store) | optional LSP packs (`install_lsp_packs.bat`) or Core Utils (`install.bat` `[4/9]`) | selected package ID | skip optional LSP/Core Utils installer prompts |
+| Telegram (`api.telegram.org`) | gateway enabled (`telegram_enabled`) | paired chat messages, voice notes, images, files | keep gateway off / revoke bot token |
+| external MCP servers | a tool call on a configured server (`mcp_client_enabled`) | tool name + arguments | leave MCP client off / remove server entries |
 
 ## Model downloads and tokens
 

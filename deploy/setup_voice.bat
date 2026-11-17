@@ -9,9 +9,10 @@ REM               into uv's cache) and fetches the gated model. Needs a one-time
 REM               "hf auth login" - without it the script explains and stops.
 REM    --both     both of the above
 REM
-REM  Usage:  deploy\setup_voice.bat [model] [--tts|--both]
+REM  Usage:  deploy\setup_voice.bat [model] [--tts|--woof|--both]
 REM          deploy\setup_voice.bat base --tts
 REM  Models: parakeet-q4k (default, 396 MB) | base (141 MB) | tiny (74 MB) | small (465 MB)
+REM  Options: --tts (Pocket TTS), --woof (Underdog Woof CPU), --both, --help|-h
 REM
 REM  NOTE: label based on purpose - parenthesised if-blocks in cmd.exe choke on
 REM  text that itself contains ")" (the first version printed half a line and

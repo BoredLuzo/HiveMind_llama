@@ -12,7 +12,7 @@ quick start, hardware minimums and the extras list see the
 - Python 3.12–3.14 (Python 3.14 is auto-installed by the setup)
 - uv (auto-installed)
 - 8 GB+ VRAM GPU recommended for single-model / sequential **Code Duo** runs (one active model slot at a time; AMD/Intel via Vulkan, NVIDIA via CUDA). **Smart Preload**, multiple simultaneously loaded models, or large 100k+ context runs need more headroom (16 GB+ VRAM or CPU/hybrid offload) — Smart Preload is off by default
-- Disk: ~12 GB for a starter set of four small models (including vision projectors), ~25–40 GB with one 24B–35B MoE model, ~130 GB for the full optional installer catalog (see [Download catalog](#download-catalog)); 32 GB+ system RAM recommended when offloading MoE experts to the CPU
+- Disk: ~12 GB for a starter set of four small models (including vision projectors), ~25–40 GB with one 24B–35B MoE model, ~106 GB for the full optional installer catalog (17 models, see [Download catalog](#download-catalog)); 32 GB+ system RAM recommended when offloading MoE experts to the CPU
 - Git (optional, autocommit/diff integration)
 - Docker Desktop (optional, SearXNG web search)
 - Windows Core Utils (optional but recommended): `winget install Microsoft.CoreUtils`.
@@ -24,16 +24,11 @@ quick start, hardware minimums and the extras list see the
 
 ## Installation (Windows)
 
-`install.bat` asks before every download step: Python 3.14 (only if missing),
-uv, venv in `.venv\`, dependencies, GPU backend choice, llama.cpp nightly into
-`llama\`, then it opens `setup_models.bat` for the models. Inside the models
-step, one optional extra asks before installing anything: the routing decider
-(a small CPU classifier that routes direct answer vs. code run, see
-`routing_decider` in `docs/settings.md`) - off by default, and it says how to
-add it later. The judge role is not a separate download: assign any installed
-model to Judge in the UI. Afterwards SearXNG is installed when Docker is
-present, and the Telegram gateway can be set up (`docs/gateway_setup.md`).
-Then run `start_hivemind.bat` and open http://localhost:8001.
+`install.bat` runs steps `[1/9]`–`[9/9]` (or `[O]` for optional parts only):
+
+- Core setup (`[1/9]`–`[3/9]`): `uv` + Python 3.14 + `.venv\` (`uv sync --all-extras --frozen --inexact` + Chromium for `playwright`), GPU backend choice + VRAM/port in `settings.json`, and the pinned `llama.cpp` build (`deploy/llama_build_pin.txt`, or `--latest` via `update_llama.bat`) into `llama\`.
+- Optional steps (`[4/9]`–`[9/9]`): Windows Core Utils (`[4/9]`), Desktop shortcut (`[5/9]`), Models + opt-in GLiNER routing decider + LSP packs (`[6/9]`), SearXNG Docker setup (`[7/9]`), Voice STT/TTS (`[8/9]`), and Telegram gateway (`[9/9]`).
+- Start HiveMind with `start_hivemind.bat` and open <http://localhost:8001>.
 
 `setup_models.bat [custom models folder]`:
 
@@ -49,7 +44,7 @@ Manual installation:
 
 1. Python 3.12–3.14 (3.14 recommended) with "Add python.exe to PATH".
 2. Install uv.
-3. `uv venv -p 3.14 .venv` (or `-p 3.12` / `-p 3.13`) and `uv pip install -r requirements.txt`.
+3. `uv python install 3.14`, `uv sync --all-extras --frozen --inexact`, and `.venv\Scripts\playwright.exe install chromium` (fallback without `uv`: `python -m venv .venv` + `pip install -r requirements.txt`).
 4. Extract a llama.cpp build (`win-vulkan-x64.zip` / `win-cuda-x64.zip`) into
    `llama\` (highest build wins), or set `HIVEMIND_LLAMA_BIN`.
 5. GGUFs into `models\` or `HIVEMIND_MODELS_DIR` (easiest via
@@ -79,9 +74,9 @@ export HIVEMIND_LLAMA_BIN=$PWD/build/bin/llama-server
 ```
 
 Backends: `vulkan` (default; AMD/Intel/NVIDIA via Mesa), `cuda` (NVIDIA, runtime
-matched to the driver via nvidia-smi), `cpu` (no GPU: pre-flight skipped,
-`--n-gpu-layers 0`, CPU thread defaults, and the plain `ubuntu-x64` build is
-preferred over a backend binary that cannot start without its loader).
+matched to the driver via nvidia-smi), `rocm` (AMD ROCm), `cpu` (no GPU:
+pre-flight skipped, `--n-gpu-layers 0`, CPU thread defaults, plain `ubuntu-x64`
+build).
 
 mlock: weights are locked in RAM by default (`llama_mlock`). Raise
 RLIMIT_MEMLOCK (systemd: `LimitMEMLOCK=infinity`, docker run:
@@ -111,14 +106,9 @@ binary found? Point `HIVEMIND_LLAMA_BIN` at the extracted llama-server.
 | Simple / Direct | trivial tasks & quick chat (default) | single model, direct answer, optional tool tiers (`off`, `readonly`, `research`, `python`, `mcp`, `full`), `/pause`/`/resume` & mid-run steering |
 | Auto | mixed daily work | rule features, optional CPU GLiNER decider, or LLM Judge route general questions and simple read/list lookups to Direct while sending real coding tasks to Code Duo |
 | Pipeline | analysis, complex docs | Analyst -> Refiner -> Critic -> Synthesizer, optional constraint loop |
-| Map (AutoMap, *experimental*) | mixed tasks | heuristic scorer picks the best model per agent role |
 | Code Duo | coding | Coder + Critic loop, sub-modes Agentic (default solo coder) and Critic-Duo |
 
-Mode buttons live in the sidebar (Agents tab). AutoMap routing can learn from
-run outcomes (`routing_weights.json`).
-
-Status note: `Simple / Direct`, `Auto`, and `Code Duo` (`Agentic` & `Critic-Duo`)
-are supported daily paths; `AutoMap` remains experimental.
+Mode buttons (`Auto`, `Chat`, `Pipeline`, `Agentic`) live in the sidebar (**Agents** tab). Legacy `automap` mode values map to `Auto` (`routing_weights.json` / `/automap/*` remain available via API).
 
 ### Direct chat tool tiers
 
@@ -131,7 +121,7 @@ In Simple/Direct chat the model can use tools through a tier
 | Basic | `readonly` | `ask_user`, `task_complete`, `get_datetime` (+ web when Websearch optional is on) |
 | Research | `research` | read/search tools + optional web/subagent (no write/exec) |
 | Python | `python` | read tools + optional web/subagent + `run_python` |
-| MCP | `mcp` | connected `mcp_*` tools (+ `task_complete`, `ask_user`, `get_datetime`) |
+| MCP | `mcp` | read-only tools + optional `web_search`/`web_fetch` + connected `mcp_*` tools (+ `task_complete`, `send_file` on Telegram) |
 | Full | `full` | read/write/exec: `edit_file`, `run_bash`, background, optionals, ... |
 
 The tier only escalates what the model may call; `full` is what you want for
@@ -143,9 +133,10 @@ falls back to pure chat; an unreachable SearXNG returns an error string.
 Optional safety valve for agentic runs (`duo_action_approval_enabled`,
 UI: Agents tab → Execution → 🛡 Action Approval, off by default, works
 mid-run). When on, the run pauses before everything that changes the
-project — code/cmd execution (`run_bash`, `run_python`,
-`install_package`, `start_background`), file writes (`write_file`,
-`edit_file`, `write_file_append`) and `git_commit` — and shows an
+project — execution (`run_bash`, `run_python`, `install_package`,
+`start_background`, `run_tests`), file writes (`write_file`, `edit_file`,
+`apply_patch`, `write_file_append`, `undo_last`), `browser`, `lsp_rename`,
+`lsp_format`, `git_commit`, and dynamic `mcp_*` tools — and shows an
 approval card with the exact command/code plus an optional message field:
 
 | Button | Effect |
@@ -164,8 +155,8 @@ finishes, the run waits. Desktop notifications fire when the run needs you.
 - Critic-Duo: Coder writes, Critic reviews (optional tool loop, max 3 rounds),
   then approve or a fix round.
 - Agentic: single-model loop with tool execution, auto-test self-fix, a
-  verification guard (successful `run_bash` required after edits) and a grace
-  round when the budget runs out.
+  verification guard (`run_tests` required after edits, `run_bash` fallback when
+  no test suite exists) and a grace round when the budget runs out.
 - Chunking: the Planner splits the task into subtasks, each chunk gets a fresh
   context, goal pinning, auto-test and self-fix retry.
 - Planner with thinking: contract-aware planning, per-model thinking budgets,
@@ -231,30 +222,31 @@ Mode-scoped toolset (`tools/definitions.py`):
 | Area | Tools |
 |------|-------|
 | Explore | `read_file`, `get_signatures`, `find_references`, `list_dir`, `find_files`, `search_code` (+ optional `subagent_research`) |
-| Write | `write_file`, `write_file_append`, `edit_file`, `replace_lines`, `edit_ast`, `apply_patch`, `undo_last` |
+| Write | `write_file`, `write_file_append`, `edit_file`, `apply_patch`, `undo_last` |
 | Run | `run_bash`, `run_python`, `install_package`, `start_background`, `get_background_output`, `stop_background` |
 | Test | `run_tests` (auto-detects pytest/npm/vitest/jest/cargo/go/maven/dotnet) |
 | Git | `git_status`, `git_commit` (optional `+Git`) |
 | Task | `task_complete`, `ask_user` (pause + resume) |
 | Browser | `browser` (headless Chromium: navigate, snapshot, screenshot, click, type, evaluate, console, close) |
-| Misc | `get_datetime`, `remember` (durable key/value memory), `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
+| LSP | `lsp_status`, `lsp_diagnostics`, `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_code_actions`, `lsp_rename`, `lsp_format` |
+| Misc | `get_datetime`, `remember`, `send_file` (Telegram), `hivemind_pipeline` |
 | Web | `web_search`, `web_fetch` (SearXNG, optional `+Websearch` when available) |
 
 Tool scoping per phase: `duo_lean` (minimal orthogonal 8-tool set: `read_file`,
 `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`,
-`task_complete`), `duo_core` (the default coder set: 18 base + `+Subagent`
-optional = 19), `duo_full`, `duo_readonly`, `pre_explore`, `critic_verify`,
-`tool_agent`, `mcp_agent`, `openai_agent`. Optional toggles (`+Websearch`,
-`+Git`, `+Subagent`) live under **Tools & Optionals** in the sidebar.
+`task_complete`), `duo_core` (the default coder set: 18 desktop tools +
+optional `+Subagent` = 19, plus `send_file` on Telegram), `duo_full` (33 base +
+extras), `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
+`mcp_agent`, `openai_agent`. Optional toggles (`+Websearch`, `+Git`, `+Subagent`)
+live under **Tools & Optionals** in the sidebar.
 
 ### Language servers (LSP)
 
-Beyond the built-in analysis tools, the coding modes can use the language
-servers already installed on the machine through one generic client. LSP is
-**on by default** — it activates through `lsp_enabled: true` in
-`settings.json` (shipped default; no UI switch needed): once a language
-server for the file type is installed, the `lsp_*` tools appear. There are
-no per-language flags, and `lsp_servers` overrides a command.
+Beyond the built-in analysis tools, coding modes can use local language servers
+through one generic client. LSP is **on by default** (`lsp_enabled: true`,
+toggleable in **Configs -> Language Servers & Auto-Lint** or `settings.json`):
+once a server for the file type is installed, its `lsp_*` tools work without
+per-language flags (`lsp_servers` overrides commands). See [docs/lsp.md](lsp.md).
 
 | LSP tool | What it does |
 |---|---|
@@ -369,8 +361,8 @@ Three ways, easiest first.
 ### 1. Drop a GGUF in
 
 Drop a `.gguf` into the models folder (`models\`, or `HIVEMIND_MODELS_DIR`).
-The filename becomes the canonical tag (`Qwen3.5-4B-UD-Q4_K_XL.gguf` ->
-`qwen3.5:4b-ud`) and the model appears in the UI - no config needed.
+The filename becomes the canonical tag (`Qwen3.5-4B-Q4_K_M.gguf` ->
+`qwen3.5:4b-mtp`) and the model appears in the UI — no config needed.
 
 ### 2. Wizard: `setup_models.bat` -> `[C]ustom`
 
@@ -446,7 +438,7 @@ profile to be used for sizing** — set only `moe_cpu_experts` and the estimate
 silently falls back to the dense heuristic (~0.6 GB per billion parameters),
 which for a 35B-A3B is several GB too high.
 
-A starting value for an 8 GB card, from the Cyber-Tiel model card:
+A typical 35B-A3B MoE starting point on an 8 GB GPU (`--n-cpu-moe` leaving active weights/shared expert + KV on GPU):
 
 ```
 --n-cpu-moe = 40 - floor((VRAM_GB - 4.3) / 0.49)     # 33 on 8 GB
@@ -538,7 +530,7 @@ by `setup_models.bat` but hand-editable:
 
 ```json
 {
-  "qwen3.5:9b-ud": "C:\\models\\Qwen3.5-9B-UD-Q4_K_XL.gguf",
+  "qwen3.5:9b-mtp": "C:\\models\\Qwen3.5-9B-Q4_K_M.gguf",
   "my-model:7b": "D:\\ml\\my-model-7b.gguf",
   "my-model:7b_mmproj": "D:\\ml\\mmproj-bf16.gguf"
 }
@@ -579,31 +571,28 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | heavy duo coder (MTP) | 5.9 GB + 0.9 GB mmproj |
 | `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
 | `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
-| `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB + 0.2 GB mmproj |
+| `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB |
 | `lfm3-omni:2b` | LiquidAI/LFM3-Omni-2B-GGUF | subagent / vision worker (needs b12001+) | 1.0 GB + 0.3 GB mmproj |
 | `lfm3:1.7b-qad` | LiquidAI/LFM3-1.7B-GGUF | tool-calling subagent (lowest latency tier, needs b12001+) | 1.0 GB |
 | `lfm3:1.7b-uncensored-ad` | AtomicChat/LFM3-1.7B-Uncensored-GGUF | uncensored subagent / helper (Q4_K_M or Q6_K fallback, needs b12001+) | 1.1 GB |
 | `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
 | `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast direct helper (dense 4B) | 3.0 GB |
-| `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
+| `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL, + DSpark drafter) | 2.1 GB + 0.65 GB drafter |
 
-Text-only models (`minicpm5`, `lfm2.5`, `spark-x2.6`, `twil`, `air`) download a single GGUF; the
-vision models pull their projector automatically, and `gemma-4` additionally gets a
-~60 MB MTP drafter from the same repo. `lfm2.5` 24B-A2B ships a DSpark spec-dec
-drafter as a sidecar - it is never registered as a model.
+Text-only models (`minicpm5`, `lfm2.5`, `lfm3`, `spark-x2.6`, `twil`, `air`, `groot`, `qwen3.5:0.8b-ud`) download GGUF weights (plus `chat_template.jinja` on `minicpm5:2b-sharp`). Multimodal models pull their paired `mmproj` projector automatically, and `gemma-4` additionally gets a ~60 MB MTP drafter. `lfm2.5:24b-a2b` and `minicpm5:2b-sharp` also fetch a DSpark spec-dec drafter sidecar (never registered as a standalone model).
 
 GGUFs already on disk can be registered without downloading anything
 (`setup_models.bat` -> `[R]`) or given a full config via `[C]`.
 
-Multimodal: `gemma-4`, `qwen3.5`, `qwen3.6`, and `hermes` load their paired
-`mmproj` projector (auto-downloaded with the model) on demand when images are
-attached. Non-multimodal models use the `Describe first` Describer /
-Vision-Agent preprocessing path.
+Multimodal: `gemma-4`, `qwen3.5`, `qwen3.6`, and `lfm3-omni` load their paired
+`mmproj` projector (auto-downloaded with vision models) on demand when images
+are attached. Non-multimodal models use the `Describe first` Vision-Agent path.
 
-Chat templates: a profile's `chat_template` wins; without one, qwen3.5/3.6/
-hermes models launch with the bundled `model_configs/chat_template_sharp_v22.5.0.jinja`
-(22.5 is the fallback). gemma-4 uses its built-in GGUF template. Per-model
-overrides live in `model_configs/models/<tag>.json`.
+Chat templates: a profile's `chat_template` wins; without one, `qwen3.5`,
+`qwen3.6`, `qwen3.8`, and `hermes3.6` fall back through the bundled templates
+(`model_configs/chat_template_sharp_v22.5.0.jinja` -> `qwen3.6_chat_template.jinja`).
+`gemma-4` uses its built-in GGUF template; per-model overrides live in
+`model_configs/models/<tag>.json`.
 
 ## UI and control
 
@@ -774,15 +763,15 @@ Change them in the UI (or `POST /settings`): the running engine holds the
 authoritative copy and rewrites the file on the next save, so a hand edit
 made while it runs is lost on the next settings write.
 
-A fresh install ships this working default configuration (the installer
-wires the agent roles to whatever `models.json` actually contains, see
-`deploy/apply_model_defaults.py`):
+A fresh install ships empty agent model slots in `settings_defaults.py`; after
+downloading models, `setup_models.bat` (`deploy/apply_model_defaults.py`) wires
+empty/missing roles to the installed models in `models.json`:
 
-| Area | Default |
-|------|---------|
+| Area | Installed-model preference |
+|------|----------------------------|
 | Mode | `chat` (direct answers); `code_duo` starts in **agentic** (one model, solo) |
-| Planner | on, and it shares the coder context — no second model load |
-| Agent roles | `direct`/pipeline → gemma-4:e4b-it-qat, `duo_coder`/`duo_critic`/`duo_planner` → qwen3.5:4b-mtp, `refiner`/`judge` → minicpm5:2b-sharp, subagent ladder lfm3:1.7b-qad → minicpm5:2b-sharp → qwen3.5:4b-mtp |
+| Planner | on, and shares the coder context — no second model load |
+| Agent roles | `direct`/pipeline -> `gemma-4:e4b-it-qat`, `duo_coder`/`duo_critic`/`duo_planner` -> `qwen3.5:4b-mtp`, `refiner`/`judge` -> `minicpm5:2b-sharp`, subagent ladder `lfm3:1.7b-qad` -> `minicpm5:2b-sharp` -> `qwen3.5:4b-mtp` |
 | Vision | `vision_agent_model` = gemma-4:e4b-it-qat (used when the vision agent is enabled) |
 | Context | coder ctx follows the VRAM budget, planner = coder ctx, compression on with automatic floor |
 | Unchanged / off | smart preload, pre-explore, chunking, git autocommit/checkpoints, web search, routing decider |
@@ -859,7 +848,7 @@ keys to the engines that work for you.
 | `setup_models.bat` | download / register / add custom models |
 | `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
 | `searxng.bat` | SearXNG manager |
-| `watchdog_engine.bat` | keeps the engine up: restarts it headless when port 8001 dies; `watchdog_engine.bat stop` ends the loop |
+| `watchdog_engine.bat` | keeps engine running on configured `server_port` (default 8001); `watchdog_engine.bat stop` ends it |
 | `Ctrl+K` in the web UI | Feature search: every setting, button and tab by name or alias (`ctx`, `tts`, `mlock`, …) |
 | `start_gateway.bat` / `start_gateway_headless.bat` | Telegram gateway (mirrors chats to your phone, voice notes and photos in, approvals out) |
 
@@ -870,30 +859,24 @@ keys to the engines that work for you.
 The logic lives in `deploy/updater.py`; `update.bat` is a thin shim that
 resolves Python and hands over, and the updater swaps in the new shim as its
 last step (self-swap) so the running batch file is never overwritten mid-run.
-`settings.json`, `models.json`, `.venv\`, `llama\`, `logs\` and `sessions\` are
-never touched; new settings keys pick up their defaults on the next start, and
-`start_hivemind.bat` installs new Python packages on demand; the update itself syncs from `uv.lock`, so a release installs exactly the versions it was tested with.
+`settings.json`, `models.json`, `.venv\`, `models\`, `llama\`, `logs\`, `sessions\`,
+`voice_models\`, `stt\`, `tts-venv\`, and `learning_logs\` stay untouched; new
+settings pick up defaults on next start and deps sync from `uv.lock`.
 
-Rollback: copy the *contents* of `update_backup_<version>\` back over the folder.
-Once it runs, the backup can be deleted. Manual alternative: extract a release
-zip NEXT TO (not over) the installation and copy the files across.
+Rollback: copy `update_backup_<version>\` back over the folder (or extract a
+release ZIP cleanly next to it).
 
-At startup `start_hivemind.bat` also runs a lightweight update check. It asks
-GitHub for newer releases (including pre-releases when the installed version
-is a pre-release), caches the answer for 24 hours, and prints one short
-`[Y/n]` notice. Nothing is downloaded or installed without an explicit `Y`;
-`HIVEMIND_NO_UPDATE_CHECK=1` disables the check, and
-`HIVEMIND_UPDATE_CHECK_PRERELEASES=1` also offers pre-releases on a stable
-install. The check is silent when offline. An accepted update downloads the
-release ZIP, verifies GitHub's sha256 digest and applies it through
-`update.bat --zip`; restart the launcher afterwards.
+Startup check (`start_hivemind.bat`): queries GitHub (including pre-releases when
+running a pre-release), caches `"update"`/`"dismissed"` results for **24 h** and
+`"current"` for **4 h**, and asks `[Y/n]` before downloading/verifying sha256
+and applying via `update.bat --zip`. `HIVEMIND_NO_UPDATE_CHECK=1` disables it;
+`HIVEMIND_UPDATE_CHECK_PRERELEASES=1` offers pre-releases on stable builds.
 
 ### Updating llama.cpp
 
-`update_llama.bat`, or manually
-`python deploy\fetch_llamacpp.py --backend vulkan --force` (add
-`--cuda-version X.Y` for a specific runtime; otherwise detected via
-nvidia-smi).
+`update_llama.bat`, or manually:
+`python deploy\fetch_llamacpp.py --backend vulkan --latest --force` (add
+`--cuda-version X.Y` for an exact CUDA runtime; otherwise detected via `nvidia-smi`).
 
 ## Deployment
 
@@ -958,7 +941,7 @@ fully local alternative to cloud coding tools.
 
 Model not found / llama-server.exe won't start: discovery searches
 `<repo>\llama\llama-bXXXX-*\llama-server.exe` (highest build, backend match,
-CUDA version). Re-run installer step 5 or fetch_llamacpp.py, or set
+CUDA version). Re-run installer step `[3/9]` or `fetch_llamacpp.py`, or set
 `HIVEMIND_LLAMA_BIN`. "Model not found" for a loaded model means its GGUF is
 neither in `models\` nor in `models.json` — use `setup_models.bat`.
 
@@ -987,8 +970,8 @@ https://github.com/ggml-org/llama.cpp/releases.
 Web search empty: is SearXNG up? Run `searxng.bat install` once (it seeds
 `searxng-config/docker-compose.yml` from the example), then
 `docker compose -f searxng-config/docker-compose.yml up -d`, then `curl -m 10
-http://localhost:8888/healthz`. `searxng_language` takes one language
-(`all` = unrestricted).
+http://localhost:8888/healthz`. `searxng_language` defaults to `"en"` (set `""`
+to leave the instance language unfiltered; legacy `"all"` auto-migrates to `"en"`).
 
 PowerShell quirks: 5.1 aliases curl (stripped automatically); native commands
 writing to stderr may exit 1 despite success; add `-m 10` to curl health

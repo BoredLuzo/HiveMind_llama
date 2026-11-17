@@ -1210,8 +1210,8 @@ async function loadSettings() {
     if (dmtrCapEl) dmtrCapEl.value = s.duo_max_tool_rounds_runtime_cap || 300;
     var dpmsEl = document.getElementById('duo-planner-max-steps');
     if (dpmsEl) dpmsEl.value = typeof s.duo_planner_max_steps === 'number' ? s.duo_planner_max_steps : 0;
-    S.duoProfileSpeedModel = (s.duo_profile_speed_model || 'qwen3.5:4b');
-    S.duoProfileQualityModel = (s.duo_profile_quality_model || 'qwen3.5:9b-ud');
+    S.duoProfileSpeedModel = (s.duo_profile_speed_model || 'qwen3.5:4b-mtp');
+    S.duoProfileQualityModel = (s.duo_profile_quality_model || 'qwen3.5:9b-mtp');
     updateDuoPairHint();
     S.duoCtxAgentic = parseInputAsOptionalInt(s.duo_coder_ctx_agentic, 16384);
     var dctxAgEl = document.getElementById('duo-ctx-agentic');
@@ -1339,7 +1339,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     // TTS (1.4): opt-in, same rule - nothing happens while it is off.
     S.ttsEnabled = s.tts_enabled === true;
     S.ttsBackend = String(s.tts_backend || 'pocket');
-    S.ttsVoice = String(s.tts_voice || 'cosette');
+    S.ttsVoice = String(s.tts_voice || 'anna');
     S.ttsSpeed = _clampTtsSpeed(s.tts_speed);
     S.tgVoiceIn = s.telegram_voice_in === true;
     S.tgImageIn = s.telegram_image_in !== false;
@@ -12730,7 +12730,53 @@ function _fmtSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
+var _chatSearchTimer = null;
+function searchChatHistory(q) {
+  if (_chatSearchTimer) clearTimeout(_chatSearchTimer);
+  var trimmed = String(q || '').trim();
+  if (trimmed.length < 2) {
+    loadChatHistory();
+    return;
+  }
+  _chatSearchTimer = setTimeout(async function() {
+    try {
+      const res = await fetch('/chats/search?q=' + encodeURIComponent(trimmed) + '&limit=30');
+      const d = await res.json();
+      const c = document.getElementById('chat-history-list');
+      if (!c) return;
+      const hits = d.results || [];
+      if (!hits.length) {
+        c.innerHTML = '<div class="empty">No matching chats found.</div>';
+        return;
+      }
+      c.innerHTML = '';
+      hits.forEach(function(ch) {
+        const item = document.createElement('div');
+        item.className = 'chat-hist-item' + (ch.id === S.currentChatId ? ' active' : '');
+        item.title = 'Click to load';
+        const dot = document.createElement('div'); dot.className = 'chat-hist-dot';
+        const info = document.createElement('div'); info.className = 'chat-hist-info';
+        const title = document.createElement('div'); title.className = 'chat-hist-title';
+        title.textContent = ch.title || 'Untitled';
+        const prev = document.createElement('div'); prev.className = 'chat-hist-preview';
+        prev.textContent = ch.snippet || '';
+        const meta = document.createElement('div'); meta.className = 'chat-hist-meta';
+        meta.textContent = (ch.match_in || 'title') + (ch.updated_at ? ' \u00B7 ' + String(ch.updated_at).slice(0, 16) : '');
+        info.appendChild(title); info.appendChild(prev); info.appendChild(meta);
+        item.appendChild(dot); item.appendChild(info);
+        item.addEventListener('click', function() { loadChat(ch.id); });
+        c.appendChild(item);
+      });
+    } catch (e) {}
+  }, 160);
+}
+
 async function loadChatHistory() {
+  var _inp = document.getElementById('chat-search-input');
+  if (_inp && _inp.value && _inp.value.trim().length >= 2) {
+    searchChatHistory(_inp.value);
+    return;
+  }
   try {
     const d  = await (await fetch('/chats')).json();
     const c  = document.getElementById('chat-history-list');
@@ -13431,7 +13477,7 @@ async function loadSpecialAgentsConfig(cachedSettings) {
     const sesel = document.getElementById('soul-evolve-model-sel');
     if (sesel) {
       sesel.innerHTML = (function() {
-        const rec = ['qwen3.5:4b-mtp','qwen3.5:2b','lfm2.5:2.6b'].find(m => S.models.includes(m));
+        const rec = ['qwen3.5:4b-mtp','qwen3.5:2b-mtp','lfm3:1.7b-qad'].find(m => S.models.includes(m));
           let o = '<option value="">-- No model (Soul Engine fallback) --</option>';
         if (rec && rec !== S.soulEvolveModel) {
           o += '<option value="' + esc(rec) + '" style="color:#8858c0;font-weight:600">★ ' + esc(rec) + ' (Recommended)</option>';
@@ -15487,7 +15533,8 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
   var _fsOverlay = null, _fsIndex = null, _fsList = null, _fsInput = null, _fsSel = -1;
 
   var PANEL_LABELS = { agents: 'AGENTS', presets: 'PRESETS', configs: 'CONFIGS',
-                       memory: 'MEMORY', soul: 'SOUL', models: 'MODELS', chats: 'CHATS' };
+                       memory: 'MEMORY', soul: 'SOUL', models: 'MODELS',
+                       chats: 'CHATS', automations: 'AUTOMATIONS' };
 
   function _selText(el) {
     var row = el.closest('.tgl-row, .cfl-row, label, .agent-card, .set-row, div');
@@ -15525,12 +15572,10 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
       var lbl = w.querySelector('span');
       _push('agents', d[1], lbl || w, 'Duo ctx', null, d[2] + ' ctx context vram');
     });
-    // VOICE + ROUTING (2026-10-21): "tts"/"stt" appear in no label (the card is
-    // "Voice", the rows are "Read aloud"/"Speed"), so the DOM scan can never
-    // find them. Explicit entries with the acronym in the search terms.
+    // VOICE (under Configs tab -> #voice-card) + ROUTING (under Agents tab).
     [['tts-enabled-toggle', 'Voice output (TTS)', 'voice tts text to speech output enabled'],
      ['tts-backend-sel', 'TTS voice model (Pocket TTS / Underdog Woof)', 'voice tts backend model pocket woof underdog numpy'],
-     ['tts-voice-sel', 'TTS voice', 'voice tts voice model speaker'],
+     ['tts-voice-sel', 'TTS voice', 'voice tts voice model speaker anna cosette juno mira'],
      ['tts-read-direct-toggle', 'Read aloud: direct answers (TTS)', 'tts read aloud speak direct chat'],
      ['tts-read-agentic-toggle', 'Read aloud: agentic runs (TTS)', 'tts read aloud speak agentic plan'],
      ['tts-read-ask-toggle', 'Read aloud: agent questions (TTS)', 'tts read aloud speak ask question'],
@@ -15538,17 +15583,24 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
      ['tts-speed-inp', 'TTS speed', 'tts speed voice rate'],
      ['tts-volume-inp', 'TTS volume', 'tts volume loudness voice'],
      ['stt-enabled-toggle', 'Voice input (STT)', 'voice stt speech to text input transcribe'],
-     ['stt-model-sel', 'STT model', 'voice stt whisper model transcribe'],
+     ['stt-model-sel', 'STT model', 'voice stt whisper parakeet model transcribe'],
      ['stt-language-sel', 'STT language', 'voice stt language transcribe'],
      ['stt-threads-sel', 'STT threads', 'voice stt threads cpu transcribe'],
      ['stt-preload-toggle', 'STT preload', 'voice stt preload warm transcribe'],
-     ['stt-max-seconds', 'STT max seconds', 'voice stt length limit transcribe'],
-     ['mode-btns-row', 'Mode: Auto / Chat / Pipeline / AutoMap / Code-Duo', 'mode auto chat pipeline automap code_duo routing'],
-     ['routing-card', 'Routing: who decides in auto', 'routing auto decider judge plan step'],
-     ['routing-decider-sel', 'Routing: decider', 'routing decider encoder on off shadow'],
+     ['stt-max-seconds', 'STT max seconds', 'voice stt length limit transcribe']
+    ].forEach(function(d) {
+      var el = document.getElementById(d[0]);
+      if (!el) return;
+      _push('configs', d[1], el, 'Voice', null, d[2]);
+    });
+    [['mode-btns-row', 'Mode: Auto / Chat / Pipeline / Code Duo (Agentic)', 'mode auto chat pipeline agentic code_duo routing'],
+     ['routing-card', 'Routing: who decides in auto', 'routing auto decider judge plan step gliner'],
+     ['routing-decider-sel', 'Routing: decider', 'routing decider encoder gliner classifier on off shadow'],
      ['routing-judge-sel', 'Routing: judge', 'routing judge llm on off shadow'],
      ['routing-planner-sel', 'Routing: plan step', 'routing plan step planner always decider never'],
-     ['routing-status', 'Routing: current choice', 'routing status current who decides']
+     ['routing-status', 'Routing: current choice', 'routing status current who decides'],
+     ['vision-accordion-hdr', 'Image Processing (Direct / Describe first)', 'image vision preprocess direct multimodal mmproj steer duo_image_mode vision_preprocessing'],
+     ['moe-model-select', 'MoE CPU experts & VRAM fit', 'moe cpu experts offload ram llama_fit_target llama_cache_reuse']
     ].forEach(function(d) {
       var el = document.getElementById(d[0]);
       if (!el) return;
@@ -15575,7 +15627,7 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
     _push('agents', 'Coder Toolset (lean / core / full)', document.getElementById('duo-coder-tool-tier'), 'Tools & Optionals', null,
       'duo_coder_tool_tier coder toolset lean core full');
     _push('agents', 'Direct Chat Tools', document.getElementById('tools-direct-block'), 'Tools & Optionals', null,
-      'direct_tools_enabled direct_tools_tier direct_tools_max_rounds off basic research python full');
+      'direct_tools_enabled direct_tools_tier direct_tools_max_rounds off readonly research python mcp full');
     _push('agents', 'Websearch (SearXNG)', document.getElementById('duo-websearch-toggle'), 'Tools & Optionals', null,
       'duo_websearch_enabled duo_websearch_timeout_seconds searxng_host websearch check host');
     _push('agents', 'Git Tools', document.getElementById('git-tools-toggle'), 'Tools & Optionals', null,
@@ -15654,6 +15706,9 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
         var row = inp.closest('label');
         if (!row || _dead(row)) return;
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt && row.closest('#vision-accordion') && !/^image/i.test(txt)) {
+          txt = 'Image Processing: ' + txt;
+        }
         if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
       });
       // BARE CHECKBOX ROWS (2026-11-01): several controls are a checkbox plus a
@@ -15736,12 +15791,12 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
     [['voice-card', 'Voice — Speech to text', null, 'Voice',
       'speech to text stt dictate dictation microphone mic voice note transcribe whisper parakeet model tier download 3 s record test english'],
      ['voice-card', 'Voice — Text to speech', null, 'Voice',
-      'text to speech tts speak read aloud vorlesen ausgeben stimme voice cosette speed pocket engine sample uvx'],
+      'text to speech tts speak read aloud vorlesen ausgeben stimme voice anna cosette woof underdog juno mira numpy speed pocket engine sample uvx'],
      ['voice-card', 'Voice — Read aloud', null, 'Voice',
       'read aloud vorlesen auto speak answer plan coder fazit ask question defensive gate approval card toggles'],
-     ['configs', 'Telegram — Voice notes in', null, 'Telegram voice',
+     ['tg-voice-in-toggle', 'Telegram — Voice notes in', null, 'Telegram voice',
       'telegram voice note in dictation transcribe bot phone dictate'],
-     ['configs', 'Telegram — Answers as voice notes', null, 'Telegram voice',
+     ['tg-voice-out-toggle', 'Telegram — Answers as voice notes', null, 'Telegram voice',
       'telegram voice out answer vorlesen voice note bot phone opus'],
      // the 1.4.2 controls: the card scan only sees English labels, and these
      // three live in rows a text scan does not reach (a slider, a select, a
@@ -15756,9 +15811,9 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
       'progress status tool calls info messages stumm mute silent only result'],
      // MCP has no card of its own (it is a launcher + a settings list), so the
      // DOM scan cannot find it - without this entry "mcp" searched nothing.
-     ['configs', 'MCP server (external tools)', null, 'Backend',
+     ['mcp-client-toggle', 'MCP server (external tools)', null, 'Backend',
       'mcp model context protocol server external tools 8090 stdio http client hivemind tools'],
-     ['configs', 'External clients / API access', null, 'Backend',
+     ['p-configs', 'External clients / API access', null, 'Backend',
       'api openai compatible endpoint v1 chat completions external client integration rest']].forEach(function(d) {
       var card = document.getElementById(d[0]) ?
         document.querySelector('.cfg-card:has(#' + d[0] + ')') : null;
@@ -15772,17 +15827,20 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
     // with curated keywords; the click lands on the tab itself.
     [['agents', 'AGENTS panel', 'agents planner coder duo execution settings vision ctx context temperature'],
      ['presets', 'PRESETS panel', 'presets prompts save load'],
-     ['configs', 'CONFIGS panel', 'configs settings toggles options rollup'],
+     ['configs', 'CONFIGS panel', 'configs settings toggles options rollup voice tts stt mcp telegram'],
      ['memory', 'MEMORY panel', 'memory long-term notes'],
      ['soul', 'SOUL panel', 'soul personality evolution'],
-     ['models', 'MODELS panel', 'models vram tokens tok llama download install ctx'],
-     ['chats', 'CHATS panel', 'chats history sizes tokens']].forEach(function(d) {
+     ['models', 'MODELS panel', 'models vram tokens tok llama download install ctx moe'],
+     ['chats', 'CHATS panel', 'chats history search sizes tokens'],
+     ['automations', 'AUTOMATIONS panel', 'automations cron schedule recurring timer zeitplan mcp telegram']].forEach(function(d) {
       var btn = null;
       document.querySelectorAll('.tab').forEach(function(b) {
         if (b.dataset && b.dataset.p === d[0]) btn = b;
       });
       _push(d[0], d[1], btn, 'Tab', null, d[2]);
     });
+    _push('chats', 'Search saved chats', document.getElementById('chat-search-input'), 'Chats', null,
+          'search chats history filter messages title');
     _push(null, 'New Chat', null, 'Action',
          function() { var b = Array.from(document.querySelectorAll('button'))
            .find(function(x) { return /new chat/i.test(x.textContent); }); if (b) b.click(); });
@@ -15818,10 +15876,6 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
     _render('');
     setTimeout(function() { _fsInput.focus(); }, 30);
   }
-
-  window.addEventListener('load', function() {
-    if (document.getElementById('fs-inline')) _initInline();
-  });
 
   function _close() { if (_fsOverlay) _fsOverlay.style.display = 'none'; }
 

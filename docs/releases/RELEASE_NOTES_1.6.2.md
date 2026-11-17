@@ -58,3 +58,15 @@ next to your old install — `settings.json`, `models.json`, `sessions\`, `logs\
   pre-release version stage ordering (`alpha < beta < rc`), stale 90s watchdog
   detection, first-upgrade orphan cleanup, empty directory cleanup, and strict
   release leak checks, covered by `tests/test_installer_updater_1_6_2.py`.
+
+## Search, UI & Documentation Alignment
+
+- Fixed Feature Search panel targeting (`Voice` in `Configs`, `Automations` tab,
+  `Planner` dedup collision, Image Processing & MoE entries, Underdog Woof /
+  GLiNER / MCP keywords), wired saved chat search (`GET /chats/search`) in the
+  Chats panel, fixed `searxng.bat external <url>`, `tools/websearch.py` empty
+  language / `site:` guards, pruned code/file search, and
+  `lsp_forward_workspace_settings` forwarding.
+- Updated `README.md`, `docs/`, `CONTRIBUTING.md`, `AGENTS.md`, and `bench/`
+  docs to match current `1.6.2` models, installer steps, security/approval/LSP/MCP/
+  Voice behavior, and defaults.

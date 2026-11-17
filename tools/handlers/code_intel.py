@@ -11,9 +11,15 @@ from utils.file import (
 )
 from tools.errors import tool_error_response as _tool_error_response
 import asyncio
+import os
 import re
 import shutil
 import sys
+
+_SKIP_SEARCH_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", ".venv", "venv",
+    ".idea", ".vscode", ".pytest_cache", ".ruff_cache", "dist", "build", "$RECYCLE.BIN",
+})
 
 from . import _shared
 
@@ -126,8 +132,30 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
     if err := _inline_check_workspace(base, workspace_lock, "find_files"):
         return err
     try:
-        matches = await asyncio.to_thread(lambda: sorted(base.glob(pattern)))
-        files = [m for m in matches if m.is_file() and not is_secret_path(m, base)]
+        def _collect() -> list[Path]:
+            if "**" not in pattern:
+                return [
+                    m for m in sorted(base.glob(pattern))
+                    if m.is_file()
+                    and not any(part in _SKIP_SEARCH_DIRS for part in m.parts)
+                    and not is_secret_path(m, base)
+                ]
+            import fnmatch
+            sub_pat = pattern[3:] if pattern.startswith("**/") else pattern
+            found: list[Path] = []
+            for dp, dns, fns in os.walk(base):
+                dns[:] = [d for d in sorted(dns) if d not in _SKIP_SEARCH_DIRS]
+                for fn in sorted(fns):
+                    fp = Path(dp) / fn
+                    rel_s = fp.relative_to(base).as_posix()
+                    if (fnmatch.fnmatch(rel_s, pattern)
+                            or fnmatch.fnmatch(fn, sub_pat)
+                            or fnmatch.fnmatch(rel_s, sub_pat)):
+                        if not is_secret_path(fp, base):
+                            found.append(fp)
+            return sorted(found)
+
+        files = await asyncio.to_thread(_collect)
         if not files:
             return f"(no matches for '{pattern}' in {base})"
         lines = []
@@ -198,10 +226,11 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
             cmds.append(["grep", "-n", "--", _safe_pat, path])
 
     _any_executed = False
+    _backend_completed = False
     _LINE_CAP = 50
 
     async def _run_one(argv: list[str]):
-        nonlocal _any_executed
+        nonlocal _any_executed, _backend_completed
         try:
             r = await asyncio.create_subprocess_exec(
                 *argv,
@@ -209,11 +238,19 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
             )
             out, _ = await asyncio.wait_for(r.communicate(), 10)
             _any_executed = True
-            result = "\n".join(
-                out.decode(errors="replace").splitlines()[:_LINE_CAP]).strip()
-            result = filter_secret_search_rows(result).strip()
-            if result:
-                return result
+            if r.returncode in (0, 1):
+                _backend_completed = True
+            raw_text = out.decode(errors="replace").strip()
+            if not raw_text:
+                return None
+            safe_text = filter_secret_search_rows(raw_text).strip()
+            if not safe_text:
+                return None
+            lines = safe_text.splitlines()
+            capped = "\n".join(lines[:_LINE_CAP])
+            if len(lines) > _LINE_CAP:
+                capped += f"\n... ({len(lines) - _LINE_CAP} more)"
+            return capped
         except Exception:
             pass
         return None
@@ -222,6 +259,8 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
         _r = await _run_one(_argv)
         if _r:
             return f"[search_code: {pattern}]\n{_r[:8000]}"
+        if _backend_completed:
+            return "(no matches — search completed, nothing found)"
 
     # PYTHON-FALLBACK (3. Backend): Original-Pattern, garantiert korrekt —
     _fb_error = False
@@ -254,25 +293,24 @@ def _python_content_search(
         rx = re.compile(pattern)
     except re.error:
         rx = re.compile(re.escape(pattern))
-    _skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv",
-                  ".idea", ".vscode", "$RECYCLE.BIN"}
     files: list[Path] = [root] if root.is_file() else []
     if not files:
-        for p in root.rglob("*"):
+        for dp, dns, fns in os.walk(root):
+            dns[:] = [d for d in sorted(dns) if d not in _SKIP_SEARCH_DIRS]
+            for fn in sorted(fns):
+                if len(files) >= max_files:
+                    break
+                p = Path(dp) / fn
+                if is_secret_path(p, root):
+                    continue
+                try:
+                    if p.stat().st_size > max_file_bytes:
+                        continue
+                except OSError:
+                    continue
+                files.append(p)
             if len(files) >= max_files:
                 break
-            if not p.is_file():
-                continue
-            if any(part in _skip_dirs for part in p.parts[:-1]):
-                continue
-            if is_secret_path(p, root):
-                continue
-            try:
-                if p.stat().st_size > max_file_bytes:
-                    continue
-            except OSError:
-                continue
-            files.append(p)
     hits: list[str] = []
     for fp in files:
         try:

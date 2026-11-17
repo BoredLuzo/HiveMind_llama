@@ -263,7 +263,7 @@
               </div>
             </div>
             <input class="sinput" type="text" id="subagent-ladder-inp"
-              placeholder="lfm2.5:2.6b, qwen3.5:0.8b-ud"
+              placeholder="lfm3:1.7b-qad, qwen3.5:0.8b-ud"
               style="margin-bottom:6px;height:28px;font-size:10px"
               onchange="postSettings({subagent_lite_model_ladder:this.value.split(',').map(s=>s.trim()).filter(Boolean)})">
             <div class="opt-row">
@@ -893,6 +893,7 @@
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);line-height:1.4">
             KV-shift reuse after mid-context edits. 0 = off, 256 = recommended. Applies on next model load.
+          </div>
           <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
             <input type="checkbox" id="vram-preflight-gate-toggle" checked
               onchange="S.vramPreflightGate=this.checked;postSettings({vram_preflight_gate:S.vramPreflightGate})">
@@ -900,7 +901,6 @@
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);line-height:1.4">
             Refuse model loads estimated not to fit VRAM. ON = safe (estimate can be wrong for foreign models). OFF = attempt the load anyway; real OOM halve ctx via retries.
-          </div>
           </div>
         </div>
 
@@ -1855,7 +1855,7 @@
             style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:190px;flex-shrink:0">
             <!-- filled from GET /tts/voices: core/tts_engine.VOICES is the
                  single list, this select must not carry its own copy -->
-            <option value="cosette">(loading...)</option>
+            <option value="anna">(loading...)</option>
           </select>
         </div>
         <div class="tgl-row">
@@ -2206,7 +2206,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <span class="sl"></span>
       </label>
     </div>
-    <div class="fld-hint" id="tg-voice-out-hint">ON: the final answer of a phone run is also sent as a voice note (cosette, the voice and speed from the Voice card). Needs <b>Text to speech</b> enabled - the switch is greyed out otherwise.</div>
+    <div class="fld-hint" id="tg-voice-out-hint">ON: the final answer of a phone run is also sent as a voice note (selected voice and speed from the Voice card). Needs <b>Text to speech</b> enabled - the switch is greyed out otherwise.</div>
     <div class="fld">
       <div class="fld-label">Final result arrives as</div>
       <select id="tg-result-mode-sel" onchange="postSettings({telegram_result_mode:this.value})">
@@ -2528,9 +2528,12 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       <input type="checkbox" id="image-persist-toggle" onchange="imagePersistToggle(this)">
       Keep uploaded images
     </label>
-    <button onclick="saveCurrentChat()" class="amber-btn" style="width:100%;margin-bottom:10px">
+    <button onclick="saveCurrentChat()" class="amber-btn" style="width:100%;margin-bottom:8px">
       &#9660; Save current chat
     </button>
+    <input class="sinput" type="search" id="chat-search-input" placeholder="Search saved chats (title & messages)..."
+      oninput="searchChatHistory(this.value)"
+      style="width:100%;height:30px;margin-bottom:10px;font-size:11px">
     <div id="chat-history-list"><div class="empty">No saved chats yet.</div></div>
   </div>
   <div class="panel" id="p-automations">

@@ -418,12 +418,100 @@ def test_script_hardening_guards() -> None:
           and "Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND" in sh)
 
 
+def test_search_and_lsp_1_6_2() -> None:
+    import asyncio
+    import tools.handlers.code_intel as ci
+    import tools.handlers.lsp as lsp_h
+    import tools.websearch as ws
+
+    sx_bat = (ROOT / "searxng.bat").read_text(encoding="utf-8")
+    check("searxng.bat: external route executes before HM_PORT validation",
+          sx_bat.index('if /i "%ACTION%"=="external" goto external')
+          < sx_bat.index("Invalid SearXNG port"))
+
+    # websearch: configure(language="") clears filter & site:github.com bypasses wiki shortcut
+    ws.configure(host="http://localhost:8888", enabled=True, engines="", language="en")
+    ws.configure(language="")
+    check("websearch: configure(language='') clears _SEARXNG_LANGUAGE",
+          ws._SEARXNG_LANGUAGE == "")
+    ws.configure(language="en")
+
+    called: list[str] = []
+
+    async def _fake_wiki(*a, **kw):
+        called.append("wiki")
+        return "wiki-hit"
+
+    async def _fake_fetch(q, m, *, engines_override=""):
+        called.append("searxng")
+        return {"results": [{"title": "GitHub", "url": "https://github.com/org/wiki", "content": "wikipedia client"}]}, None
+
+    with mock.patch.object(ws, "_wiki_direct", side_effect=_fake_wiki), \
+            mock.patch.object(ws, "_fetch_searxng_json", side_effect=_fake_fetch):
+        res = asyncio.run(ws.web_search("site:github.com wikipedia"))
+    check("websearch: non-wiki site: query stays on SearXNG path",
+          called == ["searxng"] and "https://github.com/org/wiki" in res, f"called={called}")
+
+    # code_intel: rg clean zero-hit does not fall through + find_files prunes .git/.venv
+    with tempfile.TemporaryDirectory(prefix="hm162_ci_") as td:
+        tmp = Path(td)
+        (tmp / ".git").mkdir()
+        (tmp / ".git" / "config").write_text("SECRET_NEEDLE", encoding="utf-8")
+        (tmp / ".venv" / "lib").mkdir(parents=True)
+        (tmp / ".venv" / "lib" / "mod.py").write_text("SECRET_NEEDLE", encoding="utf-8")
+        (tmp / "src.py").write_text("hello = 1\n", encoding="utf-8")
+
+        ff = asyncio.run(ci._inline_tool_find_files({"pattern": "**/*"}, tmp, None))
+        check("code_intel: find_files prunes .git and .venv",
+              "src.py" in ff and ".git" not in ff and ".venv" not in ff, ff)
+
+        class _FakeRgProc:
+            returncode = 1
+
+            async def communicate(self):
+                return b"", b""
+
+        py_called: list[str] = []
+
+        def _fake_py(*a, **kw):
+            py_called.append("py")
+            return "hit"
+
+        with mock.patch.object(ci.shutil, "which", return_value="rg"), \
+                mock.patch.object(ci.asyncio, "create_subprocess_exec",
+                                  side_effect=[_FakeRgProc()]), \
+                mock.patch.object(ci, "_python_content_search", side_effect=_fake_py):
+            sc = asyncio.run(ci._inline_tool_search_code({"pattern": "SECRET_NEEDLE"}, tmp, None))
+        check("code_intel: clean rg exit 1 stops without case-insensitive/Python fallback",
+              not py_called and "no matches" in sc, f"sc={sc!r}")
+
+    # lsp handler forwards lsp_forward_workspace_settings
+    captured: list[dict] = []
+
+    class _DummyMgr:
+        def __init__(self, workspace, cfg):
+            captured.append(cfg)
+
+    with tempfile.TemporaryDirectory(prefix="hm162_lsp_") as td:
+        lsp_h._MANAGERS.clear()
+        with mock.patch.object(lsp_h._lsp, "LspManager", _DummyMgr), \
+                mock.patch.object(lsp_h, "_lsp_settings",
+                                  return_value={"lsp_servers": {}, "lsp_forward_workspace_settings": True}):
+            async def _call():
+                lsp_h._get_manager(Path(td))
+            asyncio.run(_call())
+        lsp_h._MANAGERS.clear()
+        check("lsp: _get_manager forwards lsp_forward_workspace_settings",
+              bool(captured and captured[0].get("lsp_forward_workspace_settings") is True))
+
+
 def main() -> int:
     test_settings_deepcopy_and_safe_policy()
     test_llama_config_and_models()
     test_fetchers_hardening()
     test_updater_and_prune_and_update_check()
     test_script_hardening_guards()
+    test_search_and_lsp_1_6_2()
     return h.finish("installer_updater_1_6_2")
 
 

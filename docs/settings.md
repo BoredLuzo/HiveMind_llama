@@ -30,11 +30,11 @@ its comment) in either file, then re-run the generator.
 | `desktop_notifications` | bool | `True` | - | Windows toasts for run start/end and approval cards. |
 | `direct_tools_enabled` | bool | `True` | yes |  |
 | `direct_tools_max_rounds` | int | `12` | yes |  |
-| `direct_tools_tier` | str | `readonly` | yes | off \| readonly(websearch) \| research(web+read) \| python(read+python) \| full |
+| `direct_tools_tier` | str | `readonly` | yes | off \| readonly \| research \| python \| mcp \| full |
 | `disable_thinking_in_planner` | bool | `False` | - |  |
 | `document_max_chars` | int | `120000` | - | PDF/text extraction limits (engine /documents/extract). The gateway sends bytes, the engine answers text or a DOC_* code. |
 | `document_max_pages` | int | `40` | - |  |
-| `duo_action_approval_enabled` | bool | `False` | yes | When on, the run pauses before everything that changes the project — code/cmd execution (run_bash, run_python, install_package, start_background, run_tests), file writes (write_file, edit_file, write_file_append), git_commit and dynamic MCP tools. "Approve" buttons: once, or… |
+| `duo_action_approval_enabled` | bool | `False` | yes | When on, pauses before mutating/exec tools (run_bash, run_python, install_package, start_background, run_tests, write_file, edit_file, apply_patch, write_file_append, undo_last, browser, lsp_rename, lsp_format, git_commit, dynamic MCP tools). Approve once, remember per exact… |
 | `duo_action_approval_timeout_s` | int | `0` | yes | Auto-DENY an unanswered approval card after N seconds (0 = off, attended runs wait as before). With N > 0 and nobody at the desk the gated call is DENIED once (fail closed, review: the old auto-approve-once behavior approved unseen actions) - the gate wait ends… |
 | `duo_agentic_mode` | bool | `True` | yes | DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the default; the Critic-Duo is one click away and costs a second model. |
 | `duo_agentic_thinking` | bool | `False` | yes |  |
@@ -53,7 +53,7 @@ its comment) in either file, then re-run the generator.
 | `duo_coder_model` | str | `` | yes | Automatic/override keys that DEFAULT_SETTINGS now exposes explicitly (previously only implicit read fallbacks in the consumers). |
 | `duo_coder_tool_thinking` | bool | `False` | yes |  |
 | `duo_coder_tool_thinking_auto_mode` | str | `off` | yes |  |
-| `duo_coder_tool_tier` | str | `core` | yes | CORE CODER TIER : default "core" (18 tools: read/edit/run/ tests + lsp_diagnostics + apply_patch) instead of "full" (33 incl. git/web/MCP/browser/LSP extras). Full is opt-in when a task needs them. |
+| `duo_coder_tool_tier` | str | `core` | yes | CORE CODER TIER: default "core" (19 base tools incl. read/edit/apply_patch/ write/run/tests/lsp_diagnostics + optional subagent) instead of "full" (33 base + git/web/MCP/browser/LSP extras). Full is opt-in. |
 | `duo_coder_ttl_seconds` | int | `0` | yes | 0 = auto (420s), >0 = Override |
 | `duo_coding_mode` | bool | `True` | yes |  |
 | `duo_compress_auto_floor` | float | `0.7` | - |  |
@@ -160,7 +160,7 @@ its comment) in either file, then re-run the generator.
 | `duo_websearch_timeout_critical_seconds` | int | `24` | - |  |
 | `duo_websearch_timeout_fast_seconds` | int | `13` | - |  |
 | `duo_websearch_timeout_seconds` | int | `20` | yes |  |
-| `duo_wedge_handoff_enabled` | bool | `True` | yes | WEDGE-HANDOFF : when the coder fails the same edit on one file repeatedly (streak threshold, or the identical call twice within a streak), the run delegates that ONE edit to a fresh-context fix agent (same model weights, clean window) and continues. Off by default… |
+| `duo_wedge_handoff_enabled` | bool | `True` | yes | WEDGE-HANDOFF: when the coder fails the same edit on one file repeatedly (streak threshold, or identical call twice within a streak), delegates that edit to a fresh-context fix agent (same model weights, clean window). Default ON (includes run_bash wedges; see EDIT_FAMILY_TOOLS). |
 | `duo_wedge_handoff_max_per_run` | int | `2` | - |  |
 | `duo_wedge_handoff_max_rounds` | int | `10` | - |  |
 | `duo_wedge_handoff_max_tokens` | int | `1200` | - | MAX-TOKENS-KEY : core/fix_agent.py has always read this key (int(_s("duo_wedge_handoff_max_tokens", 1200))), but it was missing here and in docs/settings.md - the value was fixed at 1200 and could not be configured. Listed now so the UI/settings.json can set it. |
@@ -209,7 +209,7 @@ its comment) in either file, then re-run the generator.
 | `max_concurrent_models` | int | `2` | - |  |
 | `max_iterations` | int | `2` | yes |  |
 | `max_model_size_gb` | float | `6.0` | - |  |
-| `mcp_client_enabled` | bool | `False` | yes | MCP client (beta): use external MCP servers over stdio. Off by default; phone runs stay blocked by the phone restriction gate. |
+| `mcp_client_enabled` | bool | `False` | yes | MCP client (beta): connect external MCP servers over stdio or HTTP. Off by default; phone runs stay gated by telegram_phone_restricted. |
 | `mcp_client_max_calls_per_run` | int | `40` | - |  |
 | `mcp_client_timeout_s` | int | `30` | yes |  |
 | `mcp_server_budgets` | object | `{}` | - | Per-server MCP client call budgets: {"server-name": max calls per rolling hour}. Absent/0 = unlimited (previous behavior). |
@@ -250,8 +250,8 @@ its comment) in either file, then re-run the generator.
 | `soul_skill_distillation` | bool | `False` | yes | DEFAULT OFF: the distiller spends one extra LLM call after a run. It is useful, but a fresh install should not grow background model work nobody asked for - switch it on in the SOUL tab. |
 | `soul_skill_writing` | bool | `False` | yes |  |
 | `startup_preload_enabled` | bool | `False` | yes |  |
-| `stt_enabled` | bool | `False` | yes | Scope for 1.4 (see docs/voice_setup.md): English only, one CLI call per request, model tier chosen by RAM unless set explicitly. |
-| `stt_language` | str | `en` | yes | 1.4 ships en only |
+| `stt_enabled` | bool | `False` | yes | English only: one CLI call per request, tier chosen by RAM unless set. |
+| `stt_language` | str | `en` | yes | English only |
 | `stt_log_transcripts` | bool | `False` | - |  |
 | `stt_max_seconds` | int | `300` | yes |  |
 | `stt_model` | str | `` | yes | "" = RAM default (parakeet q4_k >= 8 GB) |
@@ -277,7 +277,7 @@ its comment) in either file, then re-run the generator.
 | `telegram_voice_in` | bool | `False` | yes | Telegram gateway voice (per bot, opt-in). The gateway reads these from the engine, so the UI switches drive it; greying follows stt_enabled / tts_enabled (a voice note needs STT, a voice answer needs TTS). |
 | `telegram_voice_out` | bool | `False` | yes |  |
 | `tts_backend` | str | `pocket` | yes | TTS engine: "pocket" (Kyutai Pocket TTS via uvx, CC BY 4.0) or "woof" (ConwayResearch/Underdog-Woof CPU NumPy ~41 MB, non-commercial only). |
-| `tts_enabled` | bool | `False` | yes | Opt-in like STT: the sidecar (torch) only starts when tts_enabled is on. Cosette + 1.08x speed are the operator's picks ; Pocket TTS has no speed parameter, so the factor is applied by HiveMind (WSOLA). |
+| `tts_enabled` | bool | `False` | yes | Opt-in like STT: nothing starts until tts_enabled is on. Default voice is anna (CC BY 4.0) at 1.08x; WSOLA applies speed factor. |
 | `tts_idle_stop_s` | int | `900` | - |  |
 | `tts_normalize` | bool | `True` | - | Server-side levelling of the sidecar output (measured -15.5 dBFS peak). |
 | `tts_preload_run` | bool | `True` | yes | Warm the TTS engine when a run starts instead of when the first chunk is ready - the sidecar then needs ~1 s per sentence instead of a 12 s cold start. Useful for phone runs where nobody touched the PC. |

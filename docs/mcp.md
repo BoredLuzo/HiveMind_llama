@@ -196,9 +196,12 @@ every legacy request/response byte-flow is identical.
 | `MCP_BODY_TIMEOUT_S` | `30` | per-read body timeout, else 408 |
 | `MCP_MAX_BATCH` | `16` | requests per batch |
 | `MCP_REQUEST_TIMEOUT_S` | `300` | per-request timeout on both transports, `0` disables |
-| `MCP_SHARED_TOOL_ENABLED` | `1` | forward engine tools to `/internal/tool/exec` (`0` = local handlers only) |
-| `MCP_SHARED_TOOL_URL` | *(derived)* | engine exec URL (defaults to `HIVEMIND_URL` + `/internal/tool/exec`) |
-| `MCP_SHARED_TOOL_TIMEOUT_S` | `120` | read timeout for the engine forward (min 10) |
+| `HIVEMIND_URL` | `http://127.0.0.1:8001` | engine base URL used by shared tool forwarding (`/internal/tool/exec`) |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | local model endpoint override |
+| `HIVEMIND_WORKSPACE` | *(cwd)* | workspace root for stdio/IDE calls |
+| `HIVEMIND_INTERNAL_TOKEN` | *(empty)* | optional internal auth header sent when forwarding to HiveMind |
+| `MCP_SHARED_TOOL_ENABLED` | `1` | forward engine tools to `/internal/tool/exec` (`0` = local handlers; note `edit_file` and `replace_lines` require shared dispatch) |
+| `MCP_SHARED_TOOL_TIMEOUT_S` | `120` | read timeout for engine forward (min 10) |
 | `MCP_SHARED_TOOL_MODE` | `mcp_agent` | `tool_mode` sent with the forward |
 | `MCP_SHARED_TOOL_MODEL` | `qwen3:8b` | `model_for_limits` sent with the forward |
 | `MCP_SHARED_INCLUDE_WEBSEARCH` | `1` | `include_websearch` flag sent with the forward |

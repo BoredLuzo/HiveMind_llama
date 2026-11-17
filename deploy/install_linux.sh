@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # HiveMind Linux installer: system deps + venv + llama.cpp + systemd service.
-# Usage: sudo deploy/install_linux.sh [--voice]   (env: HIVEMIND_GPU_BACKEND=vulkan|cuda|rocm|cpu, HIVEMIND_VOICE=1)
+# Usage: sudo deploy/install_linux.sh [--voice|--tts|--both]   (env: HIVEMIND_GPU_BACKEND=vulkan|cuda|rocm|cpu, HIVEMIND_VOICE=1, HIVEMIND_TTS=1)
 set -euo pipefail
 
 INSTALL_DIR="/opt/hivemind"
@@ -292,7 +292,7 @@ echo "  tail -f $LOG_DIR/hivemind.log    # Log file"
 echo ""
 echo "Configuration ($SERVICE_FILE):"
 echo "  - Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND  (vulkan | cuda | rocm | cpu)"
-echo "  - MemoryMax (default 12G, adjust for your RAM)"
+echo "  - MemoryMax=48G (adjust in $SERVICE_FILE for your RAM)"
 echo ""
 echo "Models: copy GGUFs into the models folder or run, as hivemind:"
 echo "  sudo -u hivemind bash -lc 'cd $INSTALL_DIR && ./.venv/bin/python deploy/fetch_models.py'"

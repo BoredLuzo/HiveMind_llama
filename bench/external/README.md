@@ -8,9 +8,11 @@ comparison.
 
 ## Non-invasive guarantees
 
-- `bench/runner.py` and its conditions (`raw`, `raw_files`,
-  `hivemind_direct`, `hivemind_duo`, `hivemind_duo_lean`, `aider`) are **not
-  touched** by this adapter.
+- `bench/runner.py` and its 9 conditions (`raw`, `raw_files`,
+  `hivemind_direct`, `hivemind_duo`, `hivemind_duo_full`, `hivemind_duo_lean`,
+  `aider`, `hermes`, `pi`) are **not touched** by this adapter. Dedicated DeepSWE /
+  SWE-bench adapters live alongside this file (`deepswe_hivemind.py`,
+  `swebench_hivemind.py`, `DEEPSWE_QWEN36.md`).
 - The adapter reuses the runner's task loading, fresh workspace preparation,
   code-churn metrics and the identical hidden-test check (tests are copied
   in only at check time, overwriting same-named agent files). A task passes
@@ -94,8 +96,7 @@ compare *products*, not *harnesses*.
 ## Fairness caveats
 
 - **Different model, different server.** Claude Code and Codex use their own
-  hosted models; only Aider is the same-model comparison. Report the two
-  parts separately, exactly as ROADMAP Phase 5 requires.
+  hosted models; only Aider is the same-model comparison. Always report them separately.
 - **Turn/sandbox limits differ.** `--max-turns` (default 30) caps Claude
   Code turns; Codex runs with `--sandbox workspace-write` and
   `--skip-git-repo-check`. Document the flags used alongside any numbers.
