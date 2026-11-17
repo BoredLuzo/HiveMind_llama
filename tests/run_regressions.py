@@ -468,6 +468,7 @@ _SUBPROCESS_HEAVY_SUITES = {
     "tts_engine", "stt_audio", "agentic_audit",
     "write_guard_and_explore_truth", "preflight_matrix",
     "run_bash_drive_paths", "duo_e2e_smoke", "gateway_lint_gate",
+    "glm_deep_audit_wave2",
 }
 
 

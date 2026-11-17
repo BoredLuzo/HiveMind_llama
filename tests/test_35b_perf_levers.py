@@ -90,10 +90,16 @@ def test_resolve_load_mode_large_moe():
                                 mlock_now=True, profile_lm="mmap+mlock",
                                 free_ram_gb=30.0, large_moe=True)
           == "mmap+mlock")
-    # the SPEC+NONE crash guard outranks the skip
-    check("1j large MoE + spec planned -> mmap+mlock (crash guard)",
+    # the SPEC+NONE crash guard maps to plain mmap (avoids mmap+mlock 40GB commit tax)
+    check("1j large MoE + spec planned -> mmap (crash guard without mlock tax)",
           ML._resolve_load_mode(MOE_35B_PLAIN, spec_planned=True,
                                 mlock_now=True, profile_lm="none",
+                                free_ram_gb=30.0, large_moe=True)
+          == "mmap")
+    # explicit profile mmap+mlock + spec planned still honors profile
+    check("1j2 large MoE + spec planned + profile mmap+mlock -> profile wins",
+          ML._resolve_load_mode(MOE_35B_PLAIN, spec_planned=True,
+                                mlock_now=True, profile_lm="mmap+mlock",
                                 free_ram_gb=30.0, large_moe=True)
           == "mmap+mlock")
     # setting off -> the old behavior even for large MoE
