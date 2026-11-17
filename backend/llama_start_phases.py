@@ -1187,6 +1187,8 @@ def _build_llama_spawn_env() -> dict[str, str] | None:
     pure DEVICE_LOCAL VRAM allocations unless explicitly opted out.
     """
     if platform.system() != "Windows":
+        # POSIX-LIB-PATH (2026-09-13): ubuntu tarballs ship shared libs in
+        # lib/ next to the binary without rpath — prepend to LD_LIBRARY_PATH.
         spawn_env = dict(os.environ)
         bin_dir = str(LLAMA_BIN.parent)
         # X2 (audit r2): ubuntu tarballs ship the shared libs in lib/.

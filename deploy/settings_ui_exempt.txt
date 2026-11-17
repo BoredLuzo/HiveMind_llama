@@ -155,6 +155,7 @@ duo_auto_test_timeout
 # 35B/performance levers (2026-11-12): loader/loop internals, tuned via
 # settings.json or POST /settings; each is documented in docs/settings.md.
 llama_mlock_skip_large_moe
+llama_vk_disable_host_visible_vidmem
 duo_ubatch_moe
 duo_tool_thinking_budget_cap
 vision_mmproj_always
