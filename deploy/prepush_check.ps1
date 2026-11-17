@@ -86,8 +86,15 @@ Check "e) settings docs current" ($LASTEXITCODE -eq 0)
 & $py tests\test_bat_encoding.py *> $null
 Check "f) .bat files ascii+crlf" ($LASTEXITCODE -eq 0)
 
+# Overlap read-only Pyright check with the regression suite (started async before g, joined at n).
+$pyrightOut = [System.IO.Path]::GetTempFileName()
+$pyrightErr = [System.IO.Path]::GetTempFileName()
+$pyrightProc = Start-Process -FilePath $py -ArgumentList @("deploy\pyright_baseline.py") `
+    -NoNewWindow -PassThru -RedirectStandardOutput $pyrightOut -RedirectStandardError $pyrightErr
+if ($pyrightProc) { $null = $pyrightProc.Handle }
+
 # -- g) full regression suite ------------------------------------------------
-$suiteOut = & $py tests\run_regressions.py --jobs 3 2>&1
+$suiteOut = & $py tests\run_regressions.py --jobs 6 2>&1
 $suiteLine = ($suiteOut | Select-String -Pattern "Suites:" | Select-Object -Last 1)
 Check "g) regression suite" ($LASTEXITCODE -eq 0) $(if ($suiteLine) { $suiteLine.ToString().Trim() } else { "" })
 
@@ -131,8 +138,19 @@ if (Test-Path $notesFile) {
 }
 
 # -- n) pyright baseline -----------------------------------------------------
-& $py deploy\pyright_baseline.py *> $null
-Check "n) pyright baseline" ($LASTEXITCODE -eq 0)
+$pyrightOk = $false
+try {
+    if ($pyrightProc) {
+        $pyrightProc.WaitForExit()
+        $pyrightOk = ($pyrightProc.ExitCode -eq 0)
+    } else {
+        & $py deploy\pyright_baseline.py *> $null
+        $pyrightOk = ($LASTEXITCODE -eq 0)
+    }
+} finally {
+    Remove-Item $pyrightOut, $pyrightErr -ErrorAction SilentlyContinue
+}
+Check "n) pyright baseline" $pyrightOk
 
 # -- n2) static/app.js syntax & bench/*.sh LF endings ------------------------
 if (Get-Command node -ErrorAction SilentlyContinue) {

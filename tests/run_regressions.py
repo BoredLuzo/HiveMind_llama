@@ -442,6 +442,7 @@ SUITES = [
     ("moe_auto_cpu",               "tests/test_moe_auto_cpu.py",               30),
     ("tts_and_model_wiring",       "tests/test_tts_and_model_wiring_fixes.py", 30),
     ("installer_updater_1_6_2",    "tests/test_installer_updater_1_6_2.py",    45),
+    ("dflash_and_recovery_fixes",  "tests/test_dflash_and_recovery_fixes.py",  30),
 
 ]
 
@@ -605,6 +606,54 @@ def _load_history() -> list[dict]:
     return [r for r in runs if isinstance(r, dict)]
 
 
+def _failure_tail(proc: object, max_lines: int = 5) -> list[str]:
+    """Return the last non-empty output lines of a failed suite process."""
+    if proc is None:
+        return []
+    out = (getattr(proc, "stdout", None) or "").strip()
+    err = (getattr(proc, "stderr", None) or "").strip()
+    combined = "\n".join(part for part in (out, err) if part)
+    if not combined:
+        return []
+    lines = [line.rstrip() for line in combined.splitlines() if line.strip()]
+    return lines[-max_lines:]
+
+
+def _history_entry(ok: bool, dur: float, proc: object) -> dict:
+    entry: dict = {"ok": bool(ok), "dur": round(dur, 1)}
+    if not ok:
+        tail = _failure_tail(proc)
+        if tail:
+            entry["tail"] = tail
+    return entry
+
+
+def _suite_est_durations() -> dict[str, float]:
+    """Return median recorded durations from history for LPT scheduling."""
+    try:
+        if not _HISTORY_FILE.exists():
+            return {}
+        raw = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    runs = raw.get("runs") if isinstance(raw, dict) else None
+    if not isinstance(runs, list):
+        return {}
+    samples: dict[str, list[float]] = {}
+    for run in runs:
+        res = run.get("results") if isinstance(run, dict) else None
+        if not isinstance(res, dict):
+            continue
+        for name, item in res.items():
+            if isinstance(item, dict) and isinstance(item.get("dur"), (int, float)):
+                samples.setdefault(name, []).append(float(item["dur"]))
+    medians: dict[str, float] = {}
+    for name, durs in samples.items():
+        durs.sort()
+        medians[name] = durs[len(durs) // 2]
+    return medians
+
+
 def _record_history(results: list[tuple], changed_mode: bool,
                     jobs: int, *, partial: bool = False) -> None:
     """Append this run's pass/fail/duration per suite to the history file."""
@@ -619,8 +668,8 @@ def _record_history(results: list[tuple], changed_mode: bool,
         # PARTIAL-RUNS (deep audit 2026-11-07): --only/--changed runs cover a
         # subset; the flake report must not compute flips across them.
         "partial": bool(partial),
-        "results": {name: {"ok": bool(ok), "dur": round(dur, 1)}
-                    for name, ok, dur, _ in results},
+        "results": {name: _history_entry(ok, dur, r)
+                    for name, ok, dur, r in results},
     }
     runs = _load_history()
     runs.append(run)
@@ -850,10 +899,16 @@ def main() -> int:
                 print(f"    ! {l}")
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        _futs = [pool.submit(_run_suite, pos, rel, timeout)
-                 for pos, name, rel, timeout in pending]
-        for (pos, name, _rel, timeout), _fut in zip(pending, _futs):
-            ok, dur, r = _fut.result()
+        _est_durs = _suite_est_durations()
+        _submit_order = sorted(
+            pending, key=lambda item: _est_durs.get(item[1], 0.0), reverse=True
+        )
+        _fut_by_pos = {
+            pos: pool.submit(_run_suite, pos, rel, timeout)
+            for pos, _name, rel, timeout in _submit_order
+        }
+        for pos, name, _rel, _timeout in pending:
+            ok, dur, r = _fut_by_pos[pos].result()
             _report(pos, name, ok, dur, r)
         _ran.extend(pending)
         # exclusive lane: sequential, after the parallel batch

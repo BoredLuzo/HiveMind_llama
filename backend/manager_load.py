@@ -1007,67 +1007,86 @@ class LlamaLoadMixin:
                             _cache_exc)
                     else:
                         _cache_retried_ok = True
-                # AMD-VULKAN-KOLLISIONS-RETRY:
+                # AMD-VULKAN-KOLLISIONS- & SINGLE-SLOT-GPU-RETRY: wait for VRAM
+                # reclaim and retry ONCE on GPU before falling back to CPU or
+                # failing loudly. Previously only multi-slot runs retried on GPU;
+                # single-slot reloads (e.g. right after an eviction) jumped
+                # straight to --n-gpu-layers 0 for <= 3.0 GB models.
                 _has_running_peers = any(
                     s.is_running for s in self._slots if s.slot_id != slot.slot_id
                 )
-                if not _cache_retried_ok and "exit=-1" in str(_start_exc) and _has_running_peers:
+                if not _cache_retried_ok and "exit=-1" in str(_start_exc) and (_has_running_peers or GPU_LAYERS > 0):
+                    _model_vram = _vram_of(_strip_alias(model))
+                    _need_reclaim_mib = max(1024, int(_model_vram * 1024))
                     logger.warning(
-                        f"AMD Vulkan collision for '{model}' (exit=-1) — "
-                        f"waiting 5s and retrying once ..."
+                        "Vulkan start failure for '%s' (exit=-1, peers=%s) — "
+                        "waiting for VRAM reclaim and retrying once on GPU ...",
+                        model, _has_running_peers,
                     )
                     _claim_gen = await _reclaim_for_retry(_claim_gen)
-                    await asyncio.sleep(5.0)
+                    _reclaimed = False
+                    try:
+                        _reclaimed = await wait_for_vram_reclaim(
+                            _need_reclaim_mib,
+                            timeout_sec=12 if _has_running_peers else 15,
+                            stall_abort_s=4.0 if _has_running_peers else 5.0,
+                        )
+                    except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                            AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_err:
+                        logger.debug("[LOAD-RETRY] reclaim wait skipped: %s", _rw_err)
+                    if _has_running_peers or not _reclaimed:
+                        await asyncio.sleep(5.0 if _has_running_peers else 2.0)
                     if _slot_aborted(_claim_gen):
                         raise SlotAbortedError(
                             f"Model load for '{model}' aborted (slot killed or purged)."
                         )
                     try:
-                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                                   vision=vision, n_parallel=n_parallel,
-                                                   ctx_graceful=ctx_graceful)
-                    except SlotAbortedError:
-                        raise
-                    except Exception:
-                        await _kill_if_owned(_claim_gen)
-                        raise
-                elif not _cache_retried_ok and "exit=-1" in str(_start_exc) and GPU_LAYERS > 0:
-                    _model_vram = _vram_of(_strip_alias(model))
-                    # 3.0 GB (2026-09-08): the coder sits at ~4.9 GB — under the
-                    # old 5.0 threshold a post-eviction Vulkan-timing failure
-                    # could silently reload it with --n-gpu-layers 0 (full CPU,
-                    # ~1-2 tok/s for the rest of the run). Above 3.0 GB we now
-                    # fail loudly instead; only genuinely small models
-                    # (light compressors ~2.1 GB, fallback minis) may still
-                    # take the CPU fallback.
-                    if _model_vram > 3.0:
-                        await _kill_if_owned(_claim_gen)
-                        raise RuntimeError(
-                            f"Model '{model}' ({_model_vram:.1f}GB) could not be loaded on the GPU (exit=-1).\n"
-                            f"Likely cause: VRAM not yet released (AMD Vulkan timing).\n"
-                            f"  → Restart the server, or wait 10s and try again.\n"
-                            f"  → CPU fallback skipped: {_model_vram:.1f}GB on CPU is too slow."
-                        ) from _start_exc
-                    _claim_gen = await _reclaim_for_retry(_claim_gen)
-                    logger.warning(
-                        f"Single-model start for '{model}' with exit=-1 failed - "
-                        "one-time CPU fallback with --n-gpu-layers 0"
-                    )
-                    try:
                         await self._start_process(
-                            slot,
-                            model,
-                            num_ctx or CONTEXT_SIZE_DEFAULT,
-                            vision=vision,
-                            n_parallel=n_parallel,
-                            gpu_layers_override=0,
+                            slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                            vision=vision, n_parallel=n_parallel,
                             ctx_graceful=ctx_graceful,
                         )
                     except SlotAbortedError:
                         raise
-                    except Exception:
-                        await _kill_if_owned(_claim_gen)
-                        raise
+                    except Exception as _gpu_retry_exc:
+                        if _slot_aborted(_claim_gen):
+                            raise SlotAbortedError(
+                                f"Model load for '{model}' aborted (slot killed or purged)."
+                            ) from _gpu_retry_exc
+                        if not ("exit=-1" in str(_gpu_retry_exc) and GPU_LAYERS > 0):
+                            await _kill_if_owned(_claim_gen)
+                            raise
+                        # 3.0 GB (2026-09-08): only genuinely small models
+                        # (light compressors ~2.1 GB, fallback minis) may still
+                        # fall back to --n-gpu-layers 0 AFTER a failed GPU retry.
+                        if _model_vram > 3.0:
+                            await _kill_if_owned(_claim_gen)
+                            raise RuntimeError(
+                                f"Model '{model}' ({_model_vram:.1f}GB) could not be loaded on the GPU (exit=-1).\n"
+                                f"Likely cause: VRAM not yet released (AMD Vulkan timing).\n"
+                                f"  → Restart the server, or wait 10s and try again.\n"
+                                f"  → CPU fallback skipped: {_model_vram:.1f}GB on CPU is too slow."
+                            ) from _gpu_retry_exc
+                        _claim_gen = await _reclaim_for_retry(_claim_gen)
+                        logger.warning(
+                            f"Single-model GPU retry for '{model}' with exit=-1 failed - "
+                            "one-time CPU fallback with --n-gpu-layers 0"
+                        )
+                        try:
+                            await self._start_process(
+                                slot,
+                                model,
+                                num_ctx or CONTEXT_SIZE_DEFAULT,
+                                vision=vision,
+                                n_parallel=n_parallel,
+                                gpu_layers_override=0,
+                                ctx_graceful=ctx_graceful,
+                            )
+                        except SlotAbortedError:
+                            raise
+                        except Exception:
+                            await _kill_if_owned(_claim_gen)
+                            raise
                 elif not _cache_retried_ok:
                     await _kill_if_owned(_claim_gen)
                     raise

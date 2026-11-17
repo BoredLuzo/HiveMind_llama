@@ -387,6 +387,12 @@ def _run_with_tree_kill(
                 )
             except (OSError, subprocess.SubprocessError):
                 proc.kill()
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
         try:
             out, err = proc.communicate(timeout=2)
             exc.stdout = out

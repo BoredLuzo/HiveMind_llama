@@ -133,6 +133,31 @@ try:
               q["real_suite"].get("reason") == "socket flake", f"({q})")
     finally:
         rr._QUARANTINE_FILE = old_q
+
+    # 5) failure tail + LPT median durations --------------------------------
+    from types import SimpleNamespace as _NS
+    _fail_proc = _NS(stdout="a\nb\nASSERT bad1\nASSERT bad2\n", stderr="ERR tail\n")
+    _pass_proc = _NS(stdout="ok line\n", stderr="")
+    rr._record_history(
+        [("ok_s", True, 1.5, _pass_proc), ("bad_s", False, 3.2, _fail_proc)],
+        changed_mode=False, jobs=6,
+    )
+    _tail_data = json.loads(hist.read_text(encoding="utf-8"))["runs"][-1]["results"]
+    check("passing suite omits failure tail", "tail" not in _tail_data["ok_s"],
+          f"({_tail_data['ok_s']})")
+    check("failed suite stores bounded output tail",
+          _tail_data["bad_s"].get("tail") == ["a", "b", "ASSERT bad1", "ASSERT bad2", "ERR tail"],
+          f"({_tail_data['bad_s']})")
+
+    hist.write_text(json.dumps({"runs": [
+        {"at": "r1", "results": {"slow_s": {"ok": True, "dur": 18.0}, "fast_s": {"ok": True, "dur": 1.0}}},
+        {"at": "r2", "results": {"slow_s": {"ok": True, "dur": 25.0}, "fast_s": {"ok": True, "dur": 2.0}}},
+        {"at": "r3", "results": {"slow_s": {"ok": True, "dur": 20.0}}},
+    ]}), encoding="utf-8")
+    _est = rr._suite_est_durations()
+    check("median duration prefers slowest suite first for LPT",
+          _est.get("slow_s") == 20.0 and _est.get("fast_s") == 2.0,
+          f"({_est})")
 finally:
     rr._HISTORY_FILE = old_hist
 

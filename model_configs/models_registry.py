@@ -368,6 +368,18 @@ def get_dflash_draft_n_max(model_name: str) -> int | None:
     return _get_pos_int_key(model_name, "dflash_draft_n_max")
 
 
+def get_dflash_draft_p_min(model_name: str) -> float | None:
+    """Per-model minimum draft probability for DFlash. None = use engine default."""
+    v = get_profile(model_name).get("dflash_draft_p_min")
+    if v is None:
+        return None
+    try:
+        p = float(v)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(0.95, p))
+
+
 def get_lazy_mode(model_name: str) -> str | None:
     v = (_get_str_key(model_name, "lazy_mode") or "").lower()
     return v if v in ("on", "off", "auto") else None

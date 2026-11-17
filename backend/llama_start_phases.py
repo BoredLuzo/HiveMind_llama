@@ -21,9 +21,10 @@ from pathlib import Path
 from . import llama_config as _llama_cfg
 from .llama_config import (
     BINARY_MIN_BUILD,
-    DFLASH_DRAFT_N_MAX, DFLASH_DRAFT_N_MIN, DFLASH_MIN_BUILD, DFLASH_SPEC_TYPE,
+    DFLASH_DRAFT_N_MAX, DFLASH_DRAFT_N_MIN, DFLASH_DRAFT_P_MIN,
+    DFLASH_MIN_BUILD, DFLASH_SPEC_TYPE,
     DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE,
-    GPU_BACKEND, KV_CACHE_TYPE,
+    GPU_BACKEND, GPU_LAYERS, KV_CACHE_TYPE,
     LLAMA_BIN, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VULKAN_DEVICE, VRAM_PREFLIGHT_GATE,
     _GPU_LAYERS_TABLE, _MTP_MODELS, _MOE_EXPERT_COUNTS,
@@ -31,7 +32,7 @@ from .llama_config import (
     resolve_gpu_layers, ubatch_extra_mib,
 )
 from .llama_manager_utils import (
-    CTX_DOWN_MIN, LLAMA_STARTUP_READY_TIMEOUT_SECONDS, SlotAbortedError,
+    CTX_DOWN_MIN, CanFitResult, LLAMA_STARTUP_READY_TIMEOUT_SECONDS, SlotAbortedError,
     VRAMPreFlightError,
     VRAM_BUDGET_GB, VRAM_PRE_FLIGHT_MARGIN_MIB,
     VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
@@ -244,6 +245,210 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
 
 
 
+_EXTERNAL_DRAFT_VALUE_FLAGS = frozenset({
+    "--spec-type",
+    "--model-draft",
+    "--spec-draft-n-max",
+    "--spec-draft-n-min",
+    "--spec-draft-p-min",
+    "--spec-draft-ngl",
+})
+
+
+@dataclasses.dataclass
+class _ExternalDrafter:
+    """Resolved external speculative drafter configuration (DSpark / DFlash)."""
+    spec_type: str
+    path: Path
+    n_max: int
+    n_min: int
+    p_min: float | None
+    min_build: int
+    label: str
+
+
+def _find_external_drafter_path(draft_fn: str) -> Path | None:
+    """Resolve an external drafter GGUF (DSpark/DFlash) under MODELS_DIR."""
+    dp = Path(draft_fn)
+    if dp.is_absolute() and dp.exists():
+        return dp
+    cand = MODELS_DIR / draft_fn
+    if cand.exists():
+        return cand
+    try:
+        found = list(MODELS_DIR.rglob(draft_fn))
+        if found:
+            return found[0]
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as exc:
+        logger.debug("[MTP] draft-path probe skipped: %s", exc)
+    return None
+
+
+async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = False) -> _ExternalDrafter | None:
+    """Resolve an enabled, on-disk, binary-supported DSpark/DFlash drafter."""
+    from backend.manager_load import _help_supports  # lazy: module cycle
+    draft_fn = None
+    spec_type = DSPARK_SPEC_TYPE
+    n_max = DSPARK_DRAFT_N_MAX
+    n_min = DSPARK_DRAFT_N_MIN
+    p_min: float | None = None
+    min_build = DSPARK_MIN_BUILD
+    label = "DSpark"
+    env_off = False
+    try:
+        from .llama_config import (
+            _try_registry_dflash_draft as _reg_df2,
+            _try_registry_dspark_draft as _reg_dd2,
+        )
+        from model_configs.models_registry import (
+            get_dflash_draft_n_max as _reg_df_nmax,
+            get_dflash_draft_p_min as _reg_df_pmin,
+            get_dspark_draft_n_max as _reg_nmax,
+        )
+        m_alias = _strip_alias(model)
+        draft_fn = _reg_dd2(m_alias)
+        if draft_fn:
+            n_max = int(_reg_nmax(m_alias) or DSPARK_DRAFT_N_MAX)
+            env_off = os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
+        else:
+            draft_fn = _reg_df2(m_alias)
+            if draft_fn:
+                spec_type = DFLASH_SPEC_TYPE
+                n_max = int(_reg_df_nmax(m_alias) or DFLASH_DRAFT_N_MAX)
+                n_min = int(DFLASH_DRAFT_N_MIN)
+                reg_pmin = _reg_df_pmin(m_alias)
+                p_min = float(reg_pmin if reg_pmin is not None else DFLASH_DRAFT_P_MIN)
+                min_build = DFLASH_MIN_BUILD
+                label = "DFlash"
+                env_off = (
+                    os.environ.get("HIVEMIND_DFLASH_SPEC", "1") in ("0", "false", "off")
+                    or os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
+                )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        draft_fn = None
+    if env_off or not draft_fn:
+        return None
+    draft_path = _find_external_drafter_path(draft_fn)
+    if draft_path is None:
+        if log_warnings:
+            logger.warning(
+                "%s drafter configured for '%s' (%s) but not found in %s "
+                "— running without the drafter.",
+                label, model, draft_fn, MODELS_DIR,
+            )
+        return None
+    build_num = getattr(self, "_binary_build_number", None) or 0
+    if spec_type == DFLASH_SPEC_TYPE:
+        draft_ok = await _help_supports(DFLASH_SPEC_TYPE)
+        if not draft_ok and build_num >= min_build:
+            # Fallback if --help output was unavailable/mocked on a matching build.
+            from backend.manager_load import _binary_help as _bin_help
+            draft_ok = not await _bin_help()
+    else:
+        draft_ok = getattr(self, "_dspark_flag_supported", None)
+        if draft_ok is None:
+            draft_ok = build_num >= min_build
+    if not draft_ok:
+        if log_warnings:
+            logger.warning(
+                f"{label} speculative decoding not supported for '{model}' by "
+                f"{LLAMA_BIN.name} (needs --spec-type {spec_type}, build "
+                f"{min_build}+) — skipping the drafter."
+            )
+        return None
+    return _ExternalDrafter(
+        spec_type=spec_type,
+        path=draft_path,
+        n_max=n_max,
+        n_min=n_min,
+        p_min=p_min,
+        min_build=min_build,
+        label=label,
+    )
+
+
+def _external_draft_footprint_mib(cmd: list[str]) -> float:
+    """Estimated total VRAM footprint (MiB) of the external --model-draft.
+
+    On Nemotron-3.5-Bolt-E4B + DFlash (b12001 Vulkan), the BF16 drafter GGUF
+    is ~694 MiB and adds ~1,248 MiB live peak VRAM over the undrafted target
+    (file MiB + ~550 MiB drafter KV/compute buffer).
+    """
+    if "--model-draft" not in cmd:
+        return 0.0
+    file_mib = 0.0
+    try:
+        idx = cmd.index("--model-draft")
+        if idx + 1 < len(cmd):
+            dp = Path(cmd[idx + 1])
+            if dp.is_file():
+                file_mib = dp.stat().st_size / (1024 * 1024)
+    except (ValueError, TypeError, OSError):
+        file_mib = 0.0
+    return max(600.0, file_mib + 550.0)
+
+
+def _strip_external_drafter_flags(cmd: list[str]) -> list[str]:
+    """Return a copy of cmd with external drafter flags stripped (keeps MTP)."""
+    if "--model-draft" not in cmd:
+        return list(cmd)
+    out: list[str] = []
+    skip_next = False
+    for tok in cmd:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in _EXTERNAL_DRAFT_VALUE_FLAGS:
+            skip_next = True
+            continue
+        out.append(tok)
+    return out
+
+
+def _try_drop_external_drafter(self, slot, cmd: list[str], model: str,
+                               num_ctx: int, fit: CanFitResult,
+                               moe_cache_used: float,
+                               draft_save_mib: float) -> tuple[CanFitResult, float, bool]:
+    """Drop an external drafter if target alone fits full ctx without spill."""
+    if (fit.ok or "--model-draft" not in cmd or draft_save_mib <= 0.0):
+        return fit, moe_cache_used, False
+    from . import llama_config as _llama_cfg
+    if not _llama_cfg.VRAM_PREFLIGHT_GATE:
+        return fit, moe_cache_used, False
+    # Keep the drafter when the full context still fits with reduced margin.
+    fit_red = self.can_fit(
+        model, num_ctx,
+        safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+        exclude_slot_id=slot.slot_id,
+        extra_needed_mib=moe_cache_used,
+    )
+    if fit_red.ok:
+        return fit, moe_cache_used, False
+    without_draft_extra = float(moe_cache_used) - float(draft_save_mib)
+    fit_undrafted = self.can_fit(
+        model, num_ctx,
+        exclude_slot_id=slot.slot_id,
+        extra_needed_mib=without_draft_extra,
+    )
+    if not fit_undrafted.ok:
+        fit_undrafted = self.can_fit(
+            model, num_ctx,
+            safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+            exclude_slot_id=slot.slot_id,
+            extra_needed_mib=without_draft_extra,
+        )
+    if not fit_undrafted.ok:
+        return fit, moe_cache_used, False
+    cmd[:] = _strip_external_drafter_flags(cmd)
+    logger.warning(
+        "[PRE-FLIGHT-DROP-DRAFTER] %s @ctx=%d: dropping external drafter "
+        "(~%.0f MiB) so target fits in VRAM (needed=%.0fMiB + margin=%dMiB <= free=%.0fMiB)",
+        model, num_ctx, draft_save_mib,
+        fit_undrafted.needed_mib, fit_undrafted.margin_mib, fit_undrafted.free_mib,
+    )
+    return fit_undrafted, without_draft_extra, True
+
+
 @dataclasses.dataclass
 class _FlagsPhase:
     """Phase-2 outputs (split 4.2): the flag/threads config the cmd
@@ -296,14 +501,24 @@ async def _phase_flags(self, model: str, gpu_layers_override) -> _FlagsPhase:
     except (ImportError, AttributeError, TypeError, ValueError):
         _fit_on = False
         _fit_target = 0
+    # External drafters (DFlash/DSpark): disable llama.cpp --fit (it does not
+    # account for the external drafter footprint and adds ~1.1s probe overhead)
+    # and pin GPU layers instead of auto-fitting layers against tight headroom.
+    _ext_drafter = await _resolve_external_drafter(self, model, log_warnings=False)
     _fit_supported = bool(_fit_on and gpu_layers_override is None
                           and GPU_BACKEND != "cpu"
+                          and not _ext_drafter
                           and await _help_supports("--fit"))
     if _fit_on and not _fit_supported:
-        logger.info("--fit not applied (pinned layers/cpu backend or "
-                    "binary lacks the flag)")
+        logger.info(
+            "--fit not applied (%s)",
+            "external drafter active" if _ext_drafter
+            else "pinned layers/cpu backend or binary lacks the flag",
+        )
     _gpu_layers = resolve_gpu_layers(model, gpu_layers_override,
                                      _GPU_LAYERS_TABLE, llama_gpu_layers_auto())
+    if _ext_drafter and _gpu_layers is None and GPU_BACKEND != "cpu":
+        _gpu_layers = GPU_LAYERS
     # OVERRIDE-PRECEDENCE (audit 2026-11-03): an explicit override wins
     # over the registry. The CPU fallback passes 0 — the registry block
     # used to replace it with the profile value, re-offloading the layers
@@ -804,108 +1019,37 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
             "" if await _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
         )
 
-    # ── DSpark external drafter (Speculative-Decoding Sidecar) ──────────
-    # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 disables the drafter
-    # for every model without touching any profile. Measured with the app's
-    # own llama flags (Sharp-MiniCPM5-2B Q4 + this drafter, AMD Radeon iGPU,
-    # 16 threads): target alone 14.1 tok/s, DSpark n-max 2
-    # 10.6 (49% acceptance), n-max 4 7.7 (34%). Slower at every setting,
-    # hence switchable.
-    _draft_fn = None
-    _draft_spec_type = DSPARK_SPEC_TYPE
-    _draft_nmax = None
-    _draft_nmin = DSPARK_DRAFT_N_MIN
-    _draft_min_build = DSPARK_MIN_BUILD
-    _draft_label = "DSpark"
-    _draft_env_off = False
-    try:
-        from .llama_config import (
-            _try_registry_dflash_draft as _reg_df2,
-            _try_registry_dspark_draft as _reg_dd2,
+    # ── DSpark / DFlash external drafter (Speculative-Decoding Sidecar) ────
+    # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 (or HIVEMIND_DFLASH_SPEC=0
+    # for DFlash) disables the drafter without touching any profile.
+    _ext_draft = await _resolve_external_drafter(self, model, log_warnings=True)
+    if _ext_draft is not None:
+        cmd += [
+            "--spec-type", _ext_draft.spec_type,
+            "--model-draft", str(_ext_draft.path),
+            "--spec-draft-n-max", str(_ext_draft.n_max),
+            "--spec-draft-n-min", str(_ext_draft.n_min),
+        ]
+        _draft_pmin = _ext_draft.p_min
+        _draft_pmin_ok = (
+            _draft_pmin is not None
+            and await _help_supports("--spec-draft-p-min")
         )
-        from model_configs.models_registry import (
-            get_dflash_draft_n_max as _reg_df_nmax,
-            get_dspark_draft_n_max as _reg_nmax,
+        if _draft_pmin_ok and _draft_pmin is not None:
+            cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
+        _draft_ngl_ok = (
+            GPU_BACKEND != "cpu"
+            and await _help_supports("--spec-draft-ngl")
         )
-        _m_alias = _strip_alias(model)
-        _draft_fn = _reg_dd2(_m_alias)
-        if _draft_fn:
-            _draft_nmax = _reg_nmax(_m_alias) or DSPARK_DRAFT_N_MAX
-            _draft_env_off = os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
-        else:
-            _draft_fn = _reg_df2(_m_alias)
-            if _draft_fn:
-                _draft_spec_type = DFLASH_SPEC_TYPE
-                _draft_nmax = _reg_df_nmax(_m_alias) or DFLASH_DRAFT_N_MAX
-                _draft_nmin = DFLASH_DRAFT_N_MIN
-                _draft_min_build = DFLASH_MIN_BUILD
-                _draft_label = "DFlash"
-                _draft_env_off = (
-                    os.environ.get("HIVEMIND_DFLASH_SPEC", "1") in ("0", "false", "off")
-                    or os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
-                )
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
-        _draft_fn = None
-        _draft_nmax = None
-    if _draft_env_off:
-        _draft_fn = None
-    if _draft_fn:
-        _draft_path = None
-        _dp = Path(_draft_fn)
-        if _dp.is_absolute() and _dp.exists():
-            _draft_path = _dp
-        else:
-            _cand = MODELS_DIR / _draft_fn
-            if _cand.exists():
-                _draft_path = _cand
-            else:
-                try:
-                    _found = list(MODELS_DIR.rglob(_draft_fn))
-                    if _found:
-                        _draft_path = _found[0]
-                except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
-                    logger.debug("[MTP] draft-path probe skipped: %s", _e)
-        if _draft_path is None:
-            logger.warning(
-                "%s drafter configured for '%s' (%s) but not found in %s "
-                "— running without the drafter.",
-                _draft_label, model, _draft_fn, MODELS_DIR,
-            )
-        else:
-            if _draft_spec_type == DFLASH_SPEC_TYPE:
-                _draft_ok = await _help_supports(DFLASH_SPEC_TYPE)
-                if not _draft_ok and (type(self)._binary_build_number or 0) >= _draft_min_build:
-                    # Fallback if --help output was unavailable/mocked on a matching build.
-                    from backend.manager_load import _binary_help as _bin_help
-                    _draft_ok = not await _bin_help()
-            else:
-                _draft_ok = type(self)._dspark_flag_supported
-                if _draft_ok is None:
-                    _draft_ok = (type(self)._binary_build_number or 0) >= _draft_min_build
-            if not _draft_ok:
-                logger.warning(
-                    f"{_draft_label} speculative decoding not supported for '{model}' by "
-                    f"{LLAMA_BIN.name} (needs --spec-type {_draft_spec_type}, build "
-                    f"{_draft_min_build}+) — skipping the drafter."
-                )
-            else:
-                cmd += [
-                    "--spec-type", _draft_spec_type,
-                    "--model-draft", str(_draft_path),
-                    "--spec-draft-n-max", str(_draft_nmax),
-                    "--spec-draft-n-min", str(_draft_nmin),
-                ]
-                _draft_ngl_ok = (
-                    GPU_BACKEND != "cpu"
-                    and await _help_supports("--spec-draft-ngl")
-                )
-                if _draft_ngl_ok:
-                    cmd += ["--spec-draft-ngl", "999"]
-                logger.info(
-                    "%s active: %s → drafter %s (n-max=%d, n-min=%d%s)",
-                    _draft_label, model, _draft_path.name, _draft_nmax, _draft_nmin,
-                    ", ngl=999" if _draft_ngl_ok else "",
-                )
+        if _draft_ngl_ok:
+            cmd += ["--spec-draft-ngl", "999"]
+        logger.info(
+            "%s active: %s → drafter %s (n-max=%d, n-min=%d%s%s)",
+            _ext_draft.label, model, _ext_draft.path.name,
+            _ext_draft.n_max, _ext_draft.n_min,
+            f", p-min={_draft_pmin:g}" if (_draft_pmin_ok and _draft_pmin is not None) else "",
+            ", ngl=999" if _draft_ngl_ok else "",
+        )
 
     # ── Jinja-Chat-Template ───────────────────────────────────────────────
     # (Bases: module-level _JINJA_BASES — registry "jinja" wins.)
@@ -1230,6 +1374,15 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     )
     from . import llama_config as _llama_cfg
     from .llama_models import list_available_models, _strip_alias
+    from model_configs.models_registry import get_vram_gb_override as _get_vram_ovr
+    # External drafter (DFlash/DSpark): if the profile carries a calibrated
+    # vram_gb_override (measured with drafter loaded), avoid double-counting;
+    # otherwise add its estimated footprint upfront so pre-flight never silently
+    # overflows VRAM. Record _draft_save_mib so tight VRAM can drop the drafter
+    # before degrading ctx or failing.
+    _draft_save_mib = _external_draft_footprint_mib(cmd)
+    if _draft_save_mib > 0.0 and _get_vram_ovr(_strip_alias(model)) is None:
+        _moe_cache_used = float(_moe_cache_used) + _draft_save_mib
     # ── HARTER PRE-FLIGHT-VRAM-GATE ───────────────────────────────────────
     _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
                         extra_needed_mib=_moe_cache_used)
@@ -1364,6 +1517,12 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             self, slot, cmd, model, gguf_path, num_ctx,
             _fit, _moe_cache_used, ub_base, ub_eff, ub_src, ub_delta_mib,
         )
+    if not _fit.ok and _draft_save_mib > 0.0:
+        _fit, _moe_cache_used, _draft_dropped = _try_drop_external_drafter(
+            self, slot, cmd, model, num_ctx, _fit, _moe_cache_used, _draft_save_mib,
+        )
+        if _draft_dropped:
+            _draft_save_mib = 0.0
     if not _fit.ok:
         # AUDIT-FIX 2026-08-03: Diagnose-Attribute + Zeitreihen-Log.
         # external_usage_est = Total - frei - eigene geladene Slots (Fremdbelegung).
@@ -1505,6 +1664,13 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                         _fit = self.can_fit(model, num_ctx,
                                             exclude_slot_id=getattr(slot, "slot_id", None),
                                             extra_needed_mib=_moe_cache_used)
+                        if not _fit.ok and _draft_save_mib > 0.0:
+                            _fit, _moe_cache_used, _draft_dropped = _try_drop_external_drafter(
+                                self, slot, cmd, model, num_ctx, _fit,
+                                _moe_cache_used, _draft_save_mib,
+                            )
+                            if _draft_dropped:
+                                _draft_save_mib = 0.0
                         logger.info(
                             "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
                             model, num_ctx, "OK" if _fit.ok else "BLOCK",

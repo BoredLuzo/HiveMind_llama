@@ -398,7 +398,7 @@ with tempfile.TemporaryDirectory(prefix="hm_w3_p04_") as _td:
           str(_ws / "src") in _pp and str(_ws) in _pp, _pp)
     _timed_out = False
     try:
-        _run_with_tree_kill([sys.executable, "-c", "import time; time.sleep(10)"], cwd=_ws, env=dict(), timeout=1)
+        _run_with_tree_kill([sys.executable, "-c", "import time; time.sleep(4)"], cwd=_ws, env=dict(), timeout=0.6)
     except _subprocess.TimeoutExpired:
         _timed_out = True
     check("W3 P0-4 _run_with_tree_kill raises TimeoutExpired cleanly", _timed_out)

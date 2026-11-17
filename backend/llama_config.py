@@ -612,6 +612,11 @@ DSPARK_MIN_BUILD = 10173   # llama.cpp mainline #25173 (--spec-type …draft-dsp
 DFLASH_SPEC_TYPE = "draft-dflash"
 DFLASH_DRAFT_N_MAX = 7
 DFLASH_DRAFT_N_MIN = 0
+# Empirically tuned on Nemotron-3.5-Bolt-E4B + DFlash (RX 6600 Vulkan b12001):
+# p_min=0.0 wastes target batch verification on low-conf open prose (40.7 vs
+# 44.3 t/s undrafted); 0.3-0.5 lifts prose to 48-56 t/s while keeping low-temp
+# code at 63-75.5 t/s. Overridable per profile ("dflash_draft_p_min") or env.
+DFLASH_DRAFT_P_MIN = float(os.environ.get("HIVEMIND_DFLASH_DRAFT_P_MIN", "0.4") or 0.4)
 DFLASH_MIN_BUILD = 12001   # llama.cpp mainline (--spec-type …draft-dflash)
 
 #   _MTP_MODELS = {"qwen3.6:35b-a3b-mtp"}

@@ -22,6 +22,7 @@
   "kv_bytes_per_token": 5120,
   "dflash_draft_filename": "Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf",
   "dflash_draft_n_max": 7,
+  "dflash_draft_p_min": 0.4,
   "sampling": {
     "thinking": {
       "temperature": 1.0,
