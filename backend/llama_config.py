@@ -213,6 +213,9 @@ LLAMA_BATCH_DEFAULT = 1024
 # --fit on sizes unset args to free VRAM; target = per-device margin MiB.
 LLAMA_FIT = False
 LLAMA_FIT_TARGET_MIB = 0
+# Windows Vulkan WDDM spill guard: forces pure DEVICE_LOCAL VRAM allocations
+# in ggml-vulkan unless disabled via settings or GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM.
+VK_DISABLE_HOST_VISIBLE_VIDMEM = True
 
 
 def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:

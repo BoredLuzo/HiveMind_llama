@@ -451,7 +451,7 @@ SUITES = [
 # 2026-11-07: the real LSP servers and the HTTP-poll suite joined the lane
 # for the same reason (CI runners are slower and share two cores).
 _EXCLUSIVE_SUITES = {
-    "mcp_client", "lsp_client", "wait_ready", "wait_ready_abort",
+    "mcp_client", "mcp_client_budgets", "lsp_client", "wait_ready", "wait_ready_abort",
     "lsp_real_pyright", "lsp_real_rust",
 }
 

@@ -149,11 +149,28 @@ with tempfile.TemporaryDirectory() as _td:
             mock.patch.object(_fake_mgr, "_dspark_flag_supported", True):
         _mf = asyncio.run(LSP._phase_model_flags(
             _fake_mgr, [], "nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt", _target, False))
-    check("DFlash drafter appends --spec-type draft-dflash + --model-draft + n-max 7",
+    check("DFlash drafter appends --spec-type draft-dflash + --model-draft + n-max 7 + --spec-draft-ngl 999",
           "--spec-type" in _mf.cmd and "draft-dflash" in _mf.cmd
           and str(_draft) in _mf.cmd and "--spec-draft-n-max" in _mf.cmd
-          and _mf.cmd[_mf.cmd.index("--spec-draft-n-max") + 1] == "7",
+          and _mf.cmd[_mf.cmd.index("--spec-draft-n-max") + 1] == "7"
+          and (LSP.GPU_BACKEND == "cpu" or ("--spec-draft-ngl" in _mf.cmd and _mf.cmd[_mf.cmd.index("--spec-draft-ngl") + 1] == "999")),
           f"({_mf.cmd})")
+check("nemotron-3.5-bolt:e4b calibrated SWA kv_bytes_per_token keeps 64K ctx estimate under 5.0 GB",
+      REG.get_profile("nemotron-3.5-bolt:e4b").get("kv_bytes_per_token") == 5120
+      and LVT.vram_of_with_ctx("nemotron-3.5-bolt:e4b", 65536) < 5.0,
+      f"(@64k={LVT.vram_of_with_ctx('nemotron-3.5-bolt:e4b', 65536)})")
+import os as _os_env  # noqa: E402
+with mock.patch.object(LSP.platform, "system", return_value="Windows"), \
+        mock.patch.object(LSP, "GPU_BACKEND", "vulkan"), \
+        mock.patch.object(LC, "VK_DISABLE_HOST_VISIBLE_VIDMEM", True):
+    _env_clean = {k: v for k, v in _os_env.environ.items() if k != "GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM"}
+    with mock.patch.dict(_os_env.environ, _env_clean, clear=True):
+        _senv = LSP._build_llama_spawn_env() or {}
+    check("Windows Vulkan spawn env pins GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1 by default",
+          _senv.get("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM") == "1")
+    with mock.patch.dict(_os_env.environ, {"GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM": "0"}):
+        check("Explicit GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM env var is never overwritten",
+              LSP._build_llama_spawn_env() is None)
 _ml_src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
 check("manager_load applies --lazy-mode off for non-large-MoE mmap loads",
       '"--lazy-mode"' in _ml_src and '_load_mode.startswith("mmap") and not _large_moe' in _ml_src)

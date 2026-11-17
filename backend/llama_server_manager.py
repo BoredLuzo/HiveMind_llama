@@ -32,6 +32,7 @@ from .llama_config import (
     # this module at boot; importing the defaults declares the attributes
     # for type checkers instead of creating them dynamically).
     MOE_CACHE_MIB, LLAMA_FIT, LLAMA_FIT_TARGET_MIB,
+    VK_DISABLE_HOST_VISIBLE_VIDMEM,
     CACHE_RAM_MIB, CTX_CHECKPOINTS, VRAM_PREFLIGHT_GATE, LLAMA_UBATCH,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     _MTP_MODELS,

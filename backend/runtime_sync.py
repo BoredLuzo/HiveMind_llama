@@ -57,12 +57,16 @@ def sync_loader_settings(settings: dict) -> None:
     except (TypeError, ValueError):
         logger.warning("runtime sync: moe_cache_mib ignored (bad value)")
 
-    # --fit (layers/ctx sized to the free VRAM)
+    # --fit (layers/ctx sized to the free VRAM) & Vulkan WDDM VRAM pinning
     try:
         _lc.LLAMA_FIT = bool(settings.get("llama_fit", False))
         _lc.LLAMA_FIT_TARGET_MIB = int(settings.get("llama_fit_target_mib", 0) or 0)
+        _lc.VK_DISABLE_HOST_VISIBLE_VIDMEM = bool(
+            settings.get("llama_vk_disable_host_visible_vidmem", True)
+        )
         _lsm.LLAMA_FIT = _lc.LLAMA_FIT
         _lsm.LLAMA_FIT_TARGET_MIB = _lc.LLAMA_FIT_TARGET_MIB
+        _lsm.VK_DISABLE_HOST_VISIBLE_VIDMEM = _lc.VK_DISABLE_HOST_VISIBLE_VIDMEM
     except (TypeError, ValueError):
         logger.warning("runtime sync: llama_fit ignored (bad value)")
 

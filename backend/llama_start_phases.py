@@ -895,9 +895,16 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
                     "--spec-draft-n-max", str(_draft_nmax),
                     "--spec-draft-n-min", str(_draft_nmin),
                 ]
+                _draft_ngl_ok = (
+                    GPU_BACKEND != "cpu"
+                    and await _help_supports("--spec-draft-ngl")
+                )
+                if _draft_ngl_ok:
+                    cmd += ["--spec-draft-ngl", "999"]
                 logger.info(
-                    "%s active: %s → drafter %s (n-max=%d, n-min=%d)",
+                    "%s active: %s → drafter %s (n-max=%d, n-min=%d%s)",
                     _draft_label, model, _draft_path.name, _draft_nmax, _draft_nmin,
+                    ", ngl=999" if _draft_ngl_ok else "",
                 )
 
     # ── Jinja-Chat-Template ───────────────────────────────────────────────
@@ -1168,6 +1175,35 @@ def _auto_step_moe_cpu_offload(
             return cand_fit, moe_cache_used, ub_delta_mib, cand_moe
 
     return fit, moe_cache_used, ub_delta_mib, cur_moe
+
+
+def _build_llama_spawn_env() -> dict[str, str] | None:
+    """Return child env overrides for llama-server or None to inherit os.environ.
+
+    POSIX tarballs ship libggml-vulkan.so next to the binary without rpath.
+    Windows Vulkan discrete GPUs risk WDDM demoting HOST_VISIBLE|DEVICE_LOCAL
+    ReBAR allocations to shared RAM under commit pressure (measured 15-21x
+    decode slowdown on RX 6600); GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1 forces
+    pure DEVICE_LOCAL VRAM allocations unless explicitly opted out.
+    """
+    if platform.system() != "Windows":
+        spawn_env = dict(os.environ)
+        bin_dir = str(LLAMA_BIN.parent)
+        # X2 (audit r2): ubuntu tarballs ship the shared libs in lib/.
+        ldp = f"{bin_dir}:{bin_dir}/lib"
+        existing = spawn_env.get("LD_LIBRARY_PATH")
+        spawn_env["LD_LIBRARY_PATH"] = f"{ldp}:{existing}" if existing else ldp
+        return spawn_env
+    if GPU_BACKEND == "vulkan":
+        from . import llama_config as _llama_cfg
+        if (
+            getattr(_llama_cfg, "VK_DISABLE_HOST_VISIBLE_VIDMEM", True)
+            and "GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM" not in os.environ
+        ):
+            spawn_env = dict(os.environ)
+            spawn_env["GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM"] = "1"
+            return spawn_env
+    return None
 
 
 async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
@@ -1593,22 +1629,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     f"Model load for '{model}' aborted while waiting for GPU-init semaphore."
                 )
             logger.info(f"GPU-init semaphore acquired for {model}")
-            # POSIX-LIB-PATH (2026-09-13): ubuntu tarball builds carry their
-            # shared libs next to the binary (libggml-vulkan.so etc.).
-            # Without rpath the loader only finds them via LD_LIBRARY_PATH —
-            # prepend the binary dir so the server starts on any distro.
-            _spawn_env = None
-            if platform.system() != "Windows":
-                import os as _os_spawn
-                _spawn_env = dict(_os_spawn.environ)
-                _bin_dir = str(LLAMA_BIN.parent)
-                # X2 (audit r2): ubuntu tarballs ship the shared libs
-                # in lib/ (deploy/fetch_llamacpp.py and the SO-LAYOUT
-                # probes both say so) - without it every model load
-                # died on 'libggml-vulkan.so: cannot open'.
-                _ldp = _bin_dir + ":" + _bin_dir + "/lib"
-                _spawn_env["LD_LIBRARY_PATH"] = (
-                    _ldp + (":" + _spawn_env["LD_LIBRARY_PATH"] if _spawn_env.get("LD_LIBRARY_PATH") else "")
+            _spawn_env = _build_llama_spawn_env()
+            if _spawn_env and "GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM" in _spawn_env:
+                logger.info(
+                    "Vulkan DEVICE_LOCAL pinning active (GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=%s)",
+                    _spawn_env["GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM"],
                 )
             slot.process   = subprocess.Popen(
                 cmd,

@@ -23,6 +23,15 @@ installer, in-place updater, prune, and packaging edge cases on top of `1.6.1`.
   - Fixed dead hyphenated Gemma keys in `routing/model_automap.py` and added
     executable directory `LD_LIBRARY_PATH` forwarding for POSIX STT subprocesses
     (`core/stt_engine.py`).
+  - Pinned pure `DEVICE_LOCAL` Vulkan allocations on Windows
+    (`GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1`, controlled by
+    `llama_vk_disable_host_visible_vidmem` in `settings_defaults.py` and
+    `backend/llama_start_phases.py`) to prevent WDDM from silently demoting
+    ReBAR model buffers into shared system RAM (`15-21x` faster Vulkan decode on
+    RX 6600 under GPU commit contention).
+  - Passed `--spec-draft-ngl 999` for DFlash/DSpark speculative drafters and
+    calibrated `kv_bytes_per_token=5120` on `nvidia-nemotron-3.5-bolt_e4b.json`
+    so full 64K context fits accurately inside 8 GB VRAM pre-flight checks.
 - **Downloaders & setup CLIs (`deploy/fetch_*.py`, `add_model.py`, `apply_model_defaults.py`, `recommend_models.py`, `backfill_speeds.py`):**
   - Enabled UTF-8 stdout/stderr reconfiguration across Windows CLIs without
     introducing broad exception debt.

@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**295 settings keys.**
+**296 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -196,6 +196,7 @@ its comment) in either file, then re-run the generator.
 | `llama_mlock` | bool | `True` | yes |  |
 | `llama_mlock_skip_large_moe` | bool | `True` | - | LARGE-MOE MLOCK SKIP: llama_mlock=True forces --load-mode mmap+mlock, which on large MoE GGUFs (>12 GB, experts streamed from RAM) measures up to 4.7x slower decode than load-mode none (llama-bench tg128 on the 35B-A3B: 2.92 t/s mmap+mlock vs 13.77 t/s none) because the locked… |
 | `llama_ubatch_size` | int | `256` | yes |  |
+| `llama_vk_disable_host_visible_vidmem` | bool | `True` | - | VULKAN-WDDM-PIN : on Windows Vulkan (AMD/Intel/Nvidia dGPUs with ReBAR), ggml-vulkan prefers HOST_VISIBLE\|DEVICE_LOCAL heaps that WDDM can silently demote into shared system RAM under GPU commit pressure (measured 15-21x decode drops on RX 6600). Pinning… |
 | `lsp_auto_diagnostics` | bool | `True` | yes | Attach a compact diagnostics block to a successful write/edit. A warm server is used directly; a cold one is started in the background (lsp_auto_warm_on_write) and the write waits at most 3 s for it. Failures are silent - a broken/missing server never fails a write. |
 | `lsp_auto_warm_on_write` | bool | `True` | - |  |
 | `lsp_client_timeout_s` | int | `30` | - | Per-request timeout in seconds for one LSP request; also caps the initialize handshake. A hung server is killed and lazily restarted on the next call. |

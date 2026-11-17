@@ -23,6 +23,11 @@ next to your old install — `settings.json`, `models.json`, `sessions\`, `logs\
   projector matching in `backend/llama_models.py`, fixed hyphenated Gemma keys in
   `routing/model_automap.py`, and added POSIX `LD_LIBRARY_PATH` forwarding for
   STT subprocesses (`core/stt_engine.py`).
+- Pinned `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1` for Windows Vulkan
+  `llama-server` spawns (`llama_vk_disable_host_visible_vidmem`) to avoid WDDM
+  shared-RAM spill (`15-21x` speedup under desktop/driver VRAM pressure), added
+  `--spec-draft-ngl 999` for DFlash/DSpark drafters, and calibrated `kv_bytes_per_token`
+  on `nvidia-nemotron-3.5-bolt_e4b.json` so 64K context fits on 8 GB GPUs.
 
 ## Fetchers & Setup Utilities
 

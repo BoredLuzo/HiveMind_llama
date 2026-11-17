@@ -96,6 +96,13 @@ DEFAULT_SETTINGS = {
     "llama_fit":               True,
     "llama_fit_target_mib":    0,
     "gpu_backend":             "",
+    # VULKAN-WDDM-PIN (2026-11-17): on Windows Vulkan (AMD/Intel/Nvidia dGPUs
+    # with ReBAR), ggml-vulkan prefers HOST_VISIBLE|DEVICE_LOCAL heaps that WDDM
+    # can silently demote into shared system RAM under GPU commit pressure
+    # (measured 15-21x decode drops on RX 6600). Pinning DEVICE_LOCAL-only via
+    # GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1 keeps weights in real GDDR6 VRAM;
+    # set False (or export GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=0) to opt out.
+    "llama_vk_disable_host_visible_vidmem": True,
     # 0 = off, 256 = llama.cpp recommendation.
     "llama_cache_reuse":       256,
     # Prompt-processing chunk size (llama.cpp --ubatch-size). Larger values
