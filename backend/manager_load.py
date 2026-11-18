@@ -39,6 +39,7 @@ from .llama_manager_utils import (
 from .llama_slots import ModelSlot
 from .manager_process import _slot_in_flight
 from .llama_start_phases import (
+    _find_external_drafter_path,
     _phase_capabilities, _phase_claim, _phase_flags, _phase_moe,
     _phase_model_flags, _phase_preflight_and_spawn,
 )
@@ -1242,6 +1243,16 @@ class LlamaLoadMixin:
                 except Exception:
                     _mtp = True   # registry unreadable: assume spec (safe path)
             if _mtp and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off"):
+                try:
+                    from .llama_config import _try_registry_mtp_draft as _reg_md
+                    _mtp_draft_fn = _reg_md(_key)
+                except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
+                    _mtp_draft_fn = None
+                if _mtp_draft_fn:
+                    if not include_external:
+                        return False
+                    if _find_external_drafter_path(_mtp_draft_fn) is None:
+                        return False
                 return True
             if not include_external:
                 return False
@@ -1321,9 +1332,19 @@ class LlamaLoadMixin:
                 "0.28 MiB/ubatch surcharge above 256, but 2048 spilled hard.",
                 _ub_eff,
             )
+        _fa_on = True
+        try:
+            from model_configs.models_registry import get_flash_attn as _gfa
+            _fa_pref = _gfa(_strip_alias(model))
+            if _fa_pref is not None:
+                _fa_on = bool(_fa_pref)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _fa_on = True
+        if not _fa_on:
+            logger.info("--flash-attn off for %s (profile override; KV cache forced to f16)", model)
         cmd += [
             "--parallel",     str(max(1, n_parallel)),
-            "--flash-attn",   "on",
+            "--flash-attn",   "on" if _fa_on else "off",
             "--batch-size",   str(max(1024, _ub_eff)),
             "--ubatch-size",  str(_ub_eff),
             "--threads",      str(_def_threads),

@@ -296,12 +296,14 @@ async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = Fa
     min_build = DSPARK_MIN_BUILD
     label = "DSpark"
     env_off = False
+    draft_alt_fns: list[str] = []
     try:
         from .llama_config import (
             _try_registry_dflash_draft as _reg_df2,
             _try_registry_dspark_draft as _reg_dd2,
         )
         from model_configs.models_registry import (
+            get_dflash_draft_alternates as _reg_df_alts,
             get_dflash_draft_n_max as _reg_df_nmax,
             get_dflash_draft_p_min as _reg_df_pmin,
             get_dspark_draft_n_max as _reg_nmax,
@@ -321,6 +323,7 @@ async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = Fa
                 p_min = float(reg_pmin if reg_pmin is not None else DFLASH_DRAFT_P_MIN)
                 min_build = DFLASH_MIN_BUILD
                 label = "DFlash"
+                draft_alt_fns = _reg_df_alts(m_alias)
                 env_off = (
                     os.environ.get("HIVEMIND_DFLASH_SPEC", "1") in ("0", "false", "off")
                     or os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
@@ -330,6 +333,11 @@ async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = Fa
     if env_off or not draft_fn:
         return None
     draft_path = _find_external_drafter_path(draft_fn)
+    if draft_path is None:
+        for alt_fn in draft_alt_fns:
+            draft_path = _find_external_drafter_path(alt_fn)
+            if draft_path is not None:
+                break
     if draft_path is None:
         if log_warnings:
             logger.warning(
@@ -1058,37 +1066,59 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     # OFF-SWITCH INVERTED (1.3.9): the condition used to be the
     # enable-list itself, so =0 appended --spec-type draft-mtp to
     # EVERY model instead of switching it off.
+    _mtp_draft_fn = None
+    try:
+        from .llama_config import _try_registry_mtp_draft as _reg_mtp_draft
+        _mtp_draft_fn = _reg_mtp_draft(_mtp_model_key)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
+        logger.debug("[MTP] external draft probe skipped: %s", _e)
     if os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off") and _is_mtp:
-        # profile overrides (mtp_draft_n_max / mtp_draft_p_min) win over
-        # the module defaults; the values are clamped to sane ranges so a
-        # typo cannot produce a 0-token draft or an 8-token greedy draft
-        # (the card's sweep shows n_max 8 / p_min 0 collapses to 0.57x).
-        _draft_nmax, _draft_pmin = MTP_DRAFT_N_MAX, MTP_DRAFT_P_MIN
-        try:
-            from model_configs.models_registry import get_profile as _gp
-            _prof = _gp(_mtp_model_key) or {}
-            if _prof.get("mtp_draft_n_max") is not None:
-                _draft_nmax = int(_prof["mtp_draft_n_max"])
-            if _prof.get("mtp_draft_p_min") is not None:
-                _draft_pmin = float(_prof["mtp_draft_p_min"])
-        except (ImportError, ValueError, TypeError) as _prof_err:
-            logger.debug("MTP profile override skipped: %s", _prof_err)
-        _draft_nmax = max(1, min(4, int(_draft_nmax)))
-        _draft_pmin = max(0.0, min(0.95, float(_draft_pmin)))
-        cmd += [
-            "--spec-type", MTP_SPEC_TYPE,
-            "--spec-draft-n-max", str(_draft_nmax),
-            "--spec-draft-n-min", str(MTP_DRAFT_N_MIN),
-        ]
-        # --spec-draft-p-min exists from b12001 on; on older binaries the
-        # flag would abort the load, so gate it on the help text we read.
-        if await _help_supports("--spec-draft-p-min"):
-            cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
-        logger.info(
-            "MTP active: %s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
-            MTP_SPEC_TYPE, _draft_nmax, MTP_DRAFT_N_MIN, f"{_draft_pmin:g}",
-            "" if await _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
-        )
+        _mtp_draft_path = None
+        if _mtp_draft_fn:
+            _mtp_draft_path = _find_external_drafter_path(_mtp_draft_fn)
+            if _mtp_draft_path is None:
+                logger.warning(
+                    "MTP drafter sidecar configured for '%s' (%s) but not found in %s "
+                    "— running without speculative decoding.",
+                    model, _mtp_draft_fn, MODELS_DIR,
+                )
+        if not _mtp_draft_fn or _mtp_draft_path is not None:
+            # profile overrides (mtp_draft_n_max / mtp_draft_p_min) win over
+            # the module defaults; the values are clamped to sane ranges so a
+            # typo cannot produce a 0-token draft or an 8-token greedy draft
+            # (the card's sweep shows n_max 8 / p_min 0 collapses to 0.57x).
+            _draft_nmax, _draft_pmin = MTP_DRAFT_N_MAX, MTP_DRAFT_P_MIN
+            try:
+                from model_configs.models_registry import get_profile as _gp
+                _prof = _gp(_mtp_model_key) or {}
+                if _prof.get("mtp_draft_n_max") is not None:
+                    _draft_nmax = int(_prof["mtp_draft_n_max"])
+                if _prof.get("mtp_draft_p_min") is not None:
+                    _draft_pmin = float(_prof["mtp_draft_p_min"])
+            except (ImportError, ValueError, TypeError) as _prof_err:
+                logger.debug("MTP profile override skipped: %s", _prof_err)
+            _draft_nmax = max(1, min(4, int(_draft_nmax)))
+            _draft_pmin = max(0.0, min(0.95, float(_draft_pmin)))
+            cmd += [
+                "--spec-type", MTP_SPEC_TYPE,
+                "--spec-draft-n-max", str(_draft_nmax),
+                "--spec-draft-n-min", str(MTP_DRAFT_N_MIN),
+            ]
+            if _mtp_draft_path is not None:
+                cmd += ["--model-draft", str(_mtp_draft_path)]
+                if GPU_BACKEND != "cpu" and await _help_supports("--spec-draft-ngl"):
+                    cmd += ["--spec-draft-ngl", "999"]
+            # --spec-draft-p-min exists from b12001 on; on older binaries the
+            # flag would abort the load, so gate it on the help text we read.
+            if await _help_supports("--spec-draft-p-min"):
+                cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
+            logger.info(
+                "MTP active: %s%s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
+                MTP_SPEC_TYPE,
+                f" -> drafter {_mtp_draft_path.name}" if _mtp_draft_path is not None else "",
+                _draft_nmax, MTP_DRAFT_N_MIN, f"{_draft_pmin:g}",
+                "" if await _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
+            )
 
     # ── DSpark / DFlash external drafter (Speculative-Decoding Sidecar) ────
     # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 (or HIVEMIND_DFLASH_SPEC=0
@@ -1193,6 +1223,7 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     try:
         if (_reg_is_mtp is not None and _reg_is_mtp(model)
                 and "--spec-type" not in cmd
+                and not _mtp_draft_fn
                 # ENV-BYPASS FIX (audit 2026-10-24): the registry block
                 # re-enabled draft-mtp even with HIVEMIND_MTP_SPEC=0 -
                 # the off-switch only covered the name-list gate.

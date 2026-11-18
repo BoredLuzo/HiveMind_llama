@@ -191,7 +191,7 @@ check("28 tight context below 64 thinking share returns 0 instead of overflowing
 
 # 13) Suffixed GGUF variant tags inherit their catalog tag profile before bare family fallback
 check("29 twil variant resolves twil:8b ctx",
-      get_num_ctx("twil:8b-q4-k-m-verbose-heretic") == 40960)
+      get_num_ctx("twil:8b-q4-k-m-verbose-heretic") == 16384)
 check("30 twil variant resolves twil:8b jinja",
       is_jinja("twil:8b-q4-k-m-verbose-heretic") is True)
 check("31 twil variant resolves twil:8b reasoning",

@@ -15,6 +15,7 @@
   "reasoning": "on",
   "distilled": false,
   "moe_cpu_experts": 0,
+  "flash_attn": false,
   "mtp": false,
   "gpu_layers": 99,
   "mmproj_filename": null,

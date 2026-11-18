@@ -363,6 +363,33 @@ def get_dflash_draft(model_name: str) -> str | None:
     return _get_str_key(model_name, "dflash_draft_filename")
 
 
+def get_dflash_draft_alternates(model_name: str) -> list[str]:
+    """Optional fallback filenames when multiple quantised DFlash drafters exist."""
+    v = get_profile(model_name).get("dflash_draft_alternates")
+    if isinstance(v, list):
+        return [str(tok).strip() for tok in v if str(tok).strip()]
+    return []
+
+
+def get_mtp_draft(model_name: str) -> str | None:
+    """Optional external MTP predictor sidecar filename (e.g. mtp-gemma-4-E4B-it.gguf)."""
+    return _get_str_key(model_name, "mtp_draft_filename")
+
+
+def get_flash_attn(model_name: str) -> bool | None:
+    """Optional per-model --flash-attn override (True='on', False='off', None=default on)."""
+    v = get_profile(model_name).get("flash_attn")
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        low = v.strip().lower()
+        if low in ("on", "true", "1", "yes"):
+            return True
+        if low in ("off", "false", "0", "no"):
+            return False
+    return None
+
+
 def get_dflash_draft_n_max(model_name: str) -> int | None:
     """Per-model draft budget for DFlash. None = use the engine default."""
     return _get_pos_int_key(model_name, "dflash_draft_n_max")

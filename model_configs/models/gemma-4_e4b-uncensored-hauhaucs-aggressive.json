@@ -15,10 +15,11 @@
   "reasoning": null,
   "distilled": false,
   "moe_cpu_experts": 0,
+  "flash_attn": false,
   "mtp": false,
   "gpu_layers": 99,
   "mmproj_filename": "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf",
-  "vram_gb_override": 4.5,
+  "vram_gb_override": 5.3,
   "sampling": {
     "thinking": {
       "temperature": 1.0,

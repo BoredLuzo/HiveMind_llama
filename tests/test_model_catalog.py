@@ -24,73 +24,51 @@ check = h.check
 
 
 specs = {s["key"]: s for s in fm.SPECS}
-check("catalog is non-empty", len(specs) >= 10, f"({len(specs)} entries)")
+check("catalog is non-empty condensed performance set", len(specs) >= 10, f"({len(specs)} entries)")
 
-# ── Spark-X2.6 ──────────────────────────────────────────────────────────
-spark = specs.get("spark-x2.6:4b")
-check("spark-x2.6:4b is in the catalog", spark is not None)
-if spark:
-    check("spark repo pinned to XHToken",
-          spark["repo"] == "XHToken/Spark-X2.6-4B-GGUF", f"({spark['repo']})")
-    names = ["Spark-X2.6-4B-Q4_K_M.gguf"]
-    check("spark regex matches the real asset",
-          any(re.match(p, names[0]) for p in spark["file_regex"]), f"({spark['file_regex']})")
-    check("spark regex rejects another quant",
-          not any(re.match(p, "Spark-X2.6-4B-Q8_0.gguf") for p in spark["file_regex"]))
-    check("spark tag is spark-x2.6:4b", spark.get("tag") == "spark-x2.6:4b")
-    prof = ROOT / "model_configs" / "models" / "spark-x2.6_4b.json"
-    check("spark profile exists", prof.exists())
-    if prof.exists():
-        import json
-        p = json.loads(prof.read_text(encoding="utf-8"))
-        check("spark profile targets the tag", p.get("model") == "spark-x2.6:4b", f"({p.get('model')})")
-        check("spark profile enables jinja", p.get("jinja") is True)
-        check("spark profile uses the model card sampling",
-              (p.get("sampling") or {}).get("thinking", {}).get("temperature") in (None, 1.0),
-              f"({(p.get('sampling') or {}).get('thinking')})")
+# ── Shipped profiles preserved for unlisted local models ────────────────
+prof_spark_p = ROOT / "model_configs" / "models" / "spark-x2.6_4b.json"
+check("spark profile stays shipped for existing GGUFs", prof_spark_p.exists())
+if prof_spark_p.exists():
+    import json
+    p = json.loads(prof_spark_p.read_text(encoding="utf-8"))
+    check("spark profile targets the tag", p.get("model") == "spark-x2.6:4b", f"({p.get('model')})")
+    check("spark profile enables jinja", p.get("jinja") is True)
+    check("spark profile uses the model card sampling",
+          (p.get("sampling") or {}).get("thinking", {}).get("temperature") in (None, 1.0),
+          f"({(p.get('sampling') or {}).get('thinking')})")
 
-# ── LFM2.5 24B-A2B + DSpark ─────────────────────────────────────────────
-lfm = specs.get("lfm2.5:24b-a2b")
-check("lfm2.5:24b-a2b is in the catalog", lfm is not None)
-if lfm:
-    check("lfm 24b repo pinned", lfm["repo"] == "LiquidAI/LFM2.5-24B-A2B-GGUF", f"({lfm['repo']})")
-    asset = "LFM2.5-24B-A2B-Q4_K_M.gguf"
-    check("lfm 24b regex matches the real asset",
-          any(re.match(p, asset) for p in lfm["file_regex"]), f"({lfm['file_regex']})")
-    check("lfm 24b regex rejects Q8",
-          not any(re.match(p, "LFM2.5-24B-A2B-Q8_0.gguf") for p in lfm["file_regex"]))
-    side = (lfm.get("sidecar") or [])
-    check("lfm 24b ships a DSpark drafter", len(side) == 1, f"({side})")
-    if side:
-        check("drafter repo pinned",
-              side[0]["repo"] == "LiquidAI/LFM2.5-24B-A2B-DSpark-GGUF", f"({side[0]['repo']})")
-        check("drafter filename matches the repo",
-              side[0]["path"] == "LFM2.5-24B-A2B-DSpark-F16.gguf", f"({side[0]['path']})")
-        check("drafter is labelled", bool(side[0].get("note")))
-    prof = ROOT / "model_configs" / "models" / "lfm2.5_24b-a2b.json"
-    if prof.exists():
-        import json
-        check("lfm 24b profile exists", True)
-        p = json.loads(prof.read_text(encoding="utf-8"))
-        check("profile points at the drafter filename",
-              p.get("dspark_draft_filename") == "LFM2.5-24B-A2B-DSpark-F16.gguf",
-              f"({p.get('dspark_draft_filename')})")
-        from backend.llama_vram_table import moe_cfg_for as _moe_cfg
-        _cal = (_moe_cfg("lfm2.5:24b-a2b") or {}).get("calibrated_n_cpu_moe")
-        check("profile offloads exactly the calibrated expert count",
-              int(p.get("moe_cpu_experts") or 0) == int(_cal or -1),
-              f"(profile {p.get('moe_cpu_experts')} vs calibrated {_cal})")
-        check("profile marks the model as MoE", p.get("moe") is True)
-        check("profile is not a thinking model (LFM family)", p.get("capabilities", {}).get("thinking") is False)
-    else:
-        # Live-installation profile, deliberately untracked: a clean checkout
-        # cannot carry it (2026-11-07 CI audit).
-        print("  SKIP lfm 24b profile (live-installation only, not tracked)")
+# ── Nemotron-3.5-Bolt E4B + DFlash Q8_0 (in condensed catalog) ──────────
+nem = specs.get("nvidia-nemotron-3.5-bolt:e4b")
+check("nvidia-nemotron-3.5-bolt:e4b is in the condensed catalog", nem is not None)
+if nem:
+    check("nemotron repo pinned to unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
+          nem["repo"] == "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF", f"({nem['repo']})")
+    check("nemotron regex matches UD-Q4_K_XL",
+          any(re.match(p, "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf") for p in nem["file_regex"]))
+    side_nem = (nem.get("sidecar") or [])
+    check("nemotron ships DFlash Q8_0 drafter sidecar",
+          len(side_nem) == 1 and side_nem[0]["path"] == "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf",
+          f"({side_nem})")
+
+# ── Redundant bloated entries condensed out of catalog ──────────────────
+for dropped in (
+    "gemma-4:e2b-it-qat",
+    "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+    "spark-x2.6:4b",
+    "lfm2.5:24b-a2b",
+    "groot:19b-a3b-261023",
+    "qwen3.5:2b-mtp",
+    "qwen3.5:0.8b-ud",
+):
+    check(f"condensed catalog omits redundant {dropped}", dropped not in specs)
 
 # ── Drafter werden nie als Modell registriert ───────────────────────────
-NON_MODEL = getattr(fm, "_NON_MODEL_PATTERNS", None) or {"mmproj", "dspark"}
+from backend.llama_models import is_non_model_gguf as _is_non_model  # noqa: E402
 check("drafter names are excluded from models.json",
-      any("dspark" in str(x).lower() for x in NON_MODEL), f"({NON_MODEL})")
+      _is_non_model("dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf")
+      and _is_non_model("mtp-gemma-4-E4B-it.gguf")
+      and _is_non_model("MiniCPM5-2.6B-DSpark.gguf"))
 
 # ── Automap kennt die Spark-Familie ─────────────────────────────────────
 amap = (ROOT / "routing" / "model_automap.py").read_text(encoding="utf-8", errors="replace")
@@ -243,10 +221,12 @@ if twil:
         import json as _json_tw
         tp = _json_tw.loads(twil_prof_p.read_text(encoding="utf-8"))
         check("twil profile targets twil:8b", tp.get("model") == "twil:8b")
-        check("twil profile uses recommended 40960 ctx & jinja & reasoning on",
-              tp.get("num_ctx") == 40960
+        check("twil profile uses 8 GB-safe 16384 ctx, jinja, flash_attn on, q4_0 KV & reasoning on",
+              tp.get("num_ctx") == 16384
               and tp.get("jinja") is True
               and tp.get("reasoning") == "on"
+              and tp.get("flash_attn") is True
+              and tp.get("kv_cache_type") == "q4_0"
               and tp.get("moe") is False
               and int(tp.get("moe_cpu_experts") or 0) == 0)
         ts = (tp.get("sampling") or {}).get("thinking") or {}
@@ -301,7 +281,7 @@ if q36_mtp:
     check("qwen3.6:35b-a3b-mtp repo pinned to unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
           q36_mtp["repo"] == "unsloth/Qwen3.6-35B-A3B-MTP-GGUF", f"({q36_mtp['repo']})")
     check("qwen3.6:35b-a3b-mtp sets unique file_dest & mmproj_dest",
-          q36_mtp.get("file_dest") == "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf"
+          q36_mtp.get("file_dest") == "Qwen3.6-35B-A3B-MTP-UD-IQ4_XS.gguf"
           and q36_mtp.get("mmproj_dest") == "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
           f"({q36_mtp.get('file_dest')}, {q36_mtp.get('mmproj_dest')})")
 
@@ -319,16 +299,16 @@ if q36_mtp:
 
     _ud_prof = _json_q36.loads((ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-ud.json").read_text(encoding="utf-8"))
     _mtp_prof = _json_q36.loads((ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-mtp.json").read_text(encoding="utf-8"))
-    check("qwen3.6_35b-a3b-mtp.json enables mtp + 35 CPU experts + ubatch 512",
+    check("qwen3.6_35b-a3b-mtp.json enables mtp + 35 CPU experts + ubatch 1024",
           _mtp_prof.get("mtp") is True
           and int(_mtp_prof.get("moe_cpu_experts") or 0) == 35
-          and int(_mtp_prof.get("ubatch") or 0) == 512)
+          and int(_mtp_prof.get("ubatch") or 0) == 1024)
     check("qwen3.6_35b-a3b-ud.json keeps mtp disabled",
           _ud_prof.get("mtp") is False)
 
     with _tempfile_q36.TemporaryDirectory() as _tmp_q36:
         _mdir = Path(_tmp_q36)
-        _f_mtp = _mdir / "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf"
+        _f_mtp = _mdir / "Qwen3.6-35B-A3B-MTP-UD-IQ4_XS.gguf"
         _f_mtp.write_bytes(b"mtp")
         (_mdir / "model_configs").mkdir(exist_ok=True)
         _out = _mdir / "models.json"

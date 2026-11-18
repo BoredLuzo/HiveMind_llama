@@ -1,0 +1,77 @@
+{
+  "model": "cyber-tiel-coder:35b-a3b-mtp-ud",
+  "capabilities": {
+    "thinking": true,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "load_mode": "mmap",
+  "cache_ram_mib": 2048,
+  "num_ctx": 16384,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 16384,
+  "num_ctx_vision": 8192,
+  "chat_template": "chat_template_sharp_v22.5.0.jinja",
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe": true,
+  "moe_cpu_experts": 35,
+  "ubatch": 1024,
+  "mtp": true,
+  "mtp_draft_n_max": 2,
+  "gpu_layers": null,
+  "mmproj_filename": "mmproj-Cyber-Tiel-Coder-35B-A3B-BF16.gguf",
+  "vram_gb_override": 4.7,
+  "kv_bytes_per_token": 6272,
+  "sampling": {
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 1.5,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
+    "sampling_text": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 1.5,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    }
+  }
+}

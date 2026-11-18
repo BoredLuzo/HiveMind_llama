@@ -400,6 +400,11 @@ def _try_registry_dflash_draft(model_key: str) -> str | None:
     return _try_registry_draft_attr(model_key, "get_dflash_draft")
 
 
+def _try_registry_mtp_draft(model_key: str) -> str | None:
+    """Per-Model-Registry (model_configs/models/*.json) → external MTP sidecar filename."""
+    return _try_registry_draft_attr(model_key, "get_mtp_draft")
+
+
 def detect_moe_count(model_key: str) -> int:
     import re as _re_moe2
     _key = _re_moe2.sub(r"#\d+$", "", str(model_key or "").strip().lower()).removesuffix(":latest")
@@ -427,6 +432,8 @@ _MOE_EXPERT_COUNTS = {
     "qwen3.6:35b-a3b-ud": 35,
     "qwen3.6:35b-a3b-mtp": 35,
     "qwen3.6:35b-a3b-uncensored": 35,
+    "cyber-tiel-coder:35b-a3b": 35,
+    "cyber-tiel-coder:35b-a3b-mtp-ud": 35,
 }
 
 # MiniCPM-V-4.7 35B-A3B (2026-10-13): same MoE offload as hermes3.6/qwen3.6
@@ -475,14 +482,25 @@ def _strip_ud_suffix(model_key: str) -> str:
     return k[:-3] if k.lower().endswith("-ud") else k
 
 
+def _try_registry_flash_attn_off(model_key: str) -> bool:
+    """True when the model profile explicitly sets flash_attn=false (requires f16 KV)."""
+    try:
+        from model_configs.models_registry import get_flash_attn as _gfa
+        return _gfa(model_key) is False
+    except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def moe_kv_cache_types(model_key: str) -> str:
     """MoE KV quantization for --cache-type-k/-cache-type-v.
 
     Resolution: manual dict (raw or -ud-stripped key) > model profile
-    ("kv_cache_type") > q4_0 default. The profile key is the escape hatch
-    for models that degrade on q4_0 KV at long context; the aggressive
-    default stays."""
+    ("kv_cache_type") > q4_0 default. When flash_attn=false, f16 KV is forced
+    because llama-server rejects quantized V-cache with --flash-attn off.
+    """
     k = _strip_ud_suffix(model_key)
+    if _try_registry_flash_attn_off(k):
+        return "f16"
     v = _MOE_KV_CACHE_TYPES.get(k)
     if not v:
         try:
@@ -496,16 +514,12 @@ def moe_kv_cache_types(model_key: str) -> str:
 def dense_kv_cache_type(model_key: str, global_default: str = "") -> str:
     """Dense KV quantization for --cache-type-k/-cache-type-v.
 
-    Resolution: model profile ("kv_cache_type") > static family table
-    (full key, then base before the colon) > global_default. Mirrors
-    moe_kv_cache_types so the profile key applies to dense models too -
-    previously only the MoE path consulted it (live 2026-10-27: a
-    spark-x2.6:4b profile with q8_0 silently ran the global q4_0).
-    global_default is what the loader passes: the install-wide KV_CACHE_TYPE
-    constant (q4_0). That constant is deliberately NOT a setting - per-model
-    escape hatches live in the model profile ("kv_cache_type"), which wins
-    over everything here; "f16" in a profile forces explicit f16 flags."""
+    Resolution: flash_attn=false guard ("f16") > model profile ("kv_cache_type") >
+    static family table (full key, then base before the colon) > global_default.
+    """
     k = _strip_ud_suffix(model_key)
+    if _try_registry_flash_attn_off(k):
+        return "f16"
     low = k.lower()
     v = None
     try:

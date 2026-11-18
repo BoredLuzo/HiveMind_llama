@@ -18,7 +18,7 @@
   "mtp": false,
   "gpu_layers": null,
   "mmproj_filename": "mmproj-Qwen3.5-2B-F16.gguf",
-  "vram_gb_override": 1.3,
+  "vram_gb_override": 2.0,
   "sampling": {
     "sampling_text": {
       "temperature": 0.6,

@@ -1,24 +1,14 @@
 """
 fetch_models.py
 ===============
-Downloads the recommended HiveMind models from Hugging Face and
-populates models.json with all GGUFs found in the models folder.
+Downloads the condensed performance-class HiveMind models from Hugging Face
+and populates models.json with all GGUFs found in the models folder.
 
-Recommended set (as of release, = default-settings alignment 2026-08-26):
-  gemma-4:e4b-it          Q4_K_M        — Direct/Vision/Allrounder
-  qwen3.6:35b-a3b-mtp     UD-Q4_K_XL    — Coder/Planner (MoE+MTP, needs ~16GB RAM)
-  (catalog is authoritative - this block lists only the highlights)
-  lfm3-omni:2b            Q4_0          — Subagent/Vision-Worker (+mmproj)
-  lfm3:1.7b-qad           QAD Q4_0      — text-only subagent
-  lfm2.5:24b-a2b          Q4_K_M        — Coder/Writer (MoE, + DSpark drafter)
-  spark-x2.6:4b           Q4_K_M        — fast direct helper (dense 4B)
-  qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
-  qwen3.5:2b              Q4_K_M        — Refiner
-  qwen3.5:4b-mtp          Q4_K_M        — Analyst/Critic/Synthesizer/Speed/Fallback
-  qwen3.5:9b-ud           UD-Q4_K_XL    — Direct/Duo-Coder/Quality
-  gemma-4:…-hauhaucs-aggressive  Q4_K_P  — Uncensored all-rounder (2026-09-21)
-  minicpm5:2b-sharp       Q6_K_XL (alt. Q4_K_XL) — Sharp-MiniCPM5-2B light
-                          all-rounder, tool calls via --jinja (2026-09-26)
+Essential Starter Set (`--essential`, 4 models, ~12.8 GB, fits any 8 GB GPU):
+  gemma-4:e4b-it-qat          UD-Q4_K_XL — Direct / Vision / All-rounder (+MTP)
+  qwen3.5:4b-mtp              Q4_K_M     — Duo Coder / Planner (MTP + Vision)
+  minicpm5:2b-sharp           Q6_K_XL    — Light All-rounder / Judge / Refiner (+DSpark)
+  lfm3:1.7b-qad               Q4_0       — Tool-calling subagent (~1 GB, lowest latency)
 
 Usage:
   python deploy\\fetch_models.py --models-dir <path> [options]
@@ -27,6 +17,7 @@ Usage:
   --only-missing   Do not re-download existing GGUFs
   --list-only      Only show what would be downloaded, download nothing
   --scan-only      Only scan local GGUFs + write models.json, NO download, NO network
+  --print-tiers    Print hardware-tier recommendations (VRAM x RAM) and exit
   --yes            Skip confirmation for large-file warnings
 
 Stdlib only — no huggingface_hub dependency.
@@ -41,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -193,9 +185,14 @@ ESSENTIAL_KEYS = {
 SKIP_DRAFTERS = False
 
 SPECS: list[dict] = [
+    # ── Tier 1: Essential Starter Set (fits any 8 GB GPU, ~12.8 GB disk) ───
     {
         "key": "gemma-4:e4b-it-qat",
         "tag": "gemma-4:e4b-it-qat",
+        "tier": "Essential (All-rounder + Vision + MTP)",
+        "disk_gb": "~4.5 GB",
+        "hw_req": "6-8+ GB VRAM (100% GPU)",
+        "role_hint": "Recommended Direct / Vision (~65-77 tok/s)",
         "desc": "Gemma-4 E4B-IT QAT (All-rounder/Vision, ~4.2GB + mmproj, +MTP drafter)",
         "repo": "unsloth/gemma-4-E4B-it-qat-GGUF",
         "file_regex": [
@@ -218,49 +215,68 @@ SPECS: list[dict] = [
         ],
     },
     {
-        "key": "gemma-4:e2b-it-qat",
-        "tag": "gemma-4:e2b-it-qat",
-        "desc": "Gemma-4 E2B-IT QAT (Small all-rounder/Vision, ~2.6GB + mmproj, +MTP drafter)",
-        "repo": "unsloth/gemma-4-E2B-it-qat-GGUF",
+        "key": "qwen3.5:4b-mtp",
+        "tag": "qwen3.5:4b-mtp",
+        "tier": "Essential (Fast Coder/Planner + MTP)",
+        "disk_gb": "~3.1 GB",
+        "hw_req": "6-8+ GB VRAM (100% GPU)",
+        "role_hint": "Recommended Duo Coder / Planner (~75-80 tok/s)",
+        "desc": "Qwen3.5 4B MTP (Duo Coder/Planner default, MTP spec-decode, ~2.8GB + mmproj)",
+        "repo": "unsloth/Qwen3.5-4B-MTP-GGUF",
         "file_regex": [
-            r"(?i)^gemma-4-e2b-it-qat-ud-q4_k_xl\.gguf$",
+            r"(?i)^qwen3\.5-4b-q4_k_m\.gguf$",
         ],
-        "mmproj_regex": [
-            r"(?i)^mmproj[-_.]bf16\.gguf$",
-            r"(?i)^mmproj[-_.]f16\.gguf$",
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-qwen3.5-4b-f16.gguf",
+    },
+    {
+        "key": "minicpm5:2b-sharp",
+        "tag": "minicpm5:2b-sharp",
+        "tier": "Essential (Ultra-fast All-rounder/Judge + DSpark)",
+        "disk_gb": "~2.8 GB",
+        "hw_req": "4+ GB VRAM (100% GPU)",
+        "role_hint": "Recommended Judge / Refiner (~70+ tok/s)",
+        "desc": "Sharp-MiniCPM5-2B Q6_K_XL (fast all-rounder/judge, ~2.1GB + DSpark drafter)",
+        "repo": "peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF",
+        "file_regex": [
+            r"(?i)^sharp-minicpm5-2b-q6_k_xl\.gguf$",
         ],
-                # dest matches gemma-4_e2b-it-qat.json mmproj_filename (config wins
-        # in resolve_mmproj_path) - the generic repo name collided with e4b.
-        "mmproj_dest": "mmproj-Gemma-4-E2B-BF16.gguf",
+        "mmproj_regex": [],
+        "extra_files": [
+            {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
+        ],
         "sidecar": [
             {
-                "repo": "unsloth/gemma-4-E2B-it-qat-GGUF",
-                "path": "mtp-gemma-4-E2B-it.gguf",
-                "note": "MTP spec-dec drafter (~60MB)",
+                "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",
+                "path": "MiniCPM5-2.6B-DSpark.gguf",
+                "note": "DSpark spec-dec drafter (~650MB)",
             },
         ],
     },
     {
-        "key": "qwen3.6:35b-a3b-mtp",
-        "tag": "qwen3.6:35b-a3b-mtp",
-        "desc": "Qwen3.6 35B A3B MTP unsloth UD (Coder/Planner MoE + MTP spec-decode, ~22.8GB download)",
-        "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+        "key": "lfm3:1.7b-qad",
+        "tag": "lfm3:1.7b-qad",
+        "tier": "Essential / 4 GB VRAM (Low-Latency Subagent)",
+        "disk_gb": "~1.0 GB",
+        "hw_req": "4+ GB VRAM (100% GPU)",
+        "role_hint": "Recommended Tool Subagent (~110+ tok/s)",
+        "desc": "LFM3 1.7B QAD Q4_0 (tool-calling subagent, ~1GB, needs llama.cpp b12001+)",
+        "repo": "LiquidAI/LFM3-1.7B-GGUF",
         "file_regex": [
-            r"(?i)^qwen3\.6-35b-a3b-ud-q4_k_xl\.gguf$",
+            r"(?i)^lfm3-1\.7b-qad-q4_0\.gguf$",
+            r"(?i)^lfm3-1\.7b-q4_k_m\.gguf$",
         ],
-        # Name locally so the MTP quant never collides if a non-MTP UD file is also present.
-        "file_dest": "Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf",
-        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        "mmproj_dest": "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
+        "mmproj_regex": [],
     },
+    # ── Tier 2: Compact & Specialist Workers (4-6 GB VRAM / Parallel) ──────
     {
-        # LFM3 (2026-10-30, second attempt): b12001 carries arch `lfm3`
-        # (PR #31252); b11889 answered "unknown model architecture: 'lfm3'".
-        # Preferred entry is OMNI 2B (text + vision through its own mmproj),
-        # the lean text-only 1.7B QAD follows. The 2.6B line is gone.
         "key": "lfm3-omni:2b",
         "tag": "lfm3-omni:2b",
-        "desc": "LFM3-Omni 2B Q4_0 (Subagent/Vision-Worker, ~1GB + mmproj 270MB)",
+        "tier": "Compact Vision (4-6 GB VRAM / Parallel Worker)",
+        "disk_gb": "~1.3 GB",
+        "hw_req": "4-6+ GB VRAM (100% GPU)",
+        "role_hint": "Optional Compact Vision Subagent",
+        "desc": "LFM3-Omni 2B Q4_0 (Subagent/Vision-Worker, ~1GB + mmproj 270MB, b12001+)",
         "repo": "LiquidAI/LFM3-Omni-2B-GGUF",
         "file_regex": [
             r"(?i)^lfm3-omni-2b-q4_0\.gguf$",
@@ -273,20 +289,13 @@ SPECS: list[dict] = [
         "mmproj_dest": "mmproj-LFM3-Omni-2B-Q4_0.gguf",
     },
     {
-        "key": "lfm3:1.7b-qad",
-        "tag": "lfm3:1.7b-qad",
-        "desc": "LFM3 1.7B QAD Q4_0 (tool-calling subagent, ~1GB, needs llama.cpp b12001+)",
-        "repo": "LiquidAI/LFM3-1.7B-GGUF",
-        "file_regex": [
-            r"(?i)^lfm3-1\.7b-qad-q4_0\.gguf$",
-            r"(?i)^lfm3-1\.7b-q4_k_m\.gguf$",
-        ],
-        "mmproj_regex": [],
-    },
-    {
         "key": "lfm3:1.7b-uncensored-ad",
         "tag": "lfm3:1.7b-uncensored-ad",
-        "desc": "LFM3 1.7B Uncensored Q4_K_M / Q6_K (tool-calling subagent, ~1.1GB, needs llama.cpp b12001+)",
+        "tier": "Compact Uncensored (4-6 GB VRAM)",
+        "disk_gb": "~1.1 GB",
+        "hw_req": "4-6+ GB VRAM (100% GPU)",
+        "role_hint": "Optional Uncensored Subagent",
+        "desc": "LFM3 1.7B Uncensored Q4_K_M / Q6_K (tool-calling subagent, ~1.1GB, needs b12001+)",
         "repo": "AtomicChat/LFM3-1.7B-Uncensored-GGUF",
         "file_regex": [
             r"(?i)^lfm3-1\.7b-uncensored-ad-q4_k_m\.gguf$",
@@ -337,224 +346,50 @@ SPECS: list[dict] = [
             },
         },
     },
-    # ── Spark-X2.6 4B (XHToken, 2026-10) ──────────────────────────────────
-    # Dense 4B, Apache-2.0, embedded chat template (jinja), thinking via the
-    # template's enable_thinking switch. Replaces the Spark-X2.5 profiles
-    # (4B/1.7B): same family, newer weights, one pinned repo. Sampling lives
-    # in model_configs/models/spark-x2.6_4b.json (temp 1.0 / top_p 0.95 /
-    # top_k off, no penalties) - matching the model card.
+    # ── Tier 3: 8 GB+ Dense Power Class (High Quality 4B-9B) ───────────────
     {
-        "key": "spark-x2.6:4b",
-        "tag": "spark-x2.6:4b",
-        "desc": "Spark-X2.6 4B Q4_K_M (dense, fast direct helper, ~3GB)",
-        "repo": "XHToken/Spark-X2.6-4B-GGUF",
+        "key": "nvidia-nemotron-3.5-bolt:e4b",
+        "tag": "nvidia-nemotron-3.5-bolt:e4b",
+        "tier": "8 GB Power Class (Top Quality Reasoning/Code + DFlash)",
+        "disk_gb": "~5.1 GB",
+        "hw_req": "8+ GB VRAM (100% GPU)",
+        "role_hint": "Upgrade: Top 8GB Reasoning/Coder + DFlash (~33 tok/s)",
+        "desc": "Nemotron-3.5-Bolt E4B UD-Q4_K_XL (strongest 8GB reasoning/code, 64K SWA, ~4.7GB + DFlash)",
+        "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
         "file_regex": [
-            r"(?i)^spark-x2\.6-4b-q4_k_m\.gguf$",
+            r"(?i)^nvidia-nemotron-3\.5-bolt-e4b-ud-q4_k_xl\.gguf$",
         ],
         "mmproj_regex": [],
-    },
-    # ── LFM2.5 24B-A2B (LiquidAI, 2026-10) ───────────────────────────────
-    # MoE 24B total / ~2B active. Q4_K_M is 13.5 GB, so on an 8 GB card the
-    # experts live in RAM (moe_cpu_experts in the profile). Ships with the
-    # DSpark drafter: a 0.62 GB sidecar that llama.cpp uses as --model-draft
-    # with --spec-type draft-dspark (DSPARK_MIN_BUILD in llama_config.py).
-    {
-        "key": "lfm2.5:24b-a2b",
-        "tag": "lfm2.5:24b-a2b",
-        "desc": "LFM2.5 24B-A2B Q4_K_M (MoE 24B/2B active, strong writer, ~13.5GB)",
-        "repo": "LiquidAI/LFM2.5-24B-A2B-GGUF",
-        "file_regex": [
-            r"(?i)^lfm2\.5-24b-a2b-q4_k_m\.gguf$",
-        ],
-        "mmproj_regex": [],
-        # DSpark speculative-decoding drafter (F16, 0.62 GB) - never
-        # registered as a model (dspark exclusion in write_models_json /
-        # llama_models). The profile points at this exact filename.
         "sidecar": [
             {
-                "repo": "LiquidAI/LFM2.5-24B-A2B-DSpark-GGUF",
-                "path": "LFM2.5-24B-A2B-DSpark-F16.gguf",
-                "note": "DSpark spec-dec drafter (F16, ~620MB)",
-            },
-        ],
-        # Seeded automatically when downloaded so clean installs configure DSpark + CPU experts.
-        "default_profile": {
-            "model": "lfm2.5:24b-a2b",
-            "capabilities": {"thinking": False, "vision": False, "tool_call": True},
-            "vision_preprocessing": False,
-            "num_ctx": 32768,
-            "num_ctx_analyst": None,
-            "num_ctx_duo_coder": 32768,
-            "num_ctx_vision": None,
-            "chat_template": None,
-            "jinja": True,
-            "reasoning": None,
-            "distilled": False,
-            "moe": True,
-            "moe_cpu_experts": 24,
-            "mtp": False,
-            "gpu_layers": None,
-            "dspark_draft_filename": "LFM2.5-24B-A2B-DSpark-F16.gguf",
-            "mmproj_filename": None,
-            "vram_gb_override": None,
-            "dspark_draft_n_max": 2,
-            "sampling": {
-                "sampling_text": {
-                    "temperature": 0.1,
-                    "top_p": 1.0,
-                    "top_k": 50,
-                    "min_p": 0.0,
-                    "presence_penalty": 0.0,
-                    "repetition_penalty": 1.05,
-                    "cache_prompt": True,
-                },
-                "non_thinking": {
-                    "temperature": 0.1,
-                    "top_p": 1.0,
-                    "top_k": 50,
-                    "min_p": 0.0,
-                    "presence_penalty": 0.0,
-                    "repetition_penalty": 1.05,
-                    "cache_prompt": True,
-                },
-            },
-        },
-    },
-    # ── Hermes3.6 Genesis Final "MTP-APEX-Compact" (2026-09-19) ───────────
-    # Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
-    # "MTP-APEX-Compact" (~18 GB, experts offloaded to CPU). The per-model
-    # config (model_configs/models/hermes3.6_..._final-mtp-apex-compact.json)
-    # enables the MTP head + CPU experts and carries the author's agentic
-    # coding sampling in the "thinking" profile key (temp 0.6, top_p 0.95,
-    # top_k 20, seed 42, repeat 1.05). Link updated from the V13 repo to
-    # the author's Final re-release.
-    # ── Gemma-4 E4B "Uncensored HauhauCS Aggressive" (2026-09-21) ─────────
-    # Uncensored fine-tune of Gemma-4-E4B-IT (ships with paired F16 mmproj).
-    # Card sampling temp 1.0 / top_p 0.95 / top_k 64 lives in the gemma-4
-    # family sampling profile; --jinja is enabled by the per-model config.
-    {
-        "key": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
-        "tag": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
-        "desc": "Gemma-4 E4B Uncensored HauhauCS Aggressive (uncensored all-rounder, ~5GB download)",
-        "repo": "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
-        "file_regex": [
-            r"(?i)^gemma-4-e4b-uncensored-hauhaucs-aggressive-q4_k_p\.gguf$",
-        ],
-        "mmproj_regex": [
-            r"(?i)^mmproj-gemma-4-e4b-uncensored-hauhaucs-aggressive-f16\.gguf$",
-        ],
-    },
-    # ── Sharp-MiniCPM5-2B (2026-09-26) ─────────────────────────────────────
-    # Light dense all-rounder (plain llama arch, text-only, embedded jinja
-    # template with OpenAI tool_calls). Q6_K_XL is near-lossless (99% KL 0.024
-    # vs BF16).
-    {
-        "key": "minicpm5:2b-sharp",
-        "tag": "minicpm5:2b-sharp",
-        "desc": "Sharp-MiniCPM5-2B Q6_K_XL (light all-rounder, RECOMMENDED tier, near-lossless quant, ~2.1GB)",
-        "repo": "peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF",
-        "file_regex": [
-            r"(?i)^sharp-minicpm5-2b-q6_k_xl\.gguf$",
-        ],
-        "mmproj_regex": [],
-        # The Sharp chat template is a MUST for this model (its chat_template
-        # config field points at the shipped file) — fetched into
-        # model_configs/ alongside the GGUF.
-        "extra_files": [
-            {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
-        ],
-        # DSpark speculative-decoding drafter (openbmb, 324M / ~650MB, arch
-        # "dflash"). Sidecar GGUF: never registered as a model (write_models_json
-        # and llama_models exclude every *dspark* name). The model config
-        # (minicpm5_2b-sharp.json) points at this exact filename.
-        "sidecar": [
-            {
-                "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",
-                "path": "MiniCPM5-2.6B-DSpark.gguf",
-                "note": "DSpark spec-dec drafter (~650MB)",
+                "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
+                "path": "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf",
+                "note": "DFlash spec-dec drafter Q8_0 (~370MB)",
             },
         ],
     },
-    {
-        # GROOT 19B-A3B (2026-10-30, user request): qwen35moe like Hermes,
-        # 128 experts (8 used), ctx 262144, nextn head present. Profile:
-        # model_configs/models/groot_19b-a3b-261023.json (ctx 131072,
-        # ncmoe 32, KV q4_0, mmap+mlock, MTP on, native GGUF template).
-        # ub is not a profile key: duo_ubatch/llama_ubatch_size (shipped 256).
-        "key": "groot:19b-a3b-261023",
-        "tag": "groot:19b-a3b-261023",
-        "desc": "Groot 19B-A3B-261023 Q4_K_M (EXPERIMENTAL Agent-Coder, 128 Experten, ~11.7GB)",
-        "repo": "GrootTeam/Groot-19B-A3B-261023-GGUF",
-        "file_regex": [
-            r"(?i)^groot-19b-a3b-261023-q4_k_m\.gguf$",
-        ],
-        "mmproj_regex": [],
-    },
-    # ── TwIL-8B (webAI-Official, Granite 4.2 8.8B dense reasoning) ─────────
-    # Default balanced variant at the repo root:
-    # TwIL-8B-Q4_K_M-balanced.gguf (~5.35 GB / 4.98 GiB). Text-only (no mmproj).
-    # Profile model_configs/models/twil_8b.json carries the author's
-    # defaults (-c 40960, --jinja, --reasoning on, temp=1.0, top_p=0.95).
     {
         "key": "twil:8b",
         "tag": "twil:8b",
-        "desc": "TwIL-8B Q4_K_M Balanced (8.8B Granite 4.2 math/code/IF reasoning, ~5.3GB)",
+        "tier": "8 GB Power Class (Dense 8.8B Math/Code/IF)",
+        "disk_gb": "~5.0 GB",
+        "hw_req": "8+ GB VRAM (100% GPU)",
+        "role_hint": "Upgrade: Dense 8.8B Math/Code/IF",
+        "desc": "TwIL-8B Q4_K_M Balanced (8.8B Granite 4.2 math/code/IF reasoning, ~5.0GB)",
         "repo": "webAI-Official/TwIL-8B",
         "file_regex": [
             r"(?i)^twil-8b-q4_k_m-balanced\.gguf$",
         ],
         "mmproj_regex": [],
     },
-    # ── Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE reasoning) ────────
-    # 25.2B total / ~4B active per token (128 experts, top-8, 30 blocks).
-    # Text-only per model card; Q8_0 KV cache (-ctk/-ctv q8_0), 128K default ctx.
-    # Profile model_configs/models/air_26b-a4b.json carries the author's
-    # defaults (--jinja -c 131072 -ctk q8_0 -ctv q8_0, temp=1.0, top_p=0.95, top_k=64)
-    # and MoE CPU expert offloading (moe=true, moe_cpu_experts=20, keeping 10/30 MoE blocks on GPU).
-    {
-        "key": "air:26b-a4b",
-        "tag": "air:26b-a4b",
-        "desc": "Air-26B-A4B MoE (25.2B/4B active Gemma 4 reasoning, 128K ctx, ~13.5GB)",
-        "repo": "webAI-Official/Air-26B-A4B-gguf",
-        "file_regex": [
-            r"(?i)^air-26b-a4b\.gguf$",
-        ],
-        "mmproj_regex": [],
-    },
-    # ── Qwen3.5 ladder (subagent-lite smallest tier + MTP pair) ───────────
-    # unsloth MTP repos name files WITHOUT "mtp" (verified 2026-09-11) — the
-    # regexes are anchored to the exact filenames and the repos are pinned,
-    # so no third-party repo (Jackrong etc.) can ever match.
-    {
-        "key": "qwen3.5:0.8b-ud",
-        "tag": "qwen3.5:0.8b-ud",
-        "desc": "Qwen3.5 0.8B UD (Subagent-lite ladder smallest tier, ~0.7GB VRAM)",
-        "repo": "unsloth/Qwen3.5-0.8B-GGUF",
-        "file_regex": [
-            r"(?i)^qwen3\.5-0\.8b-ud-q4_k_xl\.gguf$",
-        ],
-        "mmproj_regex": [],
-    },
-    {
-        "key": "qwen3.5:4b-mtp",
-        "tag": "qwen3.5:4b-mtp",
-        "desc": "Qwen3.5 4B MTP (Duo Coder/Planner default, MTP spec-decode, ~3.3GB VRAM)",
-        "repo": "unsloth/Qwen3.5-4B-MTP-GGUF",
-        "file_regex": [
-            r"(?i)^qwen3\.5-4b-q4_k_m\.gguf$",
-        ],
-        # Vision projector: the unsloth MTP repos ship the GENERIC
-        # mmproj-BF16/F16/F32 names (verified 2026-10-03) - without this
-        # entry a fresh install had no projector for the default duo family
-        # and every raw image was silently skipped. Dest embeds family+size
-        # so write_models_json derives the size-keyed mmproj entry.
-        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        "mmproj_dest": "mmproj-qwen3.5-4b-f16.gguf",
-    },
     {
         "key": "qwen3.5:9b-mtp",
         "tag": "qwen3.5:9b-mtp",
-        "desc": "Qwen3.5 9B MTP (Heavy Duo-Coder, MTP spec-decode, ~6GB VRAM)",
+        "tier": "8-12 GB Power Class (Heavy Dense Vision Coder + MTP)",
+        "disk_gb": "~6.5 GB",
+        "hw_req": "8-12+ GB VRAM (GPU, tight on 8 GB)",
+        "role_hint": "Upgrade: Heavy Dense Vision Coder (~34 tok/s)",
+        "desc": "Qwen3.5 9B MTP Q4_K_M (Heavy dense coder + vision, ~5.9GB + mmproj)",
         "repo": "unsloth/Qwen3.5-9B-MTP-GGUF",
         "file_regex": [
             r"(?i)^qwen3\.5-9b-q4_k_m\.gguf$",
@@ -562,18 +397,259 @@ SPECS: list[dict] = [
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
         "mmproj_dest": "mmproj-qwen3.5-9b-f16.gguf",
     },
+    # ── Tier 4: Hybrid / Heavy MoE Class (8 GB+32 GB RAM or 16-24+ GB VRAM)
     {
-        "key": "qwen3.5:2b-mtp",
-        "tag": "qwen3.5:2b-mtp",
-        "desc": "Qwen3.5 2B MTP (Refiner, MTP spec-decode, ~1.3GB VRAM)",
-        "repo": "unsloth/Qwen3.5-2B-MTP-GGUF",
+        "key": "air:26b-a4b",
+        "tag": "air:26b-a4b",
+        "tier": "Hybrid MoE / 16+ GB VRAM (26B Gemma-4 Reasoning)",
+        "disk_gb": "~12.6 GB",
+        "hw_req": "16+ GB VRAM  OR  8 GB VRAM + 32+ GB RAM (CPU-MoE RAM-Offload)",
+        "role_hint": "Upgrade: 26B MoE via RAM-Offload (~25-29 tok/s on 32GB RAM)",
+        "desc": "Air-26B-A4B MoE (25.2B/4B active Gemma 4 reasoning, 128K ctx, ~12.6GB)",
+        "repo": "webAI-Official/Air-26B-A4B-gguf",
         "file_regex": [
-            r"(?i)^qwen3\.5-2b-q4_k_m\.gguf$",
+            r"(?i)^air-26b-a4b\.gguf$",
         ],
+        "mmproj_regex": [],
+    },
+    {
+        "key": "qwen3.6:35b-a3b-mtp",
+        "tag": "qwen3.6:35b-a3b-mtp",
+        "tier": "Flagship MoE / 24+ GB VRAM or 8 GB+32 GB RAM (35B Coder + MTP)",
+        "disk_gb": "~17.6 GB",
+        "hw_req": "24+ GB VRAM  OR  8 GB VRAM + 32+ GB RAM (CPU-MoE RAM-Offload)",
+        "role_hint": "Upgrade: 35B Flagship Coder via RAM-Offload (~20-22 tok/s on 32GB RAM)",
+        "desc": "Qwen3.6 35B A3B MTP UD-IQ4_XS (Flagship MoE coder/planner + MTP, ~17.0GB + mmproj)",
+        "repo": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+        "file_regex": [
+            r"(?i)^qwen3\.6-35b-a3b-ud-iq4_xs\.gguf$",
+        ],
+        # Name locally so the MTP quant never collides if a non-MTP UD file is also present.
+        "file_dest": "Qwen3.6-35B-A3B-MTP-UD-IQ4_XS.gguf",
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        "mmproj_dest": "mmproj-qwen3.5-2b-f16.gguf",
+        "mmproj_dest": "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
     },
 ]
+
+# Hardware-tier recommendation plan (VRAM x System RAM) shared by
+# fetch_models (--print-essential / --print-tiers / --print-catalog) and recommend_models.py.
+HARDWARE_TIERS: list[dict] = [
+    {
+        "id": "low_vram",
+        "label": "4-6 GB VRAM (or CPU-only)",
+        "summary": "Keep weights under ~3.5 GB so VRAM stays spill-free. Any model can still be downloaded and tried.",
+        "essential": ["lfm3:1.7b-qad", "minicpm5:2b-sharp", "qwen3.5:4b-mtp"],
+        "upgrades": ["lfm3-omni:2b", "lfm3:1.7b-uncensored-ad"],
+        "roles": {
+            "direct": "minicpm5:2b-sharp (or lfm3-omni:2b for vision)",
+            "duo_coder": "qwen3.5:4b-mtp (at 8k-16k ctx) or minicpm5:2b-sharp",
+            "judge / refiner": "lfm3:1.7b-qad",
+            "subagent": "lfm3:1.7b-qad",
+        },
+    },
+    {
+        "id": "8gb_16gb",
+        "label": "8 GB VRAM + <=24 GB RAM",
+        "summary": "Core 2B-9B dense models run 100% in GPU VRAM. Heavy 26B/35B MoEs need 32+ GB RAM for expert offload.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "twil:8b", "qwen3.5:9b-mtp"],
+        "roles": {
+            "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default]",
+            "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default]",
+            "judge / refiner": "minicpm5:2b-sharp (+DSpark)",
+            "subagent": "lfm3:1.7b-qad",
+        },
+    },
+    {
+        "id": "8gb_32gb",
+        "label": "8 GB VRAM + 32+ GB RAM (Hybrid CPU-MoE Capable)",
+        "summary": "8 GB defaults run 100% in GPU VRAM (fast). 26B/35B MoEs work ONLY because your 32+ GB System RAM holds CPU-offloaded experts.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "twil:8b", "air:26b-a4b", "qwen3.6:35b-a3b-mtp"],
+        "roles": {
+            "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default, 100% GPU]",
+            "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default, 100% GPU]",
+            "judge / refiner": "minicpm5:2b-sharp (+DSpark) [Recommended Default]",
+            "subagent": "lfm3:1.7b-qad [Recommended Default]",
+        },
+    },
+    {
+        "id": "12gb_16gb",
+        "label": "12-16 GB VRAM",
+        "summary": "Heavy 8B-9B models stay 100% GPU-resident with huge context; 26B-35B MoEs offload minimally.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp"],
+        "roles": {
+            "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default] or qwen3.5:9b-mtp",
+            "duo_coder / planner": "qwen3.5:4b-mtp (fast GPU) or qwen3.6:35b-a3b-mtp",
+            "judge / refiner": "minicpm5:2b-sharp",
+            "subagent": "lfm3:1.7b-qad",
+        },
+    },
+    {
+        "id": "24gb_plus",
+        "label": "24+ GB VRAM",
+        "summary": "Flagship 26B-35B MoEs run with maximum GPU offload alongside fast dense defaults.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
+        "upgrades": ["qwen3.6:35b-a3b-mtp", "air:26b-a4b", "nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
+        "roles": {
+            "direct / vision": "gemma-4:e4b-it-qat (+MTP) or qwen3.5:9b-mtp",
+            "duo_coder / planner": "qwen3.6:35b-a3b-mtp (or qwen3.5:4b-mtp for max speed)",
+            "judge / refiner": "minicpm5:2b-sharp / nvidia-nemotron-3.5-bolt:e4b",
+            "subagent": "lfm3:1.7b-qad",
+        },
+    },
+]
+
+
+def probe_hardware() -> tuple[float, float, str]:
+    """Return (vram_gb, ram_gb, gpu_name) without external packages."""
+    ram_gb = 0.0
+    vram_gb = 0.0
+    gpu_name = ""
+    try:
+        import ctypes
+        if sys.platform == "win32":
+            class _MEM(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            st = _MEM()
+            st.dwLength = ctypes.sizeof(_MEM)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                ram_gb = round(st.ullTotalPhys / (1024 ** 3), 1)
+        elif Path("/proc/meminfo").is_file():
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if line.startswith("MemTotal:"):
+                    ram_gb = round(int(line.split()[1]) / (1024 ** 2), 1)
+                    break
+    except (OSError, ValueError, AttributeError):
+        pass
+    if sys.platform == "win32":
+        try:
+            import winreg
+            base = r"SYSTEM\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as k:
+                idx = 0
+                while True:
+                    try:
+                        sub = winreg.EnumKey(k, idx)
+                        idx += 1
+                    except OSError:
+                        break
+                    try:
+                        with winreg.OpenKey(k, sub) as sk:
+                            sz, _ = winreg.QueryValueEx(sk, "HardwareInformation.qwMemorySize")
+                            desc, _ = winreg.QueryValueEx(sk, "DriverDesc")
+                            raw = int.from_bytes(sz, "little") if isinstance(sz, (bytes, bytearray)) else int(sz)
+                            gb = round(raw / (1024 ** 3), 1)
+                            if gb > vram_gb:
+                                vram_gb = gb
+                                gpu_name = str(desc).strip()
+                    except OSError:
+                        pass
+        except (ImportError, OSError, ValueError):
+            pass
+    if vram_gb <= 0:
+        try:
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                text=True, timeout=3, stderr=subprocess.DEVNULL,
+            ).strip()
+            for line in out.splitlines():
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) == 2:
+                    gb = round(float(parts[1]) / 1024.0, 1)
+                    if gb > vram_gb:
+                        vram_gb = gb
+                        gpu_name = parts[0]
+        except (OSError, ValueError, ImportError, subprocess.SubprocessError):
+            pass
+    if vram_gb <= 0:
+        try:
+            cfg = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
+            vram_gb = float(cfg.get("vram_budget_gb") or 0.0)
+        except (OSError, ValueError, TypeError):
+            pass
+    return vram_gb, ram_gb, gpu_name
+
+
+def detect_hardware_tier(vram_gb: float, ram_gb: float) -> dict:
+    """Pick the matching tier entry from HARDWARE_TIERS."""
+    by_id = {t["id"]: t for t in HARDWARE_TIERS}
+    if vram_gb >= 20.0:
+        return by_id["24gb_plus"]
+    if vram_gb >= 10.5:
+        return by_id["12gb_16gb"]
+    if vram_gb >= 6.8:
+        return by_id["8gb_32gb"] if ram_gb >= 28.0 else by_id["8gb_16gb"]
+    return by_id["low_vram"]
+
+
+def model_fit_badge(spec: dict, vram_gb: float, ram_gb: float) -> str:
+    """Return a clear ASCII fit/guidance badge for a catalog model on this hardware."""
+    key = str(spec.get("key") or "")
+    is_ess = key in ESSENTIAL_KEYS
+    if key in ("air:26b-a4b", "qwen3.6:35b-a3b-mtp"):
+        if vram_gb >= 16.0:
+            return "[FITS VRAM / HIGH-VRAM MOE]"
+        if vram_gb >= 6.8 and ram_gb >= 28.0:
+            return "[WORKS VIA 32GB RAM OFFLOAD (CPU-MoE)]"
+        return "[NEEDS 32GB+ RAM OR 16GB+ VRAM (still downloadable)]"
+    if key == "qwen3.5:9b-mtp":
+        if vram_gb >= 10.5:
+            return "[FITS VRAM]"
+        if vram_gb >= 6.8:
+            return "[FITS VRAM (12GB+ ideal, tight on 8GB)]"
+        return "[HEAVY FOR THIS GPU (still downloadable)]"
+    if key in ("nvidia-nemotron-3.5-bolt:e4b", "twil:8b"):
+        if vram_gb >= 6.8:
+            return "[FITS VRAM]"
+        return "[NEEDS ~8GB VRAM (still downloadable)]"
+    if key in ("lfm3-omni:2b", "lfm3:1.7b-uncensored-ad"):
+        return "[FITS VRAM]" if vram_gb >= 3.5 else "[FITS RAM / CPU]"
+    if is_ess:
+        if vram_gb >= 6.0 or (key in ("minicpm5:2b-sharp", "lfm3:1.7b-qad") and vram_gb >= 3.5):
+            return "[RECOMMENDED DEFAULT | FITS VRAM]"
+        return "[RECOMMENDED DEFAULT | CPU/TIGHT VRAM]"
+    return "[FITS VRAM]" if vram_gb >= 6.8 else "[TRYABLE]"
+
+
+def format_hardware_plan(vram_gb: float | None = None, ram_gb: float | None = None,
+                         gpu_name: str = "") -> str:
+    """Render the hardware-matched model tier plan for CLI/installer output."""
+    if vram_gb is None or ram_gb is None:
+        v, r, g = probe_hardware()
+        vram_gb = v if vram_gb is None else vram_gb
+        ram_gb = r if ram_gb is None else ram_gb
+        gpu_name = gpu_name or g
+    tier = detect_hardware_tier(vram_gb, ram_gb)
+    idx_map = {sp["key"]: i + 1 for i, sp in enumerate(SPECS)}
+    spec_map = {sp["key"]: sp for sp in SPECS}
+    hw_desc = f"{gpu_name} ({vram_gb:.1f} GB VRAM)" if (gpu_name and vram_gb > 0) else (
+        f"{vram_gb:.1f} GB VRAM" if vram_gb > 0 else "CPU / unprobed GPU"
+    )
+    lines = [
+        f"  HARDWARE PLAN ({hw_desc}, {ram_gb:.1f} GB RAM -> {tier['label']})",
+        "  " + "-" * 72,
+        f"  {tier['summary']}",
+        "  Default Core Set [E] : " + ", ".join(tier["essential"]),
+        "  Optional Upgrades [S]:",
+    ]
+    for k in tier["upgrades"]:
+        sp = spec_map.get(k, {})
+        num = idx_map.get(k, 0)
+        badge = model_fit_badge(sp, vram_gb, ram_gb) if sp else ""
+        lines.append(f"    [{num:>2}] {k:<30} {badge}")
+    lines.append("  Default Recommended Roles (100% GPU VRAM - Fast):")
+    for role, rec in tier["roles"].items():
+        lines.append(f"    {role:<20} -> {rec}")
+    lines.append("  Note: All recommendations are visual guidance only - you can download and try any model [1]-[11].")
+    return "\n".join(lines)
 
 
 def http_json(url: str):
@@ -1065,6 +1141,8 @@ def main() -> int:
     ap.add_argument("--print-catalog", action="store_true",
                     help="Print the numbered download catalog and exit (no network, "
                          "no folder touch) — setup_models.bat renders its menu from this")
+    ap.add_argument("--print-tiers", action="store_true",
+                    help="Print hardware-tier model recommendations (VRAM x RAM) and exit")
     ap.add_argument("--only-keys", default="",
                     help="comma-separated spec KEYS to install (stable, unlike --only numbers)")
     ap.add_argument("--only", default="",
@@ -1078,35 +1156,70 @@ def main() -> int:
               "every model that needs a drafter sidecar")
         print("           (Gemma-4 MTP and the DSpark models lose ~50 % decode).")
 
+    if getattr(args, "print_tiers", False):
+        print(format_hardware_plan())
+        print()
+        for t in HARDWARE_TIERS:
+            print(f"  [{t['id']}] {t['label']}:")
+            print(f"      Upgrades: {', '.join(t['upgrades'])}")
+        return 0
+
     if getattr(args, 'print_essential', False):
-        # The menu shows the real list instead of a vague sentence.
+        # Clear visual starter overview + detected hardware guidance + upgrade index.
+        v_gb, r_gb, g_name = probe_hardware()
         _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
-        print("  ESSENTIAL SET - the default route, nothing else is needed to start")
-        print("  " + "-" * 68)
+        print("  ESSENTIAL SET [E] - recommended starter defaults (~11.4 GB + mmproj/drafters)")
+        print("  " + "=" * 72)
         print()
         for _sp in _ess:
-            print(f"    {_sp['key']}")
-            print(f"        {_sp['desc']}")
+            _idx = next((i + 1 for i, item in enumerate(SPECS) if item['key'] == _sp['key']), 0)
+            _badge = model_fit_badge(_sp, v_gb, r_gb)
+            print(f"    [{_idx:>2}] {_sp['key']:<26} {_sp.get('disk_gb', ''):<8} {_badge}")
+            print(f"         {_sp.get('role_hint', _sp['desc'])}")
+            print(f"         Needs: {_sp.get('hw_req', '')}")
             print()
-        print(f"  {len(_ess)} models, vision projectors and drafters included.")
+        print(f"  {len(_ess)} core models, vision projectors and drafters included.")
         print()
-        _rest = [sp['key'] for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS]
-        print("  ALSO AVAILABLE - choose S to pick single models")
-        print("  " + "-" * 68)
+        print(format_hardware_plan(v_gb, r_gb, g_name))
         print()
-        for _i in range(0, len(_rest), 2):
-            print("    " + "".join(f"{k:<34}" for k in _rest[_i:_i + 2]).rstrip())
+        _rest = [sp for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS]
+        print("  ALSO AVAILABLE - OPTIONAL UPGRADES (choose [S] to pick any [1]-[11])")
+        print("  " + "-" * 72)
+        for _sp in _rest:
+            _idx = next((i + 1 for i, item in enumerate(SPECS) if item['key'] == _sp['key']), 0)
+            _badge = model_fit_badge(_sp, v_gb, r_gb)
+            print(f"    [{_idx:>2}] {_sp['key']:<30} {_sp.get('disk_gb', ''):<9} {_badge}")
+            print(f"         {_sp.get('role_hint', _sp.get('tier', ''))}  |  Needs: {_sp.get('hw_req', '')}")
         print()
         return 0
 
     if args.print_catalog:
-        # Wide, two-line layout: key on its own line, description underneath.
-        # A single 120-character line wrapped in narrow terminals and cut the
-        # description mid-word.
-        for _i, _s in enumerate(SPECS):
-            print(f"  [{_i + 1:>2}] {_s['key']}")
-            print(f"       {_s['desc']}")
-            print()
+        # Grouped visual catalog with hardware fit badges; user can still pick ANY number.
+        v_gb, r_gb, g_name = probe_hardware()
+        hw_str = f"{g_name} ({v_gb:.1f} GB VRAM)" if (g_name and v_gb > 0) else f"{v_gb:.1f} GB VRAM"
+        print(f"  Detected hardware: {hw_str}, {r_gb:.1f} GB RAM")
+        print("  Visual guidance only - you can pick and test ANY model number [1]-[11] below.")
+        print()
+        groups = [
+            ("--- [A] CORE RECOMMENDED DEFAULTS (100% GPU VRAM, Fast) ---",
+             lambda s: s["key"] in ESSENTIAL_KEYS),
+            ("--- [B] COMPACT & SPECIALIST WORKERS (4-6 GB VRAM) ---",
+             lambda s: s["key"] in ("lfm3-omni:2b", "lfm3:1.7b-uncensored-ad")),
+            ("--- [C] 8-12 GB DENSE POWER UPGRADES (100% GPU VRAM) ---",
+             lambda s: s["key"] in ("nvidia-nemotron-3.5-bolt:e4b", "twil:8b", "qwen3.5:9b-mtp")),
+            ("--- [D] HYBRID CPU-MoE FLAGSHIPS (Work on 8 GB GPU ONLY via 32+ GB System RAM) ---",
+             lambda s: s["key"] in ("air:26b-a4b", "qwen3.6:35b-a3b-mtp")),
+        ]
+        for banner, pred in groups:
+            print(f"  {banner}")
+            for _i, _s in enumerate(SPECS):
+                if not pred(_s):
+                    continue
+                _badge = model_fit_badge(_s, v_gb, r_gb)
+                print(f"  [{_i + 1:>2}] {_s['key']:<30} {_s.get('disk_gb', ''):<9} {_badge}")
+                print(f"       Role: {_s.get('role_hint', '')}  |  Needs: {_s.get('hw_req', '')}")
+                print(f"       {_s['desc']}")
+                print()
         return 0
 
     mdir = Path(args.models_dir).expanduser() if args.models_dir else \

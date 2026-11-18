@@ -15,10 +15,14 @@
   "reasoning": "on",
   "distilled": false,
   "moe_cpu_experts": 0,
+  "flash_attn": false,
   "mtp": true,
+  "mtp_draft_filename": "mtp-gemma-4-E2B-it.gguf",
+  "mtp_draft_n_max": 2,
   "gpu_layers": null,
   "mmproj_filename": "mmproj-Gemma-4-E2B-BF16.gguf",
   "vram_gb_override": 2.6,
+  "kv_bytes_per_token": 32768,
   "sampling": {
     "thinking": {
       "temperature": 1.0,

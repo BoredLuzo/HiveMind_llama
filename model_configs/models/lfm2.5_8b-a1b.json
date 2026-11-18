@@ -19,7 +19,7 @@
   "mtp": false,
   "gpu_layers": 24,
   "mmproj_filename": null,
-  "vram_gb_override": 2.7,
+  "vram_gb_override": 5.1,
   "sampling": {
     "thinking": {
       "temperature": 0.2,

@@ -1,3 +1,57 @@
+## [1.6.3] - 2026-11-18
+
+Performance tuning, external Gemma-4 MTP wiring, condensed performance-class
+installer catalog, and hardware-tier recommendations (`GPU VRAM x System RAM`).
+
+### Added
+- **Gemma-4 external MTP sidecar wiring (`mtp_draft_filename`):**
+  - Added `get_mtp_draft()` (`model_configs/models_registry.py`),
+    `_try_registry_mtp_draft()` (`backend/llama_config.py`), and external
+    `--model-draft` + `--spec-draft-ngl 999` emission in
+    `backend/llama_start_phases.py` (`_phase_model_flags`), plus disk-presence
+    checks in `_speculation_planned()` (`backend/manager_load.py`).
+  - When `mtp-gemma-4-E4B-it.gguf` / `mtp-gemma-4-E2B-it.gguf` is present on
+    disk, Gemma-4 E4B/E2B runs natively with `--spec-type draft-mtp --spec-draft-n-max 2`
+    (`65-77 t/s` decode, `~396 t/s` prefill on RX 6600 Vulkan `b12001`); when the
+    sidecar is absent, MTP flags are omitted cleanly instead of failing startup.
+- **Per-profile `--flash-attn` override with safe `f16` KV guard:**
+  - Added `get_flash_attn()` (`model_configs/models_registry.py`) and
+    `_try_registry_flash_attn_off()` (`backend/llama_config.py`), wired into
+    `backend/manager_load.py` (`--flash-attn on|off`) and enforced in both
+    `moe_kv_cache_types()` and `dense_kv_cache_type()` so profiles with
+    `"flash_attn": false` automatically use `f16` KV cache (`llama-server`
+    `b12001` rejects quantized `q4_0`/`q8_0` V-cache with `--flash-attn off`).
+  - Enabled `"flash_attn": false` on `ling-3.0-tiny.json` (`+7.2x` prompt
+    prefill, `+74%` decode in RX 6600 Vulkan A/B), `gemma-4_e4b-it.json`
+    (`3.1x` prefill, plus calibrated SWA `kv_bytes_per_token=32768`),
+    `gemma-4_e2b-it-qat.json`, `gemma-4_e4b-uncensored-hauhaucs-aggressive.json`,
+    and `mellum2.1_12b-a2.5b-thinking.json` (`+56%` prefill).
+- **Condensed performance-class model catalog & hardware-tier planner:**
+  - Streamlined `deploy/fetch_models.py` `SPECS` from 17 to 11 distinct
+    performance-class models (~63 GB full catalog vs ~106 GB): kept the
+    4-model Essential Starter Set (~12.5 GB), added `nvidia-nemotron-3.5-bolt:e4b`
+    (`unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF` `UD-Q4_K_XL` + `Q8_0` DFlash
+    sidecar), and pinned `qwen3.6:35b-a3b-mtp` to `UD-IQ4_XS` (`17.0 GB`,
+    4-bit precision with faster warm prefill `169.3 vs 114.9 t/s` than `UD-Q3_K_XL`).
+  - Added shared `HARDWARE_TIERS`, Windows `winreg` + `nvidia-smi` physical
+    VRAM probing (`probe_hardware()`), `detect_hardware_tier()`, and
+    `format_hardware_plan()` across `deploy/fetch_models.py` (`--print-essential`,
+    `--print-tiers`) and `deploy/recommend_models.py` (`--plan`, empty/populated
+    reports), and extended `deploy/apply_model_defaults.py` `ROLE_PREFERENCE`
+    and `SUBAGENT_LADDER`.
+- **Missing & stale model profile calibration:**
+  - Added `model_configs/models/cyber-tiel-coder_35b-a3b-mtp-ud.json`
+    (`ncmoe=35`, `ubatch=1024`, `mtp=true`, `vram_gb_override=4.7`) and
+    `_MOE_EXPERT_COUNTS` entries in `backend/llama_config.py`.
+  - Updated `nvidia-nemotron-3.5-bolt_e4b.json` (`draft_overhead_mib=950`,
+    `dflash_draft_alternates` fallback for `dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf`,
+    cleared stale `vram_gb_override`), `twil_8b.json` (`num_ctx=16384`,
+    `flash_attn=true`, `kv_cache_type="q4_0"`), `qwen3.6_35b-a3b-mtp.json`
+    (`ubatch=1024`), `hermes3.6_..._mtp-apex-compact.json` (`ubatch=1024`),
+    `lfm2.5_8b-a1b.json` (`5.1 GB`), and `qwen3.5_2b.json` (`2.0 GB`).
+  - Added built-in filename-tag pins in `backend/llama_models.py` for Nemotron
+    Unsloth/NVIDIA, `TwIL-8B-Q4_K_M-balanced.gguf`, and Cyber-Tiel-Coder.
+
 ## [1.6.2] - 2026-11-17
 
 Hardening release resolving remaining clean-install, fetcher, Windows/Linux

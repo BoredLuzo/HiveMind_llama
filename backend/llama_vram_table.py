@@ -22,7 +22,7 @@ _VRAM_TABLE: dict[str, float] = {
     # (~2.1GB weights + q8_0 KV@4096), Q4_K_XL sits under it.
     "minicpm5:2b-sharp": 2.0,
     # LFM2.5 — 8B total, 1B active, Q4_K_M ~2.5GB weights + 0.2GB KV@4096
-    "lfm2.5:8b-a1b":     2.7,
+    "lfm2.5:8b-a1b":     5.1,
     # LFM2.5 dense 2.6B (Q4_K_M ~1.6GB weights + KV@4096) — Subagent-Ladder Default
     "lfm2.5:2.6b":       1.9,
     "lfm2.5:2.6b-instruct": 1.9,

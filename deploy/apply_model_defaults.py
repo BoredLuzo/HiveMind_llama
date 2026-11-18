@@ -35,26 +35,32 @@ ROOT = Path(__file__).resolve().parent.parent
 # Preference per role, best first. The first entry that is installed wins.
 # Kept in one place so the installer and the docs cannot drift.
 ROLE_PREFERENCE: dict[str, list[str]] = {
-    # chat / direct answers: all-rounder with vision
-    "direct": ["gemma-4:e4b-it-qat", "minicpm5:2b-sharp", "qwen3.5:4b-mtp"],
-    # pipeline roles: the all-rounder, the cheap one as fallback
-    "analyst": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp"],
-    "critic": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp"],
-    "synthesizer": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp"],
+    # chat / direct answers: all-rounder with vision, or fast Nemotron / TwIL
+    "direct": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "minicpm5:2b-sharp", "qwen3.5:4b-mtp", "twil:8b"],
+    # pipeline roles: the all-rounder, strong dense upgrades, or fast small fallback
+    "analyst": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:4b-mtp", "twil:8b", "minicpm5:2b-sharp"],
+    "critic": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:4b-mtp", "twil:8b", "minicpm5:2b-sharp"],
+    "synthesizer": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:4b-mtp", "twil:8b", "minicpm5:2b-sharp"],
     # short rewrite of constraints: fast + cheap
-    "refiner": ["minicpm5:2b-sharp", "qwen3.5:4b-mtp", "gemma-4:e4b-it-qat"],
+    "refiner": ["minicpm5:2b-sharp", "qwen3.5:4b-mtp", "lfm3:1.7b-qad", "gemma-4:e4b-it-qat"],
     # 120-token verdict: the smallest is enough
-    "judge": ["minicpm5:2b-sharp", "qwen3.5:4b-mtp", "gemma-4:e4b-it-qat"],
-    # coding: the Duo coder; the critic shares the same model (one slot)
-    "duo_coder": ["qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "minicpm5:2b-sharp"],
-    "duo_critic": ["qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "minicpm5:2b-sharp"],
+    "judge": ["minicpm5:2b-sharp", "qwen3.5:4b-mtp", "lfm3:1.7b-qad", "gemma-4:e4b-it-qat"],
+    # coding: Essential 4B coder first, upgrades (Nemotron/Qwen9B/Qwen3.6/Air/TwIL) if installed instead
+    "duo_coder": [
+        "qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp",
+        "qwen3.6:35b-a3b-mtp", "air:26b-a4b", "twil:8b", "gemma-4:e4b-it-qat", "minicpm5:2b-sharp",
+    ],
+    "duo_critic": [
+        "qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp",
+        "qwen3.6:35b-a3b-mtp", "air:26b-a4b", "twil:8b", "gemma-4:e4b-it-qat", "minicpm5:2b-sharp",
+    ],
     # the image preprocessor needs vision
-    "vision_agent": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp"],
+    "vision_agent": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "qwen3.5:9b-mtp", "lfm3-omni:2b"],
 }
 
 # Subagent ladder: smallest first - the ladder walks up only when a tier
 # fails, so the cheap model belongs at the front.
-SUBAGENT_LADDER = ["lfm3:1.7b-qad", "minicpm5:2b-sharp", "qwen3.5:4b-mtp"]
+SUBAGENT_LADDER = ["lfm3:1.7b-qad", "lfm3-omni:2b", "minicpm5:2b-sharp", "qwen3.5:4b-mtp"]
 
 
 def _installed_models(root: Path) -> set[str]:

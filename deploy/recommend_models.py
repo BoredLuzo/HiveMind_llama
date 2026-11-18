@@ -150,13 +150,13 @@ def collect(vram_gb: float, ram_gb: float) -> list[dict]:
             verdict = "fits completely in VRAM"
             score = 3
         elif (fits_ram and moe and has_gpu and vram_est <= max(1.0, vram_gb * VRAM_FIT_RATIO)):
-            verdict = "experts offloaded to RAM (fits VRAM + RAM)"
+            verdict = "fits via System RAM offload (CPU-MoE, needs 32+ GB RAM)"
             score = 2
         elif fits_ram:
             verdict = "CPU/RAM offload (slower, fits RAM)"
             score = 2
         else:
-            verdict = "too large for this machine"
+            verdict = "too large for this machine (still testable)"
             score = 1
         if tps >= 20:
             score += 1
@@ -170,53 +170,161 @@ def collect(vram_gb: float, ram_gb: float) -> list[dict]:
     return rows
 
 
+def _hardware_profile() -> tuple[float, float, float, str]:
+    """Return (vram_total_gb, vram_free_gb, ram_gb, gpu_name)."""
+    vram_free = _vram_gb()
+    ram = _total_ram_gb()
+    vram_total = vram_free
+    gpu_name = ""
+    try:
+        sys.path.insert(0, str(ROOT / "deploy"))
+        import fetch_models as fm
+        vt, rt, gn = fm.probe_hardware()
+        if vt > 0:
+            vram_total = vt
+        if rt > 0:
+            ram = rt
+        gpu_name = gn
+    except (ImportError, OSError, AttributeError):
+        pass
+    return vram_total, vram_free, ram, gpu_name
+
+
+def _tier_plan(vram_total: float, ram: float, gpu_name: str) -> tuple[dict, str]:
+    try:
+        sys.path.insert(0, str(ROOT / "deploy"))
+        import fetch_models as fm
+        tier = fm.detect_hardware_tier(vram_total, ram)
+        plan = fm.format_hardware_plan(vram_total, ram, gpu_name)
+        return tier, plan
+    except (ImportError, OSError, AttributeError):
+        return {}, ""
+
+
+def _pick_roles_from_rows(rows: list[dict], vram_total: float, vram_free: float,
+                          ram: float, tier: dict) -> dict[str, str]:
+    """Select curated/measured role winners rather than picking the smallest 0.5 GB GGUF."""
+    usable = [r for r in rows if r["score"] >= 2] or rows
+    usable_tags = {r["tag"]: r for r in usable}
+    by_largest = sorted(usable, key=lambda r: (r["score"], r["gb"]), reverse=True)
+    pick_desc = lambda pred: next((r["tag"] for r in by_largest if pred(r)), "")  # noqa: E731
+    budget_ref = vram_total or vram_free
+    max_direct_gb = max(6.0, budget_ref) if budget_ref > 0 else max(4.0, ram * 0.4)
+    max_judge_gb = max(3.0, budget_ref * 0.5) if budget_ref > 0 else max(2.5, ram * 0.25)
+    max_coder_gb = max(8.0, budget_ref) if budget_ref > 0 else max(6.0, ram * 0.5)
+
+    try:
+        sys.path.insert(0, str(ROOT / "deploy"))
+        import apply_model_defaults as amd
+        prefs = dict(amd.ROLE_PREFERENCE)
+    except (ImportError, OSError, AttributeError):
+        prefs = {}
+
+    # Core recommended defaults stay fast and 100% GPU-resident; larger MoEs
+    # (working via 32+ GB RAM offload) & 8 GB power dense models appear as optional upgrades.
+    curated_orders = {
+        "direct": prefs.get("direct") or ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "minicpm5:2b-sharp"],
+        "judge": prefs.get("judge") or ["minicpm5:2b-sharp", "lfm3:1.7b-qad", "qwen3.5:4b-mtp"],
+        "duo_coder": prefs.get("duo_coder") or ["qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "gemma-4:e4b-it-qat"],
+        "planner": prefs.get("duo_coder") or ["qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "gemma-4:e4b-it-qat"],
+    }
+    pick_curated = lambda role: next((t for t in curated_orders.get(role, ()) if t in usable_tags), "")  # noqa: E731
+    heavy_moe = ""
+    if tier.get("id") in ("8gb_32gb", "12gb_16gb", "24gb_plus"):
+        heavy_moe = next((t for t in ("qwen3.6:35b-a3b-mtp", "air:26b-a4b") if t in usable_tags), "")
+    power_dense = next(
+        (t for t in ("nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "twil:8b", "qwen3.5:9b-mtp") if t in usable_tags),
+        "",
+    )
+    return {
+        "direct": (
+            next((r["tag"] for r in usable if r["measured_tps"] >= 20), "")
+            or pick_curated("direct")
+            or pick_desc(lambda r: r["gb"] <= max_direct_gb and r["gb"] >= 1.5)
+            or usable[-1]["tag"]
+        ),
+        "judge": (
+            pick_curated("judge")
+            or next((r["tag"] for r in usable if r["gb"] <= max_judge_gb), "")
+            or usable[0]["tag"]
+        ),
+        "duo_coder": (
+            next((r["tag"] for r in by_largest if r["measured_tps"] >= 15 and not r.get("moe_cpu_experts") and r["gb"] <= max_coder_gb), "")
+            or pick_curated("duo_coder")
+            or pick_desc(lambda r: r["gb"] <= max_coder_gb)
+            or by_largest[0]["tag"]
+        ),
+        "planner": (
+            next((r["tag"] for r in by_largest if r["measured_tps"] >= 15 and r["gb"] <= max_direct_gb), "")
+            or pick_curated("planner")
+            or pick_desc(lambda r: r["gb"] <= max_direct_gb)
+            or usable[0]["tag"]
+        ),
+        "duo_coder_heavy_moe": heavy_moe,
+        "power_8gb": power_dense,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="propose a start configuration for this machine")
-    ap.add_argument("--json", action="store_true", help="JSON instead of a report")
+    ap = argparse.ArgumentParser(description="Recommend a hardware-matched HiveMind model setup")
+    ap.add_argument("--json", action="store_true", help="JSON instead of a human report")
+    ap.add_argument("--plan", action="store_true", help="Show hardware-tier recommendation plan only")
     args = ap.parse_args(argv)
 
-    vram = _vram_gb()
-    ram = _total_ram_gb()
-    rows = collect(vram, ram)
-    if not rows:
-        print(f"no models found ({MODELS_JSON}) - run setup_models.bat first")
-        return 1
+    vram_total, vram_free, ram, gpu_name = _hardware_profile()
+    tier, plan_txt = _tier_plan(vram_total, ram, gpu_name)
+    if args.plan:
+        if args.json:
+            print(json.dumps({"detected": {"gpu": gpu_name, "vram_total_gb": vram_total, "vram_free_gb": vram_free, "ram_gb": ram}, "tier": tier}, indent=1))
+        else:
+            print(plan_txt or f"VRAM: {vram_total:.1f} GB · RAM: {ram:.1f} GB")
+        return 0
 
-    usable = [r for r in rows if r["score"] >= 2] or rows
-    pick = lambda pred: next((r["tag"] for r in usable if pred(r)), "")  # noqa: E731
-    max_direct_gb = max(6.0, vram) if vram > 0 else max(4.0, ram * 0.4)
-    max_judge_gb = max(3.0, vram * 0.5) if vram > 0 else max(2.5, ram * 0.25)
-    max_coder_gb = max(8.0, vram) if vram > 0 else max(6.0, ram * 0.5)
+    rows = collect(vram_total or vram_free, ram)
+    if not rows:
+        if args.json:
+            print(json.dumps({"detected": {"gpu": gpu_name, "vram_total_gb": vram_total, "vram_free_gb": vram_free, "ram_gb": ram}, "tier": tier, "models": []}, indent=1))
+        else:
+            print(f"No models registered yet ({MODELS_JSON}).\n")
+            if plan_txt:
+                print(plan_txt)
+            print("\nRun setup_models.bat to install your starter set or tier upgrades.")
+        return 0 if tier else 1
+
+    roles_rec = _pick_roles_from_rows(rows, vram_total, vram_free, ram, tier)
     rec = {
-        "detected": {"vram_gb": vram, "ram_gb": ram},
-        "direct": pick(lambda r: r["measured_tps"] >= 20) or pick(lambda r: r["gb"] <= max_direct_gb) or usable[0]["tag"],
-        "judge": pick(lambda r: r["gb"] <= max_judge_gb) or usable[0]["tag"],
-        "duo_coder": (pick(lambda r: r["measured_tps"] >= 15 and r["gb"] >= 8)
-                      or pick(lambda r: r["measured_tps"] >= 15)
-                      or pick(lambda r: r["gb"] <= max_coder_gb)
-                      or usable[-1]["tag"]),
-        "planner": (pick(lambda r: r["measured_tps"] >= 15 and r["gb"] <= max_direct_gb)
-                    or pick(lambda r: r["gb"] <= max_direct_gb)
-                    or usable[0]["tag"]),
+        "detected": {"gpu": gpu_name, "vram_total_gb": vram_total, "vram_free_gb": vram_free, "ram_gb": ram},
+        "tier": tier.get("id", ""),
+        **roles_rec,
         "models": rows,
     }
     if args.json:
         print(json.dumps(rec, indent=1, ensure_ascii=False))
         return 0
 
-    print(f"detected: VRAM {vram:.1f} GB (free) · RAM {ram:.1f} GB · {len(rows)} models\n")
+    if plan_txt:
+        print(plan_txt)
+        print()
+    print(f"Installed ({vram_total:.1f} GB VRAM total / {vram_free:.1f} GB free · RAM {ram:.1f} GB · {len(rows)} models):\n")
     print(f"{'model':<46}{'GB':>6}{'MoE':>5}{'tok/s':>7}  assessment")
-    for r in rows[:14]:
+    for r in rows:
         print(f"{r['tag'][:45]:<46}{r['gb']:>6.1f}{r['moe_cpu_experts']:>5}"
               f"{(('%.1f' % r['measured_tps']) if r['measured_tps'] else '-'):>7}  {r['verdict']}")
-    print("\nProposal for this machine:")
+    print("\nProposal from installed models (Recommended Default - 100% VRAM):")
     for role in ("direct", "judge", "duo_coder", "planner"):
         print(f"  {role:<10} {rec[role] or '(no matching model found)'}")
+    if rec.get("duo_coder_heavy_moe") or rec.get("power_8gb"):
+        print("\nOptional Installed Upgrades (switch in UI -> Agents anytime):")
+        if rec.get("power_8gb"):
+            print(f"  {'power_8gb':<20} {rec['power_8gb']} (strong 8 GB GPU-resident option)")
+        if rec.get("duo_coder_heavy_moe"):
+            print(f"  {'duo_coder (RAM-MoE)':<20} {rec['duo_coder_heavy_moe']} (works on 8 GB via 32+ GB RAM offload)")
     _roles = [rec[r] for r in ("direct", "judge", "duo_coder", "planner")]
     if len(set(_roles)) == 1:
         print("\nNote: only one model really fits - the coder usually benefits from a\n"
-              "groesseren MoE mit CPU-Experten (RAM-Offload), auch wenn es langsamer laedt.")
-    print("\nHow to set it: UI -> Agents, or POST /settings/agent per role.")
+              "larger MoE with CPU experts (RAM offload), though it loads more slowly.")
+    print("\nAll recommendations are visual guidance only — every installed model can be tried.")
+    print("How to set it: UI -> Agents, or POST /settings/agent per role.")
     print("Measured tok/s come from token_stats.json (your own runs), not estimates.")
     return 0
 

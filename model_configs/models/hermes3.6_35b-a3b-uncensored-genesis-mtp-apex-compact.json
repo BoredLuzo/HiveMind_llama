@@ -16,7 +16,7 @@
   "jinja": true,
   "reasoning": "on",
   "moe_cpu_experts": 35,
-  "ubatch": 512,
+  "ubatch": 1024,
   "mtp": true,
   "mmproj_filename": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
   "sampling": {

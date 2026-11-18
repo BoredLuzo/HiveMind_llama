@@ -88,12 +88,12 @@ a message. Drop any extra `.gguf` weights into `models/` (or
   (the offloaded weights live in RAM).
 - **Disk:** model files dominate. A starter set of four small models (for example
   `qwen3.5:4b-mtp`, `gemma-4:e4b-it-qat`, `minicpm5:2b-sharp`, `lfm3:1.7b-qad`)
-  is about 12 GB including vision projectors. Adding one 24B–35B MoE model adds
-  roughly 14–24 GB, so about 25–40 GB in total. The full optional installer
-  catalog (`17` models, including projectors and speculative-decoding drafters) is
-  about 106 GB. Sizes are listed in the
+  is about 12.5 GB including vision projectors and drafters. Adding one 26B–35B MoE model adds
+  roughly 13–18 GB, so about 25–31 GB in total. The full optional installer
+  catalog (`11` performance-class models, including projectors and speculative-decoding drafters) is
+  about 63 GB. Sizes and hardware tiers are listed in the
   [download catalog](docs/guide.md#download-catalog); `python deploy/fetch_models.py --list-only`
-  is the authoritative answer.
+  (or `python deploy/recommend_models.py --plan`) is the authoritative answer.
 - **Optional tooling:** Git, Docker Desktop (for local SearXNG web search),
   and language servers via `deploy\install_lsp_packs.bat`. See
   [docs/guide.md](docs/guide.md#requirements).

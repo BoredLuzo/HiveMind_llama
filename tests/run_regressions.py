@@ -443,6 +443,7 @@ SUITES = [
     ("tts_and_model_wiring",       "tests/test_tts_and_model_wiring_fixes.py", 30),
     ("installer_updater_1_6_2",    "tests/test_installer_updater_1_6_2.py",    45),
     ("dflash_and_recovery_fixes",  "tests/test_dflash_and_recovery_fixes.py",  30),
+    ("catalog_tiers_and_wiring",   "tests/test_catalog_tiers_and_wiring.py",   30),
 
 ]
 

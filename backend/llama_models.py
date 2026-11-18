@@ -169,6 +169,10 @@ _BUILTIN_FILENAME_TAGS: dict[str, str] = {
     "groot-19b-a3b-261023-q4_k_m.gguf": "groot:19b-a3b-261023",
     "qwen3.6-35b-a3b-ud-q4_k_xl.gguf": "qwen3.6:35b-a3b-ud",
     "qwen3.5-0.8b-ud-q4_k_xl.gguf": "qwen3.5:0.8b-ud",
+    "nvidia-nemotron-3.5-bolt-e4b-ud-q4_k_xl.gguf": "nvidia-nemotron-3.5-bolt:e4b",
+    "nemotron-3.5-bolt-e4b-q4_k_m.gguf": "nvidia-nemotron-3.5-bolt:e4b",
+    "twil-8b-q4_k_m-balanced.gguf": "twil:8b",
+    "cyber-tiel-coder-35b-a3b-mtp-ud-iq4_xs.gguf": "cyber-tiel-coder:35b-a3b-mtp-ud",
 }
 
 

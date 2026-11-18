@@ -12,7 +12,7 @@ quick start, hardware minimums and the extras list see the
 - Python 3.12–3.14 (Python 3.14 is auto-installed by the setup)
 - uv (auto-installed)
 - 8 GB+ VRAM GPU recommended for single-model / sequential **Code Duo** runs (one active model slot at a time; AMD/Intel via Vulkan, NVIDIA via CUDA). **Smart Preload**, multiple simultaneously loaded models, or large 100k+ context runs need more headroom (16 GB+ VRAM or CPU/hybrid offload) — Smart Preload is off by default
-- Disk: ~12 GB for a starter set of four small models (including vision projectors), ~25–40 GB with one 24B–35B MoE model, ~106 GB for the full optional installer catalog (17 models, see [Download catalog](#download-catalog)); 32 GB+ system RAM recommended when offloading MoE experts to the CPU
+- Disk: ~12.5 GB for the starter set of four small models (including vision projectors and drafters), ~25–31 GB with one 26B–35B MoE model, ~63 GB for the full condensed installer catalog (11 models across hardware tiers, see [Download catalog](#download-catalog)); 32 GB+ system RAM recommended when offloading MoE experts to the CPU
 - Git (optional, autocommit/diff integration)
 - Docker Desktop (optional, SearXNG web search)
 - Windows Core Utils (optional but recommended): `winget install Microsoft.CoreUtils`.
@@ -553,33 +553,34 @@ base config plus your agent settings. Deleting the folder resets the learning.
 
 ## Download catalog
 
-`setup_models.bat` offers exactly these models (every repo is pinned - no fuzzy
-search). The list lives in `deploy/fetch_models.py`; the sizes below were measured
-on the Hub on 2026-10-18 and are the download figures for the GGUF plus its
-projector/drafter. A repo can rename or re-quantise a file, so
-`python deploy\fetch_models.py --list-only` is always the authoritative answer.
+`setup_models.bat` offers a condensed catalog of 11 performance-class models
+(every repo is pinned - no fuzzy search) plus an auto-detected hardware tier plan
+matching your GPU VRAM and system RAM. The list lives in `deploy/fetch_models.py`;
+`python deploy\fetch_models.py --list-only` and
+`python deploy\recommend_models.py --plan` are always the authoritative answers.
 
-| Model | Repo | Role | Download |
-|-------|------|------|----------|
-| `gemma-4:e4b-it-qat` | unsloth/gemma-4-E4B-it-qat-GGUF | all-rounder / vision (+ MTP drafter) | 4.2 GB + 1.0 GB mmproj |
-| `gemma-4:e2b-it-qat` | unsloth/gemma-4-E2B-it-qat-GGUF | small all-rounder / vision (+ MTP drafter) | 2.6 GB + 1.0 GB mmproj |
-| `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
-| `qwen3.6:35b-a3b-mtp` | unsloth/Qwen3.6-35B-A3B-MTP-GGUF | coder / planner (MoE + MTP spec-decode) | 22.8 GB + 0.9 GB mmproj |
-| `twil:8b` | webAI-Official/TwIL-8B | dense 8.8B Granite 4.2 reasoning (math/code/IF, balanced Q4_K_M, 40K default ctx) | 5.3 GB |
-| `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | MoE 26B/4B active Gemma 4 reasoning (128K ctx, q8_0 KV, CPU expert offload) | 13.5 GB |
-| `groot:19b-a3b-261023` | GrootTeam/Groot-19B-A3B-261023-GGUF | agent coder, **experimental** (MoE 19B/3B, 128 experts, 128K ctx) | 11.7 GB |
-| `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | heavy duo coder (MTP) | 5.9 GB + 0.9 GB mmproj |
-| `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
-| `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
-| `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB |
-| `lfm3-omni:2b` | LiquidAI/LFM3-Omni-2B-GGUF | subagent / vision worker (needs b12001+) | 1.0 GB + 0.3 GB mmproj |
-| `lfm3:1.7b-qad` | LiquidAI/LFM3-1.7B-GGUF | tool-calling subagent (lowest latency tier, needs b12001+) | 1.0 GB |
-| `lfm3:1.7b-uncensored-ad` | AtomicChat/LFM3-1.7B-Uncensored-GGUF | uncensored subagent / helper (Q4_K_M or Q6_K fallback, needs b12001+) | 1.1 GB |
-| `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
-| `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast direct helper (dense 4B) | 3.0 GB |
-| `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL, + DSpark drafter) | 2.1 GB + 0.65 GB drafter |
+| Model | Repo | Performance Class / Role | Download |
+|-------|------|--------------------------|----------|
+| `gemma-4:e4b-it-qat` | unsloth/gemma-4-E4B-it-qat-GGUF | Essential: all-rounder / vision (+ MTP drafter) | 4.2 GB + 0.9 GB mmproj + 60 MB MTP |
+| `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | Essential: duo coder / planner default (MTP) | 2.8 GB + 0.6 GB mmproj |
+| `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | Essential: light all-rounder / judge (Q6_K_XL, + DSpark) | 2.1 GB + 0.65 GB drafter |
+| `lfm3:1.7b-qad` | LiquidAI/LFM3-1.7B-GGUF | Essential / 4 GB tier: tool-calling subagent (needs b12001+) | 1.0 GB |
+| `lfm3-omni:2b` | LiquidAI/LFM3-Omni-2B-GGUF | Compact vision / 4–6 GB tier: multimodal worker (needs b12001+) | 1.0 GB + 0.3 GB mmproj |
+| `lfm3:1.7b-uncensored-ad` | AtomicChat/LFM3-1.7B-Uncensored-GGUF | Compact uncensored helper (Q4_K_M or Q6_K fallback, needs b12001+) | 1.1 GB |
+| `nvidia-nemotron-3.5-bolt:e4b` | unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF | 8 GB power tier: high-accuracy reasoning / coder (64K SWA, + Q8_0 DFlash) | 4.7 GB + 0.37 GB DFlash |
+| `twil:8b` | webAI-Official/TwIL-8B | 8 GB power tier: dense 8.8B Granite 4.2 reasoning (math/code/IF, balanced Q4_K_M) | 5.0 GB |
+| `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | 8–12 GB power tier: heavy dense vision coder (MTP) | 5.9 GB + 0.9 GB mmproj |
+| `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | Hybrid MoE / 16+ GB tier: 26B/4B active Gemma 4 reasoning (128K ctx, q4_0 KV) | 12.6 GB |
+| `qwen3.6:35b-a3b-mtp` | unsloth/Qwen3.6-35B-A3B-MTP-GGUF | Flagship MoE / 24+ GB or 8 GB+32 GB RAM tier: 35B/3B coder (`UD-IQ4_XS` + MTP) | 17.0 GB + 0.9 GB mmproj |
 
-Text-only models (`minicpm5`, `lfm2.5`, `lfm3`, `spark-x2.6`, `twil`, `air`, `groot`, `qwen3.5:0.8b-ud`) download GGUF weights (plus `chat_template.jinja` on `minicpm5:2b-sharp`). Multimodal models pull their paired `mmproj` projector automatically, and `gemma-4` additionally gets a ~60 MB MTP drafter. `lfm2.5:24b-a2b` and `minicpm5:2b-sharp` also fetch a DSpark spec-dec drafter sidecar (never registered as a standalone model).
+**Hardware tier recommendations (`deploy/recommend_models.py --plan`):**
+
+- **4–6 GB VRAM / CPU-only:** start with `lfm3:1.7b-qad`, `lfm3-omni:2b`, `minicpm5:2b-sharp`, and `qwen3.5:4b-mtp` at 8K–16K ctx.
+- **8 GB VRAM + <=24 GB RAM:** use the 4 Essential models plus 8 GB dense upgrades (`nvidia-nemotron-3.5-bolt:e4b`, `twil:8b`, `qwen3.5:9b-mtp`); skip >12 GB MoEs.
+- **8 GB VRAM + 32+ GB RAM:** ideal hybrid CPU-MoE setup — add `air:26b-a4b` and `qwen3.6:35b-a3b-mtp` alongside `nvidia-nemotron-3.5-bolt:e4b`.
+- **12–16 GB / 24+ GB VRAM:** keep 8B–9B dense models GPU-resident and run `qwen3.6:35b-a3b-mtp` / `air:26b-a4b` with higher GPU offload.
+
+Text-only models (`lfm3`, `nvidia-nemotron-3.5-bolt:e4b`, `twil:8b`, `air:26b-a4b`, `minicpm5:2b-sharp`) download GGUF weights (plus `chat_template.jinja` on `minicpm5:2b-sharp`). Multimodal models (`gemma-4:e4b-it-qat`, `qwen3.5:4b-mtp`, `qwen3.5:9b-mtp`, `lfm3-omni:2b`, `qwen3.6:35b-a3b-mtp`) pull their paired `mmproj` projector automatically. Speculative drafters are downloaded automatically alongside `gemma-4:e4b-it-qat` (~60 MB MTP sidecar), `minicpm5:2b-sharp` (DSpark), and `nvidia-nemotron-3.5-bolt:e4b` (DFlash Q8_0) and are never registered as standalone models. Other local GGUFs (such as custom/unlisted fine-tunes or larger MoEs) keep their profiles in `model_configs/models/` and can still be registered via `[R]` or `[C]`.
 
 GGUFs already on disk can be registered without downloading anything
 (`setup_models.bat` -> `[R]`) or given a full config via `[C]`.
