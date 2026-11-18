@@ -68,7 +68,7 @@ check("the guard never breaks the run",
 _src_cr = (ROOT / "core" / "chat_run.py").read_text(encoding="utf-8", errors="replace")
 check("cwd fallback is detected", 'if _ws_src == "cwd_fallback":' in _src_cr)
 check("the fallback is logged loudly",
-      "no workspace configured - using the engine directory" in _src_cr)
+      "no workspace configured - using placeholder workspace" in _src_cr)
 check("the fallback is NOT persisted as last-used",
       "this fallback is NOT saved as last-used" in _src_cr
       and _src_cr.index('if _ws_src == "cwd_fallback":') < _src_cr.index("_save_last_ws(_ws_str)"))

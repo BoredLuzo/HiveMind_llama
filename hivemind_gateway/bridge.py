@@ -195,22 +195,62 @@ class RunBridge:
         self.state.save()
         return mapping
 
-    async def workspace_for_chat(self, chat_id: str) -> str:
-        """Resolved workspace of one HiveMind chat, or '' if unset.
+    async def _placeholder_info(self) -> dict:
+        """Query the engine's built-in placeholder workspace, or {} if unavailable."""
+        fn = getattr(self.hive, "placeholder_status", None)
+        if fn is None:
+            return {}
+        try:
+            data = await fn()
+            return data if isinstance(data, dict) else {}
+        except (HiveUnreachable, HTTPError, OSError, ValueError):
+            return {}
 
-        The chat metadata is authoritative (the engine resolves runs from
-        it). The phone-side /workspace mapping is the fallback for a chat
-        whose metadata cannot be read.
+    async def resolve_chat_workspace(self, chat_id: str) -> tuple[str, bool]:
+        """Return (workspace_path, is_placeholder) for one Telegram/followed chat.
+
+        Explicit per-chat or /workspace settings win; otherwise phone runs start
+        in the isolated HiveMind placeholder folder (never leaking the UI folder
+        or install root). Falls back to ('', False) for older engines/fakes.
         """
+        ph = await self._placeholder_info()
+        ph_path = str(ph.get("path") or "").strip()
+
+        def _is_ph(ws: str) -> bool:
+            if not ws or not ph_path:
+                return False
+            try:
+                from pathlib import Path as _P
+                return _P(ws).resolve() == _P(ph_path).resolve()
+            except OSError:
+                return ws == ph_path
+
         try:
             r = await self.hive.get_chat(chat_id)
             r.raise_for_status()
             _ws = str((r.json() or {}).get("workspace") or "").strip()
             if _ws:
-                return _ws
+                return _ws, _is_ph(_ws)
         except (HiveUnreachable, HTTPError, OSError, ValueError, AttributeError):
             pass
-        return str((self._tg_chat() or {}).get("workspace") or "").strip()
+        _tg_ws = str((self._tg_chat() or {}).get("workspace") or "").strip()
+        if _tg_ws:
+            return _tg_ws, _is_ph(_tg_ws)
+        if ph_path:
+            return ph_path, True
+        return "", False
+
+    def _format_workspace_label(self, ws: str, is_placeholder: bool) -> str:
+        if is_placeholder:
+            return "default_workspace (placeholder)"
+        if not ws:
+            return "engine default"
+        return self._short_path(ws)
+
+    async def workspace_for_chat(self, chat_id: str) -> str:
+        """Resolved workspace of one HiveMind chat, or '' if unset."""
+        ws, _ = await self.resolve_chat_workspace(chat_id)
+        return ws
 
     async def _write_turn(self, chat_id: str, turn: dict) -> int:
         """Append one turn to the main json with CAS. 409 => adopt the
@@ -665,7 +705,7 @@ class RunBridge:
         chat_id = mapping["hive_chat_id"]
         # SEND-FILE (2026-11-04): one workspace lookup per run; the engine
         # already confined the file, this is the gateway-side re-check.
-        _run_ws = await self.workspace_for_chat(chat_id)
+        _run_ws, _run_is_ph = await self.resolve_chat_workspace(chat_id)
         await self._write_turn(chat_id, {"role": "user", "content": q})
         # VOICE-PRELOAD (1.4.2): warm the engine now, not when the answer is done
         await self._preload_voice()
@@ -688,9 +728,12 @@ class RunBridge:
         # from the engine settings (one fetch for restriction + models +
         # approval mode): the duo planner inherits the coder model unless
         # duo_planner_model is set (core/duo_runner.py:1038).
-        _ws = (self._tg_chat() or {}).get("workspace") or "engine default"
-        _ws_short = (_ws.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-                     if _ws != "engine default" else _ws)
+        if _run_is_ph:
+            _ws_short = "default_workspace (placeholder)"
+        elif _run_ws:
+            _ws_short = _run_ws.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        else:
+            _ws_short = "engine default"
         _restricted = True
         _s: dict = {}
         try:
@@ -1338,9 +1381,39 @@ class RunBridge:
             return f"❌ /stop failed ({exc}) - run {rid} may still " \
                    "be running, please check the PC!"
 
-    async def new_chat(self) -> str:
+    async def prepare_new_chat(self) -> dict:
+        """Check whether /new should ask before clearing default_workspace files."""
+        if self.state.data.get("active_run"):
+            return {"status": "busy", "text": self._busy_note()}
+        journal_note = await self._journal_busy()
+        if journal_note:
+            return {"status": "busy", "text": journal_note}
+        fn = getattr(self.hive, "placeholder_status", None)
+        ph: dict = {}
+        if fn is not None:
+            res = await fn()
+            ph = res if isinstance(res, dict) else {}
+        files = list(ph.get("files") or [])
+        if files:
+            return {
+                "status": "confirm",
+                "files": files,
+                "count": int(ph.get("count") or len(files)),
+                "path": str(ph.get("path") or ""),
+            }
+        text = await self.new_chat(clear_placeholder=True)
+        return {"status": "done", "text": text}
+
+    async def new_chat(self, *, clear_placeholder: bool = True) -> str:
         if self.state.data.get("active_run"):
             return self._busy_note()
+        cleared = 0
+        if clear_placeholder:
+            clear_fn = getattr(self.hive, "clear_placeholder", None)
+            if clear_fn is not None:
+                res = await clear_fn()
+                if isinstance(res, dict):
+                    cleared = int(res.get("cleared") or 0)
         import datetime as _dt
         title = "[TG] Telegram " + _dt.datetime.now().astimezone() \
             .strftime("%Y-%m-%d %H:%M")
@@ -1349,7 +1422,9 @@ class RunBridge:
                    "created_at": created.get("chat", {}).get("created_at", "")}
         self.state.data["tg_chat"] = mapping
         self.state.save()
-        return f"🆕 New HiveMind chat: {title} ({mapping['hive_chat_id']})."
+        extra = (f"\n🧹 Cleared {cleared} file(s) from default_workspace."
+                 if cleared > 0 else "")
+        return f"🆕 New HiveMind chat: {title} ({mapping['hive_chat_id']}).{extra}"
 
     async def decider_text(self, arg: str) -> str:
         """DECIDER (2026-10-22): /decider bare = status, on|off|shadow =
@@ -1438,12 +1513,22 @@ class RunBridge:
                         + f" · model {(_rs or {}).get('routing_decider_model') or 'default'}")
         else:
             _routing = "routing: decider off (keyword rules)"
-        _ws_map = mapping.get("workspace")
+        _ws_cid = str(mapping.get("hive_chat_id") or "")
+        _ws_map = mapping.get("workspace") or ""
+        if _ws_cid:
+            _ws_res, _ws_is_ph = await self.resolve_chat_workspace(_ws_cid)
+            _ws_txt = self._format_workspace_label(_ws_res, _ws_is_ph)
+        elif _ws_map:
+            _ws_txt = self._short_path(_ws_map)
+        else:
+            _ws_ph = await self._placeholder_info()
+            _ws_txt = ("default_workspace (placeholder)"
+                       if _ws_ph.get("path") else "engine default")
         return (
             "📡 Gateway status\n"
             "\n"
             f"chat: {mapping.get('hive_chat_id', '- none yet')}\n"
-            f"workspace: {self._short_path(_ws_map) if _ws_map else 'engine default'}\n"
+            f"workspace: {_ws_txt}\n"
             f"mode: {mode}  (phone runs only)\n"
             f"model: {ov.get('model') or 'engine default'}\n"
             f"ctx: planner {ov.get('planner_ctx') or '-'} · coder "
@@ -2688,14 +2773,44 @@ class RunBridge:
                 "Set with /gate ask|deny|off; /gate on|off is the master.")
 
     async def workspace_text(self, arg: str) -> str:
-        """/workspace <path> - set the workspace of the [TG] chat so
+        """/workspace <path|default> - set the workspace of the [TG] chat so
         phone runs execute there (chat workspace wins at resolve time)."""
         path = (arg or "").strip().strip('"').strip("'")
         if not path:
-            current = (self._tg_chat() or {}).get("workspace", "")
-            label = current or "- not set (engine default)"
+            cid = str((self._tg_chat() or {}).get("hive_chat_id") or "")
+            if cid:
+                cur, is_ph = await self.resolve_chat_workspace(cid)
+                label = self._format_workspace_label(cur, is_ph)
+            else:
+                ph = await self._placeholder_info()
+                label = ("default_workspace (placeholder)"
+                         if ph.get("path") else "- not set (engine default)")
             return (f"Workspace (Telegram): {label}.\n"
-                    "Set with /workspace <path>.")
+                    "Set with /workspace <path> (or /workspace default).")
+        if path.lower() in ("default", "clear", "reset", "placeholder"):
+            mapping = await self._ensure_chat()
+            chat_id = mapping["hive_chat_id"]
+            r = await self.hive.get_chat(chat_id)
+            r.raise_for_status()
+            chat = r.json()
+            rev = int(chat.get("rev") or 0)
+            for _attempt in (0, 1):
+                resp = await self.hive.put_chat_meta(
+                    chat_id, {"workspace": "", "base_rev": rev})
+                if resp.status_code == 409:
+                    body = resp.json()
+                    rev = int(body.get("rev") or 0)
+                    continue
+                resp.raise_for_status()
+                tg_map = self._tg_chat()
+                if isinstance(tg_map, dict):
+                    tg_map.pop("workspace", None)
+                    self.state.data["tg_chat"] = tg_map
+                    self.state.save()
+                return ("📁 Workspace (Telegram) reset to default_workspace "
+                        "(placeholder).\nFiles in default_workspace stay "
+                        "until /new.")
+            raise HiveUnreachable("workspace reset conflict (409 twice)")
         # audit G11 / deep-audit N9: the chat workspace IS the tool
         # confinement root for phone runs - a typo must not silently
         # re-point the agent. The gateway runs on the same machine, so a

@@ -7,6 +7,9 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
+import sys
 import time
 from pathlib import Path
 
@@ -18,7 +21,114 @@ logger = logging.getLogger("hivemind.workspace")
 RE_WIN_PATH = re.compile(r'[A-Za-z]:\\[^\s\n\'"<>|?*]+')
 RE_UNIX_PATH = re.compile(r'/(?:home|usr|var|opt|tmp|mnt)/[^\s\n\'"<>|?*]+')
 
-_LAST_WS_FILE = Path(__file__).resolve().parent.parent / "context" / "last_workspace.json"
+_APP_ROOT = Path(__file__).resolve().parent.parent
+_LAST_WS_FILE = _APP_ROOT / "context" / "last_workspace.json"
+_PLACEHOLDER_WS_DIR = _APP_ROOT / "default_workspace"
+
+
+def get_placeholder_workspace(*, create: bool = True) -> Path:
+    """Return the dedicated placeholder workspace directory inside HiveMind root.
+
+    Keeps chats without an explicit workspace isolated from the HiveMind app
+    root (so agents never inspect AGENTS.md, server.py or settings.json).
+    """
+    p = Path(_PLACEHOLDER_WS_DIR)
+    if create:
+        p.mkdir(parents=True, exist_ok=True)
+    return p.resolve()
+
+
+def is_placeholder_workspace(path: str | Path | None) -> bool:
+    """True when `path` points to the managed placeholder workspace directory."""
+    raw = str(path or "").strip()
+    if not raw:
+        return False
+    try:
+        return Path(raw).resolve() == Path(_PLACEHOLDER_WS_DIR).resolve()
+    except OSError:
+        return False
+
+
+def _is_reparse_or_link(p: Path) -> bool:
+    if p.is_symlink():
+        return True
+    try:
+        st = os.lstat(p)
+        attrs = getattr(st, "st_file_attributes", 0)
+        return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    except OSError:
+        return False
+
+
+def list_placeholder_entries(root: Path | None = None) -> list[str]:
+    """List sorted relative POSIX paths currently inside the placeholder folder."""
+    base = Path(root or _PLACEHOLDER_WS_DIR).resolve()
+    if not base.is_dir():
+        return []
+    entries: list[str] = []
+    for cur_root, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
+        cur_p = Path(cur_root)
+        # Never recurse into symlinked or junctioned directories.
+        kept_dirs: list[str] = []
+        for d in sorted(dirnames):
+            dp = cur_p / d
+            if _is_reparse_or_link(dp):
+                entries.append(dp.relative_to(base).as_posix())
+            else:
+                kept_dirs.append(d)
+        dirnames[:] = kept_dirs
+        for fn in sorted(filenames):
+            fp = cur_p / fn
+            entries.append(fp.relative_to(base).as_posix())
+        if cur_p != base and not dirnames and not filenames:
+            entries.append(cur_p.relative_to(base).as_posix() + "/")
+    return sorted(set(entries))
+
+
+def _remove_readonly_and_retry(func, path, _exc) -> None:
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
+def clear_placeholder_workspace(root: Path | None = None) -> int:
+    """Delete all files and subdirectories inside the placeholder workspace.
+
+    Refuses drive roots and the HiveMind app root; never follows symlinks or
+    Windows directory junctions out of the placeholder folder.
+    """
+    base = Path(root or _PLACEHOLDER_WS_DIR).resolve()
+    app_root = _APP_ROOT.resolve()
+    if base.parent == base or base == app_root:
+        raise ValueError(f"Refusing to clear unsafe placeholder path: {base}")
+    if not base.exists():
+        base.mkdir(parents=True, exist_ok=True)
+        return 0
+    if not base.is_dir():
+        raise ValueError(f"Placeholder path is not a directory: {base}")
+
+    removed = len(list_placeholder_entries(base))
+    _rm_kw = ({"onexc": _remove_readonly_and_retry}
+              if sys.version_info >= (3, 12)
+              else {"onerror": _remove_readonly_and_retry})
+    for child in list(base.iterdir()):
+        if _is_reparse_or_link(child):
+            try:
+                child.unlink()
+            except OSError:
+                os.rmdir(child)
+        elif child.is_dir():
+            shutil.rmtree(child, **_rm_kw)
+        else:
+            try:
+                child.unlink()
+            except PermissionError:
+                os.chmod(child, stat.S_IWRITE)
+                child.unlink()
+    base.mkdir(parents=True, exist_ok=True)
+    return removed
 
 
 class WorkspaceForceInvalid(RuntimeError):
@@ -49,7 +159,7 @@ def load_last_workspace() -> str:
 
 def save_last_workspace(ws: str) -> None:
     """Persists the last-used workspace atomically. Errors are logged, never thrown."""
-    if not ws:
+    if not ws or is_placeholder_workspace(ws):
         return
     try:
         _LAST_WS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +238,7 @@ def resolve_workspace(
         )
 
     _mode = str((settings or {}).get("mode") or "").strip().lower()
+    _is_direct = _mode in ("simple", "chat", "direct")
     _force = bool((settings or {}).get("workspace_force_ui")) if force is None else bool(force)
     ui_ws = str((settings or {}).get("workspace") or "").strip()
     if _mode in ("simple", "chat") or (not ui_ws and force is not True):
@@ -149,15 +260,16 @@ def resolve_workspace(
     if ui_ws and _valid_dir(ui_ws):
         return str(Path(ui_ws).resolve()), "ui_setting"
 
-    lw = load_last_workspace()
-    if lw:
-        return str(Path(lw).resolve()), "last_used"
+    if not _is_direct:
+        lw = load_last_workspace()
+        if lw:
+            return str(Path(lw).resolve()), "last_used"
 
-    env_ws = str(os.environ.get("HIVEMIND_WORKSPACE") or "").strip()
-    if env_ws and _valid_dir(env_ws):
-        return str(Path(env_ws).resolve()), "env"
+        env_ws = str(os.environ.get("HIVEMIND_WORKSPACE") or "").strip()
+        if env_ws and _valid_dir(env_ws):
+            return str(Path(env_ws).resolve()), "env"
 
-    return str(Path(".").resolve()), "cwd_fallback"
+    return str(get_placeholder_workspace()), "cwd_fallback"
 
 
 def bootstrap_workspace(
@@ -186,7 +298,7 @@ def bootstrap_workspace(
         # call): re-resolve, never fall through to the stale resume block.
         if fallback_fn is not None:
             return fallback_fn()
-        return str(Path(".").resolve()), "cwd_fallback"
+        return str(get_placeholder_workspace()), "cwd_fallback"
     rw = str(resume_workspace or "").strip()
     if rw:
         return str(Path(rw).resolve()), "resume"
@@ -195,7 +307,7 @@ def bootstrap_workspace(
         return str(Path(cw).resolve()), "chat_run"
     if fallback_fn is not None:
         return fallback_fn()
-    return str(Path(".").resolve()), "cwd_fallback"
+    return str(get_placeholder_workspace()), "cwd_fallback"
 
 
 def effective_run_workspace(ctx_workspace: str = "", state_workspace: str = "") -> str:
@@ -206,7 +318,10 @@ def effective_run_workspace(ctx_workspace: str = "", state_workspace: str = "") 
     ws = str(ctx_workspace or "").strip() or str(state_workspace or "").strip()
     if ws:
         return str(Path(ws).resolve())
-    return str(Path(os.environ.get("HIVEMIND_WORKSPACE") or ".").resolve())
+    env_ws = str(os.environ.get("HIVEMIND_WORKSPACE") or "").strip()
+    if env_ws:
+        return str(Path(env_ws).resolve())
+    return str(get_placeholder_workspace())
 
 
 def commit_allowed_for(request_workspace: str, chat_ctx: dict | None) -> bool:
@@ -216,10 +331,10 @@ def commit_allowed_for(request_workspace: str, chat_ctx: dict | None) -> bool:
     the chat context). A run with neither - the gravSandbox incident shape -
     may read the fallback workspace but must never commit anywhere."""
     _req = str(request_workspace or "").strip()
-    if _req and _valid_dir(_req):
+    if _req and _valid_dir(_req) and not is_placeholder_workspace(_req):
         return True
     cw = str(((chat_ctx or {}).get("workspace")) or "").strip()
-    return bool(cw and _valid_dir(cw))
+    return bool(cw and _valid_dir(cw) and not is_placeholder_workspace(cw))
 
 def fallback_for_invalid_request(settings, chat_ctx, user_input: str = "") -> tuple[str, str]:
     """Interactive fallback when the /stream workspace parameter is invalid.

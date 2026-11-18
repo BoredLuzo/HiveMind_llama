@@ -1,4 +1,5 @@
 """Core API-Router — Abort, Resume, Tool-Exec."""
+import asyncio as _asyncio
 import time as _time
 import logging
 import os
@@ -359,9 +360,10 @@ async def internal_tool_exec(req: Request):
     # SECURITY: workspace_lock NEVER comes from the request body. It is
     # derived server-side from the active configuration, so an attacker
     # cannot weaken the workspace-containment checks of the tools.
+    from utils.workspace_resolve import get_placeholder_workspace as _ph_ws
     _ws_cfg = str(settings.get("workspace") or "").strip()
     _ws_env = os.environ.get("HIVEMIND_WORKSPACE", "").strip()
-    workspace_lock = str(Path(_ws_cfg or _ws_env or ".").expanduser().resolve())
+    workspace_lock = str(Path(_ws_cfg or _ws_env or _ph_ws()).expanduser().resolve())
     # SECURITY (optional): HIVEMIND_INTERNAL_TOKEN enforces a shared secret
     # for this endpoint. Without the variable set, the CSRF origin guard applies.
     _internal_token = os.environ.get("HIVEMIND_INTERNAL_TOKEN", "").strip()
@@ -428,3 +430,38 @@ async def prefetch_stats():
             for agent, v in avgs.items()
         ],
     }
+
+
+@router.get("/workspace/placeholder")
+async def get_placeholder_workspace_info():
+    """Return path and current contents of the built-in placeholder workspace."""
+    from utils.workspace_resolve import (
+        get_placeholder_workspace as _ph_ws,
+        list_placeholder_entries as _ph_list,
+    )
+    ws_dir, files = await _asyncio.to_thread(
+        lambda: (_ph_ws(create=True), _ph_list())
+    )
+    return {
+        "ok": True,
+        "path": str(ws_dir),
+        "files": files,
+        "count": len(files),
+        "is_empty": len(files) == 0,
+    }
+
+
+@router.post("/workspace/placeholder/clear")
+async def post_placeholder_workspace_clear():
+    """Clear all files inside the built-in placeholder workspace on new chat."""
+    from utils.workspace_resolve import (
+        clear_placeholder_workspace as _ph_clear,
+        get_placeholder_workspace as _ph_ws,
+    )
+    try:
+        ws_dir = await _asyncio.to_thread(_ph_ws, create=True)
+        cleared = await _asyncio.to_thread(_ph_clear)
+    except (OSError, ValueError) as exc:
+        logger.warning("[WS-PLACEHOLDER] clear failed: %s", exc)
+        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=500)
+    return {"ok": True, "path": str(ws_dir), "cleared": int(cleared)}

@@ -29,7 +29,7 @@ $protFiles = 'settings.json','models.json','vision_model.json','presets.json',
              'searxng-config\settings.yml','searxng-config\docker-compose.yml'
 $protDirs  = 'sessions','logs','custom_prompts','.hive_uploads',
              'learning_logs','.venv','llama','models','voice_models',
-             'stt','tts-venv'
+             'stt','tts-venv','default_workspace'
 $protSub   = 'context\projects','learning\sessions','model_configs\learned'
 
 # NEVER-PRUNE update.bat (audit 2026-11-04): this script runs while

@@ -521,7 +521,7 @@ class Gateway:
                              reply_to_message_id=p.message_id,
                              reply_markup=gw_commands.help_keyboard())
         elif name == "new":
-            await self._owner_bridge_call(p, self.bridge.new_chat())
+            await self.cmd_new(p, arg)
         elif name == "shutdown":
             # R5+R6 (owner): secret /shutdown - two-step confirm with an
             # optional seconds BUFFER so the owner has time to wrap up.
@@ -771,6 +771,95 @@ class Gateway:
             note = f"🔌 HiveMind unreachable: {exc}"
         await self.reply(p.chat_id, note,
                          reply_to_message_id=p.message_id)
+
+    async def cmd_new(self, p: gw_auth.ParsedUpdate, arg: str = "") -> None:
+        """Start a fresh chat, confirming first when files exist in default_workspace."""
+        if str(arg or "").strip().lower() in ("confirm", "force", "clear"):
+            await self._owner_bridge_call(
+                p, self.bridge.new_chat(clear_placeholder=True))
+            return
+        try:
+            prep = await self.bridge.prepare_new_chat()
+        except (HiveUnreachable, HTTPError, OSError) as exc:
+            await self.reply(p.chat_id, f"🔌 HiveMind unreachable: {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        if prep.get("status") != "confirm":
+            await self.reply(p.chat_id, str(prep.get("text") or ""),
+                             reply_to_message_id=p.message_id)
+            return
+        import secrets as _secrets
+        files = list(prep.get("files") or [])
+        count = int(prep.get("count") or len(files))
+        nonce = _secrets.token_hex(4)
+        self._pending_newchat = {
+            "nonce": nonce,
+            "ts": time.time(),
+            "chat_id": p.chat_id,
+        }
+        shown = files[:8]
+        listing = "\n".join(f"• {f}" for f in shown)
+        if len(files) > 8:
+            listing += f"\n• … +{len(files) - 8} more"
+        prompt_text = (
+            f"⚠️ Default workspace still contains {count} file(s):\n"
+            f"{listing}\n\n"
+            "Are you sure you want to start a new chat and permanently "
+            "delete these files?"
+        )
+        kb = {"inline_keyboard": [[
+            {"text": "🗑 Yes, delete & new chat",
+             "callback_data": f"newchat:y:{nonce}"},
+            {"text": "❌ Cancel",
+             "callback_data": f"newchat:n:{nonce}"},
+        ]]}
+        await self.reply(p.chat_id, prompt_text,
+                         reply_to_message_id=p.message_id,
+                         reply_markup=kb)
+
+    async def handle_newchat_callback(self, p: gw_auth.ParsedUpdate) -> None:
+        """Handle confirmation buttons for /new when default_workspace has files."""
+        parts = str(p.text or "").split(":", 2)
+        action = parts[1] if len(parts) > 1 else ""
+        nonce = parts[2] if len(parts) > 2 else ""
+        pend = getattr(self, "_pending_newchat", None)
+        valid = (isinstance(pend, dict)
+                 and nonce
+                 and pend.get("nonce") == nonce
+                 and (time.time() - float(pend.get("ts") or 0)) <= 900)
+        if not valid or action not in ("y", "n"):
+            if p.callback_id:
+                try:
+                    await self.api.answer_callback_query(
+                        p.callback_id,
+                        text="Confirmation expired — run /new again.")
+                except TelegramApiError as exc:
+                    log.warning("[NEWCHAT] toast failed: %s", exc)
+            return
+        self._pending_newchat = None
+        if p.callback_id:
+            try:
+                toast = ("Starting new chat…" if action == "y"
+                         else "Cancelled")
+                await self.api.answer_callback_query(p.callback_id, text=toast)
+            except TelegramApiError as exc:
+                log.warning("[NEWCHAT] toast failed: %s", exc)
+        if p.message_id and hasattr(self.api, "edit_message_text"):
+            try:
+                status_msg = ("🗑 Deleting default_workspace & starting new chat…"
+                              if action == "y"
+                              else "❌ New chat cancelled (files kept).")
+                await self.edit_message(p.message_id, status_msg)
+            except (TelegramApiError, OSError) as exc:
+                log.debug("[NEWCHAT] card edit failed: %s", exc)
+        if action == "n":
+            await self.reply(
+                p.chat_id,
+                "❌ New chat cancelled — current chat and files kept.",
+                reply_to_message_id=p.message_id)
+            return
+        await self._owner_bridge_call(
+            p, self.bridge.new_chat(clear_placeholder=True))
 
     async def _voice_in_enabled(self) -> bool:
         """cfg.voice_in (gateway.toml) OR the engine's telegram_voice_in.
@@ -1257,6 +1346,8 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             if p.text.startswith("cmd:") or p.text == "cmdcancel":
                 # /help buttons: a tap runs the COMMAND, never a prompt
                 await gw.handle_command_callback(p)
+            elif p.text.startswith("newchat:") and p.callback_id:
+                await gw.handle_newchat_callback(p)
             elif p.text.startswith("appr:") and p.callback_id:
                 note = await gw.bridge.approval_callback(p.callback_id,
                                                          p.text)

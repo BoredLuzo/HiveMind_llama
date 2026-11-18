@@ -93,6 +93,7 @@ APPLY_SUB_XF = [
 APPLY_XD = [
     "sessions", ".hive_uploads", "learning_logs", "logs", ".venv",
     "llama", "voice_models", "stt", "tts-venv", "custom_prompts",
+    "default_workspace",
 ]
 
 # ── backup excludes ─────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ APPLY_XD = [
 BACKUP_XD = [
     ".venv", "llama", "logs", "sessions", "learning_logs",
     "voice_models", "stt", "tts-venv", ".hive_uploads",
+    "default_workspace",
     "__pycache__", TMPDIR_NAME, "update_backup_*", "update_removed_*",
 ]
 

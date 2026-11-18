@@ -119,6 +119,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude '/run_counter.json' --exclude '/.env' \
       --exclude '/custom_prompts' --exclude '/.hive_uploads' --exclude '/learning_logs' \
       --exclude '/learning/sessions' --exclude '/context/projects' \
+      --exclude '/default_workspace' \
       --exclude '/context/last_workspace.json' --exclude '/context/decider_cache.json' \
       --exclude '/searxng-config/settings.yml' --exclude '/searxng-config/docker-compose.yml' \
       --exclude '/bench/results' --exclude '/bench/.work' \
@@ -143,6 +144,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude='./run_counter.json' --exclude='./.env' \
       --exclude='./custom_prompts' --exclude='./.hive_uploads' --exclude='./learning_logs' \
       --exclude='./learning/sessions' --exclude='./context/projects' \
+      --exclude='./default_workspace' \
       --exclude='./context/last_workspace.json' --exclude='./context/decider_cache.json' \
       --exclude='./searxng-config/settings.yml' --exclude='./searxng-config/docker-compose.yml' \
       --exclude='./bench/results' --exclude='./bench/.work' \

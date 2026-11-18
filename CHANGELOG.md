@@ -103,6 +103,17 @@ installer catalog, and hardware-tier recommendations (`GPU VRAM x System RAM`).
     post-history active capability trails (`_append_direct_capability_trail`) so
     toggling Websearch or upgrading `direct_tools_tier` mid-chat takes effect
     immediately (`core/direct_runner.py`).
+  - Added an isolated `default_workspace/` placeholder folder for workspace-less
+    runs, Direct chats without explicit workspaces, and Telegram chats without
+    `/workspace` (never exposing the install root's `AGENTS.md` or inheriting
+    stale `last_used`/`env` projects in Direct mode, never overwriting
+    `last_workspace.json`), added `GET /workspace/placeholder` +
+    `POST /workspace/placeholder/clear` (`routers/core.py`), sidecar reset in
+    `PUT /chats/{id}` (`routers/chats.py`), Web-UI/Telegram confirmation before
+    `/new` or `+ NEW CHAT` wipes files in `default_workspace/`, `/workspace
+    default` reset, accurate workspace labels in Telegram (`hivemind_gateway`),
+    and updater/prune protection across `.gitignore`, `deploy/update_prune.ps1`,
+    `deploy/updater.py`, and `deploy/install_linux.sh`.
 - **Windows installer & LSP setup:**
   - Quoted `nvidia-smi` query flags against `cmd.exe` `for /f` delimiter
     splitting (`install.bat`, `update_llama.bat`), auto-seeded physical GPU

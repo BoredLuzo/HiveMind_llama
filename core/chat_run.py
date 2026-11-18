@@ -608,6 +608,7 @@ async def _run_stream_locked(
         commit_allowed_for as _commit_allowed_for,
         sync_env_workspace as _sync_env_workspace,
         save_last_workspace as _save_last_ws,
+        is_placeholder_workspace as _is_placeholder_ws,
         WorkspaceForceInvalid as _WsForceInvalid,
     )
     try:
@@ -674,17 +675,17 @@ async def _run_stream_locked(
     # ENV-Sync: Subprozesse (run_bash/run_python/browser) + Fallback-Lesezugriffe
     _sync_env_workspace(_ws_str)
     # WS-FALLBACK-WARN: with nothing configured the resolver falls back to the
-    # process CWD (= the install folder) and the run then persists THAT as
-    # "last used" - so one accidental run pins the install directory as the
-    # workspace for every later run and the model keeps writing next to the
-    # app. Never persist a fallback, and say it out loud once per run.
+    # isolated default_workspace placeholder instead of the engine root (so
+    # AGENTS.md / server.py stay unreachable), and never persists it as last-used.
     if _ws_src == "cwd_fallback":
-        logger.warning(
-            "[WS-RESOLVE] no workspace configured - using the engine directory "
-            "%s. Set the 'Workspace' field in the UI (per chat) so files land "
-            "where you expect; this fallback is NOT saved as last-used.",
+        logger.info(
+            "[WS-RESOLVE] no workspace configured - using placeholder workspace "
+            "%s. Set the 'Workspace' field in the UI (per chat) to target a "
+            "project; this fallback is NOT saved as last-used.",
             _ws_str,
         )
+        _ws_commit_allowed = False
+    elif _is_placeholder_ws(_ws_str):
         _ws_commit_allowed = False
     else:
         _save_last_ws(_ws_str)

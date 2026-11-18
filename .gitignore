@@ -84,6 +84,7 @@ infra/sessions/
 !/model_configs/models/
 
 # App runtime data (Learning/Memory/Chat contexts)
+/default_workspace/
 learning_logs/
 learning/sessions/
 model_configs/learning_logs/

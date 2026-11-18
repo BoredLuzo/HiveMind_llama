@@ -4043,6 +4043,27 @@ async function newChat() {
   // answer kept playing while the new chat was already empty. Stop the clip, the
   // queue and the prefetched request here.
   if (typeof _readAloudStop === 'function') _readAloudStop();
+  var _skipPhClear = Boolean(S._skipPlaceholderClear);
+  S._skipPlaceholderClear = false;
+  if (!_skipPhClear && !S.workspace && !S.currentChatWorkspace) {
+    try {
+      var _phRes = await fetch('/workspace/placeholder');
+      if (_phRes && _phRes.ok) {
+        var _phData = await _phRes.json();
+        if (_phData && _phData.count > 0) {
+          var _phFiles = Array.isArray(_phData.files) ? _phData.files : [];
+          var _phList = _phFiles.slice(0, 8).map(function(f) { return '• ' + f; }).join('\n');
+          if (_phFiles.length > 8) _phList += '\n• … +' + (_phFiles.length - 8) + ' more';
+          if (!confirm('Default workspace contains ' + _phData.count + ' file(s):\n' + _phList + '\n\nStart a new chat and delete these files?')) {
+            return;
+          }
+          await fetch('/workspace/placeholder/clear', {method:'POST'});
+        }
+      }
+    } catch (_phErr) {
+      console.warn('[placeholder-ws]', _phErr);
+    }
+  }
   await fetch('/memory/clear_session', {method:'POST'});
   _cleanupLoadTimers();
   if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
@@ -4053,6 +4074,7 @@ async function newChat() {
   document.getElementById('img-preview').innerHTML = '';
   _cpReset();  // PANEL-SCOPE (2026-10-03): a new chat starts with an empty code panel
   S.currentChatId = null;
+  S.currentChatWorkspace = '';
   S.currentChatMessages = [];
   S._lastDirectRunModel = '';
   if (typeof updateModelsChip === 'function') updateModelsChip();
@@ -7135,6 +7157,7 @@ async function _retryLastPromptNewChat() {
     return m && m.role === 'assistant' && String(m.content || '').trim();
   });
   if (!_hasAssistant) { _retryLastPrompt(); return; }
+  S._skipPlaceholderClear = true;
   await newChat();
   var _inp = document.getElementById('input');
   if (_inp) { _inp.value = _lp; }

@@ -64,9 +64,17 @@ and `.venv` are kept).
     the active tool set right before generation rather than being overridden by
     older assistant turns claiming search/tools are off.
   - Avoided false `WorkspaceForceInvalid('')` blocks on fresh installs when UI
-    `workspace` is empty, defaulted `subagent_lite_enabled` to `False`, raised
-    default `duo_ubatch` / `llama_ubatch_size` to `512`, and cleaned up
-    Windows Proactor subprocess pipe transports in `infra/lsp_client.py`.
+    `workspace` is empty, routed workspace-less runs (and Direct chats without an
+    explicit chat/UI workspace) into an isolated `default_workspace/`
+    placeholder folder instead of the install root (`AGENTS.md`/`server.py`),
+    and protected `default_workspace/` from git tracking and updates/prune.
+  - Added `/workspace/placeholder` inspection + clear endpoints, confirmation
+    prompts before `/new` / `+ NEW CHAT` clears existing files inside
+    `default_workspace/`, `/workspace default` reset, and honest workspace
+    reporting in Telegram's `ℹ️ Run` card and `/status`.
+  - Defaulted `subagent_lite_enabled` to `False`, raised default `duo_ubatch` /
+    `llama_ubatch_size` to `512`, and cleaned up Windows Proactor subprocess
+    pipe transports in `infra/lsp_client.py`.
 - **UI, Code mode & `/v1/chat/completions`:**
   Renamed coding mode to `Code` (`Critic-Duo` / `Agentic`) with inline Critic
   dropdown + `duo_critic_ctx`, excluded `smoke_test` runs from Token

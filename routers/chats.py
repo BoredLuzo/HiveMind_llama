@@ -693,7 +693,8 @@ async def get_chat(chat_id: str):
         _ctx = _load_chat_context(chat_id)
         if isinstance(_ctx, dict):
             # json workspace wins; the sidecar key only fills older chats
-            if not result.get("workspace") and _ctx.get("workspace"):
+            # unless the main json explicitly set an empty workspace string.
+            if "workspace" not in result and _ctx.get("workspace"):
                 result["workspace"] = _ctx["workspace"]
             if isinstance(_ctx.get("last_run"), dict):
                 result["last_run"] = _ctx["last_run"]
@@ -768,6 +769,17 @@ async def update_chat(chat_id: str, req: Request):
                              "messages": _server_msgs,
                              "hint": "server state wins - adopt these messages"},
                             status_code=409)
+    if "workspace" in data:
+        def _sync_ctx_ws():
+            from context.chat import _mutate_chat_context
+            _new_ws = str(data.get("workspace") or "").strip()
+            def _mut(c):
+                if _new_ws:
+                    c["workspace"] = _new_ws
+                else:
+                    c.pop("workspace", None)
+            _mutate_chat_context(chat_id, _mut)
+        await asyncio.to_thread(_sync_ctx_ws)
     return {"ok": True, "rev": (_saved or {}).get("rev")}
 
 

@@ -237,6 +237,24 @@ class HiveClient:
     async def get_chat(self, chat_id: str) -> httpx.Response:
         return await self._get(f"/chats/{chat_id}")
 
+    async def placeholder_status(self) -> dict:
+        """GET /workspace/placeholder — path and current file list, {} on 404."""
+        r = await self._get("/workspace/placeholder")
+        if r.status_code == 404:
+            return {}
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
+    async def clear_placeholder(self) -> dict:
+        """POST /workspace/placeholder/clear — empty the placeholder folder."""
+        r = await self._post_json("/workspace/placeholder/clear", {})
+        if r.status_code == 404:
+            return {"ok": True, "cleared": 0}
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+
     async def abort_chat(self, chat_id: str, silent: bool = False) -> dict:
         # /abort takes chat_id as QUERY param (contract divergence #1).
         try:

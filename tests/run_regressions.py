@@ -446,6 +446,7 @@ SUITES = [
     ("catalog_tiers_and_wiring",   "tests/test_catalog_tiers_and_wiring.py",   30),
     ("audit_1_6_3_fixes",          "tests/test_audit_1_6_3_fixes.py",          30),
     ("direct_ui_and_thinkblock",   "tests/test_direct_ui_and_thinkblock.py",   30),
+    ("placeholder_workspace",      "tests/test_placeholder_workspace.py",      30),
 
 ]
 
