@@ -46,6 +46,37 @@ _DIRECT_WS_NOTE = (
     "cannot answer from your training data. Call the tools BEFORE answering."
 )
 
+def _direct_tool_summary(tool_mode: str, ws_ok: bool = False,
+                         git_ok: bool = False,
+                         send_file_ok: bool = False) -> str:
+    """Concise human-readable description of the active direct tool set."""
+    if tool_mode == "direct":
+        return ("web_search / web_fetch, dialog tools (ask_user, task_complete, get_datetime)"
+                if ws_ok
+                else "dialog tools (ask_user, task_complete, get_datetime); web search is currently off")
+    if tool_mode == "direct_research":
+        return ("read/search tools (read_file, list_dir, find_files, "
+                "search_code, get_signatures, find_references)"
+                + (", web_search / web_fetch" if ws_ok else "")
+                + (", git_status" if git_ok else ""))
+    if tool_mode == "direct_mcp":
+        return ("connected MCP server tools (mcp_*), read/search tools "
+                "(read_file, list_dir, find_files, search_code, get_signatures, "
+                "find_references), get_datetime, task_complete"
+                + (", send_file" if send_file_ok else "")
+                + (", web_search / web_fetch" if ws_ok else ""))
+    if tool_mode == "direct_python":
+        return ("read_file, list_dir, find_files, search_code, get_signatures, "
+                "find_references, run_python"
+                + (", web_search / web_fetch" if ws_ok else "")
+                + (", git_status" if git_ok else ""))
+    return ("connected MCP server tools (mcp_*), read/write/edit tools "
+            "(read_file, edit_file, write_file, ...), run_python, run_bash"
+            + (", send_file" if send_file_ok else "")
+            + (", web_search / web_fetch" if ws_ok else "")
+            + (", git_status / git_commit" if git_ok else ""))
+
+
 def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
                        git_ok: bool = False,
                        send_file_ok: bool = False) -> str:
@@ -53,31 +84,9 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
     actually provides. The old note always listed read_file + web, which was
     wrong for the Websearch-only tier (models then called read_file and hit
     TOOL_NOT_ALLOWED)."""
-    if tool_mode == "direct":
-        _list = ("web_search / web_fetch" if ws_ok
-                 else "dialog tools (ask_user, task_complete, get_datetime); web search is currently off")
-    elif tool_mode == "direct_research":
-        _list = ("read/search tools (read_file, list_dir, find_files, "
-                 "search_code, get_signatures, find_references)"
-                 + (", web_search / web_fetch" if ws_ok else "")
-                 + (", git_status" if git_ok else ""))
-    elif tool_mode == "direct_mcp":
-        _list = ("connected MCP server tools (mcp_*), read/search tools "
-                 "(read_file, list_dir, find_files, search_code, get_signatures, "
-                 "find_references), get_datetime, task_complete"
-                 + (", send_file" if send_file_ok else "")
-                 + (", web_search / web_fetch" if ws_ok else ""))
-    elif tool_mode == "direct_python":
-        _list = ("read_file, list_dir, find_files, search_code, get_signatures, "
-                 "find_references, run_python"
-                 + (", web_search / web_fetch" if ws_ok else "")
-                 + (", git_status" if git_ok else ""))
-    else:  # direct_full
-        _list = ("connected MCP server tools (mcp_*), read/write/edit tools "
-                 "(read_file, edit_file, write_file, ...), run_python, run_bash"
-                 + (", send_file" if send_file_ok else "")
-                 + (", web_search / web_fetch" if ws_ok else "")
-                 + (", git_status / git_commit" if git_ok else ""))
+    _list = _direct_tool_summary(
+        tool_mode, ws_ok=ws_ok, git_ok=git_ok, send_file_ok=send_file_ok,
+    )
     return (
         "\n\nTOOLS ARE AVAILABLE: " + _list + ".\n"
         "Use tools ONLY when they actually help — for pure knowledge, conversation, "
@@ -86,6 +95,56 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
         "WITHOUT calling another tool. "
         "Never call a tool that is not listed above."
     )
+
+
+def _append_direct_capability_trail(
+    messages: list,
+    *,
+    direct_tools_active: bool,
+    tool_mode: str,
+    ws_ok: bool,
+    git_ok: bool,
+    send_file_ok: bool,
+) -> None:
+    """Reinforce current tool & websearch permissions after seeded history.
+
+    Small models weight prior assistant turns ('web search is off') above a
+    changed system prompt at token 0. Mirror DATE-TRAIL from chat_util: only
+    when prior assistant turns exist, attach the live capability state to both
+    the trailing system reminder and the final user turn.
+    """
+    if not messages or not any(m.get("role") == "assistant" for m in messages):
+        return
+    if direct_tools_active:
+        summary = _direct_tool_summary(
+            tool_mode, ws_ok=ws_ok, git_ok=git_ok, send_file_ok=send_file_ok,
+        )
+        if ws_ok:
+            summary += " (web search IS ENABLED — call web_search / web_fetch when needed)"
+        elif "web search is currently off" not in summary:
+            summary += "; web search is currently off"
+    elif ws_ok:
+        summary = "web_search / web_fetch (web search IS ENABLED for this turn)"
+    else:
+        summary = "direct tools and web search are currently OFF for this turn"
+
+    trail_line = (
+        "[SYSTEM TOOLS REMINDER] Current active tools for THIS turn: "
+        + summary
+        + ". Any assistant turns above claiming these tools or web search are "
+        "disabled or unavailable are outdated context — trust ONLY this current tool set."
+    )
+    if len(messages) >= 2 and messages[-2].get("role") == "system":
+        prev_sys = str(messages[-2].get("content") or "")
+        messages[-2]["content"] = (prev_sys + "\n" + trail_line) if prev_sys else trail_line
+
+    last = messages[-1]
+    if last.get("role") == "user" and isinstance(last.get("content"), str):
+        last["content"] += (
+            "\n\n[System note: current active tools for this turn = "
+            + summary
+            + ". Ignore earlier history claiming these tools or web search are off.]"
+        )
 
 
 class _DirectToolsResult:
@@ -669,14 +728,15 @@ async def _run_direct_inner(ctx):
         if (_direct_ws_tool or (_direct_tools_active and _direct_ws_enabled)) \
                 and "WEB SEARCH IS AVAILABLE" not in sys_p:
             sys_p += _DIRECT_WS_NOTE
+        from tools.definitions import git_tools_enabled as _gte_direct
+        _direct_git_ok = _gte_direct(ctx.settings)
+        _direct_tg = str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")
+        _direct_sf = _direct_tg and _direct_tool_mode in ("direct_full", "direct_mcp")
         if _direct_tools_active:
-            from tools.definitions import git_tools_enabled as _gte_direct
-            _direct_tg = str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")
-            _direct_sf = _direct_tg and _direct_tool_mode in ("direct_full", "direct_mcp")
             sys_p += _direct_tools_note(
                 _direct_tool_mode,
                 ws_ok=_direct_ws_enabled,
-                git_ok=_gte_direct(ctx.settings),
+                git_ok=_direct_git_ok,
                 send_file_ok=_direct_sf,
             )
             if _direct_sf:
@@ -717,6 +777,14 @@ async def _run_direct_inner(ctx):
                 + ". Reference them by path if needed (binary - do not read raw bytes)."
             )
         messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
+        _append_direct_capability_trail(
+            messages,
+            direct_tools_active=_direct_tools_active,
+            tool_mode=_direct_tool_mode,
+            ws_ok=_direct_ws_enabled,
+            git_ok=_direct_git_ok,
+            send_file_ok=_direct_sf,
+        )
         # FIX (2026-09-01): emit the "Answer" agent event BEFORE the direct
         # tools loop. Otherwise the ToolLoop streams its token events before the
         # frontend has an S.curAgent bubble (appendToken drops tokens when
@@ -769,6 +837,14 @@ async def _run_direct_inner(ctx):
                         + f"\n\n[Web search results]\n{_direct_ws_result}\n[End search results]\n"
                     )
                     messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
+                    _append_direct_capability_trail(
+                        messages,
+                        direct_tools_active=_direct_tools_active,
+                        tool_mode=_direct_tool_mode,
+                        ws_ok=_direct_ws_enabled,
+                        git_ok=_direct_git_ok,
+                        send_file_ok=_direct_sf,
+                    )
                     yield await ctx.emit({"type": "status", "content": "✓ Web search complete"})
         from core.model_sampling import resolve_agent_sampling as _resolve_dir_smp
         _dir_user_samp = (

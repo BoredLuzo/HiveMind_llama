@@ -912,6 +912,32 @@ check("14c lsp_status survives the 8k schema fit",
 check("14d lsp_diagnostics survives the 8k schema fit",
       "lsp_diagnostics" in _fit_names)
 
+# ── 15. Windows extra bin dir discovery & scrubbed child PATH ───────────
+from infra import lsp_client as LC_MOD  # noqa: E402
+from infra import lsp_registry as LR_MOD  # noqa: E402
+
+with tempfile.TemporaryDirectory(prefix="hm_lsp_bin_") as _td_bin:
+    _dummy_exe = Path(_td_bin) / (
+        "fake-hm-lsp.exe" if sys.platform == "win32" else "fake-hm-lsp"
+    )
+    _dummy_exe.write_text("", encoding="ascii")
+    with unittest.mock.patch.object(LR_MOD.sys, "platform", "win32"), \
+         unittest.mock.patch.object(LR_MOD, "windows_extra_bin_dirs", return_value=[_td_bin]), \
+         unittest.mock.patch.object(LR_MOD.shutil, "which", side_effect=lambda name, path=None: (
+             str(_dummy_exe) if path and _td_bin in path else None
+         )):
+        _resolved = LR_MOD._find_exe("fake-hm-lsp")
+    check("15a _find_exe resolves fresh Windows LSP outside inherited PATH",
+          _resolved == str(_dummy_exe), f"({_resolved})")
+
+    with unittest.mock.patch.dict(os.environ, {"PATH": r"C:\Windows\System32", "OPENAI_API_KEY": "secret"}, clear=True), \
+         unittest.mock.patch.object(LC_MOD.sys, "platform", "win32"), \
+         unittest.mock.patch.object(LR_MOD, "windows_extra_bin_dirs", return_value=[_td_bin]):
+        _cenv = LC_MOD._lsp_child_env()
+    check("15b _lsp_child_env appends extra bin dir to PATH while stripping secrets",
+          _td_bin in _cenv.get("PATH", "") and "OPENAI_API_KEY" not in _cenv,
+          f"({_cenv})")
+
 restore_settings()
 print()
 print(f"SUMMARY lsp_tools: {passed} passed, {failed} failed")

@@ -15,8 +15,8 @@ echo    [3/9] llama.cpp backend - downloaded for the chosen backend
 echo    [4/9] Windows tools     - optional POSIX tools (grep/sed/find)
 echo    [5/9] Desktop shortcut  - optional, with the HiveMind icon
 echo    [6/9] Models            - downloaded into your chosen folder
-echo          (the routing decider is an optional extra inside this step,
-echo           off by default; the judge role can use any installed model)
+echo          (also offers optional Routing Decider and LSP packs;
+echo           the judge role can use any installed model)
 echo    [7/9] SearXNG           - optional web search (requires Docker)
 echo    [8/9] Voice             - optional speech to text / text to speech
 echo    [9/9] Telegram gateway  - optional: message HiveMind from
@@ -27,10 +27,12 @@ echo.
 echo   [Y] full install    [N] abort    [O] only the optional parts
 echo       (Decider / LSP / SearXNG / Voice / Telegram - for an existing
 echo        installation, or to add them to one you installed a while ago)
+echo   [L] language servers only (LSP)
 echo   [1-9] run only that single step (e.g. 6 = Models+Decider+LSP, 8 = Voice)
 echo.
-choice /c YNO123456789 /n /m "Install HiveMind now? [Y/N/O/1-9] "
+choice /c YNO123456789L /n /m "Install HiveMind now? [Y/N/O/L/1-9] "
 set "SINGLE_STEP="
+if errorlevel 13 goto lsp_only_entry
 if errorlevel 12 (set "SINGLE_STEP=9" & goto single_step_dispatch)
 if errorlevel 11 (set "SINGLE_STEP=8" & goto single_step_dispatch)
 if errorlevel 10 (set "SINGLE_STEP=7" & goto single_step_dispatch)
@@ -606,6 +608,14 @@ if errorlevel 1 (
 )
 goto lsp_step
 
+:lsp_only_entry
+echo.
+echo   Running language-server setup only [L] ...
+echo.
+call :init_resume_env
+set "SINGLE_STEP=L"
+goto lsp_step_pick
+
 :lsp_step
 REM [6c] Language servers (optional) -----------------------------------------
 REM Verified packs only; the installer script lists what is not offered (Go,
@@ -619,12 +629,13 @@ if errorlevel 2 (
     echo   Skipped. Add later: deploy\install_lsp_packs.bat
     goto lsp_done
 )
+:lsp_step_pick
 echo.
 REM no `call` here would end this installer when the list script returns.
 call deploy\install_lsp_packs.bat --list
 echo.
 set "LSP_PICK="
-set /p "LSP_PICK=Pack numbers (e.g. 1,2,3 - Enter = skip): "
+set /p "LSP_PICK=Pack numbers (e.g. 1,2,3 or A = all - Enter = skip): "
 if not defined LSP_PICK goto lsp_done
 REM the script takes space-separated numbers; commas are what people type
 set "LSP_PICK=%LSP_PICK:,= %"

@@ -21,6 +21,7 @@ Rules (2026-10-31):
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 import shutil
 import sys
@@ -161,13 +162,53 @@ def candidates(language_id: str, override=None) -> list[list[str]]:
     return [list(c) for c in SERVER_CANDIDATES.get(lang, [])]
 
 
+def windows_extra_bin_dirs() -> list[str]:
+    """Standard tool locations on Windows for freshly installed LSP binaries.
+
+    Installers (npm, winget, rustup, go, uv) append to Machine/User PATH, which
+    an already-running HiveMind process does not inherit until restart.
+    Checking these directories after `shutil.which` lets newly installed packs
+    work immediately without restarting Windows or the engine.
+    """
+    if sys.platform != "win32":
+        return []
+    home = Path.home()
+    candidates = [
+        Path(sys.executable).parent,
+        Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "npm",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs",
+        Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "Microsoft" / "WinGet" / "Links",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "LLVM" / "bin",
+        Path(os.environ.get("CARGO_HOME", home / ".cargo")) / "bin",
+        Path(os.environ.get("GOPATH", home / "go")) / "bin",
+        home / ".local" / "bin",
+    ]
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in candidates:
+        s = str(p)
+        k = s.lower()
+        if k not in seen and p.is_dir():
+            seen.add(k)
+            out.append(s)
+    return out
+
+
 def _find_exe(name: str) -> str | None:
     """Resolve one executable: absolute paths are used as-is, anything else
-    goes through shutil.which (PATH + PATHEXT on Windows)."""
+    goes through shutil.which (PATH + PATHEXT on Windows), falling back to
+    standard Windows language-server install directories."""
     p = Path(name)
     if p.is_absolute():
         return str(p) if p.exists() else None
-    return shutil.which(name)
+    hit = shutil.which(name)
+    if hit is not None:
+        return hit
+    if sys.platform == "win32" and "/" not in name and "\\" not in name:
+        extra = windows_extra_bin_dirs()
+        if extra:
+            return shutil.which(name, path=os.pathsep.join(extra))
+    return None
 
 
 def _wrap_windows_shell(argv: list[str]) -> list[str]:

@@ -58,6 +58,14 @@ installer catalog, and hardware-tier recommendations (`GPU VRAM x System RAM`).
     Unsloth/NVIDIA, `TwIL-8B-Q4_K_M-balanced.gguf`, and Cyber-Tiel-Coder.
 
 ### Fixed & Improved
+- **Loader preflight, DFlash & GPU-first retry ladder:**
+  - Added DFlash `p_min` / `fit` / preflight handling, accounted `mmproj` and
+    extras in the context ladder, stripped `--fit` on MoE configs, reordered
+    draft-drop and context-step retries before CPU/RAM fallback, calibrated
+    `b12001` MoE profiles (`air:26b-a4b`, `groot:19b-a3b`, `hermes3.6`,
+    `minicpm-v-4.7:35b`), and added `mellum2.1_12b-a2.5b-thinking.json`
+    (`backend/llama_start_phases.py`, `backend/manager_load.py`,
+    `backend/llama_vram_table.py`).
 - **Per-port run locking, KV retention & slot pinning:**
   - Serialized concurrent LLM HTTP calls per port via `get_port_lock` and
     shared httpx connection pooling (`core/llm_transport.py`, `core/chat_run.py`,
@@ -91,9 +99,11 @@ installer catalog, and hardware-tier recommendations (`GPU VRAM x System RAM`).
     `core/chat_run.py`, `static/app.js`).
   - Fixed duplicate `_createThinkBlock` declaration shadowing (`static/app.js`
     `_buildAgentThinkBlock(tid)`), synced `#h-models` with active direct/automap
-    model changes, and emitted `run_meta` before `_run_direct_tools`
-    (`core/direct_runner.py`).
-- **Windows installer hardening:**
+    model changes, emitted `run_meta` before `_run_direct_tools`, and injected
+    post-history active capability trails (`_append_direct_capability_trail`) so
+    toggling Websearch or upgrading `direct_tools_tier` mid-chat takes effect
+    immediately (`core/direct_runner.py`).
+- **Windows installer & LSP setup:**
   - Quoted `nvidia-smi` query flags against `cmd.exe` `for /f` delimiter
     splitting (`install.bat`, `update_llama.bat`), auto-seeded physical GPU
     VRAM defaults via `probe_hardware()[0]` with `vram_budget_gb` override for
@@ -101,12 +111,15 @@ installer catalog, and hardware-tier recommendations (`GPU VRAM x System RAM`).
     pauses (`install.bat`, `create_shortcut.bat`), and added `NVSMI` path
     discovery, `-q` parsing, and `<= driver CUDA` compatible asset selection
     (`deploy/fetch_llamacpp.py`).
-  - Added single-step `[1-9]` selection (`Install HiveMind now? [Y/N/O/1-9]`),
-    expanded `[O]` optionals-only mode (`Routing Decider`, `LSP`, `SearXNG`,
-    `Voice`, `Telegram gateway`), removed the 30-second auto-skip timeout on
-    LSP installation, and added a Step `[8/9]` TTS provider picker
-    (`[W] Underdog Woof` recommended default / `[P] Pocket TTS` / `[B] Both`)
-    in `install.bat`.
+  - Added `[L] language servers only (LSP)` and `[1-9]` single-step selection
+    (`[Y/N/O/L/1-9]`), expanded `[O]` optionals-only mode (`Routing Decider`,
+    `LSP`, `SearXNG`, `Voice`, `Telegram gateway`), removed the auto-skip timeout
+    on LSP prompts, added `A`/`all` pack selection + `rustup` via `winget` /
+    Python `uv` `pylsp` fallback (`deploy/install_lsp_packs.bat`), resolved
+    Windows standard LSP install dirs without engine restart
+    (`infra/lsp_registry.py`, `infra/lsp_client.py`), and added the Step `[8/9]`
+    TTS provider picker (`[W] Underdog Woof` recommended default / `[P] Pocket
+    TTS` / `[B] Both`) in `install.bat`.
 
 ## [1.6.2] - 2026-11-17
 

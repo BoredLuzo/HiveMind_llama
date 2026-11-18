@@ -47,7 +47,7 @@ if not "%~1"=="" goto install_args
 
 call :list_packs
 set "PICK="
-set /p "PICK=Pack numbers (e.g. 1 2 3 - Enter = skip): "
+set /p "PICK=Pack numbers (e.g. 1,2,3 or A = all - Enter = skip): "
 if not defined PICK goto no_pick
 set "PICK=%PICK:,= %"
 goto install_run
@@ -83,6 +83,22 @@ shift
 goto collect_args
 
 :install_run
+REM PATH-PREREQ (2026-11-18): expose Node, Cargo, WinGet Links, LLVM and Go
+REM bins before probing npm/rustup/winget so freshly installed toolchains
+REM work in the same terminal without a reboot or explorer restart.
+set "PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm;%USERPROFILE%\.cargo\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\LLVM\bin;%USERPROFILE%\go\bin;%USERPROFILE%\.local\bin"
+set "EXPANDED_PICK="
+for %%P in (%PICK%) do (
+    if /i "%%P"=="a" (
+        set "EXPANDED_PICK=!EXPANDED_PICK! 1 2 3 4 5 6"
+    ) else if /i "%%P"=="all" (
+        set "EXPANDED_PICK=!EXPANDED_PICK! 1 2 3 4 5 6"
+    ) else (
+        set "EXPANDED_PICK=!EXPANDED_PICK! %%P"
+    )
+)
+if defined EXPANDED_PICK set "PICK=%EXPANDED_PICK%"
+
 set "NPM_OK="
 where npm >nul 2>&1
 if not errorlevel 1 set "NPM_OK=1"
@@ -119,9 +135,21 @@ goto :eof
 
 :pack_1
 echo  --- [1] Python -----------------------------------------------
-if not defined NPM_OK echo   [SKIP] npm not found - install Node.js first. & goto :eof
-call npm install -g pyright
-if errorlevel 1 echo   [WARN] pyright install failed.
+if defined NPM_OK (
+    call npm install -g pyright
+    if not errorlevel 1 goto :eof
+    echo   [WARN] pyright install failed - trying Python-native pylsp via uv.
+) else (
+    echo   [SKIP] npm not found - install Node.js first ^(winget install OpenJS.NodeJS.LTS^).
+)
+if not defined PY goto :eof
+where uv >nul 2>&1
+if errorlevel 1 goto :eof
+if exist ".venv\Scripts\python.exe" (
+    echo   [..] Installing python-lsp-server ^(pylsp^) into .venv via uv ...
+    call uv pip install --python "%PY%" python-lsp-server
+    if errorlevel 1 echo   [WARN] python-lsp-server install failed.
+)
 goto :eof
 
 :pack_2
@@ -150,7 +178,24 @@ goto :eof
 :pack_5
 echo  --- [5] Rust ^(rust-analyzer^) --------------------------------
 where rustup >nul 2>&1
-if errorlevel 1 echo   [SKIP] rustup not found - install Rust first. & goto :eof
+if not errorlevel 1 goto pack_5_have_rustup
+where winget >nul 2>&1
+if errorlevel 1 goto pack_5_skip
+echo   [..] rustup not found - installing Rustlang.Rustup via winget ...
+call winget install --id Rustlang.Rustup -e --silent --accept-package-agreements --accept-source-agreements
+set "PATH=%PATH%;%USERPROFILE%\.cargo\bin"
+where rustup >nul 2>&1
+if not errorlevel 1 goto pack_5_have_rustup
+:pack_5_skip
+echo   [SKIP] rustup not found - install Rust first ^(winget install Rustlang.Rustup^).
+goto :eof
+:pack_5_have_rustup
+set "RUST_TC="
+for /f "usebackq delims=" %%T in (`rustup toolchain list 2^>nul`) do if not defined RUST_TC set "RUST_TC=%%T"
+if not defined RUST_TC (
+    echo   [..] No Rust toolchain configured yet - installing stable ...
+    call rustup default stable
+)
 call rustup component add rust-analyzer
 if errorlevel 1 echo   [WARN] rust-analyzer install failed.
 goto :eof
@@ -173,7 +218,7 @@ REM PATH-REFRESH (2026-11-05): winget/rustup update the machine/user PATH,
 REM but this cmd process still has the old one. Preserve current session PATH too.
 set "OLD_PATH=%PATH%"
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[string][Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [string][Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%P"
-set "PATH=%PATH%;%OLD_PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\LLVM\bin"
+set "PATH=%PATH%;%OLD_PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm;%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\LLVM\bin;%USERPROFILE%\.cargo\bin;%USERPROFILE%\go\bin;%USERPROFILE%\.local\bin"
 REM A server counts as usable only when it completes the LSP handshake and
 REM returns diagnostics - an existing executable is not enough.
 if not defined PY (

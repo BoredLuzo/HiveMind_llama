@@ -333,6 +333,41 @@ def case_install_single_step_8_woof():
         shutil.rmtree(sim, ignore_errors=True)
 
 
+def case_install_lsp_only_and_all():
+    label = "install.bat [L] LSP-only + install_lsp_packs all"
+    sim = Path(tempfile.mkdtemp(prefix="hmsim_lspL_"))
+    try:
+        shutil.copy2(ROOT / "install.bat", sim / "install.bat")
+        (sim / "deploy").mkdir()
+        shutil.copy2(ROOT / "deploy" / "install_lsp_packs.bat",
+                     sim / "deploy" / "install_lsp_packs.bat")
+        ans = sim / "_ans.txt"
+        ans.write_bytes(b"L\r\n")
+        with open(ans, "rb") as fh:
+            r = subprocess.run(
+                ["cmd", "/d", "/c", "install.bat"],
+                cwd=str(sim), stdin=fh, env=build_env(),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=90,
+            )
+        check(f"{label}: [L] reaches LSP picker directly and skips cleanly",
+              "Running language-server setup only [L]" in r.stdout
+              and "Pack numbers (e.g. 1,2,3 or A = all - Enter = skip):" in r.stdout
+              and "Installation finished!" in r.stdout
+              and r.returncode == 0,
+              f"(rc={r.returncode})")
+        assert_no_cmd_crash(r.stdout, r.stderr, label)
+
+        r_all = run_cmd(sim, "deploy\\install_lsp_packs.bat", args=["all"], stdin="")
+        check(f"{label}: 'all' expands to packs 1-6 without Unknown pack",
+              "Installing language-server packs:" in r_all.stdout
+              and "1 2 3 4 5 6" in r_all.stdout
+              and 'Unknown pack "all"' not in r_all.stdout)
+        assert_no_cmd_crash(r_all.stdout, r_all.stderr, label + " all")
+    finally:
+        shutil.rmtree(sim, ignore_errors=True)
+
+
 def main() -> int:
     case_setup_models_paren_path()
     case_setup_models_mkdir_failure()
@@ -344,6 +379,7 @@ def main() -> int:
     case_install_optionals_garbage_voice_pick()
     case_install_single_step_7()
     case_install_single_step_8_woof()
+    case_install_lsp_only_and_all()
     return h.finish("installer_sim")
 
 

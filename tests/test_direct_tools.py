@@ -277,6 +277,48 @@ try:
           {"web_search", "web_fetch", "git_status", "git_commit"} <= _full_on)
     check("direct_research with web+git exposes web_search & git_status (no git_commit)",
           {"web_search", "git_status"} <= _res_on and "git_commit" not in _res_on)
+
+    # -- 7) Capability trail reinjection on multi-turn history ----------------
+    _turn1_msgs = [
+        {"role": "system", "content": "SYS"},
+        {"role": "system", "content": "[SYSTEM DATE REMINDER]"},
+        {"role": "user", "content": "[USER]\nWie wird das Wetter?"},
+    ]
+    _dr._append_direct_capability_trail(
+        _turn1_msgs,
+        direct_tools_active=True,
+        tool_mode="direct",
+        ws_ok=True,
+        git_ok=False,
+        send_file_ok=False,
+    )
+    check("turn 1 without prior assistant history adds no redundant trail",
+          "[SYSTEM TOOLS REMINDER]" not in _turn1_msgs[1]["content"]
+          and "[System note: current active tools" not in _turn1_msgs[-1]["content"])
+
+    _turn2_msgs = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "Wie wird das Wetter?"},
+        {"role": "assistant", "content": "Ich habe keinen Zugriff auf die Websuche."},
+        {"role": "system", "content": "[SYSTEM DATE REMINDER]"},
+        {"role": "user", "content": "[USER]\nSuche jetzt bitte nochmal."},
+    ]
+    _dr._append_direct_capability_trail(
+        _turn2_msgs,
+        direct_tools_active=True,
+        tool_mode="direct_research",
+        ws_ok=True,
+        git_ok=False,
+        send_file_ok=False,
+    )
+    check("turn 2+ injects live enabled websearch + upgraded tier into trailing system & user turn",
+          "[SYSTEM TOOLS REMINDER]" in _turn2_msgs[-2]["content"]
+          and "web_search / web_fetch" in _turn2_msgs[-2]["content"]
+          and "IS ENABLED" in _turn2_msgs[-2]["content"]
+          and "read_file" in _turn2_msgs[-2]["content"]
+          and "[System note: current active tools for this turn =" in _turn2_msgs[-1]["content"]
+          and "web_search / web_fetch" in _turn2_msgs[-1]["content"]
+          and "Ignore earlier history" in _turn2_msgs[-1]["content"])
 finally:
     _lc.manager = _orig_mgr
     _tl.ToolLoop = _orig_loop

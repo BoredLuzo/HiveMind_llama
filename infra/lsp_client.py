@@ -74,8 +74,21 @@ def _lsp_child_env() -> dict:
     # ENV-NO-PREFIX (audit 2026-11-03): the old prefix rule forwarded every
     # RUST*/CARGO*/GO* variable, including CARGO_REGISTRY_TOKEN and GOAUTH,
     # to language servers that execute untrusted workspace code.
-    return {k: v for k, v in os.environ.items()
-            if k.upper() in _LSP_ENV_ALLOW}
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() in _LSP_ENV_ALLOW}
+    if sys.platform == "win32":
+        from infra.lsp_registry import windows_extra_bin_dirs
+        extra = windows_extra_bin_dirs()
+        if extra:
+            cur = env.get("PATH", "")
+            parts = [p for p in cur.split(os.pathsep) if p]
+            have = {p.lower() for p in parts}
+            for d in extra:
+                if d.lower() not in have:
+                    parts.append(d)
+                    have.add(d.lower())
+            env["PATH"] = os.pathsep.join(parts)
+    return env
 
 
 def read_workspace_settings(workspace: Path) -> dict:
