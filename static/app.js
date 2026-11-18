@@ -1928,6 +1928,7 @@ async function _voiceCardRefresh() {
     if (_voicePollTimer) { clearInterval(_voicePollTimer); _voicePollTimer = null; }
     return;
   }
+  if (_voicePollTimer && typeof document !== 'undefined' && document.hidden) return;
   var line = document.getElementById('stt-status-line');
   var dlRow = document.getElementById('stt-download-row');
   var btn = document.getElementById('stt-download-btn');
@@ -4891,19 +4892,20 @@ function startAgent(name, model, role, isRepair) {
   _lh.id = 'lh-' + tid;
   _lh.style.cssText = 'font-family:IBM Plex Mono,monospace;font-size:9px;color:#20b0a0;margin-left:8px;display:none';
   _lh.textContent = '⟳ Loading... 0s';
+  hdr.appendChild(_lh);
   const _lt = setTimeout(function() {
-  const h = document.getElementById('lh-' + tid);
+    const h = document.getElementById('lh-' + tid);
     if (!h) return;
     h.style.display = 'inline';
     var _sec = 0;
     h._loadTimer = setInterval(function() {
-        _sec++;
-        if (!document.getElementById('lh-' + tid)) return;
-        h.textContent = '⟳ Loading... ' + _sec + 's';
-        // color flips to amber after 20s → warning
-        h.style.color = _sec > 20 ? '#e09030' : '#20b0a0';
+      _sec++;
+      if (!document.getElementById('lh-' + tid)) { clearInterval(h._loadTimer); h._loadTimer = null; return; }
+      h.textContent = '⟳ Loading... ' + _sec + 's';
+      // color flips to amber after 20s → warning
+      h.style.color = _sec > 20 ? '#e09030' : '#20b0a0';
     }, 1000);
-}, 2000);  // show earlier: after 2s instead of 8s
+  }, 2000);  // show earlier: after 2s instead of 8s
 
   const body = document.createElement('div'); body.className = 'abody live'; body.id = 'ab-' + tid;
   // Think-block: collapsible, injected before body; shown live while model thinks
@@ -4958,7 +4960,7 @@ function startDuoAgent(role, label, model, roundInfo) {
     var _sec = 0;
     h._loadTimer = setInterval(function() {
       _sec++;
-      if (!document.getElementById('lh-' + tid)) return;
+      if (!document.getElementById('lh-' + tid)) { clearInterval(h._loadTimer); h._loadTimer = null; return; }
       h.textContent = '⟳ Loading... ' + _sec + 's';
       h.style.color = _sec > 20 ? '#e09030' : '#7a8fa8';
     }, 1000);
@@ -6259,6 +6261,7 @@ function _apAutoBox(card, d) {
     _stop();
     _tickLbl(_left);
     card._apAutoInt = setInterval(function() {
+      if (!card.isConnected) { _stop(); return; }
       _left--;
       if (_left <= 0) {
         _stop();
@@ -6568,7 +6571,10 @@ function _apEnsureBottomPin() {
     var _pend = ['approval-request-card', 'ask-user-card']
       .map(function(id) { return document.getElementById(id); })
       .filter(Boolean);
-    if (!_pend.length) return;
+    if (!_pend.length) {
+      if (_apPinObserver) { _apPinObserver.disconnect(); _apPinObserver = null; }
+      return;
+    }
     var _tail = [].slice.call(_chat.children, -_pend.length);
     var _inPlace = _tail.length === _pend.length &&
       _pend.every(function(_c, i) { return _tail[i] === _c; });
@@ -6589,7 +6595,7 @@ function _apEnsureBottomPin() {
 // re-rendert und die Entscheidung erreicht das wartende Gate.
 try { S.currentRunId = S.currentRunId || sessionStorage.getItem('hm_run_id') || ''; } catch (e) {}
 setInterval(function() {
-  if (!S.currentRunId) return;
+  if (document.hidden || !S.currentRunId) return;
   try { sessionStorage.setItem('hm_run_id', S.currentRunId); } catch (e) {}
   fetch('/approval/pending/' + encodeURIComponent(S.currentRunId))
     .then(function(r) { return r.json(); })
@@ -6609,7 +6615,7 @@ setInterval(function() {
           _renderApprovalCard({ run_id: S.currentRunId, tool: d.tool, preview: d.preview, decision_id: d.decision_id });
         }
       } else {
-        if (existing) existing.remove();
+        if (existing) { if (existing._apAutoInt) { clearInterval(existing._apAutoInt); existing._apAutoInt = null; } existing.remove(); }
         if (existingAsk) existingAsk.remove();
       }
     }).catch(function() {});
@@ -7417,6 +7423,7 @@ async function sendMsg() {
     S.streaming = false;
     _cleanupLoadTimers();
     S.currentRunId = null;
+    try { sessionStorage.removeItem('hm_run_id'); } catch (e) {}
     document.getElementById('send').disabled = false;
     _updateSendState();
     document.getElementById('h-dot').className = 'on';
@@ -7516,6 +7523,7 @@ function _journalStopTail() {
   // queued forever. Only clear it when this tail owned the state.
   if (S._journalTailing) S.streaming = false;
   S._journalTailing = null;
+  if (window._journalTailIv) { clearInterval(window._journalTailIv); window._journalTailIv = null; }
 }
 
 function _journalStartTail(runId) {
@@ -7523,6 +7531,7 @@ function _journalStartTail(runId) {
   S._journalTailing = runId;
   var _iv = setInterval(function() {
     if (S._journalTailing !== runId) { clearInterval(_iv); return; }
+    if (document.hidden) return;
     fetch('/run/journal?run_id=' + encodeURIComponent(runId) + '&after=' + (S._sseFrameSeq || 0))
       .then(function(r) { return r.json(); })
       .then(function(j) {
@@ -7537,6 +7546,7 @@ function _journalStartTail(runId) {
       })
       .catch(function() {});
   }, 2000);
+  window._journalTailIv = _iv;
 }
 
 function _journalInitAttach() {
@@ -7582,7 +7592,7 @@ setTimeout(_journalInitAttach, 1500);
 // LIVE MIRROR (2026-10-06, owner): a run started on the PHONE (or another
 // tab) while this UI sits idle now appears here too - poll the journal
 // every 10 s and attach to any new active run.
-setInterval(_journalInitAttach, 10000);
+setInterval(function() { if (!document.hidden) _journalInitAttach(); }, 10000);
 
 function handleEvent(d) {
   // RATE FIX v2 (2026-10-07, user feedback: git fields must not reset on save):
@@ -9271,6 +9281,7 @@ function handleEvent(d) {
   }
   else if (d.type === 'done') {
     S._sawDoneEvent = true;
+    try { sessionStorage.removeItem('hm_run_id'); } catch (e) {}
     _cleanupLoadTimers();
     _perfOnDone(d);
     setPauseBtnState('idle');
@@ -9282,7 +9293,10 @@ function handleEvent(d) {
     // up (abort paths that bypass agent_resumed, watchdog stop). Streaming
     // and poll are gone at this point, so clear it here.
     var _apDone = document.getElementById('approval-request-card');
-    if (_apDone) _apDone.remove();
+    if (_apDone) {
+      if (_apDone._apAutoInt) { clearInterval(_apDone._apAutoInt); _apDone._apAutoInt = null; }
+      _apDone.remove();
+    }
     var _askDone = document.getElementById('ask-user-card');
     if (_askDone) _askDone.remove();
     // Close any still-open coder bubble (no-critic runs skip duo_critic event)
@@ -13876,8 +13890,24 @@ function setVramRefreshInterval(ms) {
   _vramRefreshInterval = Math.max(2000, parseInt(ms) || 8000);
 }
 
-async function refreshVram() {
+var _vramTimerId = null;
+var _vramVisWired = false;
+
+async function refreshVram(fromTimer) {
   if (_vramPending) return;  // PERF: no stacking while a fetch is running
+  if (!_vramVisWired && typeof document !== 'undefined' && document.addEventListener) {
+    _vramVisWired = true;
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && _vramOpen && !_vramPending) refreshVram();
+    });
+  }
+  if (fromTimer && typeof document !== 'undefined' && document.hidden) {
+    if (_vramOpen) {
+      if (_vramTimerId) clearTimeout(_vramTimerId);
+      _vramTimerId = setTimeout(function() { refreshVram(true); }, 10000);
+    }
+    return;
+  }
   _vramPending = true;
   if (Date.now() > _vramFastUntil) _vramFastMode = false;
 
@@ -14092,9 +14122,10 @@ async function refreshVram() {
     }
   } finally {
     _vramPending = false;
+    if (_vramTimerId) { clearTimeout(_vramTimerId); _vramTimerId = null; }
     if (_vramOpen) {
       var _ms = _vramFastMode ? Math.min(_vramRefreshInterval, 2000) : _vramRefreshInterval;
-      setTimeout(refreshVram, _ms);
+      _vramTimerId = setTimeout(function() { refreshVram(true); }, _ms);
     }
   }
 }
@@ -15316,7 +15347,12 @@ async function loadGitConfig(s) {
       if (n >= 3) { clearInterval(iv); supBusy = false; supStop.disabled = false; }
     }, 500);
   };
-  if (supStart || supStop) { gatewaySupervisorTick(); setInterval(gatewaySupervisorTick, 5000); }
+  window.refreshTgSupStatus = gatewaySupervisorTick;
+  if (supStart || supStop) {
+    gatewaySupervisorTick();
+    if (window._tgSupIv) { clearInterval(window._tgSupIv); window._tgSupIv = null; }
+    window._tgSupIv = setInterval(function() { if (!document.hidden) gatewaySupervisorTick(); }, 5000);
+  }
   var emailInp = document.getElementById('git-email');
   if (emailInp) emailInp.value = s.git_email || '';
   var prefixInp = document.getElementById('git-commit-prefix');

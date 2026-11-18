@@ -1234,18 +1234,7 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
             # (coder-load 3/3 failed -> runtime_load_error, run dead).
             # Guarded like the KV flags below: the flag must exist in the
             # binary's --help, otherwise the server starts undrafted.
-            _help_txt = ""
-            try:
-                # HELP-OFF-LOOP (audit 2026-11-03): this probe blocked
-                # the event loop up to 20 s on every MTP load.
-                _help_txt = (await asyncio.to_thread(
-                    subprocess.run, [cmd[0], "--help"],
-                    capture_output=True, text=True, timeout=20,
-                    encoding="utf-8", errors="replace")).stdout
-            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                    AttributeError, IndexError, subprocess.TimeoutExpired):
-                _help_txt = ""
-            if "--spec-draft-n-max" in _help_txt:
+            if await _help_supports("--spec-draft-n-max"):
                 cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
                 logger.info(f"--spec-type draft-mtp (n-max 2) enabled for {model} (registry mtp)")
             else:

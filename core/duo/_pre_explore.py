@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio, hashlib, json, logging, re, time
 from pathlib import Path
-import httpx
 
 logger = logging.getLogger("hivemind.duo")
 
@@ -2073,32 +2072,28 @@ async def _phase_pre_explore(ctx, state: dict):
                                 n_parallel=2)
 
 
-                            async with httpx.AsyncClient(
-                                limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
-                                timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=5.0),
-                            ) as _xexplore_client_fb:
-                                if _fb_port is None or _fb_port == 0:
-                                    _explore_error = f"Pre-explore: no valid port for {_fb_model}"
-                                    logger.warning("[PRE-EXPLORE-FALLBACK] %s", _explore_error)
-                                    _explore_ctx = ""
-                                    yield await ctx.emit({"type": "status", "content": f"⛔ Pre-Explore: model {_fb_model.split(':')[0]} has no valid port — skipped."})
-                                    return
-                                _explore_ctx, _, _, _xmsgs = await run_pre_explore(
-                                    model           = _fb_model,
-                                    port            = _fb_port,
-                                    partitions      = _partitions,
-                                    workspace       = _ws_str,
-                                    tree_ctx        = _tree_ctx,
-                                    user_input      = ctx.user_input,
-                                    worker_slots    = None,
-                                    parallel        = False,
-                                    max_tool_rounds = _xmax,
-                                    pctx            = int(_xopts.get("num_ctx", 0)),
-                                    aborted_fn      = ctx.aborted,
-                                    emit_fn         = _xemit_bridge,
-                                    thinking_override = _x_thinking_override,
-                                    llm_read_timeout = float(_xopts.get("_llm_read_timeout_s", 300.0) or 300.0),
-                                )
+                            if _fb_port is None or _fb_port == 0:
+                                _explore_error = f"Pre-explore: no valid port for {_fb_model}"
+                                logger.warning("[PRE-EXPLORE-FALLBACK] %s", _explore_error)
+                                _explore_ctx = ""
+                                yield await ctx.emit({"type": "status", "content": f"⛔ Pre-Explore: model {_fb_model.split(':')[0]} has no valid port — skipped."})
+                                return
+                            _explore_ctx, _, _, _xmsgs = await run_pre_explore(
+                                model           = _fb_model,
+                                port            = _fb_port,
+                                partitions      = _partitions,
+                                workspace       = _ws_str,
+                                tree_ctx        = _tree_ctx,
+                                user_input      = ctx.user_input,
+                                worker_slots    = None,
+                                parallel        = False,
+                                max_tool_rounds = _xmax,
+                                pctx            = int(_xopts.get("num_ctx", 0)),
+                                aborted_fn      = ctx.aborted,
+                                emit_fn         = _xemit_bridge,
+                                thinking_override = _x_thinking_override,
+                                llm_read_timeout = float(_xopts.get("_llm_read_timeout_s", 300.0) or 300.0),
+                            )
                     _xq_open = False
                     _parallel_explore_ran = True
 

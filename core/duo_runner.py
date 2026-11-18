@@ -1460,6 +1460,9 @@ async def _duo_exec_round_task(
         # nudge; the executor state is rebuilt every round, these dicts are not.
         _reads_seen = state.setdefault("_reads_seen", {})
         _freshness_warned = state.setdefault("_freshness_warned", {})
+        _wide_read_streak = state.setdefault("_wide_read_streak", [0])
+        _last_test_outcome = state.setdefault("_last_test_outcome", [None])
+        _superseded_paths = state.setdefault("_superseded_paths", [])
         _exec_task = asyncio.create_task(execute_tool_round(
             tool_calls=_dr_tcs,
             dtool_msgs=_dtool_msgs,
@@ -1492,11 +1495,14 @@ async def _duo_exec_round_task(
                 total_tool_errors=_total_tool_errors_ref,
                 tc_consecutive=_tc_consecutive,
                 at_nosuite_nudged=_at_nosuite_nudged,
+                superseded_paths=_superseded_paths,
                 consecutive_reads=_consecutive_reads,
                 last_read_path=_last_read_path,
                 read_ladder_fired=_read_ladder_fired,
+                wide_read_streak=_wide_read_streak,
                 ws_budget_streak=_ws_budget_streak,
                 ws_disabled=_ws_disabled,
+                last_test_outcome=_last_test_outcome,
                 allow_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
             ),
             tool_mode=_tool_mode,

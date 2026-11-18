@@ -281,7 +281,7 @@ def plan_partial_cut_index(
     # per-message accumulation is a char heuristic — scale the accumulation
     # so the cut lands where the real tokens say it should.
     _ratio = max(0.1, min(4.0, float(token_ratio or 1.0)))
-    to_remove = int((total - target) * _ratio)
+    to_remove = int(total - target)
     acc = 0
     condensable_before_cut = 0
     for i, m in enumerate(msgs):

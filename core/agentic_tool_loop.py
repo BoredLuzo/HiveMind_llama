@@ -14,6 +14,7 @@ from core.llm_transport import (
     build_chat_url as _t_chat_url,
     disable_thinking_in_payload as _t_disable_thinking,
     extract_response_error_text as _t_err_text,
+    get_port_lock as _t_port_lock,
     iter_sse_json as _t_iter_sse,
     normalize_chat_payload as _t_norm_payload,
     parse_timings as _t_parse_timings,
@@ -288,7 +289,7 @@ class AgenticToolLoop(ToolLoop):
                 _ttfb_ms = None
                 _t_last_ms = None
                 _dr_prompt_timings = None
-                async with self._client.stream(
+                async with _t_port_lock(result["dport"]), self._client.stream(
                     "POST", _t_chat_url(result["dport"]),
                     json=payload, timeout=_timeout,
                 ) as _resp:
@@ -817,7 +818,25 @@ class AgenticToolLoop(ToolLoop):
                         except (OSError, ValueError) as _diag_exc:
                             logger.debug("[LONG-RUN-DIAG] slot log read: %s",
                                          _diag_exc)
-                        _tel.append_round({
+                        _tls = payload.get("tools") or []
+                        _tls_sig = (
+                            len(_tls),
+                            tuple(
+                                ((_t.get("function") or {}).get("name", ""),
+                                 len(str((_t.get("function") or {}).get("description", "") or "")))
+                                for _t in _tls if isinstance(_t, dict)
+                            ),
+                        )
+                        _tsc = getattr(self.round_state, "_schema_chars_cache", None)
+                        if _tsc and _tsc[0] == _tls_sig:
+                            _tools_schema_chars = _tsc[1]
+                        else:
+                            _tools_schema_chars = sum(len(json.dumps(_t)) for _t in _tls) or None
+                            try:
+                                setattr(self.round_state, "_schema_chars_cache", (_tls_sig, _tools_schema_chars))
+                            except (AttributeError, TypeError):
+                                pass
+                        await asyncio.to_thread(_tel.append_round, {
                             "phase": "coder",
                             "model": getattr(self.round_state, "exec_model", None),
                             "max_tokens": getattr(self.round_state, "max_tokens", None),
@@ -829,9 +848,7 @@ class AgenticToolLoop(ToolLoop):
                                 (_dr_usage_final or {}).get("cached_tokens") == 0
                                 and int((_dr_usage_final or {}).get("prompt_tokens") or 0) > 4000
                             ) or None,
-                            "tools_schema_chars": sum(
-                                len(json.dumps(_t)) for _t in (payload.get("tools") or [])
-                            ) or None,
+                            "tools_schema_chars": _tools_schema_chars,
                             "prompt_n": (_dr_prompt_timings or {}).get("prompt_n"),
                             "prompt_ms": (_dr_prompt_timings or {}).get("prompt_ms"),
                             "prompt_tps": (_dr_prompt_timings or {}).get("prompt_per_second"),

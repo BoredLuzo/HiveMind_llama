@@ -1566,7 +1566,7 @@ class RunBridge:
             out["duo_coder_ctx_normal"] = min(int(cctx), 131072)
         tools = self.state.data.get("tools")
         tier = str(self.state.data.get("direct_tools_tier") or "").strip().lower()
-        if tier in ("off", "websearch", "readonly", "python", "full"):
+        if tier in ("off", "websearch", "readonly", "mcp", "python", "full"):
             tier = "readonly" if tier in ("websearch", "readonly") else tier
             out["direct_tools_tier"] = tier
             out["direct_tools_enabled"] = tier != "off"
@@ -2087,6 +2087,11 @@ class RunBridge:
             elif ev.get("type") == "agent":
                 if m["answer_parts"]:
                     m["answer_parts"] = []
+                # R4: phase switches (Planner / Code / Answer) as own lines
+                _ph = str(ev.get("content") or "").strip()
+                if _ph and _ph != last_phase:
+                    await self.ms.send_message(f"→ {_ph}")
+                    last_phase = _ph
             elif ev.get("type") == "steer":
                 # STEER CARD (2026-10-06): relay the takeover run's steer
                 # pickups as their own phone message.
@@ -2096,21 +2101,28 @@ class RunBridge:
                     if ev.get("images"):
                         _note += f" (+{ev.get('images')} img)"
                     await self.ms.send_message(_note)
-            elif ev.get("type") == "agent":
-                # R4: phase switches (Planner / Code / Answer) as own lines
-                _ph = str(ev.get("content") or "").strip()
-                if _ph and _ph != last_phase:
-                    await self.ms.send_message(f"→ {_ph}")
-                    last_phase = _ph
             elif ev.get("type") == "planner_result":
-                # R4: the plan itself (the most informative moment of a duo
-                # run) - compact single-line preview
-                _plan = str(ev.get("content") or "")
-                if not _plan and isinstance(ev.get("chunks"), list):
-                    _plan = "".join(str(c) for c in ev["chunks"])
-                _plan = " ".join(_plan.split())[:350]
+                # Combine structured chunks preview with content/thinking fallbacks
+                _pch = ev.get("chunks") or []
+                _plan = ""
+                if isinstance(_pch, list) and _pch:
+                    _titles = [
+                        str((c.get("title") or c.get("raw") or "")).strip()
+                        for c in _pch if isinstance(c, dict)
+                    ]
+                    _titles = [t for t in _titles if t]
+                    if _titles:
+                        _plan = "Plan (" + str(len(_titles)) + " steps): " + " | ".join(_titles)
+                if not _plan:
+                    _plan = str(ev.get("content") or "")
+                    if not _plan and isinstance(_pch, list):
+                        _plan = "".join(str(c) for c in _pch)
+                if not _plan:
+                    _plan = str(ev.get("thinking") or "").strip()
+                _plan = " ".join(_plan.split())
                 if _plan:
-                    await self.ms.send_message(f"🧠 Plan: {_plan}")
+                    await self.ms.send_message(
+                        "🧠 " + _plan[:600] + ("…" if len(_plan) > 600 else ""))
             elif ev.get("type") == "duo_round":
                 _rn = ev.get("n")
                 _rt = ev.get("total")
@@ -2125,24 +2137,6 @@ class RunBridge:
                 _lbl = str(ev.get("label") or "").strip()
                 if _lbl:
                     await self.ms.send_message("🤖 " + _lbl[:200])
-            elif ev.get("type") == "planner_result":
-                # PLANNER ON THE PHONE (2026-10-07, user feedback: the plan did not reach the phone again): the takeover delta loop never had this
-                # branch at all - the finished plan never reached the phone.
-                _pch = ev.get("chunks") or []
-                _plan = ""
-                if isinstance(_pch, list) and _pch:
-                    _titles = [str((c.get("title") or c.get("raw") or "")).strip()
-                               for c in _pch if isinstance(c, dict)]
-                    _titles = [t for t in _titles if t]
-                    if _titles:
-                        _plan = ("Plan (" + str(len(_titles)) + " steps): "
-                                 + " | ".join(_titles))
-                if not _plan:
-                    _plan = str(ev.get("thinking") or "").strip()
-                _plan = " ".join(_plan.split())
-                if _plan:
-                    await self.ms.send_message(
-                        "🧠 " + _plan[:600] + ("…" if len(_plan) > 600 else ""))
             elif ev.get("type") == "ctx_meter":
                 # CONTEXT/COMPRESSION VISIBILITY (user feedback: the plan did not reach the phone again): milestone lines at 50/75/90 % (once each) and
                 # a one-shot note while the engine compresses context.

@@ -1948,7 +1948,7 @@ async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_s
         try:
             async for _chunk in run_stream(
                 _user_msg, [], "simple", 1, None,
-                constraint_mode=True, chat_id=None,
+                constraint_mode=True, force_complexity="simple", chat_id=None,
             ):
                 _s = _chunk if isinstance(_chunk, str) else ""
                 if not _s.startswith("data: "):
@@ -2552,6 +2552,7 @@ async def gateway_stop():
              "error": "pid was recycled by another process - refusing, status reset"},
             status_code=409)
     if _verdict != "py":
+        _sup.clear()
         return JSONResponse(
             {"ok": False, "error": "gateway process not found - status reset"},
             status_code=409)

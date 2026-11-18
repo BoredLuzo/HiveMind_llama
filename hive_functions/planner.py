@@ -40,7 +40,7 @@ def _strip_toolcall_markup(text: str) -> str:
     if not text:
         return text
     cleaned = _RE_PLAN_TOOLCALL.sub(" ", text)
-    cleaned = re.sub(r"[" + chr(10) + "]{3,}", "[" + chr(10) + chr(10) + "]", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 # ── PLANNER-OVERRUN-GUARD (2026-09-02) ─────────────────────────────────────────
 # Some models (observed live: LFM2.5 in duo-agentic) keep generating past the

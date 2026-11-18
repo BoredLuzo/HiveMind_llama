@@ -389,16 +389,18 @@ def partition_tree(
     _content_fingerprint = ""
     if workspace_root:
         try:
-            _ws_path = Path(workspace_root)
             _mtimes = []
-            for _f in _ws_path.rglob("*"):
-                if _f.is_file() and not any(skip in _f.parts for skip in _SKIP_DIRS):
+            for _root, _dirs, _files in os.walk(str(workspace_root)):
+                _dirs[:] = [d for d in _dirs if d not in _SKIP_DIRS]
+                for _fname in _files:
                     try:
-                        _mtimes.append(int(_f.stat().st_mtime))
+                        _mtimes.append(int(os.stat(os.path.join(_root, _fname)).st_mtime))
                     except OSError:
                         pass
                     if len(_mtimes) >= 50:
                         break
+                if len(_mtimes) >= 50:
+                    break
             if _mtimes:
                 _content_fingerprint = hashlib.sha1(
                     ",".join(str(m) for m in sorted(_mtimes)).encode()

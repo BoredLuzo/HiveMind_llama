@@ -78,6 +78,8 @@ async def _explore_partition(
     msg_cap: int,
     aborted_fn,
     emit_fn,
+    task: str = "",
+    max_tool_rounds: int = 0,
     max_unique_reads: int = 0,
     thinking_override: bool | None = None,
     llm_read_timeout: float = 300.0,
@@ -163,7 +165,7 @@ async def _explore_partition(
                 pass
 
     # ── Fresh context ─────────────────────────────────────────────────────────
-    sys_p = build_partition_explore_prompt(label, workspace, paths, tree_ctx)
+    sys_p = build_partition_explore_prompt(label, workspace, paths, tree_ctx, task=task)
     msgs: list[dict] = [{"role": "system", "content": sys_p}]
 
     path_list_str = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(paths))
@@ -236,8 +238,9 @@ async def _explore_partition(
     _error_nudge_sent = False  # Bug 8 guard: max 1 error-nudge per worker
     _prose_only_rounds = 0     # Bug 9: rounds without tool calls (prose-only)
     read_n   = 0
+    read_calls = 0
     rounds   = 0
-    max_r    = max(8, len(paths) * 2 + 4)
+    max_r    = max(8, int(max_tool_rounds)) if int(max_tool_rounds or 0) > 0 else max(8, len(paths) * 2 + 4)
     # Running char total — updated incrementally instead of recomputed every round
     _total_chars = sum(len(m.get("content") or "") for m in msgs)
 
@@ -282,6 +285,7 @@ async def _explore_partition(
                 tn = tc.get("name", "")
                 ta = tc.get("args") or {}
                 if tn == "read_file":
+                    read_calls += 1
                     fp = str(ta.get("path", "")).strip()
                     # M5 FIX: /workspace/<project>/ prefix normalization (llama.cpp context mount)
                     _ws_base = Path(workspace).name
@@ -1001,6 +1005,8 @@ async def _explore_partition(
         "summary":     "\n".join(lines),
         "contract":    contract,
         "files_read":  read_n,
+        "n_files_read": read_n,
+        "read_calls":  read_calls,
         "files_total": len(paths),
         "messages":    _coder_msgs,   # raw chat messages for coder bridge
     }
@@ -1131,6 +1137,8 @@ async def _worker_drain(
             msg_cap=14,
             aborted_fn=aborted_fn,
             emit_fn=emit_fn,
+            task=task,
+            max_tool_rounds=max_tool_rounds,
             max_unique_reads=max_unique_reads,
             thinking_override=thinking_override,
             llm_read_timeout=llm_read_timeout,

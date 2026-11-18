@@ -444,6 +444,7 @@ SUITES = [
     ("installer_updater_1_6_2",    "tests/test_installer_updater_1_6_2.py",    45),
     ("dflash_and_recovery_fixes",  "tests/test_dflash_and_recovery_fixes.py",  30),
     ("catalog_tiers_and_wiring",   "tests/test_catalog_tiers_and_wiring.py",   30),
+    ("audit_1_6_3_fixes",          "tests/test_audit_1_6_3_fixes.py",          30),
 
 ]
 

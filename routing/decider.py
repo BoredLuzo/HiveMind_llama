@@ -628,7 +628,7 @@ async def decide_async(settings: dict, text: str, *, forced_complexity: str | No
         return decide_from_signals(settings, text, forced_complexity=_forced)
 
     decider_mode = _mode_from(settings, "routing_decider")
-    planner_goal = _planner_from(settings) in ("decider", "auto")
+    planner_goal = _planner_from(settings) == "decider"
     enc_dec: Decision | None = None
 
     if decider_mode != "off":

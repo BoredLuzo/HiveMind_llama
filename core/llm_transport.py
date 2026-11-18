@@ -25,6 +25,44 @@ OVERFLOW_ERROR_MARKERS = (
 )
 _TRANSIENT_HTTP_STATUSES = frozenset((408, 429, 500, 502, 503, 504))
 _HTTP_SHORT_CAP_STATUSES = frozenset((500, 502, 504))
+_ORIG_ASYNC_CLIENT = httpx.AsyncClient
+
+_port_locks: dict[int, asyncio.Lock] = {}
+_port_locks_loop: asyncio.AbstractEventLoop | None = None
+_shared_local_client: httpx.AsyncClient | None = None
+_shared_local_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def get_port_lock(port: int) -> asyncio.Lock:
+    """Return an asyncio.Lock serializing llama-server requests on `port` (--parallel 1)."""
+    global _port_locks_loop
+    loop = asyncio.get_running_loop()
+    if loop is not _port_locks_loop:
+        _port_locks.clear()
+        _port_locks_loop = loop
+    key = int(port or 0)
+    lock = _port_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _port_locks[key] = lock
+    return lock
+
+
+def get_shared_local_client() -> httpx.AsyncClient:
+    """Return a loop-scoped pooled httpx.AsyncClient for local llama-server calls."""
+    global _shared_local_client, _shared_local_client_loop
+    loop = asyncio.get_running_loop()
+    if (
+        _shared_local_client is None
+        or getattr(_shared_local_client, "is_closed", False)
+        or loop is not _shared_local_client_loop
+    ):
+        _shared_local_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
+        )
+        _shared_local_client_loop = loop
+    return _shared_local_client
 
 
 def is_context_overflow_body(body: str) -> bool:
@@ -357,7 +395,8 @@ async def post_chat_json(
         for attempt in range(eff_attempts):
             t0 = time.monotonic()
             try:
-                resp = await http_client.post(url, json=send_payload, timeout=eff_timeout)
+                async with get_port_lock(port):
+                    resp = await http_client.post(url, json=send_payload, timeout=eff_timeout)
                 last_status = resp.status_code
                 last_body = resp.text[:2000] if resp.status_code >= 400 else ""
                 if resp.status_code in retry_statuses and attempt < eff_attempts - 1:
@@ -420,8 +459,10 @@ async def post_chat_json(
 
     if client is not None:
         return await _execute(client)
-    async with httpx.AsyncClient(timeout=eff_timeout) as owned_client:
-        return await _execute(owned_client)
+    if httpx.AsyncClient is not _ORIG_ASYNC_CLIENT:
+        async with httpx.AsyncClient(timeout=eff_timeout) as owned_client:
+            return await _execute(owned_client)
+    return await _execute(get_shared_local_client())
 
 
 async def stream_chat_chunks(
@@ -444,25 +485,29 @@ async def stream_chat_chunks(
     async def _open_and_yield(http_client: httpx.AsyncClient) -> AsyncIterator[dict]:
         for attempt in range(eff_attempts):
             partial = False
+            retry_delay: float | None = None
             try:
-                async with http_client.stream("POST", url, json=send_payload, timeout=eff_timeout) as resp:
+                async with get_port_lock(port), http_client.stream("POST", url, json=send_payload, timeout=eff_timeout) as resp:
                     if resp.status_code >= 400:
                         err_body = await extract_response_error_text(resp, limit=2000)
                         if should_retry_http_status(resp.status_code, err_body, attempt, eff_attempts):
-                            delay = retry_backoff(attempt, resp.status_code)
+                            retry_delay = retry_backoff(attempt, resp.status_code)
                             _log.debug(
                                 "[%s] retryable stream HTTP %d (attempt %d/%d) — sleeping %.2fs",
-                                log_label, resp.status_code, attempt + 1, eff_attempts, delay,
+                                log_label, resp.status_code, attempt + 1, eff_attempts, retry_delay,
                             )
-                            await asyncio.sleep(delay)
-                            continue
-                        raise RuntimeError(
-                            f"{log_label} HTTP {resp.status_code}: {err_body[:200]}"
-                        )
-                    async for chunk in iter_sse_json(resp):
-                        partial = True
-                        yield chunk
-                    return
+                        else:
+                            raise RuntimeError(
+                                f"{log_label} HTTP {resp.status_code}: {err_body[:200]}"
+                            )
+                    else:
+                        async for chunk in iter_sse_json(resp):
+                            partial = True
+                            yield chunk
+                        return
+                if retry_delay is not None:
+                    await asyncio.sleep(retry_delay)
+                    continue
             except httpx.ConnectError as exc:
                 if partial or attempt >= eff_attempts - 1:
                     raise
@@ -480,9 +525,13 @@ async def stream_chat_chunks(
         async for chunk in _open_and_yield(client):
             yield chunk
         return
-    async with httpx.AsyncClient(timeout=eff_timeout) as owned_client:
-        async for chunk in _open_and_yield(owned_client):
-            yield chunk
+    if httpx.AsyncClient is not _ORIG_ASYNC_CLIENT:
+        async with httpx.AsyncClient(timeout=eff_timeout) as owned_client:
+            async for chunk in _open_and_yield(owned_client):
+                yield chunk
+        return
+    async for chunk in _open_and_yield(get_shared_local_client()):
+        yield chunk
 
 
 def _record_tool_loop_usage(loop_obj: Any, usage: dict | None) -> None:
@@ -611,7 +660,7 @@ async def iter_tool_loop_post(
     for attempt in range(max(1, int(cfg.max_post_attempts or 1))):
         partial_stream = False
         try:
-            async with loop_obj._client.stream("POST", url, json=send_payload, timeout=timeout) as resp:
+            async with get_port_lock(port), loop_obj._client.stream("POST", url, json=send_payload, timeout=timeout) as resp:
                 if resp.status_code >= 400:
                     err_events: list[dict] = []
                     action, send_payload = await _handle_tool_loop_http_error(

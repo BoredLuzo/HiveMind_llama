@@ -530,9 +530,6 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _no_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"noop:{_no_path}") >= 3:
-            # TOOL-MSG-ALWAYS (2026-09-13): replacing _dresult here without
-            # appending left the assistant tool_call dangling in history
-            # (API 400 risk). Append first, then swap in the escalation text.
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 f"[SYSTEM] edit_file produced no change on '{_no_path}' 3x. "
@@ -540,6 +537,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                 f"Call read_file('{_no_path}') to see the current content, then "
                 "pass a different new_text containing the actual change."
             )
+            _append_tool_footer(dtool_msgs, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -560,6 +558,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                 "can achieve the same result.\n\n"
                 f"Last result: {_dresult[:600]}"
             )
+            _append_tool_footer(dtool_msgs, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -580,7 +579,9 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                 "(read_file/edit_file), quote paths containing spaces, "
                 "or run a small python -c check before continuing.\n\n"
                 + f"Last output: {_dresult[:300]}" + ('...' if len(_dresult) > 300 else '')
+                + "\n[Error: RUN_BASH_NONZERO]"
             )
+            _append_tool_footer(dtool_msgs, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -598,6 +599,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                 "are blocked for security reasons. Use read_file / edit_file "
                 "or run inline code inside the workspace via python -c as an alternative."
             )
+            _append_tool_footer(dtool_msgs, _dresult)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -644,6 +646,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
 
     elif _tool_error_has_code(_dresult, "WEBSEARCH_UNAVAILABLE", "web_search") or \
          _tool_error_has_code(_dresult, "WEBSEARCH_FAILED", "web_search"):
+        _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Web search unavailable or failed. "
@@ -653,6 +656,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
 
     elif _tool_error_has_code(_dresult, "WEBFETCH_UNAVAILABLE", "web_fetch") or \
          _tool_error_has_code(_dresult, "WEBFETCH_FAILED", "web_fetch"):
+        _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Web fetch unavailable or failed. "
@@ -663,6 +667,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
 
     elif _tool_error_has_code(_dresult, "GIT_UNAVAILABLE") or \
          _tool_error_has_code(_dresult, "GIT_STATUS_FAILED"):
+        _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Git tools not available or git status failed — "
@@ -674,6 +679,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
     elif _tool_error_has_code(_dresult, "TOOL_EXEC_CRASH") or \
          _tool_error_has_code(_dresult, "TOOL_NOT_FOUND") or \
          _tool_error_has_code(_dresult, "TOOL_NOT_ALLOWED"):
+        _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "Tool call failed (crash, unknown tool, or not allowed). "
@@ -717,6 +723,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
     elif _tool_error_has_code(_dresult, "REPLACE_LINES_INVALID_START", "replace_lines") or \
          _tool_error_has_code(_dresult, "REPLACE_LINES_INVALID_END", "replace_lines") or \
          _tool_error_has_code(_dresult, "REPLACE_LINES_FAILED", "replace_lines"):
+        _matched = True
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "REPLACE_LINES error: line numbers may be stale. "

@@ -362,6 +362,8 @@ async def ollama_preload_judge():
 
 @router.post("/load")
 async def ollama_load(req: Request):
+    model = ""
+    _load_ctx = None
     try:
         data = await req.json()
         model = data.get("model", "")

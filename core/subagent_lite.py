@@ -64,6 +64,37 @@ def _gguf_size_gb(model: str) -> float | None:
     return None
 
 
+def _same_model(a: str | None, b: str | None) -> bool:
+    sa = str(a or "").strip().lower()
+    sb = str(b or "").strip().lower()
+    if not sa or not sb:
+        return False
+    if sa == sb:
+        return True
+    try:
+        from backend.llama_manager_utils import _nm
+        return _nm(sa) == _nm(sb)
+    except ImportError:
+        return False
+
+
+def _slot_can_open_for_subagent(slot) -> bool:
+    """True if *slot* is free or idle-evictable without disturbing pinned/active slots."""
+    if getattr(slot, "_loading", False):
+        return False
+    if not getattr(slot, "is_running", False):
+        return True
+    if getattr(slot, "pinned", False):
+        return False
+    in_flight_fn = getattr(slot, "in_flight_active", None)
+    if callable(in_flight_fn):
+        if in_flight_fn():
+            return False
+    elif int(getattr(slot, "in_flight", 0) or 0) > 0:
+        return False
+    return True
+
+
 async def pick_delegate_model() -> tuple[str, int]:
 
     cfg = _cfg()
@@ -73,21 +104,43 @@ async def pick_delegate_model() -> tuple[str, int]:
     ctx_default = int(_s("subagent_lite_ctx_default", 8192))
 
     ram = _available_ram_gb()
-    biggest = max((_gguf_size_gb(m) or 0.0) for m in ladder) if ladder else 0.0
     if ram is not None and ram < min_ram:
         raise GateBlocked(f"ram {ram:.1f}GB < {min_ram}GB")
-    if ram is not None and biggest and ram < biggest + 0.5:
-        raise GateBlocked(f"ram {ram:.1f}GB < file size {biggest:.1f}GB+0.5")
 
     from backend.llama_server_manager import manager
-    if any(getattr(s, "_loading", False) for s in manager._slots):
+    slots = list(getattr(manager, "_slots", []) or [])
+    if any(getattr(s, "_loading", False) for s in slots):
         raise GateBlocked("another load is already running")
 
+    has_free_slot = any(
+        not getattr(s, "is_running", False) and not getattr(s, "_loading", False)
+        for s in slots
+    )
+    if slots and not has_free_slot and not any(_slot_can_open_for_subagent(s) for s in slots):
+        raise GateBlocked("no free slot available for subagent")
+
+    loaded_models = [
+        str(getattr(s, "model", "") or "")
+        for s in slots
+        if getattr(s, "model", None) and (getattr(s, "is_running", False) or getattr(s, "_loading", False))
+    ]
+
+    last_reason = "vram: no ladder model fits"
     for model in ladder:
+        # Never hijack/evict a model already running in another active slot (e.g. coder):
+        # pick a smaller separate ladder model so subagent gets its own dedicated slot.
+        if any(_same_model(model, lm) for lm in loaded_models):
+            last_reason = f"slot busy: {model} already loaded"
+            continue
+        file_gb = _gguf_size_gb(model)
+        if ram is not None and file_gb and ram < file_gb + 0.5:
+            last_reason = f"ram {ram:.1f}GB < file size {file_gb:.1f}GB+0.5"
+            continue
         fit = manager.can_fit(model, ctx_default, safety_margin_mib=margin)
         if getattr(fit, "ok", False):
             return model, ctx_default
-    raise GateBlocked("vram: no ladder model fits")
+        last_reason = "vram: no ladder model fits"
+    raise GateBlocked(last_reason)
 
 
 async def run_research(task: str, workspace_lock: str | None) -> str:
@@ -193,7 +246,10 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
     from backend.llama_server_manager import manager
 
     max_tools = int(_s("subagent_lite_max_tools", 12))
-    port = await manager.ensure_loaded(model, num_ctx=ctx, pin=True)
+    was_loaded_before = any(
+        _same_model(getattr(s, "model", ""), model) and getattr(s, "is_running", False)
+        for s in (getattr(manager, "_slots", []) or [])
+    )
 
     from tools import runner as _tr
     _tok_read = _tr._files_read_in_run.set(set())
@@ -209,6 +265,7 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
     summary = ""
     from tools.runner import _run_inline_tool
     try:
+        port = await manager.ensure_loaded(model, num_ctx=ctx, pin=True)
         for _round in range(max_tools + 1):
             msg = await _call_model(port, model, messages)
             tcs = msg.get("tool_calls") or []
@@ -239,14 +296,15 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
         _tr._files_seen_in_run.reset(_tok_seen)
         _tr._files_written_in_run.reset(_tok_written)
         _tr._files_in_context.reset(_tok_inctx)
-        _evict_task = asyncio.ensure_future(manager.evict(model))
-        _evict_task.add_done_callback(
-            lambda t: t.exception() if not t.cancelled() else None
-        )
-        try:
-            await asyncio.shield(_evict_task)
-            await asyncio.sleep(1.5)
-        except Exception:
-            pass
+        if not was_loaded_before:
+            _evict_task = asyncio.ensure_future(manager.evict(model))
+            _evict_task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
+            try:
+                await asyncio.shield(_evict_task)
+                await asyncio.sleep(1.5)
+            except Exception:
+                pass
 
     return f"[subagent summary | {model}]\n{summary}"

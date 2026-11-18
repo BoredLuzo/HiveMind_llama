@@ -439,9 +439,16 @@ async def list_chats():
         try:
             if meta_file and os.path.isfile(meta_file):
                 total += os.path.getsize(meta_file)
-            bdir = os.path.join(os.path.dirname(meta_file or ""), f"*_{cid}.blobs")
+            _bdirs = []
+            _direct_bdir = str(_blob_dir(cid))
+            if os.path.isdir(_direct_bdir):
+                _bdirs.append(_direct_bdir)
             import glob as _glob
-            for bf in _glob.glob(bdir):
+            _legacy_pat = os.path.join(os.path.dirname(meta_file or ""), f"*_{cid}.blobs")
+            for _lb in _glob.glob(_legacy_pat):
+                if _lb != _direct_bdir:
+                    _bdirs.append(_lb)
+            for bf in _bdirs:
                 for root, _dirs, files in os.walk(bf):
                     for f in files:
                         try:

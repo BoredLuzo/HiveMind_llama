@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 _LOG_DIR = Path(__file__).resolve().parent.parent / "logs" / "telemetry"
+_LOG_DIR_CREATED: Path | None = None
 _COMPRESSION: dict = {"n": 0, "ts": ""}
 _last_hashes: list | None = None
 
@@ -59,8 +60,11 @@ def message_hashes(msgs) -> tuple:
 
 
 def append_round(row: dict) -> None:
+    global _LOG_DIR_CREATED
     try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if _LOG_DIR_CREATED != _LOG_DIR:
+            _LOG_DIR.mkdir(parents=True, exist_ok=True)
+            _LOG_DIR_CREATED = _LOG_DIR
         mdl = str(row.get("model") or "unknown").replace(":", "_").replace("/", "_")
         path = _LOG_DIR / f"{time.strftime('%Y%m%d')}-{mdl}.jsonl"
         out = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), **row}

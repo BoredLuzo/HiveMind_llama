@@ -159,6 +159,69 @@ async def run_stream(
     request_workspace: str = "",
     agentic_force: bool = False,
 ):
+    """Serialize top-level runs so concurrent triggers do not thrash slot caches."""
+    from infra.run_control import (
+        _unregister_abort,
+        _unregister_step_skip,
+        get_active_top_run_id,
+        get_top_run_lock,
+        set_active_top_run_id,
+    )
+
+    _top_lock = get_top_run_lock()
+    if _top_lock.locked():
+        yield f"data: {json.dumps({'type': 'status', 'content': '⏳ Active run in progress — waiting in queue…'}, ensure_ascii=False)}\n\n"
+    async with _top_lock:
+        _run_id_seen = ""
+        try:
+            async for _ev in _run_stream_locked(
+                user_input,
+                images,
+                mode,
+                iterations,
+                active_preset,
+                constraint_mode=constraint_mode,
+                force_complexity=force_complexity,
+                skip_agents=skip_agents,
+                judge_bias=judge_bias,
+                chat_id=chat_id,
+                duo_config=duo_config,
+                model_overrides=model_overrides,
+                request_workspace=request_workspace,
+                agentic_force=agentic_force,
+            ):
+                if isinstance(_ev, str) and '"run_id"' in _ev and not _run_id_seen:
+                    try:
+                        _parsed = json.loads(_ev[6:]) if _ev.startswith("data: ") else {}
+                        if isinstance(_parsed, dict) and _parsed.get("type") == "run_id":
+                            _run_id_seen = str(_parsed.get("run_id") or "")
+                    except (ValueError, TypeError):
+                        pass
+                yield _ev
+        finally:
+            _rid_cleanup = _run_id_seen or get_active_top_run_id()
+            set_active_top_run_id("")
+            if _rid_cleanup:
+                _unregister_step_skip(_rid_cleanup)
+                _unregister_abort(_rid_cleanup)
+
+
+async def _run_stream_locked(
+    user_input: str,
+    images: list,
+    mode: str,
+    iterations: int,
+    active_preset,
+    constraint_mode: bool = True,
+    force_complexity: str | None = None,
+    skip_agents: set | frozenset = frozenset(),
+    judge_bias: int = 50,
+    chat_id: str | None = None,
+    duo_config: DuoConfig | None = None,
+    model_overrides: dict | None = None,
+    request_workspace: str = "",
+    agentic_force: bool = False,
+):
     # CYCLE-BREAK (2026-11-05): category-A names come from their home
     # modules now — server only re-exported them. The 15 real server-owned
     # globals/functions (S_models_cache, THIS_FILE, _VRAM_LOOKUP_GB,
@@ -168,7 +231,7 @@ async def run_stream(
         _abort_event, _is_aborted,
         _register_abort, _unregister_abort,
         _register_step_skip, _unregister_step_skip, _clear_step_skip,
-        claim_chat_run,
+        claim_chat_run, set_active_top_run_id,
     )
     from vram.loader import (
         _bk_evict, _bk_load, _bk_pin,
@@ -631,6 +694,7 @@ async def run_stream(
     _raw_budget = settings.get("vram_budget_gb")
     _vram_budget = float(_raw_budget) if _raw_budget is not None else DEFAULT_VRAM_BUDGET_GB
     abort_ev      = _register_abort(run_id)
+    set_active_top_run_id(run_id)
     if chat_id:
         await claim_chat_run(chat_id, run_id)
     step_skip_ev = _register_step_skip(run_id)  # NEW

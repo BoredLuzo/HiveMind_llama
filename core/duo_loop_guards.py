@@ -65,10 +65,13 @@ async def _duo_loop_guards(ctx, ps: _DuoLoopGuardsState):
         if _total_tool_rounds > 0 and _total_tool_rounds % 10 == 0:
             _hc_ok = False
             try:
+                from core.llm_transport import get_shared_local_client
                 _hc_url = f"http://127.0.0.1:{_dport}/v1/models"
-                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0)) as _hc_client:
-                    _hc_r = await _hc_client.get(_hc_url)
-                    _hc_ok = _hc_r.status_code < 500
+                _hc_r = await get_shared_local_client().get(
+                    _hc_url,
+                    timeout=httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0),
+                )
+                _hc_ok = _hc_r.status_code < 500
             except Exception:
                 pass
             if not _hc_ok:

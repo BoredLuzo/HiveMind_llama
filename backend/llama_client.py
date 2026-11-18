@@ -15,6 +15,11 @@ from .llama_server_manager import manager
 from .llama_config import CONTEXT_SIZE_DEFAULT
 
 
+def _port_lock(port: int):
+    from core.llm_transport import get_port_lock
+    return get_port_lock(port)
+
+
 class LlamaError(Exception):
     pass
 
@@ -176,11 +181,12 @@ class LlamaClient:
         max_attempts = 45
         for attempt in range(max_attempts):
             try:
-                r = await self._client.post(
-                    f"http://127.0.0.1:{port}/v1/chat/completions",
-                    json=payload,
-                    timeout=httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0),
-                )
+                async with _port_lock(port):
+                    r = await self._client.post(
+                        f"http://127.0.0.1:{port}/v1/chat/completions",
+                        json=payload,
+                        timeout=httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0),
+                    )
                 if r.status_code >= 400:
                     self._log.error(
                         "req=%s llama-server %s fuer '%s' (chat) | body: %s",
@@ -344,7 +350,7 @@ class LlamaClient:
         _yielded_any = False
         for attempt in range(max_attempts):
             try:
-                async with self._client.stream(
+                async with _port_lock(port), self._client.stream(
                     "POST",
                     f"http://127.0.0.1:{port}/v1/chat/completions",
                     json=payload,

@@ -23,6 +23,32 @@ def _get_abort_lock() -> asyncio.Lock:
         _chat_abort_lock = asyncio.Lock()
     return _chat_abort_lock
 
+
+_top_run_lock: asyncio.Lock | None = None
+_top_run_lock_loop: asyncio.AbstractEventLoop | None = None
+_active_top_run_id: str = ""
+
+
+def get_top_run_lock() -> asyncio.Lock:
+    """Return a loop-scoped asyncio.Lock serializing top-level chat/scheduler runs."""
+    global _top_run_lock, _top_run_lock_loop
+    loop = asyncio.get_running_loop()
+    if _top_run_lock is None or loop is not _top_run_lock_loop:
+        _top_run_lock = asyncio.Lock()
+        _top_run_lock_loop = loop
+    return _top_run_lock
+
+
+def get_active_top_run_id() -> str:
+    """Return the run_id currently holding the top-level run lock (or empty string)."""
+    return _active_top_run_id
+
+
+def set_active_top_run_id(run_id: str) -> None:
+    """Record the run_id currently holding the top-level run lock."""
+    global _active_top_run_id
+    _active_top_run_id = str(run_id or "")
+
 def init_run_control(chats_cache=None, cache_lock=None,
                      abort_registry=None, abort_lock=None,
                      run_abort_registry=None, run_abort_registry_ts=None,

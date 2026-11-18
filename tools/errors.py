@@ -104,6 +104,8 @@ def tool_call_failed(result: str, tool_name: str | None = None) -> bool:
     Handles both Format A and Format B.
     """
     txt = str(result or "")
+    if txt.startswith("[SYSTEM] "):
+        return True
     if tool_name and txt.startswith(f"[{tool_name} error"):
         return True
     if txt.startswith("[TOOL_ERROR") or "TOOL_ERROR" in txt[:80]:

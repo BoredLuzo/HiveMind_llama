@@ -22,7 +22,7 @@ async def _inline_tool_subagent_research(args: dict, workspace: Path, workspace_
         return _tool_error_response(
             "SUBAGENT_FAILED",
             f"subagent_research failed: {type(e).__name__}: {str(e)[:160]} "
-            "— recherchiere inline.",
+            "— research inline.",
             tool="subagent_research")
 
 

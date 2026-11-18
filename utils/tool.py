@@ -313,7 +313,7 @@ def validate_tool_calls(tool_calls, *, finish_reason: str | None = None,
                     _append_hint = 4000
                     try:
                         _append_hint = int(
-                            (resolve_write_char_limits(_vname, token_budget,
+                            (resolve_write_char_limits(model, token_budget,
                                                        chars_per_token) or (0, 4000))[1]
                         ) or 4000
                     except Exception:
