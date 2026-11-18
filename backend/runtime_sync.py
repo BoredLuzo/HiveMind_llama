@@ -59,7 +59,7 @@ def sync_loader_settings(settings: dict) -> None:
 
     # --fit (layers/ctx sized to the free VRAM) & Vulkan WDDM VRAM pinning
     try:
-        _lc.LLAMA_FIT = bool(settings.get("llama_fit", False))
+        _lc.LLAMA_FIT = bool(settings.get("llama_fit", True))
         _lc.LLAMA_FIT_TARGET_MIB = int(settings.get("llama_fit_target_mib", 0) or 0)
         _lc.VK_DISABLE_HOST_VISIBLE_VIDMEM = bool(
             settings.get("llama_vk_disable_host_visible_vidmem", True)

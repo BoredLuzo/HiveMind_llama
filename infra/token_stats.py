@@ -37,10 +37,27 @@ def _save_token_stats(stats: dict):
     _write_json_atomic(_TOKEN_STATS_FILE, stats)
 
 
+def _is_noise_run(run: dict) -> bool:
+    """Return True for synthetic smoke-test or failed pre-flight 0-request entries."""
+    if not isinstance(run, dict):
+        return False
+    if run.get("smoke_test"):
+        return True
+    return (
+        int(run.get("requests") or 0) == 0
+        and int(run.get("prompt_tokens") or 0) == 0
+        and not (run.get("phases") or {})
+        and int(run.get("tokens") or 0) == 45
+        and float(run.get("elapsed_s") or 0.0) >= 20.0
+    )
+
+
 def _record_run(run_record: dict) -> None:
 
 
     if _token_stats_lock is None:
+        return
+    if _is_noise_run(run_record):
         return
     tokens = int(run_record.get("tokens") or 0)
     prompt = int(run_record.get("prompt_tokens") or 0)
@@ -135,6 +152,8 @@ def aggregate_by_model(daily: dict, day: str | None = None,
     _days = [day] if day and day in daily else sorted(daily)
     for _day in _days:
         for run in (daily[_day].get("run_list") or []):
+            if _is_noise_run(run):
+                continue
             models = run.get("models") or {}
             phases = run.get("phases") or {}
             ms = run.get("phases_ms") or {}
@@ -227,6 +246,8 @@ def aggregate_by_mode(daily: dict) -> list[dict]:
     rows: dict[str, dict] = {}
     for _day in sorted(daily):
         for run in (daily[_day].get("run_list") or []):
+            if _is_noise_run(run):
+                continue
             key = str(run.get("mode") or "unrecorded")
             row = rows.setdefault(key, {
                 "mode": key, "runs": 0, "tokens": 0, "timed_tokens": 0,

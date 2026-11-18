@@ -1653,7 +1653,11 @@ def _setup_token_cli() -> int:
     print("Telegram bot token setup — validates the token and stores it "
           "in the Windows Credential Manager (hivemind_gateway / "
           "bot_token). Nothing is written to disk, history or logs.")
-    tok = getpass.getpass("Bot token (input hidden): ")
+    try:
+        tok = getpass.getpass("Bot token (input hidden): ")
+    except (KeyboardInterrupt, EOFError):
+        print("\nCancelled — no token was stored.")
+        return 0
     try:
         username = asyncio.run(perform_token_setup(tok))
     except TelegramApiError as exc:

@@ -65,6 +65,38 @@ class _DuoCoderPreloopState:
     stop: bool = False
 
 
+async def _abort_preloop(
+    ctx,
+    stop_reason: str,
+    status_msgs: list[str],
+    ws_str: str,
+    explore_ctx: str,
+    done_tasks: list,
+    written_files: list,
+    *,
+    hard_stop: bool = False,
+):
+    """Shared teardown + done_event emitter for early exits in _duo_coder_preloop."""
+    for _msg in status_msgs:
+        yield await ctx.emit({"type": "status", "content": _msg})
+    ctx.phase_timer.skip("coder_loop")
+    clear_graceful_stop(ctx.run_id)
+    _cleanup_pause_state(ctx.run_id)
+    if ctx.chat_id:
+        _clear_pause_state(ctx.chat_id)
+    _cleanup_governor(ctx.chat_id or ctx.run_id)
+    if hard_stop:
+        _pre_loop_resume(ctx, ws_str, explore_ctx, done_tasks, written_files)
+    else:
+        _pre_loop_resume(ctx, ws_str, explore_ctx, done_tasks, written_files, stop_reason)
+    ctx.duo_stop_reason = stop_reason
+    yield await ctx.emit(ctx.done_event(
+        round(time.time() - ctx.t_total, 1),
+        ctx.duo_stop_reason,
+        **ctx.collect_done_metrics(),
+    ))
+
+
 async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
     _done_tasks = ps.done_tasks
     _written_files = ps.written_files
@@ -244,6 +276,13 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 and (not _need_raw_vision or _plan_port_vision):
             _cached_coder_port = _plan_port
             _cached_coder_port_ctx = _plan_port_actual_ctx  # honest slot ctx (>= coder need)
+            try:
+                for _s_pin in getattr(_lsm_pv, "_slots", ()):
+                    if getattr(_s_pin, "port", None) == _plan_port and hasattr(_s_pin, "set_pinned"):
+                        _s_pin.set_pinned(True)
+                _duo_pinned.add(exec_mdl)
+            except (AttributeError, TypeError, RuntimeError):
+                pass
             logger.info("[Planner=Coder] Model stays in VRAM - slot ctx=%d covers coder need=%d (vision=%s)",
                         _plan_port_actual_ctx, max(_plan_ctx_req, _coder_ctx_need),
                         _plan_port_vision)
@@ -479,22 +518,11 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                             # emit succeeds anyway), so without this an
                             # aborted run burned ~10 min of load/kill churn.
                             if is_ctx_aborted(ctx):
-                                yield await ctx.emit({"type": "status",
-                                    "content": "⏹ Coder load aborted (run was stopped)"})
-                                ctx.phase_timer.skip("coder_loop")
-                                clear_graceful_stop(ctx.run_id)
-                                _cleanup_pause_state(ctx.run_id)
-                                if ctx.chat_id:
-                                    _clear_pause_state(ctx.chat_id)
-                                _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                _pre_loop_resume(ctx, _ws_str, _explore_ctx,
-                                                 _done_tasks, _written_files, "aborted")
-                                ctx.duo_stop_reason = "aborted"
-                                yield await ctx.emit(ctx.done_event(
-                                    round(time.time() - ctx.t_total, 1),
-                                    ctx.duo_stop_reason,
-                                    **ctx.collect_done_metrics(),
-                                ))
+                                async for _ev in _abort_preloop(
+                                    ctx, "aborted", ["⏹ Coder load aborted (run was stopped)"],
+                                    _ws_str, _explore_ctx, _done_tasks, _written_files,
+                                ):
+                                    yield _ev
                                 ps.stop = True
                                 return
                             try:
@@ -510,47 +538,27 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                 await asyncio.sleep(4.0)
                                 if is_ctx_aborted(ctx):
                                     # the sleep is the second abort window
-                                    yield await ctx.emit({"type": "status",
-                                        "content": "⏹ Coder load aborted (run was stopped during retry wait)"})
-                                    ctx.phase_timer.skip("coder_loop")
-                                    clear_graceful_stop(ctx.run_id)
-                                    _cleanup_pause_state(ctx.run_id)
-                                    if ctx.chat_id:
-                                        _clear_pause_state(ctx.chat_id)
-                                    _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                    _pre_loop_resume(ctx, _ws_str, _explore_ctx,
-                                                     _done_tasks, _written_files, "aborted")
-                                    ctx.duo_stop_reason = "aborted"
-                                    yield await ctx.emit(ctx.done_event(
-                                        round(time.time() - ctx.t_total, 1),
-                                        ctx.duo_stop_reason,
-                                        **ctx.collect_done_metrics(),
-                                    ))
+                                    async for _ev in _abort_preloop(
+                                        ctx, "aborted",
+                                        ["⏹ Coder load aborted (run was stopped during retry wait)"],
+                                        _ws_str, _explore_ctx, _done_tasks, _written_files,
+                                    ):
+                                        yield _ev
                                     ps.stop = True
                                     return
                                 _coder_ctx_try = _next_ctx
                                 continue
-                            yield await ctx.emit({
-                                "type": "status",
-                                "content": (
+                            _duo_hard_stop = True
+                            async for _ev in _abort_preloop(
+                                ctx, "hard_stop",
+                                [
                                     f"⛔ Coder load timeout at ctx={_coder_ctx_try} — "
                                     "ctx too large for model/VRAM. Please reduce ctx."
-                                ),
-                            })
-                            ctx.phase_timer.skip("coder_loop")
-                            clear_graceful_stop(ctx.run_id)
-                            _cleanup_pause_state(ctx.run_id)
-                            if ctx.chat_id:
-                                _clear_pause_state(ctx.chat_id)
-                            _cleanup_governor(ctx.chat_id or ctx.run_id)
-                            _duo_hard_stop = True
-                            _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                            ctx.duo_stop_reason = "hard_stop"
-                            yield await ctx.emit(ctx.done_event(
-                                round(time.time() - ctx.t_total, 1),
-                                ctx.duo_stop_reason,
-                                **ctx.collect_done_metrics(),
-                            ))
+                                ],
+                                _ws_str, _explore_ctx, _done_tasks, _written_files,
+                                hard_stop=True,
+                            ):
+                                yield _ev
                             ps.stop = True
                             return
                         except _VRAMPreFlightError as _vpf:
@@ -592,21 +600,11 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                             break
                         except Exception as _cl_err:
                             if is_ctx_aborted(ctx):
-                                yield await ctx.emit({"type": "status",
-                                    "content": "⏹ Coder load aborted (run was stopped)"})
-                                ctx.phase_timer.skip("coder_loop")
-                                clear_graceful_stop(ctx.run_id)
-                                _cleanup_pause_state(ctx.run_id)
-                                if ctx.chat_id:
-                                    _clear_pause_state(ctx.chat_id)
-                                _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
-                                ctx.duo_stop_reason = "aborted"
-                                yield await ctx.emit(ctx.done_event(
-                                    round(time.time() - ctx.t_total, 1),
-                                    ctx.duo_stop_reason,
-                                    **ctx.collect_done_metrics(),
-                                ))
+                                async for _ev in _abort_preloop(
+                                    ctx, "aborted", ["⏹ Coder load aborted (run was stopped)"],
+                                    _ws_str, _explore_ctx, _done_tasks, _written_files,
+                                ):
+                                    yield _ev
                                 ps.stop = True
                                 return
                             logger.warning(
@@ -620,41 +618,25 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                 await asyncio.sleep(4.0)
                                 _coder_ctx_try = _next_ctx
                                 if is_ctx_aborted(ctx):
-                                    yield await ctx.emit({"type": "status",
-                                        "content": "⏹ Coder load aborted (run was stopped)"})
-                                    ctx.phase_timer.skip("coder_loop")
-                                    clear_graceful_stop(ctx.run_id)
-                                    _cleanup_pause_state(ctx.run_id)
-                                    if ctx.chat_id:
-                                        _clear_pause_state(ctx.chat_id)
-                                    _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                    _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
-                                    ctx.duo_stop_reason = "aborted"
-                                    yield await ctx.emit(ctx.done_event(
-                                        round(time.time() - ctx.t_total, 1),
-                                        ctx.duo_stop_reason,
-                                        **ctx.collect_done_metrics(),
-                                    ))
+                                    async for _ev in _abort_preloop(
+                                        ctx, "aborted", ["⏹ Coder load aborted (run was stopped)"],
+                                        _ws_str, _explore_ctx, _done_tasks, _written_files,
+                                    ):
+                                        yield _ev
                                     ps.stop = True
                                     return
                     if not _coder_load_ok:
                         _duo_hard_stop = True
-                        _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                        yield await ctx.emit({"type": "status",
-                            "content": f"⛔ Coder ({exec_mdl.split(':')[0]}) could not be loaded — run aborted."})
-                        ctx.phase_timer.skip("coder_loop")
-                        clear_graceful_stop(ctx.run_id)
-                        _cleanup_pause_state(ctx.run_id)
-                        if ctx.chat_id:
-                            _clear_pause_state(ctx.chat_id)
-                        _cleanup_governor(ctx.chat_id or ctx.run_id)
-                        yield await ctx.emit({"type": "status", "content": "Coder-Load final failure: process aborted."})
-                        ctx.duo_stop_reason = "hard_stop"
-                        yield await ctx.emit(ctx.done_event(
-                            round(time.time() - ctx.t_total, 1),
-                            ctx.duo_stop_reason,
-                            **ctx.collect_done_metrics(),
-                        ))
+                        async for _ev in _abort_preloop(
+                            ctx, "hard_stop",
+                            [
+                                f"⛔ Coder ({exec_mdl.split(':')[0]}) could not be loaded — run aborted.",
+                                "Coder-Load final failure: process aborted.",
+                            ],
+                            _ws_str, _explore_ctx, _done_tasks, _written_files,
+                            hard_stop=True,
+                        ):
+                            yield _ev
                         ps.stop = True
                         return
                     yield await ctx.emit({"type": "status",
@@ -718,22 +700,14 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                 # hits a dead port → TCP close → frontend: "Error in input stream".
                 logger.warning("Worker-evict/coder-load after explore failed: %s", _evict_err)
                 if not _coder_load_ok:
-                    yield await ctx.emit({"type": "status",
-                        "content": f"⛔ Coder could not be loaded after evict error: {str(_evict_err)[:80]}"})
-                    ctx.phase_timer.skip("coder_loop")
-                    clear_graceful_stop(ctx.run_id)
-                    _cleanup_pause_state(ctx.run_id)
-                    if ctx.chat_id:
-                        _clear_pause_state(ctx.chat_id)
-                    _cleanup_governor(ctx.chat_id or ctx.run_id)
                     _duo_hard_stop = True
-                    _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                    ctx.duo_stop_reason = "hard_stop"
-                    yield await ctx.emit(ctx.done_event(
-                        round(time.time() - ctx.t_total, 1),
-                        ctx.duo_stop_reason,
-                        **ctx.collect_done_metrics(),
-                    ))
+                    async for _ev in _abort_preloop(
+                        ctx, "hard_stop",
+                        [f"⛔ Coder could not be loaded after evict error: {str(_evict_err)[:80]}"],
+                        _ws_str, _explore_ctx, _done_tasks, _written_files,
+                        hard_stop=True,
+                    ):
+                        yield _ev
                     ps.stop = True
                     return
     finally:

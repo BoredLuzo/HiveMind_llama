@@ -811,13 +811,24 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
                     sse_lines.append(line)
 
     timed_out = False
+    stream_broke = False
     try:
         await asyncio.wait_for(_stream_run(), timeout=_agent_to)
     except (asyncio.TimeoutError, httpx.TimeoutException):
         await _abort_hivemind(cfg.hivemind_url, _chat_id)
         timed_out = True
+    except (httpx.HTTPError, OSError):
+        await _abort_hivemind(cfg.hivemind_url, _chat_id)
+        stream_broke = True
 
     res = _accumulate_hivemind_sse(sse_lines)
+    if not timed_out and not res.get("stop_reason"):
+        await _abort_hivemind(cfg.hivemind_url, _chat_id)
+        if stream_broke:
+            res["stop_reason"] = "stream_error"
+            res["detail"] = res.get("detail") or "hivemind stream disconnected"
+    if timed_out or stream_broke or not res.get("stop_reason"):
+        await _wait_llama_slot_idle(cfg)
     if timed_out:
         res["stop_reason"] = "timeout"
         res["detail"] = f"hivemind timed out after {int(_agent_to)}s"

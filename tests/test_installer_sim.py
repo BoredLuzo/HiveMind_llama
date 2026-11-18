@@ -265,7 +265,7 @@ def case_install_optionals_garbage_voice_pick():
     sim.mkdir(parents=True)
     try:
         shutil.copy2(ROOT / "install.bat", sim / "install.bat")
-        r = run_cmd(sim, "install.bat", stdin="O\n9\nN\nX\n")
+        r = run_cmd(sim, "install.bat", stdin="O\nN\nN\n9\nN\nX\n")
         check(f"{label}: optionals path entered",
               "Optional parts only" in r.stdout)
         check(f"{label}: docker absent handled",
@@ -281,6 +281,58 @@ def case_install_optionals_garbage_voice_pick():
         shutil.rmtree(sim.parent, ignore_errors=True)
 
 
+def case_install_single_step_7():
+    label = "install.bat single step 7 (SearXNG)"
+    sim = Path(tempfile.mkdtemp(prefix="hmsim_step7_"))
+    try:
+        shutil.copy2(ROOT / "install.bat", sim / "install.bat")
+        r = run_cmd(sim, "install.bat", stdin="7\nX\n")
+        check(f"{label}: only step 7 ran",
+              "[7/9] SearXNG (web search" in r.stdout
+              and "[OK] step 7/9 SearXNG - done." in r.stdout
+              and "[8/9] Voice (optional:" not in r.stdout
+              and "[OK] step 8/9" not in r.stdout
+              and "[1/9] Setting up Python" not in r.stdout)
+        check(f"{label}: summary reached",
+              "Installation finished!" in r.stdout and r.returncode == 0,
+              f"(rc={r.returncode})")
+        assert_no_cmd_crash(r.stdout, r.stderr, label)
+    finally:
+        shutil.rmtree(sim, ignore_errors=True)
+
+
+def case_install_single_step_8_woof():
+    label = "install.bat single step 8 (Voice -> Underdog Woof)"
+    sim = Path(tempfile.mkdtemp(prefix="hmsim_step8_"))
+    try:
+        shutil.copy2(ROOT / "install.bat", sim / "install.bat")
+        (sim / "deploy").mkdir()
+        (sim / "deploy" / "setup_voice.bat").write_text(
+            "@echo off\r\necho FAKE_SETUP_VOICE_ARGS=[%*]\r\nexit /b 0\r\n",
+            encoding="ascii",
+        )
+        ans = sim / "_ans.txt"
+        ans.write_bytes(b"83\r\nW\r\nX\r\n")
+        with open(ans, "rb") as fh:
+            r = subprocess.run(
+                ["cmd", "/d", "/c", "install.bat"],
+                cwd=str(sim), stdin=fh, env=build_env(),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=90,
+            )
+        check(f"{label}: TTS provider prompt shown and Woof passed",
+              "TTS provider [W/P/B, default W]:" in r.stdout
+              and "FAKE_SETUP_VOICE_ARGS=[--woof]" in r.stdout)
+        check(f"{label}: stopped after step 8",
+              "[OK] step 8/9 Voice - done." in r.stdout
+              and "[9/9] Telegram gateway (optional)" not in r.stdout
+              and "Installation finished!" in r.stdout and r.returncode == 0,
+              f"(rc={r.returncode})")
+        assert_no_cmd_crash(r.stdout, r.stderr, label)
+    finally:
+        shutil.rmtree(sim, ignore_errors=True)
+
+
 def main() -> int:
     case_setup_models_paren_path()
     case_setup_models_mkdir_failure()
@@ -290,6 +342,8 @@ def main() -> int:
     case_voice_tts_env_fail()
     case_install_abort_paren_path()
     case_install_optionals_garbage_voice_pick()
+    case_install_single_step_7()
+    case_install_single_step_8_woof()
     return h.finish("installer_sim")
 
 

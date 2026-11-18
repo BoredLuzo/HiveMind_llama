@@ -212,6 +212,33 @@ def test_fetchers_hardening() -> None:
         check("fetch_llamacpp: Linux cudart tarball pattern matches",
               m_cu is not None and m_cu.group(1) == "13.1")
 
+        # CUDA asset selection falls back to highest compatible runtime <= driver CUDA
+        rels = [{
+            "tag_name": "b12001",
+            "assets": [
+                {"name": "llama-b12001-bin-win-cuda-12.4-x64.zip"},
+                {"name": "llama-b12001-bin-win-cuda-13.4-x64.zip"},
+            ],
+        }]
+        picked, _ = fl._pick_asset(rels, fl.ASSET_REGEX["cuda"], max_cuda_version="12.8")
+        check("fetch_llamacpp: _pick_asset selects cuda-12.4 <= max_cuda_version 12.8",
+              picked is not None and picked["name"] == "llama-b12001-bin-win-cuda-12.4-x64.zip",
+              f"got {picked}")
+
+        class _FakeSmiRes:
+            def __init__(self, stdout: str):
+                self.stdout = stdout
+
+        with mock.patch.object(fl, "_find_nvidia_smi", return_value="nvidia-smi"), \
+                mock.patch.object(
+                    fl.subprocess,
+                    "run",
+                    side_effect=[_FakeSmiRes("plain banner without version"), _FakeSmiRes("CUDA Version : 12.8\n")],
+                ):
+            det_cuda = fl._detect_cuda_version_from_driver()
+        check("fetch_llamacpp: _detect_cuda_version_from_driver falls back to -q",
+              det_cuda == "12.8", f"got {det_cuda!r}")
+
         # fetch_woof rejects truncated Content-Length downloads without writing dst
         class _ShortResp:
             headers = {"Content-Length": "1000"}

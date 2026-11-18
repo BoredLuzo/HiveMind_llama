@@ -458,24 +458,6 @@ async def list_chats():
         except OSError:
             pass
         return total
-    # DISK-BYTES OFF-LOOP (audit A1, 2026-10-23): _disk_bytes globs+walks
-    # each chat's blob dir — measured 1.77 s of event-loop stall on 480
-    # chats, once per sidebar refresh. One to_thread for the whole map.
-    def _disk_bytes_all(pairs):
-        return {cid: _disk_bytes(cid, f) for cid, f in pairs}
-    _bytes_map = await asyncio.to_thread(
-        _disk_bytes_all, [(cid, c.get("_file", "")) for cid, c in items])
-    for cid, c in items:
-        result.append({
-            "id": cid,
-            "title": c.get("title", "Untitled"),
-            "created_at": c.get("created_at", ""),
-            "updated_at": c.get("updated_at", ""),
-            "msg_count": c.get("_msg_count", 0),
-            "tokens": c.get("_tokens", 0),
-            "preview": c.get("_preview", ""),
-            "bytes": _bytes_map.get(cid, 0),
-        })
     # INTERRUPTED-FLAG (2026-08-21): letzter Run via Browser-Close parkiert?
     def _is_interrupted(cid: str) -> bool:
         try:
@@ -487,8 +469,27 @@ async def list_chats():
             )
         except Exception:
             return False
-    for _r in result:
-        _r["interrupted"] = await asyncio.to_thread(_is_interrupted, _r["id"])
+
+    def _chat_disk_meta_all(pairs):
+        return (
+            {cid: _disk_bytes(cid, f) for cid, f in pairs},
+            {cid: _is_interrupted(cid) for cid, _ in pairs},
+        )
+
+    _bytes_map, _int_map = await asyncio.to_thread(
+        _chat_disk_meta_all, [(cid, c.get("_file", "")) for cid, c in items])
+    for cid, c in items:
+        result.append({
+            "id": cid,
+            "title": c.get("title", "Untitled"),
+            "created_at": c.get("created_at", ""),
+            "updated_at": c.get("updated_at", ""),
+            "msg_count": c.get("_msg_count", 0),
+            "tokens": c.get("_tokens", 0),
+            "preview": c.get("_preview", ""),
+            "bytes": _bytes_map.get(cid, 0),
+            "interrupted": _int_map.get(cid, False),
+        })
     result.sort(key=lambda x: x["updated_at"], reverse=True)
     return {"chats": result}
 

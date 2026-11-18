@@ -1749,21 +1749,6 @@ class RunBridge:
         return (f"✅ Preset '{names[pick - 1]}' loaded (global - phone + "
                 "UI).")
 
-    def cancel_setup(self) -> str:
-        """/cancel: clear the model/ctx overrides for phone runs (the
-        pending /setModel quiz no longer exists - commands apply live)."""
-        ov = self.state.data.setdefault("run_overrides", {})
-        had = any(ov.get(k) for k in ("model", "planner_model",
-                                      "coder_ctx", "planner_ctx"))
-        ov.pop("model", None)
-        ov.pop("planner_model", None)
-        ov.pop("coder_ctx", None)
-        ov.pop("planner_ctx", None)
-        self.state.save()
-        return ("Overrides cleared - upcoming phone runs use the engine "
-                "settings again." if had else
-                "No overrides set - nothing to clear.")
-
     def reset_overrides(self) -> str:
         self.state.data["run_overrides"] = {}
         self.state.data["pending_setup"] = None
@@ -2499,6 +2484,22 @@ class RunBridge:
             return f"{ask_ans} - delivered"
         if answer not in ("1", "2", "3"):
             return "unknown button"
+
+        def _fmt_routed(resp, *, dup_msg: str) -> str:
+            try:
+                routed = str((resp.json() or {}).get("routed") or "")
+            except (ValueError, TypeError, AttributeError):
+                routed = ""
+            if routed == "duplicate":
+                return dup_msg
+            if routed == "expired":
+                return "⏱ card already timed out - the call was denied (fail closed)"
+            if routed == "stale":
+                return "ℹ️ That card is outdated (a newer one replaced it) - nothing changed."
+            if answer == "2":
+                return "always (this chat, this exact call) - delivered"
+            return "allowed (once) - delivered" if answer == "1" else "denied - delivered"
+
         own = self._open_own_approval or {}
         if rid == own.get("rid"):
             if card_did and card_did != (own.get("decision_id") or ""):
@@ -2509,29 +2510,11 @@ class RunBridge:
                 tool=own.get("tool") or "")
             code = getattr(resp, "status_code", 500)
             if code >= 300:
-                # Keep the card answerable on a 4xx/5xx (the pause may still
-                # be waiting); the text path already does the same.
                 return f"not accepted (HTTP {code})"
             self._open_own_approval = None
             self.state.data.setdefault("open_approvals", {}).pop(rid, None)
             self.state.save()
-            try:
-                routed = str((resp.json() or {}).get("routed") or "")
-            except (ValueError, TypeError, AttributeError):
-                routed = ""
-            if routed == "duplicate":
-                return "already answered - nothing changed"
-            if routed == "expired":
-                # TOAST-HONESTY (2026-10-06): the engine discarded this
-                # decision (fail-closed timeout already denied the call) -
-                # "delivered" would be a lie.
-                return "⏱ card already timed out - the call was denied (fail closed)"
-            if routed == "stale":
-                return "ℹ️ That card is outdated (a newer one replaced it) - nothing changed."
-            if answer == "2":
-                return "always (this chat, this exact call) - delivered"
-            return "allowed (once) - delivered" if answer == "1" \
-                else "denied - delivered"
+            return _fmt_routed(resp, dup_msg="already answered - nothing changed")
         if rid != m.get("run_id") or not m.get("approval_sig"):
             return "card already gone"
         resp = await self.hive.decide_approval(
@@ -2542,22 +2525,7 @@ class RunBridge:
         m["approval_sig"] = None
         if code >= 300:
             return f"not accepted (HTTP {code})"
-        try:
-            routed = str((resp.json() or {}).get("routed") or "")
-        except (ValueError, TypeError, AttributeError):
-            routed = ""
-        if routed == "duplicate":
-            return "already answered (UI) - nothing changed"
-        if routed == "expired":
-            # TOAST-HONESTY (2026-10-06): see approval_callback - the engine
-            # discarded this decision, never claim "delivered".
-            return "⏱ card already timed out - the call was denied (fail closed)"
-        if routed == "stale":
-            return "ℹ️ That card is outdated (a newer one replaced it) - nothing changed."
-        if answer == "2":
-            return "always (this chat, this exact call) - delivered"
-        return "allowed (once) - delivered" if answer == "1" \
-            else "denied - delivered"
+        return _fmt_routed(resp, dup_msg="already answered (UI) - nothing changed")
 
     async def mirror_send(self, text: str) -> str:
         """Route a phone message into the mirrored run: while an APPROVAL

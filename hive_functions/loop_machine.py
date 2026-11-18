@@ -166,43 +166,11 @@ class ExecutionController:
         if union == 0:
             return 0.0
         return inter / union
-    
-    def can_continue(self, is_aborted_callback=None, max_tool_rounds: int = 0) -> bool:
-        if self.state == AgentState.HALTED:
-            return False
-
-        if is_aborted_callback and is_aborted_callback():
-            self.abort(StopReason.USER_ABORTED)
-            return False
-
-        if self.iteration > self.max_iterations:
-            self.abort(StopReason.MAX_ITERATIONS)
-            return False
-
-        if max_tool_rounds > 0 and self.tool_rounds >= max_tool_rounds:
-            self.abort(StopReason.MAX_TOOL_ROUNDS)
-            return False
-
-        if self.is_stuck():
-            self.abort(StopReason.STUCK_IN_LOOP)
-            return False
-
-        return True
-
-    def record_tool_call(self, n: int = 1):
-
-
-        self.tool_rounds += n
 
     def sync_tool_rounds(self, total: int):
 
 
         self.tool_rounds = total
-
-    def increment_iteration(self):
-
-
-        self.iteration += 1
 
     def get_summary(self) -> str:
         reason = self.stop_reason.value if self.stop_reason else "unknown"

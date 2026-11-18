@@ -15,148 +15,116 @@ def init_websearch(available: bool, module=None):
 _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "read_file", "description": (
-            "Read file content. ALWAYS call read_file before edit_file on existing files. "
-            "Returns RAW content (no line-number prefixes) with a header showing the total/selected line range. "
-            "Files above the read budget are refused with a range hint; "
-            "use get_signatures first and start_line/end_line to read only the sections you need."
+            "Read raw file content (ALWAYS call read_file before edit_file). "
+            "Returns header with total/selected line range; large files require start_line/end_line after get_signatures."
         ),
         "parameters": {"type": "object", "properties": {
-            "path":       {"type": "string", "description": "Absolute or relative file path"},
-            "start_line": {"type": "integer", "description": "First line to read (1-indexed, optional)"},
-            "end_line":   {"type": "integer", "description": "Last line to read (inclusive, optional)"}
+            "path":       {"type": "string", "description": "File path"},
+            "start_line": {"type": "integer", "description": "Start line (1-indexed)"},
+            "end_line":   {"type": "integer", "description": "End line (inclusive)"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
         "name": "get_signatures",
         "description": (
-            "Return a compact structural map of a file (classes, functions, methods, variables) with line numbers. "
-            "Use BEFORE read_file on large files to identify relevant line ranges. "
-            "Supports .py (AST-based) and .ts/.js (heuristic). "
-            "Then call read_file with start_line/end_line for only the sections you need."
+            "Return compact structural outline (classes, functions, line numbers) before read_file on large .py/.ts/.js files."
         ),
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Absolute or relative file path"},
-            "max_items": {"type": "integer", "description": "Optional max number of signature lines (default: 400)"}
+            "path": {"type": "string", "description": "File path"},
+            "max_items": {"type": "integer", "description": "Max signature lines (default 400)"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
         "name": "find_references",
         "description": (
-            "Find all references/uses of a symbol across the workspace. "
-            "Returns file paths + line numbers (definition vs. use). "
-            "Preferred over run_bash grep for 'who calls X'. Max 160 results."
+            "Find all symbol references across the workspace (file paths + line numbers, max 160). Preferred over grep."
         ),
         "parameters": {"type": "object", "properties": {
-            "symbol": {"type": "string", "description": "The symbol to find (e.g. 'calculateTotal' or 'Handler')"},
-            "path":   {"type": "string", "description": "Scan root (default: workspace)"},
-            "max_items": {"type": "integer", "description": "Optional max results (default: 160)"}
+            "symbol": {"type": "string", "description": "Symbol name"},
+            "path":   {"type": "string", "description": "Scan root (default workspace)"},
+            "max_items": {"type": "integer", "description": "Max results (default 160)"}
         }, "required": ["symbol"]}
     }},
     {"type": "function", "function": {
-        "name": "list_dir", "description": "List the IMMEDIATE entries (files + subdirectories) of one directory level — non-recursive. Path defaults to project root if empty. Returns up to 200 entries; for deeper structure call list_dir on a subdirectory or use find_files.",
+        "name": "list_dir", "description": "List immediate entries (files + subdirs, non-recursive, max 200) of a directory.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Directory path to list (default: project root, optional)"}
+            "path": {"type": "string", "description": "Directory path (default root)"}
         }, "required": []}
     }},
     {"type": "function", "function": {
         "name": "find_files",
         "description": (
-            "Find files by GLOB pattern (file name matching, NOT content search). "
-            "Use for discovering project structure. Examples: '**/*.py' (all Python files), 'src/**/*.ts', 'test_*.py', '*.json'. "
-            "For searching file CONTENTS use search_code."
+            "Find files by glob pattern (e.g. '**/*.py', 'test_*.py'). For file contents use search_code."
         ),
         "parameters": {"type": "object", "properties": {
             "pattern": {"type": "string", "description": "Glob pattern"},
-            "path":    {"type": "string", "description": "Search root (default: .)"}
+            "path":    {"type": "string", "description": "Search root (default .)"}
         }, "required": ["pattern"]}
     }},
     {"type": "function", "function": {
         "name": "search_code", "description": (
-            "Search file CONTENTS with regex or plain text (file names: find_files). "
-            "Preferred over run_bash for content searches. Returns file paths + line "
-            "numbers; confined to the workspace."
+            "Search workspace file contents with regex/text; returns matching file paths and line numbers."
         ),
         "parameters": {"type": "object", "properties": {
-            "pattern": {"type": "string", "description": "Regex pattern or plain search string"},
-            "path":    {"type": "string", "description": "Search path (default: ., searches subdirectories)"}
+            "pattern": {"type": "string", "description": "Regex or plain text"},
+            "path":    {"type": "string", "description": "Search path (default .)"}
         }, "required": ["pattern"]}
     }},
     {"type": "function", "function": {
         "name": "run_python",
         "description": (
-            "USE WHEN: quick Python checks or workspace smoke tests (10s timeout, cwd & PYTHONPATH = workspace). "
-            "Standalone script with no conversation context. NOT for long-running servers or "
-            "shell commands — use run_bash or write a file + run_tests."
+            "Run quick standalone Python snippet (10s timeout, workspace cwd). Not for servers; use run_bash or run_tests."
         ),
         "parameters": {"type": "object", "properties": {
-            "code": {"type": "string", "description": "Python snippet; output from stdout (use print())."}
+            "code": {"type": "string", "description": "Python snippet (use print() for output)"}
         }, "required": ["code"]}
     }},
     {"type": "function", "function": {
         "name": "install_package",
         "description": (
-            "Install a dependency (controlled way — never raw run_bash installs). "
-            "Managers: npm, pip, cargo, go, dotnet, composer. Budgeted per run. "
-            "Verify the import/build via run_bash afterwards."
+            "Install dependency via npm/pip/cargo/go/dotnet/composer (never raw run_bash). Budgeted; verify afterwards."
         ),
         "parameters": {"type": "object", "properties": {
             "manager":  {"type": "string", "enum": ["npm", "pip", "cargo", "go", "dotnet", "composer"],
                          "description": "Package manager"},
-            "packages": {"type": "string", "description": "Space-separated package names"},
+            "packages": {"type": "string", "description": "Space-separated packages"},
             "dev":      {"type": "boolean", "description": "npm --save-dev"}
         }, "required": ["manager", "packages"]}
     }},
     {"type": "function", "function": {
         "name": "run_bash",
         "description": (
-            "Execute a shell command. On Windows the shell is Git Bash when "
-            "installed (POSIX syntax), else Windows PowerShell 5.1 - "
-            "settings.run_bash_shell (auto|bash|powershell) decides, and the "
-            "error output names the shell that ran. On Linux/Mac it is bash. "
-            "Only for what no dedicated tool covers: content search -> search_code, "
-            "file names -> find_files, references -> find_references, git -> git_status, "
-            "installs -> install_package (each of these only if it is in your "
-            "tool list). Long-running services: use start_background — "
-            "run_bash waits and times out.\n"
-            "NEVER create or edit source files via run_bash — use write_file/edit_file "
-            "(on Windows '>' writes UTF-16 and there are no heredocs). "
-            "Check OUTPUT before retrying; never blindly retry identical failing args."
+            "Run shell command (Git Bash when installed on Windows, else PowerShell 5.1; bash on Linux/Mac). "
+            "Prefer dedicated tools when available: content -> search_code, files -> find_files, "
+            "refs -> find_references, git -> git_status, installs -> install_package (only if it is in your tool list). "
+            "NEVER write files via run_bash (Windows '>' writes UTF-16) — use write_file/edit_file. "
+            "Use start_background for long servers. Check output before retrying."
         ),
         "parameters": {"type": "object", "properties": {
-            "cmd": {"type": "string", "description": "Shell command - POSIX bash syntax when the shell is Git Bash, PowerShell syntax only when the shell is powershell.exe"}
+            "cmd": {"type": "string", "description": "Shell command (POSIX bash when Git Bash active, else PowerShell)"}
         }, "required": ["cmd"]}
     }},
     {"type": "function", "function": {
         "name": "edit_file",
         "description": (
-            "Replace ONE unique passage in an EXISTING file. Copy old_text "
-            "VERBATIM from your last read_file; it must appear exactly once. "
-            "new_text is the replacement. For several changes in the SAME file "
-            "use edits=[{old_text,new_text}, ...] (max 20, one atomic write). "
-            "To create a new file use write_file."
+            "Replace one unique verbatim passage from read_file in an existing file, or pass edits=[{old_text,new_text}] (max 20 atomic writes). New files: write_file."
         ),
         "parameters": {"type": "object", "properties": {
             "path":     {"type": "string", "description": "File path"},
-            "old_text": {"type": "string", "description": "Exact text to replace — copied verbatim from read_file, unique in the file"},
+            "old_text": {"type": "string", "description": "Exact unique text from read_file"},
             "new_text": {"type": "string", "description": "Replacement text"},
-            "edits":    {"type": "array", "description": "Up to 20 {old_text,new_text} replacements for this file, applied in order.",
+            "edits":    {"type": "array", "description": "Up to 20 ordered {old_text,new_text} replacements",
                          "items": {"type": "object", "properties": {
-                             "old_text": {"type": "string", "description": "Exact unique text at this point"},
+                             "old_text": {"type": "string", "description": "Exact unique text"},
                              "new_text": {"type": "string", "description": "Replacement text"}
                          }, "required": ["old_text", "new_text"]}},
-            "confirm_shrink": {"type": "boolean", "description": "Only when a replacement intentionally removes most of the file"}
+            "confirm_shrink": {"type": "boolean", "description": "Allow replacing most of file"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
         "name": "apply_patch",
         "description": (
-            "Apply a unified diff to one or more files. For multi-file "
-            "refactors (move + import update, rename caller + definition). "
-            "All-or-nothing: exact context lines REQUIRED around every "
-            "change; workspace-relative paths; new files use "
-            "'--- /dev/null', deletions '+++ /dev/null'. Nothing is written "
-            "unless EVERY hunk matches; a failed write rolls back. Simple "
-            "single-file edits: prefer edit_file."
+            "Apply atomic multi-file unified diff (exact context required, rolled back on any mismatch). Single-file edits: prefer edit_file."
         ),
         "parameters": {"type": "object", "properties": {
             "patch": {"type": "string", "description": "Unified diff text"}
@@ -165,20 +133,13 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "write_file",
         "description": (
-            "Create a file, or overwrite it completely, with plain content (no "
-            "SEARCH/REPLACE markers — that is edit_file). For a SMALL change inside "
-            "a big file prefer edit_file: a full overwrite needs the complete content.\n"
-            "Stay within your WRITE RULES char target. If the call is cut off by the "
-            "output limit, the server keeps everything up to the last complete line "
-            "and reports that line — continue with write_file_append.\n"
-            "An overwrite that would shrink a file drastically is refused once: pass "
-            "confirm_shrink=true only when the file is really supposed to get much "
-            "smaller (a rewrite/truncation)."
+            "Create a file or overwrite it completely with plain text. For small edits prefer edit_file. "
+            "Long files: continue cut-off chunks via write_file_append. Large shrink requires confirm_shrink=true."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Complete file content (plain text, no markers)."},
-            "confirm_shrink": {"type": "boolean", "description": "Set true to allow an overwrite that shrinks an existing file by a lot."}
+            "content": {"type": "string", "maxLength": 20000, "description": "Complete plain file content"},
+            "confirm_shrink": {"type": "boolean", "description": "Allow large file shrink"}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
@@ -203,106 +164,85 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "write_file_append",
         "description": (
-            "Append a continuation chunk VERBATIM to the end of a file — only as "
-            "follow-up in the SAME write sequence (write_file part1 -> append "
-            "part2 -> append part3), or to continue a write that was cut off at "
-            "the output limit (start after the last complete line the server "
-            "reported). Stay within your WRITE RULES char target."
+            "Append verbatim continuation chunk to end of file (follow-up to cut-off write_file, starting after last complete line)."
         ),
         "parameters": {"type": "object", "properties": {
-            "path":    {"type": "string", "description": "File path (must already exist)"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk, verbatim."}
+            "path":    {"type": "string", "description": "Existing file path"},
+            "content": {"type": "string", "maxLength": 20000, "description": "Verbatim chunk"}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
         "name": "undo_last",
         "description": (
-            "Undo the latest file change of the current chunk round. "
-            "Restores a file to its state BEFORE the current round's edits/writes. "
-            "Use WITHOUT path to undo ALL files changed in this round, or WITH path to undo a single file. "
-            "Cannot undo files that were never modified in this round. "
-            "After undoing, re-read the file before further edits."
+            "Restore files modified in the current round to their pre-round state (omit path for all files; re-read afterwards)."
         ),
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "File to undo (omit: all changes this round)."}
+            "path": {"type": "string", "description": "File to undo (omit for all this round)"}
         }, "required": []}
     }},
     {"type": "function", "function": {
         "name": "ask_user",
         "description": (
-            "Pause execution to ask the user a SINGLE critical question. "
-            "Use ONLY when the answer CANNOT be found by reading code, searching the project, or inferring from context. "
-            "NOT for questions like 'which file should I edit?' — figure that out yourself. "
-            "NOT for confirmations — just act. Valid cases: missing credentials, ambiguous architecture choice, destructive operations."
+            "Pause to ask user ONE blocking question that cannot be answered from code (credentials, ambiguous design, destructive op)."
         ),
         "parameters": {"type": "object", "properties": {
-            "question": {"type": "string", "description": "Specific, concise question for the user."}
+            "question": {"type": "string", "description": "Concise question"}
         }, "required": ["question"]}
     }},
     {"type": "function", "function": {
         "name": "run_tests",
         "description": (
-            "Run the project's FULL test suite (auto-detects pytest/npm/vitest/"
-            "jest/cargo/go/maven/dotnet; pre-existing failures count too). "
-            "MUST run before task_complete. Returns [TEST-RESULT] pass/fail "
-            "lines. No suite found -> verify manually via run_bash."
+            "Run full test suite (pytest/npm/vitest/jest/cargo/go/maven/dotnet). "
+            "Must run before task_complete; pre-existing failures count too. Returns [TEST-RESULT] lines."
         ),
         "parameters": {"type": "object", "properties": {
-            "timeout": {"type": "integer", "description": "Timeout in seconds (default 90, max 300)", "default": 90},
+            "timeout": {"type": "integer", "description": "Timeout s (default 90, max 300)", "default": 90},
             "lang_override": {"type": "string",
                               "enum": ["python", "javascript", "typescript", "astro", "docker", "java", "rust", "go", "csharp", "cpp"],
-                              "description": "Force a language instead of auto-detect", "default": ""}
+                              "description": "Force language", "default": ""}
         }, "required": []}
     }},
     {"type": "function", "function": {
         "name": "start_background",
         "description": (
-            "Start a long-running command in the BACKGROUND (e.g. 'npm run dev', "
-            "'docker compose up', a test watcher) and return a handle. The process "
-            "keeps running while you do other work — unlike run_bash which waits. "
-            "Then use get_background_output(handle) to read its logs and "
-            "stop_background(handle) to kill it."
+            "Start long-running process in background and return handle; inspect with get_background_output and stop with stop_background."
         ),
         "parameters": {"type": "object", "properties": {
-            "cmd": {"type": "string", "description": "Shell command to run in the background"}
+            "cmd": {"type": "string", "description": "Background shell command"}
         }, "required": ["cmd"]}
     }},
     {"type": "function", "function": {
         "name": "get_background_output",
         "description": (
-            "Read the accumulated stdout/stderr of a background process (started via "
-            "start_background). Returns its handle + running/exited status + buffered "
-            "output. With no handle, lists all running background processes."
+            "Read stdout/stderr + status of background handle (omit handle to list all running)."
         ),
         "parameters": {"type": "object", "properties": {
-            "handle": {"type": "string", "description": "The handle returned by start_background (omit to list all)"}
+            "handle": {"type": "string", "description": "Handle from start_background (optional)"}
         }, "required": []}
     }},
     {"type": "function", "function": {
         "name": "stop_background",
         "description": "Stop a background process started via start_background, by its handle.",
         "parameters": {"type": "object", "properties": {
-            "handle": {"type": "string", "description": "The handle returned by start_background"}
+            "handle": {"type": "string", "description": "Handle from start_background"}
         }, "required": ["handle"]}
     }},
     {"type": "function", "function": {
         "name": "task_complete",
         "description": (
-            "Signal the coding task is finished (all changes implemented and "
-            "verified). Requires a status object: completed, blockers, "
-            "build_status."
+            "Signal coding task finished after edits & verification (requires completed, blockers, build_status)."
         ),
         "parameters": {"type": "object", "properties": {
             "status": {
                 "type": "object",
-                "description": "See fields.",
+                "description": "Completion report",
                 "properties": {
                     "completed": {"type": "array", "items": {"type": "string"},
-                                  "description": "What was implemented/verified"},
+                                  "description": "Implemented/verified items"},
                     "blockers": {"type": "array", "items": {"type": "string"},
-                                 "description": "What could not be done and why; empty list if none"},
+                                 "description": "Remaining blockers (empty if none)"},
                     "build_status": {"type": "string", "enum": ["passing", "failing", "untested"],
-                                     "description": "Result of your final verification"}
+                                     "description": "Final verification status"}
                 },
                 "required": ["completed", "blockers", "build_status"]
             }
@@ -697,11 +637,11 @@ def subagent_tools_enabled(settings: dict | None = None) -> bool:
             from settings import load_settings
             settings = load_settings() or {}
     except (ImportError, AttributeError, TypeError, ValueError, OSError):
-        return True
-    raw = (settings or {}).get("subagent_lite_enabled", True)
+        return False
+    raw = (settings or {}).get("subagent_lite_enabled", False)
     if isinstance(raw, bool):
         return raw
-    return str(raw or "").strip().lower() not in ("0", "false", "off", "no")
+    return str(raw or "").strip().lower() not in ("", "0", "false", "off", "no")
 
 
 def _tool_names_for_mode(
@@ -879,47 +819,50 @@ def fit_tools_to_budget(tools: list, budget_chars: int, *, mode: str = "") -> li
     if budget_chars is None or budget_chars <= 0 or not tools:
         return list(tools)
 
-    def _total(state: dict, pool: dict) -> int:
-        s = 0
-        for n, t in pool.items():
-            fn = t["function"]
-            s += len(_json.dumps({**t, "function": {
-                **fn, "description": _desc_at_level(str(fn.get("description", "")),
-                                                    state.get(n, 0))}}))
-        return s
-
-    pool = {}
+    pool: dict[str, dict] = {}
+    order: list[str] = []
+    variants: dict[str, tuple[dict, dict, dict]] = {}
+    sizes: dict[str, tuple[int, int, int]] = {}
     for t in tools:
-        n = t.get("function", {}).get("name", "")
-        if n:
-            pool[n] = t
-    state = {n: 0 for n in pool}
+        fn = t.get("function", {})
+        n = fn.get("name", "")
+        if not n:
+            continue
+        desc = str(fn.get("description", ""))
+        v = tuple(
+            {**t, "function": {**fn, "description": _desc_at_level(desc, lv)}}
+            for lv in (0, 1, 2)
+        )
+        if n not in pool:
+            order.append(n)
+        pool[n] = t
+        variants[n] = v  # type: ignore[assignment]
+        sizes[n] = (len(_json.dumps(v[0])), len(_json.dumps(v[1])), len(_json.dumps(v[2])))
+
+    state = {n: 0 for n in order}
+    cur_total = sum(sizes[n][0] for n in pool)
 
     # 1. drop non-core tools that keep the MINIMAL set over budget
     for n in sorted(pool, key=lambda name: _tool_priority(name, mode), reverse=True):
-        if _total(state, pool) <= budget_chars:
+        if cur_total <= budget_chars:
             break
         if _tool_priority(n, mode) == 0:
             continue  # tier 0 is always kept
+        cur_total -= sizes[n][0]
         del pool[n]
         del state[n]
 
     # 2. upgrade by priority, two steps (minimal -> sentence -> full)
     for target_level in (1, 2):
         for n in sorted(pool, key=lambda name: _tool_priority(name, mode)):
-            if state[n] >= target_level:
-                continue
             old = state[n]
-            state[n] = target_level
-            if _total(state, pool) > budget_chars:
-                state[n] = old
-    return [
-        {**pool[n], "function": {**pool[n]["function"],
-                                 "description": _desc_at_level(
-                                     str(pool[n]["function"].get("description", "")),
-                                     state[n])}}
-        for n in pool
-    ]
+            if old >= target_level:
+                continue
+            delta = sizes[n][target_level] - sizes[n][old]
+            if cur_total + delta <= budget_chars:
+                state[n] = target_level
+                cur_total += delta
+    return [variants[n][state[n]] for n in order if n in pool]
 
 
 def _apply_budget_texts(tools: list, budgets) -> list:

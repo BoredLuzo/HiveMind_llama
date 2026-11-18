@@ -179,7 +179,10 @@ _TS_DEF_TYPES: dict[str, dict[str, str]] = {
 _TS_SYMBOL_CAP = 200
 
 
-def _extract_symbols_tree_sitter(abs_path: str) -> Optional[list[str]]:
+def _extract_symbols_tree_sitter(
+    abs_path: str,
+    raw_bytes: Optional[bytes] = None,
+) -> Optional[list[str]]:
 
     ext = os.path.splitext(abs_path)[1].lower()
     lang = _TS_LANG_BY_EXT.get(ext)
@@ -189,8 +192,11 @@ def _extract_symbols_tree_sitter(abs_path: str) -> Optional[list[str]]:
     try:
         from tree_sitter_language_pack import get_parser
         parser = get_parser(lang)
-        with open(abs_path, "rb") as f:
-            content = f.read(512_000)
+        if raw_bytes is None:
+            with open(abs_path, "rb") as f:
+                content = f.read(512_000)
+        else:
+            content = raw_bytes[:512_000]
         tree = parser.parse(content)
     except Exception:
         return None
@@ -237,23 +243,19 @@ def _analyze_file(abs_path: str, rel_path: str) -> Optional[FileInfo]:
 
     try:
         with open(abs_path, "rb") as _bf:
-            _head = _bf.read(4096)
-        if b"\x00" in _head:
+            _raw = _bf.read(512_000)
+        if b"\x00" in _raw[:4096]:
             return None
     except Exception:
         return None
 
-    symbols = _extract_symbols_tree_sitter(abs_path)
+    symbols = _extract_symbols_tree_sitter(abs_path, _raw)
     if symbols is None:
         from hive_functions.hivemind_feature.ast_tools import get_signatures_report
         report = get_signatures_report(abs_path)
         symbols = _extract_symbols_from_report(report)
 
-    try:
-        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read(32_000)
-    except Exception:
-        content = ""
+    content = _raw[:32_000].decode("utf-8", errors="replace")
 
     imports = _extract_imports(content)
 

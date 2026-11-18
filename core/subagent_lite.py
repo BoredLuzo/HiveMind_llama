@@ -147,7 +147,7 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
 
     global _active, _last_block_ts
 
-    if not bool(_s("subagent_lite_enabled", True)):
+    if not bool(_s("subagent_lite_enabled", False)):
         return "Subagent disabled — researching inline."
     if _active:
         return "Subagent already busy — researching inline."
@@ -190,13 +190,11 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _tool_schemas() -> list[dict]:
-    """Filter the read-only tool OpenAI schemas from definitions.py.
-
-    BUDGET-TEXTS (2026-10-17): the schemas state the caps the handlers actually
-    enforce (core.budgets.active(), i.e. the run's budgets or the same 16k
-    fallback the handlers use) instead of shipping the module placeholder text.
-    This set is small enough to fit every window, so no fit is applied."""
+def build_tool_schemas(
+    allowed_tools: tuple[str, ...] | list[str],
+    fallback_prefix: str = "read-only tool",
+) -> list[dict]:
+    """Filter OpenAI tool schemas from definitions.py with active runtime budgets."""
     try:
         from tools.definitions import _INLINE_CODING_TOOLS, _apply_budget_texts
         try:
@@ -204,19 +202,23 @@ def _tool_schemas() -> list[dict]:
             _src = _apply_budget_texts(list(_INLINE_CODING_TOOLS), _b_active())
         except (ImportError, AttributeError, TypeError):
             _src = list(_INLINE_CODING_TOOLS)
-        want = set(_ALLOWED_TOOLS)
+        want = set(allowed_tools)
         return [t for t in _src
                 if t.get("function", {}).get("name") in want]
     except Exception:
-        # Minimal-Fallback (OpenAI-Format)
-        out = []
-        for n in _ALLOWED_TOOLS:
-            out.append({"type": "function", "function": {
+        return [
+            {"type": "function", "function": {
                 "name": n,
-                "description": f"read-only tool: {n}",
+                "description": f"{fallback_prefix}: {n}",
                 "parameters": {"type": "object", "properties": {}},
-            }})
-        return out
+            }}
+            for n in allowed_tools
+        ]
+
+
+def _tool_schemas() -> list[dict]:
+    """Filter the read-only tool OpenAI schemas from definitions.py."""
+    return build_tool_schemas(_ALLOWED_TOOLS, "read-only tool")
 
 
 async def _call_model(port: int, model: str, messages: list[dict]) -> dict:

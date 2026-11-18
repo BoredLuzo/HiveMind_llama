@@ -201,17 +201,15 @@ VRAM_PREFLIGHT_GATE = True
 #     Hermes 512 -> 91.7 t/s, 1024 -> 113.6 t/s (+23.9 %),
 #     shared delta vs the 512 run: +52 MiB only.
 #   Groot (ub 512 vs 1024, 4.2k/10.5k depth): +27.7 % / +17.1 %, +58 MiB.
-# Default 256 (2026-10-31, user decision): the shipped baseline stays at the
-# tight-GPU value. 512/1024 are measured OPT-INS (Hermes 512 -> 91.7 t/s,
-# 1024 -> 113.6 t/s at 18k prompt; Groot +27.7 %/+17.1 %) and cost a larger
-# compute buffer. The live install sets duo_ubatch 1024 explicitly.
-LLAMA_UBATCH = 256
-LLAMA_UBATCH_DEFAULT = 256
+# Default 512 (2026-11-18): 512 lifts 4B/MoE prefill significantly (+72 MiB
+# compute buffer vs 256); tight <6 GB GPUs can still override to 256.
+LLAMA_UBATCH = 512
+LLAMA_UBATCH_DEFAULT = 512
 LLAMA_UBATCH_MIN = 64
 LLAMA_UBATCH_MAX = 4096
 LLAMA_BATCH_DEFAULT = 1024
 # --fit on sizes unset args to free VRAM; target = per-device margin MiB.
-LLAMA_FIT = False
+LLAMA_FIT = True
 LLAMA_FIT_TARGET_MIB = 0
 # Windows Vulkan WDDM spill guard: forces pure DEVICE_LOCAL VRAM allocations
 # in ggml-vulkan unless disabled via settings or GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM.

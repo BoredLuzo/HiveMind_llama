@@ -14,7 +14,6 @@ Setup-Skript gedacht.
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import sys
 from pathlib import Path
@@ -36,31 +35,13 @@ VRAM_FIT_RATIO = 0.80
 
 
 def _total_ram_gb() -> float:
-    """RAM ohne Zusatzpaket - Windows via ctypes, Linux via /proc."""
+    """Delegate RAM probing to deploy.fetch_models.probe_hardware."""
     try:
-        if sys.platform == "win32":
-            class _MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [("dwLength", ctypes.c_ulong),
-                            ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong),
-                            ("ullAvailPhys", ctypes.c_ulonglong),
-                            ("ullTotalPageFile", ctypes.c_ulonglong),
-                            ("ullAvailPageFile", ctypes.c_ulonglong),
-                            ("ullTotalVirtual", ctypes.c_ulonglong),
-                            ("ullAvailVirtual", ctypes.c_ulonglong),
-                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-            stat = _MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                return round(stat.ullTotalPhys / (1024 ** 3), 1)
-            return 0.0
-        with open("/proc/meminfo", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("MemTotal:"):
-                    return round(int(line.split()[1]) / (1024 ** 2), 1)
-    except (OSError, ValueError, AttributeError):
+        sys.path.insert(0, str(ROOT / "deploy"))
+        import fetch_models as fm
+        return float(fm.probe_hardware()[1] or 0.0)
+    except (ImportError, OSError, ValueError, AttributeError):
         return 0.0
-    return 0.0
 
 
 def _vram_gb() -> float:

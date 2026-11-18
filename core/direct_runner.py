@@ -158,9 +158,14 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
                                          vision=vision)
         _agent = ctx.pipeline.agents["direct"]
-        _think = bool(getattr(_agent, "thinking", False))
-        _budget = int(getattr(_agent, "thinking_budget", 0) or 0)
-        _max_tokens = max(int(getattr(_agent, "max_tokens", 600) or 600) + 400, 1000)
+        from core.model_sampling import resolve_agent_sampling as _resolve_dt_smp
+        _, _think, _resolved_budget, _ = _resolve_dt_smp(
+            model, agent=_agent, settings=_settings_dict, role="direct",
+        )
+        _budget = int(getattr(_agent, "thinking_budget", 0) or _resolved_budget or 0)
+        _base_tok = int(getattr(_agent, "max_tokens", 600) or 600)
+        _max_tokens = _base_tok + (_budget if _think and _budget > 0 else 0)
+        _max_tokens = min(int(_max_tokens), max(256, int(_num_ctx) - 512))
         try:
             _rounds_raw = int(ctx.settings.get("direct_tools_max_rounds", 12))
         except (TypeError, ValueError):
@@ -272,10 +277,16 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         # USAGE (2026-11-08): surface the loop's summed token counters so
         # run-stats and the benchmark see real numbers for tool runs.
         if _state is not None and (_state.prompt_tokens or _state.completion_tokens):
+            _dt_gen_ms = float(getattr(_state, "gen_ms", 0.0) or 0.0)
+            _dt_tps = float(getattr(_state, "decode_tps", 0.0) or 0.0)
+            if _dt_tps <= 0 and _dt_gen_ms > 0 and _state.completion_tokens > 0:
+                _dt_tps = _state.completion_tokens / (_dt_gen_ms / 1000.0)
             yield {"type": "usage_meta", "phase": "direct_tools",
                    "completion_tokens": int(_state.completion_tokens),
                    "prompt_tokens": int(_state.prompt_tokens),
-                   "cached_tokens": int(_state.cached_tokens)}
+                   "cached_tokens": int(_state.cached_tokens),
+                   "gen_ms": round(_dt_gen_ms, 1),
+                   "decode_tps": round(_dt_tps, 2)}
     except Exception as _e:
         _direct_log.warning("[Direct-Tools] tool loop failed: %s", _e)
         yield {"type": "status", "content": f"⚠ Tool loop error: {str(_e)[:120]}"}
@@ -712,6 +723,7 @@ async def _run_direct_inner(ctx):
         # curAgent is null) → the answer was lost, the bubble stayed empty, and
         # the run ended "without error".
         yield await ctx.emit({"type": "agent", "content": "Answer", "model": _direct_model})
+        yield await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
         _ws_used = False
         _tool_content = ""
         _tool_final_msgs = None
@@ -784,11 +796,14 @@ async def _run_direct_inner(ctx):
         _direct_tokens = min(int(_direct_tokens), max(256, int(_direct_ctx_cap)))
         parts, t = [], time.time()
         _pause_aborted = bool(_dt_result and _dt_result.pause_aborted)   # A1: an abort during the pause gate ends the run
+        _direct_had_err = False
         if _direct_tools_active and (_tool_content or _pause_aborted):
             # ToolLoop already streamed the answer live (or aborted in pause) — skip fallback stream.
             parts = [_tool_content] if _tool_content else []
         else:
             _d_ct_sum = _d_pt_sum = _d_ca_sum = 0
+            _d_gen_ms_sum = 0.0
+            _d_pred_tps = 0.0
             try:
                 # _pick_direct_model(complex, ...) → qwen3:8b → 131072 default ctx → ~8GB KV-Cache → OVERFLOW
                 _stream_msgs = messages
@@ -821,6 +836,8 @@ async def _run_direct_inner(ctx):
                     _round_tok_start = len(parts)
                     if is_ctx_aborted(ctx):
                         break
+                    _d_round_t0 = time.monotonic()
+                    _d_first_tok_t = None
                     if _direct_think:
                         # Thinking mode: stream content and reasoning separately.
                         async for _cont, _thk in ctx.pipeline.ollama.chat_stream(
@@ -842,6 +859,8 @@ async def _run_direct_inner(ctx):
                             if not _pg.continue_run:
                                 _pause_aborted = True
                                 break
+                            if _d_first_tok_t is None and (_thk or _cont):
+                                _d_first_tok_t = time.monotonic()
                             if _thk:
                                 yield await ctx.emit({"type": "thinking_token", "content": _thk})
                             if _cont:
@@ -873,10 +892,13 @@ async def _run_direct_inner(ctx):
                                 break
                             if not _tok:
                                 continue
+                            if _d_first_tok_t is None:
+                                _d_first_tok_t = time.monotonic()
                             parts.append(_tok)
                             yield await ctx.emit({"type": "token", "content": _tok})
                     if _pause_aborted or _aborted():
                         break
+                    _d_round_gen_ms = max(0.0, (time.monotonic() - (_d_first_tok_t or _d_round_t0)) * 1000.0)
                     # RUN-STATS: accumulate the round's real usage — the emit
                     # below stays ONE usage_meta event even with continuation
                     # rounds (the ledger adds per event).
@@ -890,6 +912,13 @@ async def _run_direct_inner(ctx):
                         _d_ct_sum += _d_ct
                         _d_pt_sum += int(_usage.get("prompt_tokens") or 0)
                         _d_ca_sum += _d_ca
+                        _d_gen_ms_sum += _d_round_gen_ms
+                        try:
+                            _d_round_pred = float((_d_tim.get("predicted_per_second") if isinstance(_d_tim, dict) else 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            _d_round_pred = 0.0
+                        if _d_round_pred > 0:
+                            _d_pred_tps = _d_round_pred
                         _usage.clear()
                     _direct_rounds += 1
                     # A2 continuation boundary: steers that arrived DURING the
@@ -904,6 +933,7 @@ async def _run_direct_inner(ctx):
                         # the model must see its own answer before the steer
                         _stream_msgs.append({"role": "assistant", "content": _round_text})
             except Exception as _direct_err:
+                _direct_had_err = True
                 _err_tok = f"[Direct error: {str(_direct_err)[:120]}]"
                 parts.append(_err_tok)
                 yield await ctx.emit({"type": "token", "content": _err_tok})
@@ -912,12 +942,15 @@ async def _run_direct_inner(ctx):
             # rides run_meta so run records and the done event attribute direct
             # runs instead of showing the registry fallback only.
             if _d_ct_sum > 0 or _d_pt_sum > 0:
+                _d_tps_emit = _d_pred_tps if _d_pred_tps > 0 else ((_d_ct_sum / (_d_gen_ms_sum / 1000.0)) if _d_gen_ms_sum > 0 and _d_ct_sum > 0 else 0.0)
                 yield await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
                 yield await ctx.emit({"type": "usage_meta", "phase": "direct",
                                 "timer_key": "direct_chat",
                                 "completion_tokens": _d_ct_sum,
                                 "prompt_tokens": _d_pt_sum,
-                                "cached_tokens": _d_ca_sum})
+                                "cached_tokens": _d_ca_sum,
+                                "gen_ms": round(_d_gen_ms_sum, 1),
+                                "decode_tps": round(_d_tps_emit, 2)})
         content = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
         # Content (z.B. max_tokens/thinking_budget durch Reasoning verbraucht),
         if _direct_think and not content and not _aborted():
@@ -948,8 +981,10 @@ async def _run_direct_inner(ctx):
                 )
         # A1: an abort-during-pause signals through the pause gate, not the
         # run abort event — the run still ends as "aborted".
-        _direct_stop_reason = ("aborted" if (_aborted() or _pause_aborted)
-                               else "completed")
+        _direct_stop_reason = (
+            "aborted" if (_aborted() or _pause_aborted)
+            else ("error" if (_direct_had_err and _d_ct_sum == 0 and _d_pt_sum == 0) else "completed")
+        )
         # SEND-FILE (direct mode): a file the model wrote in this run can be
         # queued with send_file, or auto-picked when exactly one deliverable
         # exists. The gateway uploads it before the done frame.

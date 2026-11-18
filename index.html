@@ -81,7 +81,7 @@
       <div class="mbtn on" data-mode="auto" onclick="setMode('auto',this)" title="Auto: the decider picks direct or agentic; tool requests run in the Direct chat loop (when Chat Tools on)">Auto</div>
       <div class="mbtn" data-mode="simple" onclick="setMode('simple',this)" title="Chat (Direct) — fast single-model chat. Chat Tools (read/python/web) available when enabled">Chat</div>
       <div class="mbtn" data-mode="pipeline" onclick="setMode('pipeline',this)" title="Pipeline — Analyst → Refiner → Critic → Synthesizer (multi-agent)">Pipeline</div>
-      <div class="mbtn" data-mode="code_duo" onclick="setMode('code_duo',this)" style="color:#20b0a0;border-color:rgba(32,176,160,.35)" title="Agentic — autonomous tool loop with optional Planner (or Critic-Duo review)">&#9889; Agentic</div>
+      <div class="mbtn" data-mode="code_duo" onclick="setMode('code_duo',this)" style="color:#20b0a0;border-color:rgba(32,176,160,.35)" title="Code — coding mode with Agentic solo loop or Critic-Duo review (optional Planner)">&#9889; Code</div>
     </div>
     <div id="mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin:-4px 0 9px;line-height:1.5"></div>
     <!-- ROUTING (2026-10-21): wer entscheidet, wenn der Modus "auto" ist.
@@ -256,7 +256,7 @@
               <span class="sl"></span>
             </label>
           </div>
-          <div id="subagent-lite-body" style="margin-top:4px;padding:6px 8px;border:1px solid var(--b2);border-radius:4px;background:rgba(16,19,26,.45)">
+          <div id="subagent-lite-body" style="display:none;margin-top:4px;padding:6px 8px;border:1px solid var(--b2);border-radius:4px;background:rgba(16,19,26,.45)">
             <div class="opt-row" style="margin-bottom:2px">
               <div class="opt-row-left">
                 <span class="opt-hint">Model ladder &mdash; rank 1 = default; any indexed model (needs native tool-calls), comma separated</span>
@@ -370,6 +370,14 @@
         <select id="duo-coder-model-sel" onchange="onDuoCoderModelChange(this.value)" title="Model for the coder"
           style="flex:1;background:#10131a;border:1px solid rgba(32,176,160,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4">
           <option value="">– choose model –</option>
+        </select>
+      </div>
+      <!-- Critic Model (shown in Critic-Duo submode) -->
+      <div id="duo-critic-model-row" style="display:flex;align-items:center;gap:7px">
+        <span class="duo-row-lbl" style="min-width:58px;flex-shrink:0;color:#e06c60">🔍 Critic</span>
+        <select id="duo-critic-model-sel" onchange="onDuoCriticModelChange(this.value)" title="Model for the critic in Critic-Duo mode (empty = Follow Duo-Coder)"
+          style="flex:1;background:#10131a;border:1px solid rgba(224,108,96,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4">
+          <option value="">Follow Duo-Coder</option>
         </select>
       </div>
       <div id="duo-pair-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 0 0;line-height:1.45"></div>
@@ -853,7 +861,7 @@
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#b090e0;flex:1;font-weight:600">MoE expert cache (MiB)</span>
             <input type="number" min="0" step="256" id="moe-cache-mib" value="0"
               style="width:76px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
-              onchange="postSettings({moe_cache_mib: parseInt(this.value)||0})">
+              onchange="syncEngineTwinInputs('config-moe-cache-mib','moe_cache_mib',this.value,false)">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55;margin-top:3px">
             Opt-in <code>--moe-cache-mib</code>: keeps hot MoE experts in VRAM.
@@ -865,7 +873,7 @@
             <span class="tgl-text">Fit to VRAM (--fit)</span>
             <label class="cfl-sw">
               <input type="checkbox" id="llama-fit-toggle"
-                onchange="postSettings({llama_fit:this.checked})">
+                onchange="syncEngineTwinInputs('config-llama-fit-toggle','llama_fit',this.checked,true)">
               <span class="sl"></span>
             </label>
           </div>
@@ -873,7 +881,7 @@
             <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);flex:1">Fit target margin (MiB)</span>
             <input type="number" min="0" step="128" id="llama-fit-target" value="0"
               style="width:76px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:3px 6px;text-align:center;outline:none"
-              onchange="postSettings({llama_fit_target_mib: parseInt(this.value)||0})">
+              onchange="syncEngineTwinInputs('config-llama-fit-target','llama_fit_target_mib',this.value,false)">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55;margin-top:3px">
             <code>--fit on</code> lets llama.cpp size unset arguments (layers, ctx)
@@ -2487,19 +2495,19 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);flex:1">MoE expert cache (MiB) — 0 = off</span>
         <input type="number" min="0" step="256" id="config-moe-cache-mib" value="0"
-          onchange="postSettings({moe_cache_mib: parseInt(this.value)||0})"
+          onchange="syncEngineTwinInputs('moe-cache-mib','moe_cache_mib',this.value,false)"
           style="width:70px;background:var(--bg2);border:1px solid var(--b);border-radius:5px;
           padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh);outline:none">
       </div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
         <input type="checkbox" id="config-llama-fit-toggle"
-          onchange="postSettings({llama_fit:this.checked})">
+          onchange="syncEngineTwinInputs('llama-fit-toggle','llama_fit',this.checked,true)">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">Fit to VRAM (--fit) — default on; turn off for a manual MoE split</span>
       </div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);flex:1">Fit target margin (MiB)</span>
         <input type="number" min="0" step="128" id="config-llama-fit-target" value="0"
-          onchange="postSettings({llama_fit_target_mib: parseInt(this.value)||0})"
+          onchange="syncEngineTwinInputs('llama-fit-target','llama_fit_target_mib',this.value,false)"
           style="width:70px;background:var(--bg2);border:1px solid var(--b);border-radius:5px;
           padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh);outline:none">
       </div>
@@ -2623,6 +2631,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261117-01"></script>
+        <script src="/static/app.js?v=20261118-01"></script>
 </body>
 </html>

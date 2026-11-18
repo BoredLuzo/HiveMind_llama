@@ -94,9 +94,16 @@ $pyrightProc = Start-Process -FilePath $py -ArgumentList @("deploy\pyright_basel
 if ($pyrightProc) { $null = $pyrightProc.Handle }
 
 # -- g) full regression suite ------------------------------------------------
-$suiteOut = & $py tests\run_regressions.py --jobs 4 2>&1
-$suiteLine = ($suiteOut | Select-String -Pattern "Suites:" | Select-Object -Last 1)
-Check "g) regression suite" ($LASTEXITCODE -eq 0) $(if ($suiteLine) { $suiteLine.ToString().Trim() } else { "" })
+Write-Host "  ... running regression suite (streaming progress):" -ForegroundColor DarkGray
+$suiteLines = New-Object System.Collections.Generic.List[string]
+& $py -u tests\run_regressions.py --jobs 4 2>&1 | ForEach-Object {
+    $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { [string]$_ }
+    Write-Host "      $line"
+    [void]$suiteLines.Add($line)
+}
+$suiteRc = $LASTEXITCODE
+$suiteLine = ($suiteLines | Select-String -Pattern "Suites:" | Select-Object -Last 1)
+Check "g) regression suite" ($suiteRc -eq 0) $(if ($suiteLine) { $suiteLine.ToString().Trim() } else { "" })
 
 # -- h) no scratch files in the root -----------------------------------------
 $scratch = @(Get-ChildItem -File -Filter "_*.py" | ForEach-Object { $_.Name })

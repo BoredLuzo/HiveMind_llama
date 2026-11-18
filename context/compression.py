@@ -14,6 +14,7 @@ logger = logging.getLogger("hivemind.compression")
 
 # bzw. "[path lines X-Y / N]".
 _RE_READ_PATH = re.compile(r"[A-Za-z]:[\\/][^\s\]'\"]+")
+_RE_THINK_BLOCK = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 _ERROR_MARKERS = ("[TOOL_ERROR", "Error:", "Traceback", "FAILED", "[stderr]", "SyntaxError", "TypeError")
 
@@ -725,6 +726,8 @@ async def _compress_tool_context(
                     "temperature":    0.1,
                     "max_tokens":     800,
                     "thinking": False, "thinking_budget": 0,
+                    "reasoning_format": "none",
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
                 timeout=httpx.Timeout(connect=10.0, read=float(read_timeout or 180.0), write=10.0, pool=5.0),
             )
@@ -744,6 +747,8 @@ async def _compress_tool_context(
                 _summary = _data["choices"][0].get("message", {}).get("content", "").strip()
             else:
                 _summary = _data.get("message", {}).get("content", "").strip()
+            if _summary and "<think" in _summary.lower():
+                _summary = _RE_THINK_BLOCK.sub("", _summary).strip()
             # EMPTY-SUMMARY-FALLBACK (2026-10-30): a model that ignores
             # enable_thinking answers with an empty content (only a think
             # block). That is NOT an exception, so the fallback below never

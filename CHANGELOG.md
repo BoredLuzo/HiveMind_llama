@@ -29,28 +29,84 @@ installer catalog, and hardware-tier recommendations (`GPU VRAM x System RAM`).
 - **Condensed performance-class model catalog & hardware-tier planner:**
   - Streamlined `deploy/fetch_models.py` `SPECS` from 17 to 11 distinct
     performance-class models (~63 GB full catalog vs ~106 GB): kept the
-    4-model Essential Starter Set (~12.5 GB), added `nvidia-nemotron-3.5-bolt:e4b`
-    (`unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF` `UD-Q4_K_XL` + `Q8_0` DFlash
-    sidecar), and pinned `qwen3.6:35b-a3b-mtp` to `UD-IQ4_XS` (`17.0 GB`,
-    4-bit precision with faster warm prefill `169.3 vs 114.9 t/s` than `UD-Q3_K_XL`).
+    4-model Essential Starter Set (~12.5 GB), added `ling-3.0-tiny` (`32k`
+    ctx) and `nvidia-nemotron-3.5-bolt:e4b`
+    (`unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF` `UD-Q4_K_XL` + opt-in
+    `Q8_0` DFlash sidecar with `spec_enabled_default: false`), moved `twil:8b`
+    to the specialist footnote, and pinned `qwen3.6:35b-a3b-mtp` to
+    `UD-IQ4_XS` (`17.0 GB`, 4-bit precision with faster warm prefill
+    `169.3 vs 114.9 t/s` than `UD-Q3_K_XL`).
   - Added shared `HARDWARE_TIERS`, Windows `winreg` + `nvidia-smi` physical
     VRAM probing (`probe_hardware()`), `detect_hardware_tier()`, and
     `format_hardware_plan()` across `deploy/fetch_models.py` (`--print-essential`,
     `--print-tiers`) and `deploy/recommend_models.py` (`--plan`, empty/populated
     reports), and extended `deploy/apply_model_defaults.py` `ROLE_PREFERENCE`
-    and `SUBAGENT_LADDER`.
+    (`duo_critic` prefers co-resident `minicpm5:2b-sharp` instead of colliding
+    with `duo_coder`) and `SUBAGENT_LADDER`.
 - **Missing & stale model profile calibration:**
   - Added `model_configs/models/cyber-tiel-coder_35b-a3b-mtp-ud.json`
     (`ncmoe=35`, `ubatch=1024`, `mtp=true`, `vram_gb_override=4.7`) and
     `_MOE_EXPERT_COUNTS` entries in `backend/llama_config.py`.
   - Updated `nvidia-nemotron-3.5-bolt_e4b.json` (`draft_overhead_mib=950`,
     `dflash_draft_alternates` fallback for `dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf`,
-    cleared stale `vram_gb_override`), `twil_8b.json` (`num_ctx=16384`,
-    `flash_attn=true`, `kv_cache_type="q4_0"`), `qwen3.6_35b-a3b-mtp.json`
-    (`ubatch=1024`), `hermes3.6_..._mtp-apex-compact.json` (`ubatch=1024`),
+    opt-in `spec_enabled_default=false`, cleared stale `vram_gb_override`),
+    `twil_8b.json` (`num_ctx=16384`, `flash_attn=true`, `kv_cache_type="q4_0"`),
+    `qwen3.6_35b-a3b-mtp.json` (`ubatch=1024`),
+    `hermes3.6_..._mtp-apex-compact.json` (`ubatch=1024`),
     `lfm2.5_8b-a1b.json` (`5.1 GB`), and `qwen3.5_2b.json` (`2.0 GB`).
   - Added built-in filename-tag pins in `backend/llama_models.py` for Nemotron
     Unsloth/NVIDIA, `TwIL-8B-Q4_K_M-balanced.gguf`, and Cyber-Tiel-Coder.
+
+### Fixed & Improved
+- **Per-port run locking, KV retention & slot pinning:**
+  - Serialized concurrent LLM HTTP calls per port via `get_port_lock` and
+    shared httpx connection pooling (`core/llm_transport.py`, `core/chat_run.py`,
+    `core/subagent_lite.py`), pinned the active coder slot across inter-round
+    calls (`core/agentic_tool_loop.py`, `core/duo_coder_preloop.py`), and
+    capped Critic context requests to active slot capacity when co-located
+    (`core/duo_runner.py`).
+  - Raised default `duo_ubatch` and `llama_ubatch_size` from `256` to `512`
+    (`settings_defaults.py`, `backend/llama_config.py`), set Research subagent
+    (`subagent_lite_enabled`) default to `False` on fresh installs
+    (`settings_defaults.py`, `core/subagent_lite.py`, `tools/definitions.py`,
+    `static/app.js`, `index.html`), and suppressed thinking during context
+    compression (`context/compression.py`).
+- **UI, metrics & `/v1/chat/completions` parity:**
+  - Renamed the coding mode button to `Code` (`Critic-Duo` & `Agentic`
+    submodes), added inline Critic model selector (`#duo-critic-model-sel`)
+    plus `duo_critic_ctx` wiring, synced Engine Twin controls (`llama_fit`,
+    `llama_fit_target_mib`, `moe_cache_mib`), indexed Code selectors in `Ctrl+K`
+    Feature Search, excluded `smoke_test` runs from `token_stats.json` UI stats,
+    preserved multi-turn message metric footers, and added live planner decode
+    metrics in the overlay (`static/app.js`, `index.html`, `routers/config.py`,
+    `routers/vram.py`, `core/direct_runner.py`).
+  - Fixed `/v1/chat/completions` direct mode to pass `model_overrides`,
+    multi-turn conversation history, `temperature`/`max_tokens`, and real
+    usage counts (`server.py`).
+  - Fixed fresh-install `WorkspaceForceInvalid('')` (`RUN BLOCKED`) when
+    `workspace` is empty and `workspace_force_ui=True` (`mode="chat"` /
+    `"simple"` / `"auto"` / `"code_duo"`), passed `_run_settings` + active
+    `mode` into `resolve_workspace()`, and surfaced `done.summary` on
+    `blocked` runs in the UI (`utils/workspace_resolve.py`,
+    `core/chat_run.py`, `static/app.js`).
+  - Fixed duplicate `_createThinkBlock` declaration shadowing (`static/app.js`
+    `_buildAgentThinkBlock(tid)`), synced `#h-models` with active direct/automap
+    model changes, and emitted `run_meta` before `_run_direct_tools`
+    (`core/direct_runner.py`).
+- **Windows installer hardening:**
+  - Quoted `nvidia-smi` query flags against `cmd.exe` `for /f` delimiter
+    splitting (`install.bat`, `update_llama.bat`), auto-seeded physical GPU
+    VRAM defaults via `probe_hardware()[0]` with `vram_budget_gb` override for
+    APUs (`install.bat`, `deploy/fetch_models.py`), suppressed extra shortcut
+    pauses (`install.bat`, `create_shortcut.bat`), and added `NVSMI` path
+    discovery, `-q` parsing, and `<= driver CUDA` compatible asset selection
+    (`deploy/fetch_llamacpp.py`).
+  - Added single-step `[1-9]` selection (`Install HiveMind now? [Y/N/O/1-9]`),
+    expanded `[O]` optionals-only mode (`Routing Decider`, `LSP`, `SearXNG`,
+    `Voice`, `Telegram gateway`), removed the 30-second auto-skip timeout on
+    LSP installation, and added a Step `[8/9]` TTS provider picker
+    (`[W] Underdog Woof` recommended default / `[P] Pocket TTS` / `[B] Both`)
+    in `install.bat`.
 
 ## [1.6.2] - 2026-11-17
 

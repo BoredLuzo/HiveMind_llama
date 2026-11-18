@@ -6,9 +6,9 @@
     "tool_call": true
   },
   "vision_preprocessing": false,
-  "num_ctx": 131072,
-  "num_ctx_analyst": null,
-  "num_ctx_duo_coder": null,
+  "num_ctx": 16384,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 16384,
   "num_ctx_vision": null,
   "chat_template": "sharp_minicpm5_chat_template.jinja",
   "jinja": true,

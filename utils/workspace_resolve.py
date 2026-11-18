@@ -128,11 +128,10 @@ def resolve_workspace(
         )
 
     _mode = str((settings or {}).get("mode") or "").strip().lower()
-    _force = bool(settings.get("workspace_force_ui")) if force is None else bool(force)
-    if _mode == "simple":
-        _force = False
-
+    _force = bool((settings or {}).get("workspace_force_ui")) if force is None else bool(force)
     ui_ws = str((settings or {}).get("workspace") or "").strip()
+    if _mode in ("simple", "chat") or (not ui_ws and force is not True):
+        _force = False
 
     if _force:
         if ui_ws and _valid_dir(ui_ws):

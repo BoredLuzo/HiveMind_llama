@@ -173,11 +173,14 @@ async def _phase_vram(ctx, state: dict):
             # exactly like duo_runner's planner phase (:890-896) — incl.
             # duo_planner_use_coder_ctx and the duo_planner_model override,
             # which were previously ignored here (wrong pin, wasted load).
+            _explicit_pin_think = "duo_agentic_thinking" in (ctx.settings or {})
             _pre_pin_thinking = (
                 ctx.duo_config.agentic_thinking
                 or (not bool(ctx.settings.get("disable_thinking_in_planner", False))
                     and (ctx.duo_config.chunking
-                         or (bool(ctx.settings.get("duo_planner_default_thinking", True)) and ctx.duo_config.coding_mode)))
+                         or (not _explicit_pin_think
+                             and bool(ctx.settings.get("duo_planner_default_thinking", True))
+                             and ctx.duo_config.coding_mode)))
             )
             _pre_pin_planner_mdl = exec_mdl if (
                 _pre_pin_thinking or bool(ctx.settings.get("duo_planner_use_exec_model", True))

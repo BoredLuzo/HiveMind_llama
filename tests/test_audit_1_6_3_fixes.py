@@ -493,4 +493,162 @@ async def _test_remaining_fixes():
 
 asyncio.run(_test_remaining_fixes())
 
+
+# ── 8. UI / Critic dropdown / Code label / Decode t/s / .msg-stats / smoke noise ──
+def _test_ui_and_metrics_points():
+    idx_html = (ROOT / "index.html").read_text(encoding="utf-8")
+    check("index.html renames top mode button to Code and adds Critic dropdown in #duo-pair-row",
+          ">&#9889; Code</div>" in idx_html
+          and ">&#9889; Agentic</div>" not in idx_html
+          and 'id="duo-critic-model-row"' in idx_html
+          and 'id="duo-critic-model-sel"' in idx_html
+          and 'onchange="onDuoCriticModelChange(this.value)"' in idx_html)
+
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    check("static/app.js wires Critic selector in duo-pair-row, live decode fallback, and multi-turn msg-stats",
+          "function onDuoCriticModelChange(model)" in app_js
+          and "duoCriticModel: ''," in app_js
+          and "document.getElementById('duo-critic-model-row')" in app_js
+          and "querySelectorAll('#chat .ablock.duo-coder:not([data-turn-done=\"1\"])')" in app_js
+          and "el.setAttribute('data-turn-done', '1');" in app_js
+          and "var lastBlock = blocks[blocks.length - 1];" in app_js
+          and "lastBlock.querySelector(':scope > .amsg-foot')" in app_js
+          and "else if (d.type === 'planner_token') {\n    _perfOnToken(d.content);" in app_js
+          and "var _liveDec = _perfRealRate() || Number(S.perfTokRate || 0);" in app_js)
+
+    # Verify startDuoAgent appends a footer element (.amsg-foot)
+    duo_fn = app_js[app_js.index("function startDuoAgent("):app_js.index("function _renderThinkCodeBlocks(")]
+    check("startDuoAgent attaches .amsg-foot to each new duo block",
+          "_speakWrap.className = 'amsg-foot';" in duo_fn
+          and "wrap.appendChild(_speakWrap);" in duo_fn)
+
+    # Backend decode_tps & direct error stop_reason & smoke_test gating
+    pl_src = (ROOT / "hive_functions" / "planner.py").read_text(encoding="utf-8")
+    dr_src = (ROOT / "core" / "direct_runner.py").read_text(encoding="utf-8")
+    cr_src = (ROOT / "core" / "chat_run.py").read_text(encoding="utf-8")
+    srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    check("planner, direct_runner & chat_run emit decode_tps and guard synthetic Direct error / smoke_test runs",
+          '"decode_tps": round(_p_dtps, 2)' in pl_src
+          and '"decode_tps": round(_dt_tps, 2)' in dr_src
+          and '"decode_tps": round(_d_tps_emit, 2)' in dr_src
+          and '_direct_had_err and _d_ct_sum == 0 and _d_pt_sum == 0' in dr_src
+          and '"decode_tps": round(_p_tps, 2)' in cr_src
+          and 'not str(data["content"]).startswith("[Direct error:")' in cr_src
+          and 'not bool(_run_settings.get("smoke_test"))' in cr_src
+          and 'if "smoke_test" in body:' in srv_src)
+
+    # Behavioral test for ToolLoop._add_usage timings + gen_ms fallback
+    from core.tool_loop import ToolLoop, ToolLoopConfig
+    tl = ToolLoop(config=ToolLoopConfig(), http_client=None, port=8080, workspace=".")
+    tl._add_usage({"prompt_tokens": 100, "completion_tokens": 50}, timings={"predicted_per_second": 41.2}, gen_ms=1200.0)
+    check("ToolLoop._add_usage records gen_ms and predicted_per_second",
+          abs(tl.state.gen_ms - 1200.0) < 0.1 and abs(tl.state.decode_tps - 41.2) < 0.1,
+          f" gen_ms={tl.state.gen_ms} decode_tps={tl.state.decode_tps}")
+
+    # Behavioral test for token_stats noise filtering
+    import infra.token_stats as ts
+    smoke_err = {"tokens": 45, "requests": 0, "prompt_tokens": 0, "phases": {}, "elapsed_s": 48.8,
+                 "models": {"direct": "ling-3.0-tiny"}, "mode": "direct", "stop_reason": "completed"}
+    smoke_flag = {"tokens": 92, "requests": 1, "prompt_tokens": 2357, "phases": {"direct_tools": 92},
+                  "elapsed_s": 5.3, "models": {"direct": "ling-3.0-tiny"}, "smoke_test": True}
+    real_run = {"tokens": 120, "requests": 1, "prompt_tokens": 2100, "phases": {"coder": 120},
+                "phases_ms": {"coder": 3000}, "elapsed_s": 4.2, "models": {"coder": "qwen3.5:4b-mtp"},
+                "mode": "code_duo", "stop_reason": "completed"}
+    daily_probe = {"2026-11-18": {"tokens": 257, "runs": 3, "run_list": [smoke_err, smoke_flag, real_run]}}
+    by_mdl = ts.aggregate_by_model(daily_probe)
+    by_mod = ts.aggregate_by_mode(daily_probe)
+    check("_is_noise_run filters smoke_test & 45-tok 0-req preflight noise while preserving real runs",
+          ts._is_noise_run(smoke_err) is True
+          and ts._is_noise_run(smoke_flag) is True
+          and ts._is_noise_run(real_run) is False
+          and len(by_mdl) == 1 and by_mdl[0]["model"] == "qwen3.5:4b-mtp"
+          and len(by_mod) == 1 and by_mod[0]["mode"] == "code_duo",
+          f" by_mdl={by_mdl} by_mod={by_mod}")
+
+
+_test_ui_and_metrics_points()
+
+
+# ── 9. Wave 1-3 Audit, Wiring & Simplification Regressions ───────────────────
+async def _test_wave_1_to_3_fixes():
+    from routing import model_picker as mp
+    _fake_pipe = types.SimpleNamespace(agents={"direct": types.SimpleNamespace(model="ling-3.0-tiny")})
+    _op, _os, _osi, _oco = mp.pipeline, mp.settings, mp._SIMPLE_DIRECT_MODELS, mp._COMPLEX_DIRECT_MODELS
+    try:
+        mp.init_model_picker(_fake_pipe, {"mode": "direct", "automap_excluded": []},
+                             simple_direct={"chat": "qwen3.5:4b-mtp"}, complex_direct={"chat": "qwen3.5:4b-mtp"})
+        check("_pick_direct_model honors configured direct model when mode != automap",
+              mp._pick_direct_model("simple", "chat", ["qwen3.5:4b-mtp", "ling-3.0-tiny"]) == "ling-3.0-tiny")
+        mp.init_model_picker(_fake_pipe, {"mode": "automap", "automap_excluded": []})
+        check("_pick_direct_model uses automap table in automap mode when direct not excluded",
+              mp._pick_direct_model("simple", "chat", ["qwen3.5:4b-mtp", "ling-3.0-tiny"]) == "qwen3.5:4b-mtp")
+    finally:
+        mp.init_model_picker(_op, _os or {}, _osi, _oco)
+
+    srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    check("_v1_direct_mode forwards model_overrides, conversation history, and real token usage",
+          '_direct_overrides["direct_model"] = _v1_model' in srv_src
+          and '_direct_overrides["agents_user_sampling_choice"] = {"direct": ["temperature"]}' in srv_src
+          and "Conversation history:" in srv_src and 'if _d.get("type") == "usage_meta":' in srv_src
+          and 'model_overrides=_direct_overrides or None' in srv_src)
+
+    vram_router_src = (ROOT / "routers" / "vram.py").read_text(encoding="utf-8")
+    check("POST /vram/budget calls sync_loader_settings",
+          "from backend.runtime_sync import sync_loader_settings" in vram_router_src
+          and "def llama_kill_all" not in vram_router_src)
+
+    from context.compression import _compress_tool_context
+    captured: list[dict] = []
+
+    async def _comp_handler(request: httpx.Request) -> httpx.Response:
+        import json as _j
+        captured.append(_j.loads(request.content))
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "<think>internal</think>Concise summary."}}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 12},
+        }, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_comp_handler)) as cl:
+        new_msgs, _, _ = await _compress_tool_context(
+            [{"role": "user", "content": "build app"}, {"role": "assistant", "content": "x " * 40},
+             {"role": "assistant", "content": "tail"}],
+            "qwen3.5:4b-mtp", 8081, cl, "sys", "build app", ["a.py"], ["step 1"], keep_recent_msgs=1)
+    summary_text = "\n".join(str(m.get("content", "")) for m in new_msgs)
+    check("_compress_tool_context sends enable_thinking=False, reasoning_format=none and strips <think>",
+          len(captured) == 1 and captured[0].get("reasoning_format") == "none"
+          and captured[0].get("chat_template_kwargs") == {"enable_thinking": False}
+          and "Concise summary." in summary_text and "<think>" not in summary_text,
+          f" summary={summary_text[:120]!r}")
+
+    import json as _j
+    from tools.definitions import fit_tools_to_budget, _INLINE_CODING_TOOLS
+    tight = fit_tools_to_budget(list(_INLINE_CODING_TOOLS), 2500, mode="duo_core")
+    med = fit_tools_to_budget(list(_INLINE_CODING_TOOLS), 25000, mode="duo_core")
+    check("fit_tools_to_budget keeps core tools & fits realistic budget cleanly",
+          {"read_file", "edit_file"}.issubset({t["function"]["name"] for t in tight})
+          and len(tight) < len(_INLINE_CODING_TOOLS) and len(_j.dumps(med)) <= 25000,
+          f" tight_count={len(tight)} med_len={len(_j.dumps(med))}")
+
+    from core.subagent_lite import build_tool_schemas, _tool_schemas as _sub_ts
+    from core.fix_agent import _tool_schemas as _fix_ts
+    from core.duo_coder_preloop import _abort_preloop
+    from core.pipeline_runner import _stream_stage_once
+    from tools.runner import _apply_pre_decision, _consume_budget
+    from tools.handlers.file_ops import _check_edit_shrink, _check_edit_symbol_loss
+    check("subagent_lite & fix_agent share build_tool_schemas and extracted helpers exist",
+          {t["function"]["name"] for t in _sub_ts()} == {"read_file", "list_dir", "search_code"}
+          and "edit_file" in {t["function"]["name"] for t in _fix_ts()}
+          and all(callable(fn) for fn in (build_tool_schemas, _abort_preloop, _stream_stage_once,
+                                          _apply_pre_decision, _consume_budget,
+                                          _check_edit_shrink, _check_edit_symbol_loss)))
+
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    check("static/app.js applyAgent syncs duoCtxAgentic/Normal/Critic and engine twin inputs",
+          "if (ctx > 0 && key === 'duo_coder')" in app_js
+          and "else if (ctx > 0 && key === 'duo_critic')" in app_js
+          and "function syncEngineTwinInputs" in app_js)
+
+
+asyncio.run(_test_wave_1_to_3_fixes())
+
 sys.exit(h.finish("audit_1_6_3_fixes"))

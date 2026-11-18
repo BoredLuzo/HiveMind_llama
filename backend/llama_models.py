@@ -320,6 +320,9 @@ def _quant_token(filename: str) -> str:
     return m.group(0).lstrip("-._ ").lower() if m else ""
 
 
+_logged_quant_collisions: set[tuple[str, tuple[str, ...]]] = set()
+
+
 def _resolve_index_collisions(index: dict[str, Path],
                               cands: dict[str, list[Path]]) -> None:
     """MULTI-QUANT (2026-11-05, live): one model in several quantizations.
@@ -352,6 +355,7 @@ def _resolve_index_collisions(index: dict[str, Path],
             continue
         winner = files[0]
         _losers: list[Path] = []
+        _log_new = False
         if len(files) > 1:
             def _score(f: Path) -> tuple[int, int]:
                 claimed = str(f.resolve()).lower() in _claimed_paths
@@ -362,13 +366,17 @@ def _resolve_index_collisions(index: dict[str, Path],
                 return (1 if claimed else 0, size)
             winner = max(files, key=_score)
             _losers = [f for f in files if f != winner]
-            _why = ("registered/known file"
-                    if str(winner.resolve()).lower() in _claimed_paths
-                    else "largest file")
-            _logger.warning(
-                "[GGUF-INDEX] '%s': %d quants (%s) — '%s' wins (%s)",
-                name, len(files), ", ".join(f.name for f in files),
-                winner.name, _why)
+            _coll_key = (name, tuple(sorted(f.name for f in files)))
+            _log_new = _coll_key not in _logged_quant_collisions
+            if _log_new:
+                _logged_quant_collisions.add(_coll_key)
+                _why = ("registered/known file"
+                        if str(winner.resolve()).lower() in _claimed_paths
+                        else "largest file")
+                _logger.warning(
+                    "[GGUF-INDEX] '%s': %d quants (%s) — '%s' wins (%s)",
+                    name, len(files), ", ".join(f.name for f in files),
+                    winner.name, _why)
         index[name] = winner
         for _i, _loser in enumerate(_losers):
             _q = _quant_token(_loser.name)
@@ -380,21 +388,26 @@ def _resolve_index_collisions(index: dict[str, Path],
             if not _alt or _alt in index or _alt in cands:
                 _alt = f"{name}-alt{_i + 1}" if len(_losers) > 1                     else f"{name}-alt"
             if _alt in index or _alt in cands:
-                _logger.warning(
-                    "[GGUF-INDEX] alias '%s' still collides — %s is only "
-                    "resolvable via models.json", _alt, _loser.name)
+                if _log_new:
+                    _logger.warning(
+                        "[GGUF-INDEX] alias '%s' still collides — %s is only "
+                        "resolvable via models.json", _alt, _loser.name)
                 continue
             index[_alt] = _loser
-            _logger.info("[GGUF-INDEX] '%s' → alternate quant alias for %s",
-                        _alt, _loser.name)
+            if _log_new:
+                _logger.info("[GGUF-INDEX] '%s' → alternate quant alias for %s",
+                             _alt, _loser.name)
 
 
 def _get_index() -> dict[str, Path]:
     global _index_cache, _index_ts
     now = _time_module.time()
     if not _index_cache or (now - _index_ts) > _INDEX_TTL:
-        _age = now - _index_ts
-        _logger.info(f"GGUF index cache expired (age={_age:.0f}s > TTL={_INDEX_TTL:.0f}s) — rebuilding (trigger={_index_trigger_callers()})")
+        if _index_ts <= 0.0:
+            _logger.info(f"Building initial GGUF index (trigger={_index_trigger_callers()})")
+        else:
+            _age = now - _index_ts
+            _logger.info(f"GGUF index cache expired (age={_age:.0f}s > TTL={_INDEX_TTL:.0f}s) — rebuilding (trigger={_index_trigger_callers()})")
         _index_cache = _build_index()
         _index_ts = _time_module.time()
     return _index_cache

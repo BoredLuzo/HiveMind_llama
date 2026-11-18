@@ -153,34 +153,10 @@ def installed_models() -> list[str]:
 def total_ram_gb() -> float:
     """Total physical RAM in GB; 0.0 when it cannot be read (never raises)."""
     try:
-        if _IS_WIN:
-            import ctypes
-
-            class _MemStat(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong),
-                    ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong),
-                    ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong),
-                    ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong),
-                    ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            stat = _MemStat()
-            stat.dwLength = ctypes.sizeof(_MemStat)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                return round(stat.ullTotalPhys / (1024 ** 3), 1)
-            return 0.0
-        with open("/proc/meminfo", encoding="ascii", errors="ignore") as fh:
-            for line in fh:
-                if line.startswith("MemTotal:"):
-                    return round(int(line.split()[1]) / (1024 ** 2), 1)
-    except (OSError, ValueError, AttributeError, ImportError):
-        pass
-    return 0.0
+        from deploy.fetch_models import probe_hardware
+        return float(probe_hardware()[1] or 0.0)
+    except (ImportError, OSError, ValueError, AttributeError):
+        return 0.0
 
 
 def resolve_model(settings: dict | None = None) -> str:

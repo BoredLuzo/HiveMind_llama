@@ -1021,12 +1021,22 @@ async def _llm_stream(
                             _p_reasoning = int(((_p_usage.get("completion_tokens_details") or {}).get("reasoning_tokens")) or 0)
                         except Exception:
                             _p_reasoning = 0
+                        _p_ct = int(_p_usage["completion_tokens"])
+                        _p_gen_ms = int((time.monotonic() - _p_gen_t0) * 1000)
+                        _p_tim = chunk_data.get("timings") or _p_usage.get("timings") or {}
+                        try:
+                            _p_dtps = float(_p_tim.get("predicted_per_second") or 0.0) if isinstance(_p_tim, dict) else 0.0
+                        except (TypeError, ValueError):
+                            _p_dtps = 0.0
+                        if _p_dtps <= 0 and _p_gen_ms > 0 and _p_ct > 0:
+                            _p_dtps = _p_ct / (_p_gen_ms / 1000.0)
                         _p_usage_final = {
-                            "completion_tokens": int(_p_usage["completion_tokens"]),
+                            "completion_tokens": _p_ct,
                             "prompt_tokens": int(_p_usage.get("prompt_tokens") or 0),
                             "cached_tokens": _p_cached,
                             "reasoning_tokens": _p_reasoning,
-                            "gen_ms": int((time.monotonic() - _p_gen_t0) * 1000),
+                            "gen_ms": _p_gen_ms,
+                            "decode_tps": round(_p_dtps, 2),
                         }
                     delta = (chunk_data.get("choices") or [{}])[0].get("delta", {})
 

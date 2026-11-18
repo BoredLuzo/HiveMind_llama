@@ -850,9 +850,13 @@ _SET = _settings_src()
 check("22c checkpoints are a setting", '"llama_ctx_checkpoints":' in _SET)
 check("22d the host prompt cache is a setting", '"llama_cache_ram_mib":' in _SET)
 _SRV = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+_RF_SRC = (ROOT / "backend" / "runtime_flags.py").read_text(encoding="utf-8", errors="replace")
 check("22e both are synced into the backend at startup",
-      "_lc_init.CTX_CHECKPOINTS = _cp_val" in _SRV
-      and "_lc_init.CACHE_RAM_MIB = _cram_val" in _SRV)
+      ("_lc_init.CTX_CHECKPOINTS = _cp_val" in _SRV
+       and "_lc_init.CACHE_RAM_MIB = _cram_val" in _SRV)
+      or ("apply_runtime_flags" in _SRV
+          and "mod.CTX_CHECKPOINTS = checkpoints" in _RF_SRC
+          and "mod.CACHE_RAM_MIB = cache_ram" in _RF_SRC))
 _DOC = (ROOT / "docs" / "settings.md").read_text(encoding="utf-8", errors="replace")
 check("22f settings docs list the knobs",
       "llama_ctx_checkpoints" in _DOC and "llama_cache_ram_mib" in _DOC)

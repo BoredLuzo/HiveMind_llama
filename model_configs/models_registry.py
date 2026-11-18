@@ -243,6 +243,12 @@ def get_profile(model_name: str) -> dict:
     direct, fallback = _resolve_pair(canonical, base)
     if direct is None and not fallback and base.lower().startswith("nemotron-"):
         direct, fallback = _resolve_pair(f"nvidia-{canonical}", f"nvidia-{base}")
+    if direct is None and not fallback and base.lower().startswith("sharp-minicpm"):
+        _norm_sc = canonical.lower().replace("sharp-minicpm", "minicpm")
+        if not _norm_sc.endswith("-sharp"):
+            _norm_sc += "-sharp"
+        _norm_sb = _norm_sc.split(":")[0]
+        direct, fallback = _resolve_pair(_norm_sc, _norm_sb)
 
     if direct and fallback is not None and direct is not fallback:
         return copy.deepcopy(_merge(fallback, direct))
@@ -561,24 +567,6 @@ def get_thinking_budget(model_name: str) -> int | None:
                 except (ValueError, TypeError):
                     pass
     return None
-
-
-def get_mtp_draft_params(model_name: str) -> tuple[int | None, float | None]:
-    """Returns (mtp_draft_n_max, mtp_draft_p_min) from profile, if configured."""
-    prof = get_profile(model_name)
-    n_max = None
-    p_min = None
-    if prof.get("mtp_draft_n_max") is not None:
-        try:
-            n_max = int(prof["mtp_draft_n_max"])
-        except (ValueError, TypeError):
-            pass
-    if prof.get("mtp_draft_p_min") is not None:
-        try:
-            p_min = float(prof["mtp_draft_p_min"])
-        except (ValueError, TypeError):
-            pass
-    return n_max, p_min
 
 
 def find_profile_file(model_name: str) -> Path | None:

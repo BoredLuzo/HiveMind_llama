@@ -85,12 +85,36 @@ import tempfile as _tmpf                                                   # noq
 # checks read that instead of the empty-file contract they pin.
 _wsr._LAST_WS_FILE = Path(_tmpf.mkdtemp(prefix="wsguards_")) / "last_workspace.json"
 from utils.workspace_resolve import (                                      # noqa: E402
+    WorkspaceForceInvalid,
     fallback_for_invalid_request,
     resolve_workspace,
 )
+from settings_defaults import DEFAULT_SETTINGS                               # noqa: E402
 _ws, _src = resolve_workspace({}, None, "")
 check("empty settings resolve to the cwd fallback",
       _src == "cwd_fallback", f" (source={_src})")
+
+_fresh = dict(DEFAULT_SETTINGS)
+_ws_f, _src_f = resolve_workspace(_fresh, None, "")
+check("fresh DEFAULT_SETTINGS (chat, empty workspace, force_ui=True) resolves to cwd_fallback",
+      _src_f == "cwd_fallback", f" (source={_src_f})")
+for _fm in ("auto", "code_duo"):
+    _, _src_fm = resolve_workspace({**_fresh, "mode": _fm}, None, "")
+    check(f"DEFAULT_SETTINGS with mode={_fm!r} and empty workspace resolves to cwd_fallback",
+          _src_fm == "cwd_fallback", f" (source={_src_fm})")
+
+_bad_ui = os.path.join(os.sep, "definitely", "not", "here")
+_wfi_raised = False
+try:
+    resolve_workspace({**_fresh, "mode": "code_duo", "workspace": _bad_ui}, None, "")
+except WorkspaceForceInvalid:
+    _wfi_raised = True
+check("non-empty invalid UI workspace still raises WorkspaceForceInvalid in code_duo",
+      _wfi_raised)
+for _cm in ("chat", "simple"):
+    _, _src_cm = resolve_workspace({**_fresh, "mode": _cm, "workspace": _bad_ui}, None, "")
+    check(f"mode={_cm!r} does not force non-empty invalid UI workspace",
+          _src_cm == "cwd_fallback", f" (source={_src_cm})")
 
 # ── 3. invalid request workspace (the 1.3.9 regression) ─────────────────────
 # 1.3.9 made the /stream workspace parameter win over everything. When the UI

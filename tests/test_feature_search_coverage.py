@@ -67,7 +67,7 @@ check("no multi-word alias packed into one string",
 for needle in ("Voice output (TTS)", "TTS voice", "Read aloud: direct answers (TTS)",
                "Voice input (STT)", "STT model", "STT language",
                "Routing: decider", "Routing: judge", "Routing: plan step",
-               "Mode: Auto / Chat / Pipeline / Code Duo (Agentic)",
+               "Mode: Auto / Chat / Pipeline / Code",
                "AUTOMATIONS panel", "Image Processing (Direct / Describe first)"):
     check(f"index entry {needle!r}", needle in APP)
 

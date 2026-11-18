@@ -16,6 +16,9 @@
   "distilled": false,
   "moe": true,
   "moe_cpu_experts": 26,
+  "ubatch": 1024,
+  "load_mode": "mmap",
+  "cache_ram_mib": 2048,
   "kv_cache_type": "q4_0",
   "mtp": false,
   "gpu_layers": null,
@@ -41,7 +44,7 @@
       "repetition_penalty": 1.0
     },
     "sampling_thinking_code": {
-      "temperature": 1.0,
+      "temperature": 0.6,
       "top_p": 0.95,
       "top_k": 64,
       "min_p": 0.0,

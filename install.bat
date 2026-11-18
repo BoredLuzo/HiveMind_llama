@@ -25,10 +25,21 @@ echo                              (needs a @BotFather token, 2FA on)
 echo.
 
 echo   [Y] full install    [N] abort    [O] only the optional parts
-echo       (SearXNG / Voice / Telegram - for an existing installation,
-echo        or to add them to one you installed a while ago)
+echo       (Decider / LSP / SearXNG / Voice / Telegram - for an existing
+echo        installation, or to add them to one you installed a while ago)
+echo   [1-9] run only that single step (e.g. 6 = Models+Decider+LSP, 8 = Voice)
 echo.
-choice /c YNO /n /m "Install HiveMind now? [Y/N/O] "
+choice /c YNO123456789 /n /m "Install HiveMind now? [Y/N/O/1-9] "
+set "SINGLE_STEP="
+if errorlevel 12 (set "SINGLE_STEP=9" & goto single_step_dispatch)
+if errorlevel 11 (set "SINGLE_STEP=8" & goto single_step_dispatch)
+if errorlevel 10 (set "SINGLE_STEP=7" & goto single_step_dispatch)
+if errorlevel 9  (set "SINGLE_STEP=6" & goto single_step_dispatch)
+if errorlevel 8  (set "SINGLE_STEP=5" & goto single_step_dispatch)
+if errorlevel 7  (set "SINGLE_STEP=4" & goto single_step_dispatch)
+if errorlevel 6  (set "SINGLE_STEP=3" & goto single_step_dispatch)
+if errorlevel 5  (set "SINGLE_STEP=2" & goto single_step_dispatch)
+if errorlevel 4  (set "SINGLE_STEP=1" & goto single_step_dispatch)
 if errorlevel 3 goto optionals_only
 if errorlevel 2 (
     echo.
@@ -37,7 +48,9 @@ if errorlevel 2 (
     exit /b 0
 )
 echo.
+goto step_1
 
+:step_1
 REM ======================================================
 REM [1/9] Python
 REM ======================================================
@@ -251,6 +264,8 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 
 echo   [OK] step 1/9 Python - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_2
 REM ======================================================
 REM [2/9] GPU backend (auto-detection)
 REM ======================================================
@@ -267,9 +282,9 @@ REM fall back to WMI (Win32_VideoAdapter) when nvidia-smi is unavailable.
 set "HM_NVIDIA="
 set "HM_GPU_NAME="
 set "HM_DRIVER_CUDA="
-nvidia-smi --query-gpu=name --format=csv,noheader >nul 2>&1
+nvidia-smi "--query-gpu=name" "--format=csv,noheader" >nul 2>&1
 if not errorlevel 1 (
-    for /f "usebackq delims=" %%G in (`nvidia-smi --query-gpu=name --format=csv,noheader 2^>nul`) do if not defined HM_GPU_NAME set "HM_GPU_NAME=%%G"
+    for /f "usebackq delims=" %%G in (`nvidia-smi "--query-gpu=name" "--format=csv,noheader" 2^>nul ^| findstr /v /b /i "ERROR:"`) do if not defined HM_GPU_NAME set "HM_GPU_NAME=%%G"
     if defined HM_GPU_NAME (
         set "HM_NVIDIA=1"
         for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "& nvidia-smi 2>$null | ForEach-Object { if ($_ -match 'CUDA Version:\s*([\d.]+)') { $matches[1] } }"`) do set "HM_DRIVER_CUDA=%%C"
@@ -305,6 +320,7 @@ REM I4 (audit r3): a REPAIR re-run must keep the values the user chose
 REM the first time - seed the shown defaults from the existing settings.
 set "VRAM="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.vram_budget_gb"`) do set "VRAM=%%V"
+if not defined VRAM for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "& $env:PY -c 'from deploy.fetch_models import probe_hardware; v = probe_hardware()[0] or 0; print(v if v >= 2 else str())'" 2^>nul`) do set "VRAM=%%V"
 if not defined VRAM set "VRAM=8.0"
 set "VRAM_IN="
 set /p "VRAM_IN=VRAM in GB [Enter = keep %VRAM%]: "
@@ -344,6 +360,8 @@ echo.
 
 echo   [OK] step 2/9 GPU backend - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_3
 REM ======================================================
 REM [3/9] llama.cpp backend
 REM ======================================================
@@ -390,6 +408,8 @@ echo.
 
 echo   [OK] step 3/9 llama.cpp backend - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_4
 REM ======================================================
 REM [4/9] Windows tools (optional: POSIX tools for the agent)
 REM Models are trained on GNU coreutils and write grep/sed/awk/find.
@@ -485,6 +505,8 @@ REM during model downloads.
 REM ======================================================
 echo   [OK] step 4/9 Windows tools - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_5
 echo  ==========================================================
 echo   [5/9] Desktop shortcut
 echo  ==========================================================
@@ -494,12 +516,16 @@ echo   start_hivemind.bat with the HiveMind icon.
 echo.
 choice /c YN /n /m "Create a Desktop shortcut with the HiveMind icon? [Y/N] "
 if errorlevel 2 goto shortcut_done
+set "HIVEMIND_NO_PAUSE=1"
 call create_shortcut.bat
+set "HIVEMIND_NO_PAUSE="
 :shortcut_done
 echo.
 
 echo   [OK] step 5/9 Desktop shortcut - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_6
 REM ======================================================
 REM [6/9] Models
 REM ======================================================
@@ -588,7 +614,7 @@ echo.
 echo   Language servers (optional): gives the coding agent real diagnostics,
 echo   definition/reference lookup and formatting for the languages you use.
 echo   Nothing is required - the built-in analysis works without them.
-choice /c YN /n /t 30 /d N /m "Install language-server packs now? [y/N] "
+choice /c YN /n /m "Install language-server packs now? [Y/N] "
 if errorlevel 2 (
     echo   Skipped. Add later: deploy\install_lsp_packs.bat
     goto lsp_done
@@ -607,6 +633,7 @@ call "%~dp0deploy\install_lsp_packs.bat" %LSP_PICK%
 :lsp_done
 echo   [OK] step 6/9 Models - done.
 echo.
+if defined SINGLE_STEP goto install_summary
 :searxng_step
 REM [7/9] SearXNG (optional)
 REM ======================================================
@@ -629,6 +656,8 @@ echo.
 
 echo   [OK] step 7/9 SearXNG - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_8
 echo  ==========================================================
 echo   [8/9] Voice (optional: speech to text / text to speech)
 echo  ==========================================================
@@ -641,18 +670,15 @@ echo   This step is OPTIONAL and can be run at any time later -
 echo   NO reinstall needed, nothing else in the install changes:
 echo     - Settings -^> Voice -^> Download  (UI, with progress)
 echo     - or deploy\setup_voice.bat [model] [--tts^|--woof^|--both]
-echo   Text-to-speech is separate and uses a gated model ^(Pocket TTS^).
-echo   One-time setup, three steps:
-echo     1. Accept the terms:  huggingface.co/kyutai/pocket-tts
-echo     2. Create a Read token:  huggingface.co/settings/tokens
-echo     3. Run:  uvx --from huggingface_hub hf auth login
-echo   The Hugging Face CLI stores the token on this machine.
-echo   HiveMind never creates a token. Public models need none.
+echo   Text-to-speech supports two local engines:
+echo     - Underdog Woof (recommended): CPU NumPy ~41 MB, no Hugging Face login needed
+echo     - Pocket TTS: PyTorch CPU ~200 MB, gated Hugging Face model
+echo       (accept kyutai/pocket-tts + Read token + hf auth login once)
 echo.
 echo   [1] Speech to text only              (~420 MB, English)
-echo   [2] Speech to text + text to speech  ^(adds ~200 MB; one-time HF login^)
-echo   [3] Text to speech only              ^(~200 MB; one-time HF login^)
-echo   [4] Skip ^(recommended if unsure^) - add it later without reinstalling:
+echo   [2] Speech to text + text to speech  (STT + pick Underdog Woof or Pocket TTS)
+echo   [3] Text to speech only              (pick Underdog Woof or Pocket TTS)
+echo   [4] Skip (recommended if unsure) - add it later without reinstalling:
 echo       Settings -^> Voice, or deploy\setup_voice.bat
 echo.
 set "VOICE_PICK="
@@ -662,18 +688,56 @@ REM INPUT-HARDENING (2026-11-04): anything that is not 1-4 used to fall
 REM through SILENTLY (no message, no setup). Normalize it to the skip choice
 REM so the user at least sees the "Skipped" hint.
 if not "%VOICE_PICK%"=="1" if not "%VOICE_PICK%"=="2" if not "%VOICE_PICK%"=="3" if not "%VOICE_PICK%"=="4" set "VOICE_PICK=4"
+if "%VOICE_PICK%"=="4" goto voice_skip
+if "%VOICE_PICK%"=="1" goto voice_stt_only
+echo.
+echo   Text-to-speech provider:
+echo     [W] Underdog Woof  (recommended - CPU NumPy ~41 MB, no Hugging Face login needed)
+echo     [P] Pocket TTS     (PyTorch CPU ~200 MB, gated Hugging Face model)
+echo     [B] Both           (install Underdog Woof + Pocket TTS)
+echo.
+set "TTS_PICK="
+set /p "TTS_PICK=TTS provider [W/P/B, default W]: "
+if /i "%TTS_PICK%"=="B" goto voice_both_tts
+if /i "%TTS_PICK%"=="P" goto voice_pocket_tts
+set "TTS_FLAGS=--woof"
+set "TTS_PREF=woof"
+if "%VOICE_PICK%"=="2" set "TTS_FLAGS=parakeet-q4k --woof"
+goto voice_run_tts
+:voice_pocket_tts
+set "TTS_FLAGS=--tts"
+set "TTS_PREF=pocket"
+if "%VOICE_PICK%"=="2" set "TTS_FLAGS=--both"
+goto voice_run_tts
+:voice_both_tts
+set "TTS_FLAGS=--tts --woof"
+set "TTS_PREF=woof"
+if "%VOICE_PICK%"=="2" set "TTS_FLAGS=--both --woof"
+:voice_run_tts
 REM The voice script pauses for a key on its own; inside the installer that
 REM looks like a freeze right before step [9/9]. It honours this flag.
 set "HIVEMIND_NO_PAUSE=1"
-if "%VOICE_PICK%"=="1" call "%~dp0deploy\setup_voice.bat"
-if "%VOICE_PICK%"=="2" call "%~dp0deploy\setup_voice.bat" --both
-if "%VOICE_PICK%"=="3" call "%~dp0deploy\setup_voice.bat" --tts
+call "%~dp0deploy\setup_voice.bat" %TTS_FLAGS%
 set "HIVEMIND_NO_PAUSE="
-if "%VOICE_PICK%"=="4" echo   Skipped - add it later with no reinstall: Settings -^> Voice, or deploy\setup_voice.bat.
+if not defined PY goto voice_done
+if not exist "%PY%" goto voice_done
+set "HM_TTS_PREF=%TTS_PREF%"
+"%PY%" -c "import os; from settings import load_settings, save_settings; s = load_settings(); s['tts_backend'] = os.environ.get('HM_TTS_PREF', 'pocket'); save_settings(s)" >nul 2>&1
+goto voice_done
+:voice_stt_only
+set "HIVEMIND_NO_PAUSE=1"
+call "%~dp0deploy\setup_voice.bat"
+set "HIVEMIND_NO_PAUSE="
+goto voice_done
+:voice_skip
+echo   Skipped - add it later with no reinstall: Settings -^> Voice, or deploy\setup_voice.bat.
+:voice_done
 echo.
 
 echo   [OK] step 8/9 Voice - done.
 echo.
+if defined SINGLE_STEP goto install_summary
+:step_9
 echo  ==========================================================
 echo   [9/9] Telegram gateway (optional)
 echo  ==========================================================
@@ -694,6 +758,8 @@ echo.
 
 echo   [OK] step 9/9 Telegram gateway - done.
 echo.
+:install_summary
+if not defined HM_PORT set "HM_PORT=8001"
 echo  ==============================================================
 echo   Installation finished^^!
 echo.
@@ -721,10 +787,7 @@ exit /b 0
 
 REM ======================================================
 REM  OPTIONALS ONLY -- reached with [O] at the first prompt.
-REM  Jumps straight to step [7/9] and runs SearXNG, Voice and
-REM  the Telegram gateway. Python, GPU backend, llama.cpp and
-REM  the models are skipped: this is the "add a part later"
-REM  path, no reinstall and no re-download of anything big.
+REM  Runs Decider, LSP, SearXNG, Voice and Telegram gateway.
 REM  Written with labels instead of if-blocks on purpose -
 REM  parenthesised blocks choke on text that contains ")".
 REM ======================================================
@@ -734,26 +797,51 @@ echo  ==========================================================
 echo   Optional parts only
 echo  ==========================================================
 echo.
-echo   Skipping: Python, GPU backend, llama.cpp, models.
-echo   Running : SearXNG, Voice, Telegram gateway.
+echo   Skipping: Python, GPU backend, llama.cpp, Windows tools, shortcut, model weights.
+echo   Running : Routing decider, Language servers (LSP), SearXNG, Voice, Telegram gateway.
 echo.
 
-REM Ports are normally set by the full-install steps; restore them here so
-REM searxng.bat and the final summary do not get an empty value.
-if defined SEARXNG_PORT goto opt_have_sx_port
-set "SEARXNG_PORT=8888"
-:opt_have_sx_port
-if defined HM_PORT goto opt_have_port
-set "HM_PORT="
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.server_port"`) do set "HM_PORT=%%P"
-if not defined HM_PORT set "HM_PORT=8001"
-:opt_have_port
+call :init_resume_env
 
-if exist "%~dp0.venv\Scripts\python.exe" goto opt_have_venv
+if defined PY goto opt_have_venv
 echo   [NOTE] No Python environment in this folder. SearXNG works on its own,
-echo          but Voice and the Telegram gateway need the full install first
-echo          (step 1/9). Everything below will tell you if it is missing.
+echo          but Decider, Voice and the Telegram gateway need the full install
+echo          first (step 1/9). Everything below will tell you if it is missing.
 echo.
 :opt_have_venv
 
-goto searxng_step
+goto decider_model_step
+
+:single_step_dispatch
+echo.
+echo   Running single step [%SINGLE_STEP%/9] ...
+echo.
+call :init_resume_env
+if "%SINGLE_STEP%"=="1" goto step_1
+if not defined PY echo   [NOTE] No .venv Python found yet - run step 1 first if this step needs Python.
+if not defined PY echo.
+if "%SINGLE_STEP%"=="2" goto step_2
+if "%SINGLE_STEP%"=="3" goto step_3
+if "%SINGLE_STEP%"=="4" goto step_4
+if "%SINGLE_STEP%"=="5" goto step_5
+if "%SINGLE_STEP%"=="6" goto step_6
+if "%SINGLE_STEP%"=="7" goto searxng_step
+if "%SINGLE_STEP%"=="8" goto step_8
+if "%SINGLE_STEP%"=="9" goto step_9
+goto install_summary
+
+:init_resume_env
+if not defined PY if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if not defined BACKEND (
+    set "BACKEND=vulkan"
+    if exist "settings.json" (
+        for /f "usebackq delims=" %%B in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; if ($s.gpu_backend) { $s.gpu_backend }"`) do set "BACKEND=%%B"
+    )
+)
+if not defined SEARXNG_PORT set "SEARXNG_PORT=8888"
+if not defined HM_PORT (
+    set "HM_PORT="
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.server_port"`) do set "HM_PORT=%%P"
+    if not defined HM_PORT set "HM_PORT=8001"
+)
+goto :eof

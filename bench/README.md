@@ -21,7 +21,7 @@ token cost reported together.
 | `raw` | Diagnostic only, opt-in. One prompt, no file contents, no tools; the model must guess a unified diff. A 0/N here is expected and is not a result. |
 | `raw_files` | Diagnostic only, opt-in. One prompt with full files, no tools; the model returns full corrected files (`### FILE: path` blocks). |
 
-`--model` is forced into every condition: HiveMind runs get `direct_model` /
+`--model` is forced into every condition (`aider`, `hermes`, and `pi` harnesses live in `bench/runner.py`, while `bench/external/run_external.py` wires external CLI benchmarks for `claude` and `codex`): HiveMind runs get `direct_model` /
 `duo_coder_model` / `duo_critic_model` / `duo_planner_model` overrides, so the
 comparison does not silently use the install's settings models. Token counts
 are summed from the SSE `usage_meta` events (ToolLoop rounds included); the

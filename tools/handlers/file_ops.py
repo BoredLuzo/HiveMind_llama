@@ -1012,34 +1012,15 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             "EDIT_FILE_NOOP",
             f"no change — '{p}' already contains exactly this content.",
             tool="edit_file")
-    _after_n = len([l for l in working.splitlines() if l.strip()])
-    if (not args.get("confirm_shrink") and _pre_n >= 30
-            and (_after_n <= 3
-                 or (_pre_n >= 100 and _after_n <= _pre_n // 10)
-                 # same proportional arm as write_file (2026-10-31)
-                 or _after_n <= _pre_n // 4)):
-        return _tool_error_response(
-            "EDIT_FILE_SUSPICIOUS_SHRINK",
-            f"This replacement would shrink '{p}' from {_pre_n} to {_after_n} content "
-            "lines — almost always a malformed edit, not a real refactor. If you "
-            "REALLY want that: read_file first, then resend with "
-            "\"confirm_shrink\": true.",
-            tool="edit_file")
+    _shrink_err = _check_edit_shrink(p, _pre_n, working, args, "replacement")
+    if _shrink_err:
+        return _shrink_err
 
     final = working.replace("\n", "\r\n") if _has_crlf else working
 
-    if not args.get("confirm_shrink") and not args.get("allow_overwrite"):
-        _dropped_ed = _missing_top_level_py_symbols(p, content, working)
-        if _dropped_ed:
-            _dlist_ed = ", ".join(_dropped_ed[:10])
-            return _tool_error_response(
-                "WOULD_DROP_SYMBOLS",
-                f"Edit to '{p.name}' would remove existing top-level symbol(s): "
-                f"{_dlist_ed}. Keep existing module-level constants, functions, "
-                "classes, and re-exports (or re-export moved symbols via "
-                "'from new_module import symbol'). The file on disk was NOT modified."
-                f"{_symbol_definition_hints(content, _dropped_ed)}",
-                tool="edit_file")
+    _sym_err = _check_edit_symbol_loss(p, content, working, args)
+    if _sym_err:
+        return _sym_err
     _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
 
     if _chk:
@@ -1059,6 +1040,44 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
         _chard = len(new_n) - len(old_n)
         result += f", {_chard:+d} chars"
     return result + _lint
+
+
+def _check_edit_shrink(
+    p_target: Path, pre_n: int, working_txt: str, args_d: dict, kind: str,
+) -> str | None:
+    """Reject accidental massive file truncation unless confirm_shrink=true."""
+    after_n = len([l for l in working_txt.splitlines() if l.strip()])
+    if (not args_d.get("confirm_shrink") and pre_n >= 30
+            and (after_n <= 3
+                 or (pre_n >= 100 and after_n <= pre_n // 10)
+                 or after_n <= pre_n // 4)):
+        return _tool_error_response(
+            "EDIT_FILE_SUSPICIOUS_SHRINK",
+            f"This {kind} would shrink '{p_target}' from {pre_n} to {after_n} content "
+            "lines — almost always a malformed edit, not a real refactor. If you "
+            "REALLY want that: read_file first, then resend with "
+            "\"confirm_shrink\": true.",
+            tool="edit_file",
+        )
+    return None
+
+
+def _check_edit_symbol_loss(p_target: Path, old_src: str, working_txt: str, args_d: dict) -> str | None:
+    if args_d.get("confirm_shrink") or args_d.get("allow_overwrite"):
+        return None
+    _dropped_ed = _missing_top_level_py_symbols(p_target, old_src, working_txt)
+    if not _dropped_ed:
+        return None
+    _dlist_ed = ", ".join(_dropped_ed[:10])
+    return _tool_error_response(
+        "WOULD_DROP_SYMBOLS",
+        f"Edit to '{p_target.name}' would remove existing top-level symbol(s): "
+        f"{_dlist_ed}. Keep existing module-level constants, functions, "
+        "classes, and re-exports (or re-export moved symbols via "
+        "'from new_module import symbol'). The file on disk was NOT modified."
+        f"{_symbol_definition_hints(old_src, _dropped_ed)}",
+        tool="edit_file",
+    )
 
 
 # MULTI-EDIT (D3, 2026-11-09): several exact replacements in ONE call, ONE
@@ -1163,34 +1182,14 @@ async def _inline_tool_edit_file_batch(args: dict, p: Path, workspace: Path,
 
     # SHRINK-GUARD across the whole batch (same arms as the single edit).
     _pre_n = len([l for l in content.replace("\r\n", "\n").splitlines() if l.strip()])
-    _after_n = len([l for l in working.splitlines() if l.strip()])
-    if (not args.get("confirm_shrink") and _pre_n >= 30
-            and (_after_n <= 3
-                 or (_pre_n >= 100 and _after_n <= _pre_n // 10)
-                 or _after_n <= _pre_n // 4)):
-        return _tool_error_response(
-            "EDIT_FILE_SUSPICIOUS_SHRINK",
-            f"This batch would shrink '{p}' from {_pre_n} to {_after_n} content "
-            "lines — almost always a malformed edit, not a real refactor. If you "
-            "REALLY want that: read_file first, then resend with "
-            "\"confirm_shrink\": true.",
-            tool="edit_file")
+    _shrink_err = _check_edit_shrink(p, _pre_n, working, args, "batch")
+    if _shrink_err:
+        return _shrink_err
 
-    # SYMBOL-LOSS guard across the batch: compare the ORIGINAL content with
-    # the final result, so a batch cannot smuggle out what two single calls
-    # would each have been blocked from removing.
-    if not args.get("confirm_shrink") and not args.get("allow_overwrite"):
-        _dropped_ed = _missing_top_level_py_symbols(p, content, working)
-        if _dropped_ed:
-            _dlist_ed = ", ".join(_dropped_ed[:10])
-            return _tool_error_response(
-                "WOULD_DROP_SYMBOLS",
-                f"Edit to '{p.name}' would remove existing top-level symbol(s): "
-                f"{_dlist_ed}. Keep existing module-level constants, functions, "
-                "classes, and re-exports (or re-export moved symbols via "
-                "'from new_module import symbol'). The file on disk was NOT modified."
-                f"{_symbol_definition_hints(content, _dropped_ed)}",
-                tool="edit_file")
+    # SYMBOL-LOSS guard across the batch: compare ORIGINAL content with final.
+    _sym_err = _check_edit_symbol_loss(p, content, working, args)
+    if _sym_err:
+        return _sym_err
 
     final = working.replace("\n", "\r\n") if _has_crlf else working
     _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")

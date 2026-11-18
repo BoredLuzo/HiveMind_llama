@@ -57,7 +57,7 @@ if not "%BACKEND%"=="cuda" if not "%BACKEND%"=="rocm" if not "%BACKEND%"=="cpu" 
 
 REM Detect NVIDIA GPU for a better default
 set "HM_NVIDIA="
-nvidia-smi --query-gpu=name --format=csv,noheader >nul 2>&1
+nvidia-smi "--query-gpu=name" "--format=csv,noheader" >nul 2>&1
 if not errorlevel 1 set "HM_NVIDIA=1"
 
 if defined HM_NVIDIA (

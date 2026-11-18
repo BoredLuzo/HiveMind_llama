@@ -27,7 +27,6 @@ llama_gpu_layers_auto
 gpu_backend
 duo_runtime_profile
 routing_decider_model
-duo_critic_model
 duo_caps
 duo_until_finished_max_hours
 duo_rounds_balanced_cap

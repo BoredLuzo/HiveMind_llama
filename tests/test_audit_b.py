@@ -169,12 +169,14 @@ check("the handoff reuse check still refuses degraded slots",
 ml_src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
 ml_src += (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace")
 srv_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+rs_src = (ROOT / "backend" / "runtime_sync.py").read_text(encoding="utf-8", errors="replace")
 check("the registry-MTP block honors the env off-switch",
       "ENV-BYPASS FIX" in ml_src
       and 'and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in' in ml_src)
 check("llama_mlock reaches the load path (dynamic read, canonical module)",
       "_llama_cfg.MLOCK_MODEL" in ml_src and "MLOCK_MODEL" not in ml_src.split("from .llama_config import")[1].split(")")[0]
-      and "_lc_init.MLOCK_MODEL = bool(settings.get" in srv_src)
+      and ("_lc_init.MLOCK_MODEL = bool(settings.get" in srv_src
+           or ("sync_loader_settings" in srv_src and "_lc.MLOCK_MODEL = _mlock" in rs_src)))
 check("speculative models keep mmap+mlock even with mlock off (OOM guard)",
       "_resolve_load_mode(" in ml_src
       and 'if spec_planned or (mlock_now and not large_moe):' in ml_src

@@ -156,51 +156,40 @@ _web_search_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVa
 _WEBSEARCH_BUDGET_DEFAULT = 20
 
 
-def _consume_web_search_budget() -> bool:
-
+def _consume_budget(
+    counter_var: _contextvars.ContextVar[list | None],
+    setting_key: str,
+    default: int,
+) -> bool:
+    """Increment a per-run ContextVar call counter and return True if over limit."""
     try:
         from core.state import settings as _ws_settings
-        _limit = int(_ws_settings.get("duo_websearch_max_calls", _WEBSEARCH_BUDGET_DEFAULT))
+        _limit = int(_ws_settings.get(setting_key, default))
     except Exception:
-        _limit = _WEBSEARCH_BUDGET_DEFAULT
-    # NO-CONTEXT (audit 2026-10-17): the counter lives in a ContextVar that the
-    # run sets up. Called WITHOUT that context (a unit test, a direct API call, a
-    # future scheduler) the fresh list below is per-call, so the budget can never
-    # trip - deliberate, and the reason a test can call the tool in a loop. Every
-    # real run goes through the context manager in core/duo_runner, so the limit
-    # applies there.
-    _c = _web_search_count.get(None)
+        _limit = default
+    _c = counter_var.get(None)
     if _c is None:
         _c = [0]
-        _web_search_count.set(_c)
+        counter_var.set(_c)
     _c[0] += 1
     return _c[0] > _limit
 
 
-# FETCH-BUDGET (2026-10-14, audit phase 7): web_fetch previously drained the
-# SAME pool as web_search — a pure doc-fetching run silently killed search.
-# Separate counter, own settings key (webfetch_max_calls, same default).
+def _consume_web_search_budget() -> bool:
+    return _consume_budget(_web_search_count, "duo_websearch_max_calls", _WEBSEARCH_BUDGET_DEFAULT)
+
+
+# FETCH-BUDGET (2026-10-14, audit phase 7): separate pool from web_search.
 _web_fetch_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "web_fetch_count", default=None
 )
 
 
 def _consume_web_fetch_budget() -> bool:
-
-    try:
-        from core.state import settings as _ws_settings
-        _limit = int(_ws_settings.get("webfetch_max_calls", _WEBSEARCH_BUDGET_DEFAULT))
-    except Exception:
-        _limit = _WEBSEARCH_BUDGET_DEFAULT
-    _c = _web_fetch_count.get(None)
-    if _c is None:
-        _c = [0]
-        _web_fetch_count.set(_c)
-    _c[0] += 1
-    return _c[0] > _limit
+    return _consume_budget(_web_fetch_count, "webfetch_max_calls", _WEBSEARCH_BUDGET_DEFAULT)
 
 
-# A-P1-6: Dependency-Install-Call-Budget (Governor analog web_search). Install-
+# A-P1-6: Dependency-Install-Call-Budget (Governor analog web_search).
 _install_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "install_count", default=None
 )
@@ -208,25 +197,10 @@ _INSTALL_BUDGET_DEFAULT = 3
 
 
 def _consume_install_budget() -> bool:
-
-    try:
-        from core.state import settings as _is_settings
-        _limit = int(_is_settings.get("duo_install_max_calls", _INSTALL_BUDGET_DEFAULT))
-    except Exception:
-        _limit = _INSTALL_BUDGET_DEFAULT
-    _c = _install_count.get(None)
-    if _c is None:
-        _c = [0]
-        _install_count.set(_c)
-    _c[0] += 1
-    return _c[0] > _limit
+    return _consume_budget(_install_count, "duo_install_max_calls", _INSTALL_BUDGET_DEFAULT)
 
 
-# I3 (2026-10-31 audit): mcp_* calls had no budget at all - websearch/fetch/
-# install are governed, but a loop against an external MCP server (model
-# hallucination or an IDE client) ran unbounded. Same governor pattern; the
-# fallback limit lives here because there is no settings key yet and this
-# pass must not change settings.py.
+# I3 (2026-10-31 audit): mcp_* per-run governor.
 _mcp_call_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "mcp_call_count", default=None
 )
@@ -234,19 +208,7 @@ _MCP_CALL_BUDGET_DEFAULT = 40
 
 
 def _consume_mcp_call_budget() -> bool:
-
-    try:
-        from core.state import settings as _mc_settings
-        _limit = int(_mc_settings.get("mcp_client_max_calls_per_run",
-                                      _MCP_CALL_BUDGET_DEFAULT))
-    except (ImportError, AttributeError, TypeError, ValueError):
-        _limit = _MCP_CALL_BUDGET_DEFAULT
-    _c = _mcp_call_count.get(None)
-    if _c is None:
-        _c = [0]
-        _mcp_call_count.set(_c)
-    _c[0] += 1
-    return _c[0] > _limit
+    return _consume_budget(_mcp_call_count, "mcp_client_max_calls_per_run", _MCP_CALL_BUDGET_DEFAULT)
 
 
 # S3 (2026-10-31 audit): the four governors above live in ContextVars that
@@ -674,6 +636,48 @@ def _redact_secret_text(text: str) -> str:
     return _REDACT_SECRET_RE.sub(lambda m: m.group(1) + "***", text or "")
 
 
+def _apply_pre_decision(
+    run_id: str,
+    workspace: str,
+    name: str,
+    args: dict | None,
+    pre_entry: dict,
+    *,
+    label: str = "pre-decision",
+):
+    """Apply a stored user approval decision (repo/once/input/deny)."""
+    import logging as _appr_log
+    _lg = _appr_log.getLogger("hivemind.tools")
+    ans, note = pre_entry.get("answer", ""), pre_entry.get("note", "")
+    decision = _parse_approval_answer(ans)
+    _lg.warning("[APPROVAL] %s=%s run=%s tool=%s note=%r",
+                label, decision, run_id, name, str(note)[:80])
+    _is_write = name in ("write_file", "edit_file", "write_file_append", "apply_patch")
+    if decision == "repo":
+        _remember_repo_approval(workspace, name, args or {})
+        if _is_write:
+            _approval_free_pass[str(run_id)] = "write"
+        return ("NOTE", note) if note else None
+    if decision == "once":
+        if _is_write:
+            _wpp = _workspace_approval_key(workspace) + "::" + _norm_write_path(args or {})
+            if _wpp:
+                _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp)
+            _approval_free_pass[str(run_id)] = "write"
+        return ("NOTE", note) if note else None
+    if decision == "input":
+        return ("INPUT_ONLY", note or "(empty)")
+    if label == "pre-decision":
+        _lg.warning("[APPROVAL] pre-decision=deny run=%s tool=%s", run_id, name)
+    return ("DENY", _tool_error_response(
+        "ACTION_APPROVAL_DENIED",
+        "The user did not approve this call while it was being generated."
+        + (f" User message: {note}" if note else "")
+        + " Pick a different approach that does not need " + name + ".",
+        tool=name,
+    ))
+
+
 async def _check_action_approval(name: str, args: dict, workspace,
                                  gated: bool = False):
     """Returns None to let the tool run, ("NOTE", text) to run with a user
@@ -730,35 +734,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
         _approval_pre_decisions.pop(str(run_id), None)
         _pending_approvals.pop(str(run_id), None)
         _card_staged.pop(str(run_id), None)
-        _ans, _note = _pre.get("answer", ""), _pre.get("note", "")
-        decision = _parse_approval_answer(_ans)
-        _lg.warning("[APPROVAL] pre-decision=%s run=%s tool=%s note=%r",
-                    decision, run_id, name, _note[:80])
-        if decision == "repo":
-            _remember_repo_approval(workspace, name, args or {})
-            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
-                _approval_free_pass[str(run_id)] = "write"
-            if _note:
-                return ("NOTE", _note)
-            return None
-        if decision == "once":
-            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
-                _wpp = _workspace_approval_key(workspace) + "::" + _norm_write_path(args)
-                if _wpp:
-                    _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp)
-                _approval_free_pass[str(run_id)] = "write"
-            if _note:
-                return ("NOTE", _note)
-            return None
-        if decision == "input":
-            return ("INPUT_ONLY", _note or "(empty)")
-        _lg.warning("[APPROVAL] pre-decision=deny run=%s tool=%s", run_id, name)
-        return ("DENY", _tool_error_response(
-            "ACTION_APPROVAL_DENIED",
-            "The user did not approve this call while it was being generated."
-            + (f" User message: {_note}" if _note else "")
-            + " Pick a different approach that does not need " + name + ".",
-            tool=name ))
+        return _apply_pre_decision(run_id, workspace, name, args, _pre)
     # "once" for writes covers the path: continuations of an approved write
     # (auto-split part 2, follow-up edits) must not re-ask.
     _scope = _approval_scope()
@@ -805,30 +781,9 @@ async def _check_action_approval(name: str, args: dict, workspace,
         _rc.cleanup_pause(run_id)
         _pending_approvals.pop(str(run_id), None)
         _card_staged.pop(str(run_id), None)
-        _ans_l, _note_l = _pre_late.get("answer", ""), _pre_late.get("note", "")
-        _dec_l = _parse_approval_answer(_ans_l)
-        _lg.warning("[APPROVAL] late pre-decision=%s run=%s tool=%s note=%r",
-                    _dec_l, run_id, name, str(_note_l)[:80])
-        if _dec_l == "repo":
-            _remember_repo_approval(workspace, name, args or {})
-            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
-                _approval_free_pass[str(run_id)] = "write"
-            return (("NOTE", _note_l) if _note_l else None)
-        if _dec_l == "once":
-            if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
-                _wpp_l = _workspace_approval_key(workspace) + "::" + _norm_write_path(args)
-                if _wpp_l:
-                    _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp_l)
-                _approval_free_pass[str(run_id)] = "write"
-            return (("NOTE", _note_l) if _note_l else None)
-        if _dec_l == "input":
-            return ("INPUT_ONLY", _note_l or "(empty)")
-        return ("DENY", _tool_error_response(
-            "ACTION_APPROVAL_DENIED",
-            "The user did not approve this call while it was being generated."
-            + (f" User message: {_note_l}" if _note_l else "")
-            + " Pick a different approach that does not need " + name + ".",
-            tool=name ))
+        return _apply_pre_decision(
+            run_id, workspace, name, args, _pre_late, label="late pre-decision",
+        )
     # DECISION-NONCE into the pending entry: initiate_pause created it, the
     # card and every decide POST validate against it from here on.
     _decision_id = _rc.get_decision_id(run_id)
@@ -1616,8 +1571,8 @@ async def _run_inline_tool(
     _resolve_hint = ""     # fuzzy path resolution hint for edit tools
 
     if name in ("edit_file", "patch_file", "write_file", "write_file_append", "replace_lines") and "path" in args:
+        _resolve_hint = ""
         raw_path = args["path"]
-        _resolved_path = raw_path
         # T5 (audit r2): build the probe via the SAME MSYS-stripping
         # resolver the handler uses - '/C:/x' used to probe a phantom
         # 'workspace//C:/x' (never exists) and both read/write guards
@@ -1627,11 +1582,6 @@ async def _run_inline_tool(
             _fp_check = _fp_check.resolve()
         except Exception:
             pass
-        if _resolved_path != raw_path:
-            _resolve_hint = f"[Path resolved: {raw_path} → {_resolved_path}]\n"
-            args["path"] = _resolved_path
-        else:
-            _resolve_hint = ""
         _target = _normalize_tool_path(str(_fp_check), workspace)
         _ctx_set = _files_in_context.get(None)
         _in_context = bool(_ctx_set and _target in _ctx_set)

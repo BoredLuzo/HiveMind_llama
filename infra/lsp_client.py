@@ -398,7 +398,8 @@ class _LspConnection:
         }
         # the configured timeout wins, so a hung server cannot hold the
         # full 20 s default (same rule as the MCP handshake)
-        limit = min(INIT_TIMEOUT_S, self.timeout_s)
+        limit = (self.timeout_s if self.timeout_s > DEFAULT_TIMEOUT_S
+                 else max(5.0, min(INIT_TIMEOUT_S, self.timeout_s)))
         result = await self.request("initialize", self.init_params,
                                     timeout=limit)
         caps = result.get("capabilities") if isinstance(result, dict) else None
@@ -848,31 +849,43 @@ class _LspConnection:
         if proc is None:
             return
         try:
-            if proc.stdin is not None and not proc.stdin.is_closing():
-                proc.stdin.close()
-        except (OSError, ValueError):
-            pass
-        if proc.returncode is None:
-            # TREE-KILL first (see _kill_tree): taskkill /T on Windows,
-            # killpg on POSIX, then terminate() as the direct-child fallback
-            await kill_tree(proc)
             try:
-                proc.terminate()
+                if proc.stdin is not None and not proc.stdin.is_closing():
+                    proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+            if proc.returncode is None:
+                # TREE-KILL first (see _kill_tree): taskkill /T on Windows,
+                # killpg on POSIX, then terminate() as the direct-child fallback
+                await kill_tree(proc)
+                try:
+                    proc.terminate()
+                except (ProcessLookupError, OSError):
+                    pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_S)
+                return
+            except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                pass
+            try:
+                proc.kill()
             except (ProcessLookupError, OSError):
                 pass
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_S)
-            return
-        except (asyncio.TimeoutError, ProcessLookupError, OSError):
-            pass
-        try:
-            proc.kill()
-        except (ProcessLookupError, OSError):
-            pass
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_HARD_S)
-        except (asyncio.TimeoutError, ProcessLookupError, OSError):
-            pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_HARD_S)
+            except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                pass
+        finally:
+            # PROACTOR-CLOSE (2026-11-18): close subprocess pipe transports
+            # before asyncio.run() tears down the loop so Windows Proactor GC
+            # does not later call fileno() on an already-closed pipe.
+            tr = getattr(proc, "_transport", None)
+            if tr is not None:
+                try:
+                    tr.close()
+                except (OSError, RuntimeError, ValueError):
+                    pass
+            await asyncio.sleep(0)
 
 
 async def kill_tree(proc) -> None:

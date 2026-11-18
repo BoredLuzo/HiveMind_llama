@@ -185,7 +185,7 @@ ESSENTIAL_KEYS = {
 SKIP_DRAFTERS = False
 
 SPECS: list[dict] = [
-    # ── Tier 1: Essential Starter Set (fits any 8 GB GPU, ~12.8 GB disk) ───
+    # ── Tier 1: Essential Starter Set (fits any 8 GB GPU, ~12.5 GB total) ─
     {
         "key": "gemma-4:e4b-it-qat",
         "tag": "gemma-4:e4b-it-qat",
@@ -371,11 +371,11 @@ SPECS: list[dict] = [
     {
         "key": "twil:8b",
         "tag": "twil:8b",
-        "tier": "8 GB Power Class (Dense 8.8B Math/Code/IF)",
+        "tier": "Specialist / Math Footnote (Dense 8.8B Math/IF — slower ~14 t/s)",
         "disk_gb": "~5.0 GB",
         "hw_req": "8+ GB VRAM (100% GPU)",
-        "role_hint": "Upgrade: Dense 8.8B Math/Code/IF",
-        "desc": "TwIL-8B Q4_K_M Balanced (8.8B Granite 4.2 math/code/IF reasoning, ~5.0GB)",
+        "role_hint": "Specialist Math/IF (slower ~14 tok/s vs 34+ tok/s dense/MoE options)",
+        "desc": "TwIL-8B Q4_K_M Balanced (8.8B Granite 4.2 math/code/IF specialist, ~5.0GB)",
         "repo": "webAI-Official/TwIL-8B",
         "file_regex": [
             r"(?i)^twil-8b-q4_k_m-balanced\.gguf$",
@@ -443,6 +443,7 @@ HARDWARE_TIERS: list[dict] = [
         "roles": {
             "direct": "minicpm5:2b-sharp (or lfm3-omni:2b for vision)",
             "duo_coder": "qwen3.5:4b-mtp (at 8k-16k ctx) or minicpm5:2b-sharp",
+            "duo_critic": "lfm3:1.7b-qad (keep != duo_coder)",
             "judge / refiner": "lfm3:1.7b-qad",
             "subagent": "lfm3:1.7b-qad",
         },
@@ -452,10 +453,11 @@ HARDWARE_TIERS: list[dict] = [
         "label": "8 GB VRAM + <=24 GB RAM",
         "summary": "Core 2B-9B dense models run 100% in GPU VRAM. Heavy 26B/35B MoEs need 32+ GB RAM for expert offload.",
         "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "twil:8b", "qwen3.5:9b-mtp"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default]",
             "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default]",
+            "duo_critic": "minicpm5:2b-sharp (co-resident; keep != duo_coder)",
             "judge / refiner": "minicpm5:2b-sharp (+DSpark)",
             "subagent": "lfm3:1.7b-qad",
         },
@@ -465,10 +467,11 @@ HARDWARE_TIERS: list[dict] = [
         "label": "8 GB VRAM + 32+ GB RAM (Hybrid CPU-MoE Capable)",
         "summary": "8 GB defaults run 100% in GPU VRAM (fast). 26B/35B MoEs work ONLY because your 32+ GB System RAM holds CPU-offloaded experts.",
         "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "twil:8b", "air:26b-a4b", "qwen3.6:35b-a3b-mtp"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default, 100% GPU]",
             "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default, 100% GPU]",
+            "duo_critic": "minicpm5:2b-sharp (co-resident; keep != duo_coder)",
             "judge / refiner": "minicpm5:2b-sharp (+DSpark) [Recommended Default]",
             "subagent": "lfm3:1.7b-qad [Recommended Default]",
         },
@@ -482,6 +485,7 @@ HARDWARE_TIERS: list[dict] = [
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default] or qwen3.5:9b-mtp",
             "duo_coder / planner": "qwen3.5:4b-mtp (fast GPU) or qwen3.6:35b-a3b-mtp",
+            "duo_critic": "minicpm5:2b-sharp (co-resident; keep != duo_coder)",
             "judge / refiner": "minicpm5:2b-sharp",
             "subagent": "lfm3:1.7b-qad",
         },
@@ -495,6 +499,7 @@ HARDWARE_TIERS: list[dict] = [
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) or qwen3.5:9b-mtp",
             "duo_coder / planner": "qwen3.6:35b-a3b-mtp (or qwen3.5:4b-mtp for max speed)",
+            "duo_critic": "minicpm5:2b-sharp / gemma-4:e4b-it-qat (keep != duo_coder)",
             "judge / refiner": "minicpm5:2b-sharp / nvidia-nemotron-3.5-bolt:e4b",
             "subagent": "lfm3:1.7b-qad",
         },
@@ -569,12 +574,13 @@ def probe_hardware() -> tuple[float, float, str]:
                         gpu_name = parts[0]
         except (OSError, ValueError, ImportError, subprocess.SubprocessError):
             pass
-    if vram_gb <= 0:
-        try:
-            cfg = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
-            vram_gb = float(cfg.get("vram_budget_gb") or 0.0)
-        except (OSError, ValueError, TypeError):
-            pass
+    try:
+        cfg = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
+        cfg_vram = float(cfg.get("vram_budget_gb") or 0.0)
+        if cfg_vram > vram_gb:
+            vram_gb = cfg_vram
+    except (OSError, ValueError, TypeError):
+        pass
     return vram_gb, ram_gb, gpu_name
 
 
@@ -604,7 +610,7 @@ def model_fit_badge(spec: dict, vram_gb: float, ram_gb: float) -> str:
         if vram_gb >= 10.5:
             return "[FITS VRAM]"
         if vram_gb >= 6.8:
-            return "[FITS VRAM (12GB+ ideal, tight on 8GB)]"
+            return "[FITS VRAM (tight on 8 GB - 16k ctx, 12GB+ ideal)]"
         return "[HEAVY FOR THIS GPU (still downloadable)]"
     if key in ("nvidia-nemotron-3.5-bolt:e4b", "twil:8b"):
         if vram_gb >= 6.8:
@@ -1038,12 +1044,13 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
             (s["tag"] for s in SPECS if s.get("tag") and _spec_matches_file(s, g)),
             None,
         )
+        names = _parse_gguf_filename(g.name)
         if _spec_tag:
             mapping[_spec_tag] = str(g)
             if g.name.lower() not in _known_filename_tags():
                 _record_known_filename(g.name, _spec_tag)
-        names = _parse_gguf_filename(g.name)
-        if names:
+            families.add(_spec_tag.split(":")[0])
+        elif names:
             mapping.setdefault(names[0], str(g))
             families.add(names[0].split(":")[0])
 
@@ -1080,6 +1087,7 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
         existing = existing if isinstance(existing, dict) else {}
     except (OSError, ValueError):
         existing = {}
+    _registered_paths = {str(Path(v).resolve()) for k, v in mapping.items() if not k.endswith("_mmproj")}
     for _k, _v in existing.items():
         if not isinstance(_k, str) or not isinstance(_v, str):
             continue
@@ -1088,7 +1096,11 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
         if _k in mapping:
             continue
         try:
-            if Path(_v.strip()).is_file():
+            _vp = Path(_v.strip())
+            if _vp.is_file():
+                _parsed_alias = _parse_gguf_filename(_vp.name)
+                if str(_vp.resolve()) in _registered_paths and _parsed_alias and _k == _parsed_alias[0]:
+                    continue
                 mapping[_k] = _v
             else:
                 print(f"    dropped stale entry {_k} (file gone: {_v})")
@@ -1168,7 +1180,7 @@ def main() -> int:
         # Clear visual starter overview + detected hardware guidance + upgrade index.
         v_gb, r_gb, g_name = probe_hardware()
         _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
-        print("  ESSENTIAL SET [E] - recommended starter defaults (~11.4 GB + mmproj/drafters)")
+        print("  ESSENTIAL SET [E] - recommended starter defaults (~12.5 GB total incl. mmproj/drafters)")
         print("  " + "=" * 72)
         print()
         for _sp in _ess:

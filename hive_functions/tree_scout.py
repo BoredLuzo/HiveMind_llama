@@ -612,20 +612,11 @@ def partition_tree(
     _READ_SLOT_BYTES = 4000    # 4KB pro Slot
     _MAX_SLOTS_PER_PARTITION = max(4, int(max_files_per_partition * 1.5))
 
-    def _file_slots(filepath: str) -> int:
-        try:
-            _ws_path_local = Path(workspace_root)
-            size = (_ws_path_local / filepath).stat().st_size
-        except (OSError, TypeError):
-            return 1
-        slots = max(1, (size + _READ_SLOT_BYTES - 1) // _READ_SLOT_BYTES)
-        return min(slots, 4)  # Cap bei 4 Slots
-
     _TOTAL_FILES = sum(len(v) for v in refined.values())
     _SIZE_SPLIT_ENABLED = bool(workspace_root)
+    _sz: dict[str, int] = {}
 
     if _SIZE_SPLIT_ENABLED:
-        _sz: dict[str, int] = {}
         try:
             _ws_path_local = Path(workspace_root)
             for _files in refined.values():
@@ -636,6 +627,13 @@ def partition_tree(
                         _sz[_f] = 0
         except Exception:
             _SIZE_SPLIT_ENABLED = False
+
+    def _file_slots(filepath: str) -> int:
+        size = _sz.get(filepath)
+        if size is None:
+            return 1
+        slots = max(1, (size + _READ_SLOT_BYTES - 1) // _READ_SLOT_BYTES)
+        return min(slots, 4)  # Cap bei 4 Slots
 
     if _SIZE_SPLIT_ENABLED:
         _resplit: dict[str, list[str]] = {}
@@ -1319,60 +1317,3 @@ def parse_contract_summary(text: str) -> list[dict]:
         )
 
     return results
-
-
-def build_contract_prompt(partition: dict, all_contracts: list[dict]) -> str:
-    own_label    = partition.get("partition", "")
-    entry_points = partition.get("entry_points", [])
-    hint         = partition.get("hint", "")
-    plan_steps   = partition.get("plan_steps", [])
-    own_plan     = partition.get("plan", "")
-
-    other_parts: list[str] = []
-    for c in all_contracts:
-        if c.get("partition") == own_label:
-            continue
-        label   = c.get("partition", "?")
-        exports = c.get("exports", [])
-        ep      = c.get("entry_points", [])
-        ch      = c.get("hint", "")
-        line = f"  [{label}]"
-        if exports:
-            line += f" exports: {', '.join(exports)}"
-        if ep:
-            line += (f" | entry: {ep[0]}" if len(ep) == 1
-                     else f" | entries: {', '.join(ep)}")
-        if ch:
-            line += f"\n    hint: {ch}"
-        other_parts.append(line)
-
-    parts: list[str] = []
-
-    if entry_points:
-        parts.append(
-            f"## Einstiegspunkte ({own_label})\n"
-            + "\n".join(f"  - {e}" for e in entry_points)
-        )
-
-    if hint:
-        parts.append(f"## Note\n{hint}")
-
-    if plan_steps:
-        steps_txt = "\n".join(
-            f"  {s.get('step','?')!s}. [{s.get('file','')}] {s.get('action','')}"
-            for s in plan_steps
-            if isinstance(s, dict)
-        )
-        parts.append(f"## Implementierungsplan ({own_label})\n{steps_txt}")
-    elif own_plan:
-        parts.append(f"## Implementierungsplan ({own_label})\n{own_plan}")
-
-    if other_parts:
-        parts.append(
-            "## Contracts from other partitions\n"
-            "For OTHER partitions: use their exports and contracts. Do NOT read their source files.\n"
-            "For YOUR OWN files: read them before editing unless their content is already provided in context.\n"
-            + "\n".join(other_parts)
-        )
-
-    return "\n\n".join(parts)

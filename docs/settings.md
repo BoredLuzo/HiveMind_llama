@@ -65,7 +65,7 @@ its comment) in either file, then re-run the generator.
 | `duo_compress_threshold` | int | `0` | - |  |
 | `duo_context_budget_chars` | int | `8000` | - | CONTEXT BUDGET (D2, ): upper char cap for the tiny-workspace pre-seed block (core/duo_helpers.build_preseed_context). The effective cap is min(this, ctx_tokens/4, floor 2000); 8000 keeps the old behavior. |
 | `duo_critic_ctx` | null | `None` | yes |  |
-| `duo_critic_model` | str | `` | - |  |
+| `duo_critic_model` | str | `` | yes |  |
 | `duo_critic_tools` | bool | `False` | yes |  |
 | `duo_deep_retrieval` | bool | `True` | - | DEEP RETRIEVAL (D2, ): when the tiny-workspace pre-seed produces nothing, the repo index (context/repo_index.py, BOUNDED walk: hidden/heavy dirs pruned, depth + file caps) ranks nested repo files against the task text and the coder's first message gets a compact hint… |
 | `duo_deep_retrieval_max_chars` | int | `3000` | - | Upper char cap for the hint block; ranked hints that do not fit are dropped (never truncated mid-line). |
@@ -150,7 +150,7 @@ its comment) in either file, then re-run the generator.
 | `duo_tree_scout_enabled` | bool | `True` | - |  |
 | `duo_tree_scout_max_depth` | int | `4` | - |  |
 | `duo_tree_scout_max_files` | int | `200` | - |  |
-| `duo_ubatch` | int | `256` | yes | Prompt-processing chunk size (llama.cpp --ubatch-size). Larger values (512/1024) speed up prefill substantially for MoE models with CPU expert offloading (fewer RAM-streaming passes over the expert weights), at the cost of a larger VRAM compute buffer. Test lever for slow… |
+| `duo_ubatch` | int | `512` | yes | Prompt-processing chunk size (llama.cpp --ubatch-size). Larger values (512/1024) speed up prefill substantially for MoE models with CPU expert offloading (fewer RAM-streaming passes over the expert weights), at the cost of a larger VRAM compute buffer. Test lever for slow… |
 | `duo_ubatch_moe` | int | `0` | - | MoE UBATCH RAISE: 0 = the model profile decides ("ubatch" key, MoE models only — e.g. the 35B-A3B profile ships 512 for the measured +24..55% prefill); a value > 0 forces this ubatch for every MoE model; a negative value vetoes any raise and keeps duo_ubatch everywhere. A raise… |
 | `duo_until_finished_cap` | int | `999999` | yes |  |
 | `duo_until_finished_max_hours` | int | `24` | - | UNTIL-FINISHED-BOUND : until-finished runs are meant to work for hours - the operator can always kill a run (/stop, the Stop button, the phone). The wall clock is therefore generous by default (24 h) and only there so a wedged model cannot hold the machine forever;… |
@@ -195,7 +195,7 @@ its comment) in either file, then re-run the generator.
 | `llama_gpu_layers_auto` | bool | `False` | - | Auto-fit : omit --n-gpu-layers so llama.cpp fits the layers to the free VRAM itself — it refuses while the flag pins 99. Default keeps the explicit full-offload behavior. |
 | `llama_mlock` | bool | `True` | yes |  |
 | `llama_mlock_skip_large_moe` | bool | `True` | - | LARGE-MOE MLOCK SKIP: llama_mlock=True forces --load-mode mmap+mlock, which on large MoE GGUFs (>12 GB, experts streamed from RAM) measures up to 4.7x slower decode than load-mode none (llama-bench tg128 on the 35B-A3B: 2.92 t/s mmap+mlock vs 13.77 t/s none) because the locked… |
-| `llama_ubatch_size` | int | `256` | yes |  |
+| `llama_ubatch_size` | int | `512` | yes |  |
 | `llama_vk_disable_host_visible_vidmem` | bool | `True` | - | VULKAN-WDDM-PIN : on Windows Vulkan (AMD/Intel/Nvidia dGPUs with ReBAR), ggml-vulkan prefers HOST_VISIBLE\|DEVICE_LOCAL heaps that WDDM can silently demote into shared system RAM under GPU commit pressure (measured 15-21x decode drops on RX 6600). Pinning… |
 | `lsp_auto_diagnostics` | bool | `True` | yes | Attach a compact diagnostics block to a successful write/edit. A warm server is used directly; a cold one is started in the background (lsp_auto_warm_on_write) and the write waits at most 3 s for it. Failures are silent - a broken/missing server never fails a write. |
 | `lsp_auto_warm_on_write` | bool | `True` | - |  |
@@ -262,7 +262,7 @@ its comment) in either file, then re-run the generator.
 | `stt_translate` | bool | `False` | - | whisper --translate (English target; whisper tiers only) |
 | `subagent_lite_cooldown_s` | int | `60` | - |  |
 | `subagent_lite_ctx_default` | int | `8192` | yes |  |
-| `subagent_lite_enabled` | bool | `True` | yes | SUBAGENT-LITE : serial |
+| `subagent_lite_enabled` | bool | `False` | yes | SUBAGENT-LITE : serial, default off so fresh installs do not spawn extra delegate loads unless enabled. |
 | `subagent_lite_max_tokens` | int | `700` | - |  |
 | `subagent_lite_max_tools` | int | `12` | - |  |
 | `subagent_lite_min_free_ram_gb` | float | `5.0` | - |  |

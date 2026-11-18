@@ -100,6 +100,21 @@ def main():
         ok("no duplicate decider block")
     else:
         fail("no duplicate decider block", ":decider_done still present")
+
+    # NVIDIA-SMI-FOR-F + SHORTCUT NO-PAUSE (2026-11-18):
+    # - cmd's `for /f` splits unquoted '=' and ',' in `--query-gpu=name --format=csv,noheader`.
+    # - create_shortcut.bat inside install.bat must suppress its extra pause.
+    if '"--query-gpu=name" "--format=csv,noheader"' in _inst:
+        ok("install.bat quotes nvidia-smi flags against cmd for/f delimiter splitting")
+    else:
+        fail("install.bat quotes nvidia-smi flags against cmd for/f delimiter splitting",
+             'missing "--query-gpu=name" "--format=csv,noheader"')
+    _sc = (ROOT / "create_shortcut.bat").read_text(encoding="ascii", errors="replace")
+    if "HIVEMIND_NO_PAUSE=1" in _inst and "if defined HIVEMIND_NO_PAUSE" in _sc:
+        ok("create_shortcut.bat skips extra pause when called from install.bat")
+    else:
+        fail("create_shortcut.bat skips extra pause when called from install.bat",
+             "missing HIVEMIND_NO_PAUSE guard around create_shortcut.bat")
     return h.finish()
 
 

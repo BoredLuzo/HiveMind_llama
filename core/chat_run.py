@@ -365,7 +365,8 @@ async def _run_stream_locked(
     async def emit(data: dict) -> str:
         # Track generated output tokens from content events (all token types)
         _tok_types = {"token", "thinking_token", "planner_token", "planner_thinking_token", "planner_plan_token"}
-        if data.get("type") in _tok_types and data.get("content"):
+        if (data.get("type") in _tok_types and data.get("content")
+                and not str(data["content"]).startswith("[Direct error:")):
             n = _estimate_tokens_from_content(str(data["content"]))
             _ledger.token_estimate += n
             _phase_timer.add_tokens(n)
@@ -450,10 +451,17 @@ async def _run_stream_locked(
                   or _usage.get("cached_tokens") or 0
                   or (_tim.get("cache_n") if isinstance(_tim, dict) else 0) or 0)
         if _ct > 0:
+            try:
+                _p_tps = float((_tim.get("predicted_per_second") if isinstance(_tim, dict) else 0.0) or 0.0)
+            except (TypeError, ValueError):
+                _p_tps = 0.0
+            if _p_tps <= 0 and _gen_ms > 0:
+                _p_tps = _ct / (_gen_ms / 1000.0)
             await emit({"type": "usage_meta", "phase": phase,
                         "timer_key": _pipeline_timer_key(phase),
                         "completion_tokens": _ct, "prompt_tokens": _pt,
-                        "cached_tokens": _ca, "gen_ms": _gen_ms})
+                        "cached_tokens": _ca, "gen_ms": _gen_ms,
+                        "decode_tps": round(_p_tps, 2)})
         else:
             # Server ohne usage-Block: Zeit wenigstens als Phase verbuchen
             _phase_timer.add_real(_pipeline_timer_key(phase), 0, _gen_ms)
@@ -470,7 +478,8 @@ async def _run_stream_locked(
             logger.info("[A-P2-7] real eval_counts=%d prompt=%d cached=%d (by phase=%s) heuristic=%d -- recording %d",
                         _real_total, _prompt_total, _cached_total,
                         _ledger.real_by_phase, _ledger.token_estimate, _tokens_to_record)
-        _record_ok = stop_reason in ("completed", "loop_detected", "timeout", "hard_stop", "graceful_stop", "aborted")
+        _record_ok = (stop_reason in ("completed", "loop_detected", "timeout", "hard_stop", "graceful_stop", "aborted")
+                      and not bool(_run_settings.get("smoke_test")))
         if _record_ok and _tokens_to_record > 0:
             _phases = dict(_ledger.real_by_phase)
             _phases_ms: dict = {}
@@ -613,7 +622,8 @@ async def _run_stream_locked(
                     _chat_ctx_ws = {**(_chat_ctx_ws or {}), "workspace": _json_ws}
             except (OSError, ValueError):
                 pass
-        _ws_str, _ws_src = _resolve_workspace(settings, _chat_ctx_ws, user_input,
+        _ws_settings = {**_run_settings, "mode": mode or _run_settings.get("mode", "")}
+        _ws_str, _ws_src = _resolve_workspace(_ws_settings, _chat_ctx_ws, user_input,
                                               request_workspace=request_workspace)
         # COMMIT-GATE (2026-10-14, security fix): auto-commit only when the
         # run explicitly addressed a workspace (request parameter) or
@@ -644,7 +654,7 @@ async def _run_stream_locked(
             from utils.workspace_resolve import (
                 fallback_for_invalid_request as _fb_invalid,
             )
-            _fb_ws, _fb_src = _fb_invalid(settings, _chat_ctx_ws, user_input)
+            _fb_ws, _fb_src = _fb_invalid(_ws_settings, _chat_ctx_ws, user_input)
         except (ImportError, AttributeError, TypeError, ValueError):
             _fb_ws, _fb_src = "", ""
         if _fb_ws:

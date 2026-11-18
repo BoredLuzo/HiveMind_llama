@@ -244,6 +244,149 @@ async def _explore_partition(
     # Running char total — updated incrementally instead of recomputed every round
     _total_chars = sum(len(m.get("content") or "") for m in msgs)
 
+    async def _handle_read_file_call(
+        ta_arg: dict,
+        results_out: list[str],
+        *,
+        track_failures: bool,
+        add_outside_read_set: bool,
+        emit_badge: bool,
+        append_preview: bool,
+    ) -> None:
+        nonlocal read_n
+        fp = str(ta_arg.get("path", "")).strip()
+        _fp_raw = fp
+        if _fp_raw.startswith("/workspace/"):
+            _ws_base = Path(workspace).name
+            _fp_parts = _fp_raw[len("/workspace/"):].lstrip("/").split("/", 1)
+            if _fp_parts and _fp_parts[0].lower() == _ws_base.lower():
+                _fp_raw = _fp_parts[1] if len(_fp_parts) > 1 else _fp_parts[0]
+        try:
+            _fp_abs = str((Path(workspace) / _fp_raw).resolve())
+        except Exception:
+            _fp_abs = _fp_raw
+        _norm_fp = _fp_abs.replace("\\", "/").lower()
+        _abs_ws = Path(workspace).resolve()
+        try:
+            Path(_fp_abs).resolve().relative_to(_abs_ws)
+        except ValueError:
+            fc = f"[ERROR: '{fp}' is outside workspace — not readable]"
+            results_out.append(f"[read_file: {fp}]\n{fc}")
+            await _emit_tok(f"skip({fp}): outside workspace")
+            if track_failures:
+                _failed_reads.add(fp)
+            _hallucinated_paths.add(fp)
+            return
+
+        if _path_has_excluded_dir(_fp_abs):
+            if track_failures:
+                _failed_reads.add(fp)
+                _hallucinated_paths.add(fp)
+                _to_rm_excl = next(
+                    (_rp for _rp in remaining
+                     if _rp.replace("\\", "/").lower().rstrip("/") == _norm_fp.rstrip("/")),
+                    None,
+                )
+                if _to_rm_excl:
+                    remaining.remove(_to_rm_excl)
+            results_out.append(f"[read_file: {fp}]\n{_EXCLUDE_MSG}")
+            await _emit_tok(f"skip({fp}): excluded dir")
+            return
+
+        if _partition_roots and _norm_fp not in _partition_norms:
+            _in_bounds = False
+            try:
+                _fp_rel = str(Path(_norm_fp).resolve().relative_to(_abs_ws)).replace("\\", "/").lower()
+            except (ValueError, OSError):
+                _fp_rel = _norm_fp
+            for _pr in _partition_roots:
+                if _pr and (_fp_rel.startswith(_pr.lower()) or _norm_fp.startswith(_pr)):
+                    _in_bounds = True
+                    break
+            if not _in_bounds:
+                results_out.append(f"[read_file: {fp}]\n[out of partition — skipped]")
+                await _emit_tok(f"skip({fp}): out of partition")
+                return
+
+        if _norm_fp in _seen_files:
+            _read_counts[_norm_fp] = _read_counts.get(_norm_fp, 0) + 1
+            _content = _seen_files[_norm_fp]
+            _cached_lines = _content.count("\n") + 1
+            if _read_counts[_norm_fp] == 1:
+                _preview = _content[:200].rstrip()
+                fc = (
+                    f"[ALREADY READ — do NOT read again]\n"
+                    f"{_cached_lines} lines | {len(_content)} chars\n"
+                    f"Preview:\n{_preview}\n"
+                    f"Full content is already in context above. "
+                    f"Move on to the next task."
+                )
+            else:
+                fc = (
+                    f"[SKIP: '{fp}' already read "
+                    f"({_cached_lines} lines). "
+                    f"Do NOT call read_file on this path again.]"
+                )
+        elif max_unique_reads > 0 and len(_seen_files) >= max_unique_reads:
+            fc = f"[read cap reached ({max_unique_reads}) — skipped]"
+        else:
+            fc = await _exec_tool("read_file", ta_arg, workspace, _DummyTx(),
+                                  max_read=MAX_FILE_CHARS)
+
+        if _norm_fp not in _seen_files:
+            _seen_files[_norm_fp] = fc
+            if add_outside_read_set or _norm_fp in _partition_norms:
+                _read_set.add(_fp_abs)
+            if _norm_fp in _partition_norms:
+                read_n += 1
+
+        _norm_fp_strip = _norm_fp.strip("/")
+        _to_remove = next(
+            (_rp for _rp in remaining
+             if (lambda _nrp: (
+                 _nrp == _norm_fp_strip
+                 or _norm_fp_strip.endswith("/" + _nrp)
+                 or (track_failures and _nrp.endswith("/" + _norm_fp_strip))
+                 or _norm_fp_strip.endswith(_nrp)
+             ))(_rp.replace("\\", "/").lower().strip("/"))),
+            None,
+        )
+        if _to_remove:
+            if track_failures:
+                _read_ok = not any(
+                    err in str(fc or "")
+                    for err in ("[ERROR", "[TOOL_ERROR", "Permission denied", "not found", "No such file")
+                )
+                if _read_ok:
+                    remaining.remove(_to_remove)
+                else:
+                    logger.warning(
+                        "[PRE-EXPLORE] read_file failed for %s — keeping in remaining", _to_remove
+                    )
+                    _failed_reads.add(_to_remove)
+                    _err_match = re.search(r'\[ERROR:READ\].*?No such file.*?[\'"]([^\'"]+)[\'"]', fc or "")
+                    if _err_match:
+                        _hallucinated_paths.add(_err_match.group(1))
+            else:
+                remaining.remove(_to_remove)
+
+        results_out.append(f"[read_file: {fp}]\n{fc}")
+        if append_preview:
+            content_msgs.append(fc[:200])
+        await _emit_tok(f"read_file({_fp_abs})")
+        if emit_badge and emit_fn:
+            try:
+                await emit_fn({
+                    "type": "file_read",
+                    "label": label,
+                    "path": _fp_abs,
+                    "n_read": read_n,
+                    "n_total": len(paths),
+                    "worker_key": wk,
+                })
+            except Exception:
+                pass
+
     # ── Main loop ─────────────────────────────────────────────────────────────
     while not contract_done and rounds < max_r:
         if aborted_fn and aborted_fn():
@@ -286,149 +429,13 @@ async def _explore_partition(
                 ta = tc.get("args") or {}
                 if tn == "read_file":
                     read_calls += 1
-                    fp = str(ta.get("path", "")).strip()
-                    # M5 FIX: /workspace/<project>/ prefix normalization (llama.cpp context mount)
-                    _ws_base = Path(workspace).name
-                    _fp_raw = fp
-                    if _fp_raw.startswith("/workspace/"):
-                        _fp_parts = _fp_raw[len("/workspace/"):].lstrip("/").split("/", 1)
-                        if _fp_parts and _fp_parts[0].lower() == _ws_base.lower():
-                            _fp_raw = _fp_parts[1] if len(_fp_parts) > 1 else _fp_parts[0]
-                    # Already-read guard: return short notice instead of full content
-                    # so the model doesn't loop re-reading the same file.
-                    _fp_check = str((Path(workspace) / _fp_raw).resolve())
-                    _fp_check_norm = _fp_check.replace("\\", "/").lower()
-                    _abs_ws = Path(workspace).resolve()
-                    try:
-                        Path(_fp_check).resolve().relative_to(_abs_ws)
-                    except ValueError:
-                        fc = f"[ERROR: '{fp}' is outside workspace — not readable]"
-                        tool_results.append(f"[read_file: {fp}]\n{fc}")
-                        await _emit_tok(f"skip({fp}): outside workspace")
-                        _failed_reads.add(fp)
-                        _hallucinated_paths.add(fp)
-                        continue
-                    # --- EXCLUDE DIRS CHECK (before boundary) ---
-                    if _path_has_excluded_dir(_fp_check):
-                        _failed_reads.add(fp)
-                        _hallucinated_paths.add(fp)
-                        _to_rm_excl = next(
-                            (_rp for _rp in remaining
-                             if _rp.replace("\\", "/").lower().rstrip("/") == _fp_check_norm.rstrip("/")),
-                            None
-                        )
-                        if _to_rm_excl:
-                            remaining.remove(_to_rm_excl)
-                        fc = _EXCLUDE_MSG
-                        tool_results.append(f"[read_file: {fp}]\n{fc}")
-                        await _emit_tok(f"skip({fp}): excluded dir")
-                        continue
-                    # --- BOUNDARY CHECK ---
-                    if _partition_roots and _fp_check_norm not in _partition_norms:
-                        _in_bounds = False
-                        # Convert absolute path to workspace-relative for root matching
-                        try:
-                            _ws_norm = Path(workspace).resolve()
-                            _fp_rel = str(Path(_fp_check_norm).resolve().relative_to(_ws_norm)).replace("\\", "/").lower()
-                        except (ValueError, OSError):
-                            _fp_rel = _fp_check_norm
-                        for _pr in _partition_roots:
-                            if _pr and (_fp_rel.startswith(_pr.lower()) or _fp_check_norm.startswith(_pr)):
-                                _in_bounds = True
-                                break
-                        if not _in_bounds:
-                            fc = "[out of partition — skipped]"
-                            tool_results.append(f"[read_file: {fp}]\n{fc}")
-                            await _emit_tok(f"skip({fp}): out of partition")
-                            continue
-                    # --- DEDUP + CAP CHECK ---
-                    if _fp_check_norm in _seen_files:
-                        _read_counts[_fp_check_norm] = (
-                            _read_counts.get(_fp_check_norm, 0) + 1
-                        )
-                        _content = _seen_files[_fp_check_norm]
-                        _cached_lines = _content.count('\n') + 1
-                        _cached_chars = len(_content)
-                        if _read_counts[_fp_check_norm] == 1:
-                            _preview = _content[:200].rstrip()
-                            fc = (
-                                f"[ALREADY READ — do NOT read again]\n"
-                                f"{_cached_lines} lines | {_cached_chars} chars\n"
-                                f"Preview:\n{_preview}\n"
-                                f"Full content is already in context above. "
-                                f"Move on to the next task."
-                            )
-                        else:
-                            fc = (
-                                f"[SKIP: '{fp}' already read "
-                                f"({_cached_lines} lines). "
-                                f"Do NOT call read_file on this path again.]"
-                            )
-                    elif max_unique_reads > 0 and len(_seen_files) >= max_unique_reads:
-                        fc = f"[read cap reached ({max_unique_reads}) — skipped]"
-                    else:
-                        fc = await _exec_tool("read_file", ta, workspace, _DummyTx(),
-                                             max_read=MAX_FILE_CHARS)
-                    # Resolve to absolute path — model may return relative or absolute.
-                    # _read_set stores absolute paths for display; _seen_files is
-                    # the lowercase dedup key with cached content.
-                    try:
-                        _fp_abs = str((Path(workspace) / fp).resolve()) if not Path(fp).is_absolute() else str(Path(fp).resolve())
-                    except Exception:
-                        _fp_abs = fp
-                    _norm_fp = _fp_abs.replace("\\", "/").lower()
-                    if _norm_fp not in _seen_files:
-                        _seen_files[_norm_fp] = fc
-                        _read_set.add(_fp_abs)   # absolute path for UI display
-                        # Only count reads that belong to this partition.
-                        if _norm_fp in _partition_norms:
-                            read_n += 1
-                    # Remove from remaining: match by suffix because the model may
-                    # return an absolute path while remaining holds relative paths.
-                    _norm_fp_strip = _norm_fp.strip("/")
-                    _to_remove = None
-                    for _rp in remaining:
-                        _norm_rp = _rp.replace("\\", "/").lower().strip("/")
-                        if (
-                            _norm_rp == _norm_fp_strip                          # exact
-                            or _norm_fp_strip.endswith("/" + _norm_rp)          # abs ends with rel
-                            or _norm_rp.endswith("/" + _norm_fp_strip)          # rel ends with abs (rare)
-                            or _norm_fp_strip.endswith(_norm_rp)                # abs ends with rel (no leading slash)
-                        ):
-                            _to_remove = _rp
-                            break
-                    if _to_remove:
-                        _read_ok = not any(
-                            err in str(fc or "")
-                            for err in ("[ERROR", "[TOOL_ERROR", "Permission denied", "not found", "No such file")
-                        )
-                        if _read_ok:
-                            remaining.remove(_to_remove)
-                        else:
-                            logger.warning(
-                                "[PRE-EXPLORE] read_file failed for %s — keeping in remaining", _to_remove
-                            )
-                            _failed_reads.add(_to_remove)  # P2: track for deadlock detection
-                            # HALLUCINATION FIX: track paths the model invents that don't exist
-                            _err_match = re.search(r'\[ERROR:READ\].*?No such file.*?[\'"]([^\'"]+)[\'"]', fc or "")
-                            if _err_match:
-                                _hallucinated_paths.add(_err_match.group(1))
-                    tool_results.append(f"[read_file: {fp}]\n{fc}")
-                    # partition_token: live file list in UI card
-                    await _emit_tok(f"read_file({_fp_abs})")
-                    # file_read: counter badge update (n_read / n_total)
-                    if emit_fn:
-                        try:
-                            await emit_fn({
-                                "type":     "file_read",
-                                "label":    label,
-                                "path":     _fp_abs,
-                                "n_read":   read_n,
-                                "n_total":  len(paths),
-                                "worker_key": wk,
-                            })
-                        except Exception:
-                            pass
+                    await _handle_read_file_call(
+                        ta, tool_results,
+                        track_failures=True,
+                        add_outside_read_set=True,
+                        emit_badge=True,
+                        append_preview=False,
+                    )
                 elif tn == "list_dir":
                     fc = await _exec_tool("list_dir", ta, workspace, _DummyTx())
                     tool_results.append(f"[list_dir]\n{fc}")
@@ -675,94 +682,13 @@ async def _explore_partition(
                 _fr_results: list[str] = []
                 for _tc in _fr_result["tool_calls"]:
                     if _tc.get("name") == "read_file":
-                        _fp2 = str(_tc.get("args", {}).get("path", "")).strip()
-                        # M5 FIX: /workspace/<project>/ prefix normalization
-                        if _fp2.startswith("/workspace/"):
-                            _ws_base2 = Path(workspace).name
-                            _fp2_parts = _fp2[len("/workspace/"):].lstrip("/").split("/", 1)
-                            if _fp2_parts and _fp2_parts[0].lower() == _ws_base2.lower():
-                                _fp2 = _fp2_parts[1] if len(_fp2_parts) > 1 else _fp2_parts[0]
-                        try:
-                            _fp2_abs = str((Path(workspace) / _fp2).resolve()) if not Path(_fp2).is_absolute() else str(Path(_fp2).resolve())
-                        except Exception:
-                            _fp2_abs = _fp2
-                        _norm2 = _fp2_abs.replace("\\", "/").lower()
-                        _abs_ws2 = Path(workspace).resolve()
-                        try:
-                            Path(_fp2_abs).resolve().relative_to(_abs_ws2)
-                        except ValueError:
-                            _fc2 = f"[ERROR: '{_fp2}' is outside workspace — not readable]"
-                            _fr_results.append(f"[read_file: {_fp2}]\n{_fc2}")
-                            await _emit_tok(f"skip({_fp2}): outside workspace")
-                            _hallucinated_paths.add(_fp2)
-                            continue
-                        # --- EXCLUDE DIRS CHECK (force-read) ---
-                        if _path_has_excluded_dir(_fp2_abs):
-                            _fc2 = _EXCLUDE_MSG
-                            _fr_results.append(f"[read_file: {_fp2}]\n{_fc2}")
-                            await _emit_tok(f"skip({_fp2}): excluded dir")
-                            continue
-                        # --- BOUNDARY CHECK ---
-                        _fp2_in_bounds = _norm2 in _partition_norms
-                        if _partition_roots and not _fp2_in_bounds:
-                            try:
-                                _ws_norm2 = Path(workspace).resolve()
-                                _fp2_rel = str(Path(_norm2).resolve().relative_to(_ws_norm2)).replace("\\", "/").lower()
-                            except (ValueError, OSError):
-                                _fp2_rel = _norm2
-                            for _pr in _partition_roots:
-                                if _pr and (_fp2_rel.startswith(_pr.lower()) or _norm2.startswith(_pr)):
-                                    _fp2_in_bounds = True
-                                    break
-                            if not _fp2_in_bounds:
-                                _fc2 = "[out of partition — skipped]"
-                                _fr_results.append(f"[read_file: {_fp2}]\n{_fc2}")
-                                await _emit_tok(f"skip({_fp2}): out of partition")
-                                continue
-                        # --- DEDUP + CAP CHECK ---
-                        if _norm2 in _seen_files:
-                            _read_counts[_norm2] = (
-                                _read_counts.get(_norm2, 0) + 1
-                            )
-                            _content = _seen_files[_norm2]
-                            _cached_lines = _content.count('\n') + 1
-                            _cached_chars = len(_content)
-                            if _read_counts[_norm2] == 1:
-                                _preview = _content[:200].rstrip()
-                                _fc2 = (
-                                    f"[ALREADY READ — do NOT read again]\n"
-                                    f"{_cached_lines} lines | {_cached_chars} chars\n"
-                                    f"Preview:\n{_preview}\n"
-                                    f"Full content is already in context above. "
-                                    f"Move on to the next task."
-                                )
-                            else:
-                                _fc2 = (
-                                    f"[SKIP: '{_fp2}' already read "
-                                    f"({_cached_lines} lines). "
-                                    f"Do NOT call read_file on this path again.]"
-                                )
-                        elif max_unique_reads > 0 and len(_seen_files) >= max_unique_reads:
-                            _fc2 = f"[read cap reached ({max_unique_reads}) — skipped]"
-                        else:
-                            _fc2 = await _exec_tool("read_file", _tc.get("args", {}),
-                                                   workspace, _DummyTx(), max_read=MAX_FILE_CHARS)
-                        if _norm2 not in _seen_files:
-                            _seen_files[_norm2] = _fc2
-                            if _norm2 in _partition_norms:
-                                _read_set.add(_fp2_abs)
-                                read_n += 1
-                        _norm2_strip = _norm2.strip("/")
-                        _rem2 = None
-                        for _rp2 in remaining:
-                            _nrp2 = _rp2.replace("\\", "/").lower().strip("/")
-                            if _nrp2 == _norm2_strip or _norm2_strip.endswith("/" + _nrp2) or _norm2_strip.endswith(_nrp2):
-                                _rem2 = _rp2; break
-                        if _rem2:
-                            remaining.remove(_rem2)
-                        _fr_results.append(f"[read_file: {_fp2}]\n{_fc2}")
-                        content_msgs.append(_fc2[:200])
-                        await _emit_tok(f"read_file({_fp2_abs})")
+                        await _handle_read_file_call(
+                            _tc.get("args", {}), _fr_results,
+                            track_failures=False,
+                            add_outside_read_set=False,
+                            emit_badge=False,
+                            append_preview=True,
+                        )
                 if _fr_results:
                     msgs.append({"role": "user", "content": "\n\n".join(_fr_results)})
             elif _fr_result["content"]:
@@ -1183,26 +1109,33 @@ async def _make_fallback_partition(workspace: str, tree_ctx: str, user_input: st
             )
             return [{"label": "workspace", "paths": paths}]
 
-    # Strategie 2 — direkter Filesystem-Scan
+    # Strategie 2 — direkter Filesystem-Scan (ein pruned os.walk statt 44x rglob)
     try:
+        import os as _os
+        _skip_dirs_l = {str(d).lower() for d in _SKIP_DIRS}
         found: list[str] = []
-        for ext in sorted(_CODE_EXTS):
-            for f in ws.rglob(f"*{ext}"):
-                if f.is_file() and not f.name.startswith(_SKIP_FILE_PREFIXES) and not any(s in (p.lower() for p in f.parts) for s in _SKIP_DIRS):
-                    try:
-                        found.append(str(f.relative_to(ws)))
-                    except ValueError:
-                        found.append(str(f))
+        for _dirpath, _dirnames, _filenames in _os.walk(ws):
+            _dirnames[:] = sorted(d for d in _dirnames if d.lower() not in _skip_dirs_l)
+            for _fname in sorted(_filenames):
+                if _fname.startswith(_SKIP_FILE_PREFIXES):
+                    continue
+                if Path(_fname).suffix.lower() not in _CODE_EXTS:
+                    continue
+                _fpath = Path(_dirpath) / _fname
+                try:
+                    found.append(str(_fpath.relative_to(ws)))
+                except ValueError:
+                    found.append(str(_fpath))
                 if len(found) >= _MAX_FALLBACK_FILES:
                     break
             if len(found) >= _MAX_FALLBACK_FILES:
                 break
         if found:
             logger.info(
-                "Gap-1-FIX: fallback partition via rglob (%d files)", len(found)
+                "Gap-1-FIX: fallback partition via walk (%d files)", len(found)
             )
             return [{"label": "workspace", "paths": found}]
     except Exception as e:
-        logger.warning("Gap-1-FIX: rglob failed: %s", e)
+        logger.warning("Gap-1-FIX: fallback walk failed: %s", e)
 
     return []

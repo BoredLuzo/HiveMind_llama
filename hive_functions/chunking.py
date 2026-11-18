@@ -915,23 +915,6 @@ class ChunkState:
         # stringified, capped at 50 — mirrors build_resume_block).
         self.send_files = [str(p) for p in _rb.get("pending_send_files", []) if str(p).strip()][:50]
 
-    def get_remaining_items(self, loop_items: list, current_di: int) -> list[dict]:
-        """Build the chunks_remaining list for a resume save.
-
-        Parameters
-        ----------
-        loop_items : list
-            The full _loop_items list (subtasks or [None]*rounds).
-        current_di : int
-            Current 0-based index — items from here onward are remaining.
-
-        Returns
-        -------
-        list[dict]
-            Remaining items as [{"title": ...}] dicts.
-        """
-        return [{"title": str(t)} for t in loop_items[current_di:]]
-
     # ------------------------------------------------------------------ #
     #  Reset helpers
     # ------------------------------------------------------------------ #

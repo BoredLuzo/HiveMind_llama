@@ -75,6 +75,7 @@ if defined QUIET exit /b 0
 echo  [OK] Desktop shortcut created.
 echo       Double-click "%SC_NAME%" to start HiveMind.
 echo.
+if defined HIVEMIND_NO_PAUSE exit /b 0
 echo  Press any key to continue...
 pause >nul
 exit /b 0

@@ -346,11 +346,12 @@ async def _duo_planner_phase(
     try:
         _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
         _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
+        _explicit_planner_think = "duo_agentic_thinking" in (ctx.settings or {})
         _use_thinking_planner = bool(
             ctx.duo_config.agentic_thinking
             or (not _disable_think_planner and (
                 ctx.duo_config.chunking
-                or (_planner_default_thinking and ctx.duo_config.coding_mode)
+                or (not _explicit_planner_think and _planner_default_thinking and ctx.duo_config.coding_mode)
             ))
         )
         _planner_use_exec_model = bool(ctx.settings.get("duo_planner_use_exec_model", True))
@@ -1189,10 +1190,25 @@ async def _duo_critic_review(
         _critic_tc_read_s = float(ctx.settings.get("duo_llm_slow_timeout_s", 300))
         _critic_tc_timeout = httpx.Timeout(connect=10.0, read=_critic_tc_read_s, write=10.0, pool=5.0)
         from backend.llama_server_manager import manager as _lsm_c
-        _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic"))
+        _critic_req_ctx = resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic")
+        try:
+            for _cs in getattr(_lsm_c, "_slots", ()):
+                _cs_mdl = getattr(_cs, "_model", None) or getattr(_cs, "model", None)
+                _cs_ctx = int(getattr(_cs, "_num_ctx", 0) or 0)
+                if _cs_mdl and (_cs_mdl == critic_mdl or _cs_mdl == coder_mdl) and 0 < _cs_ctx < _critic_req_ctx:
+                    _critic_req_ctx = _cs_ctx
+                    break
+        except (AttributeError, TypeError, ValueError):
+            pass
+        _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=_critic_req_ctx)
 
         _critic_ag = (ctx.pipeline.agents.get("duo_critic") if getattr(ctx, "pipeline", None) else None)
         _critic_think_budget = int(getattr(_critic_ag, "thinking_budget", 0) or 0)
+        _critic_req_max_tokens = (
+            min(int(_critic_req_ctx), int(_duo_critic_tok) + _critic_think_budget)
+            if (_critic_thinking and _critic_think_budget > 0)
+            else _duo_critic_tok
+        )
         if _critic_tools_enabled:
             # ── Critic Tool-Loop ─────────────────────────────────────
             # Critic can read files and run tests before giving verdict.
@@ -1211,7 +1227,7 @@ async def _duo_critic_review(
                         _CRITIC_VERIFY_TOOLS,
                         tool_choice="auto",
                         temp_override=_duo_critic_temp,
-                        max_tokens=_duo_critic_tok,
+                        max_tokens=_critic_req_max_tokens,
                         critic_profile=_critic_profile,
                         critic_thinking=_critic_thinking,
                         critic_thinking_budget=_critic_think_budget,
@@ -1268,7 +1284,7 @@ async def _duo_critic_review(
                 _critic_msgs,
                 [],
                 temp_override=_duo_critic_temp,
-                max_tokens=_duo_critic_tok,
+                max_tokens=_critic_req_max_tokens,
                 critic_profile=_critic_profile,
                 critic_thinking=_critic_thinking,
                 critic_thinking_budget=_critic_think_budget,

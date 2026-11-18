@@ -157,18 +157,31 @@ def _cuda_version_of(name: str, rx) -> tuple[int, ...]:
         return (0,)
 
 
-def _pick_asset(releases: list[dict], rx, cuda_version: str = "") -> tuple[dict | None, str]:
+def _parse_cuda_tuple(cuda_version: str) -> tuple[int, ...] | None:
+    if not cuda_version:
+        return None
+    try:
+        parts = tuple(int(x) for x in cuda_version.split(".")[:2])
+        return parts if len(parts) >= 1 else None
+    except ValueError:
+        return None
+
+
+def _pick_asset(
+    releases: list[dict],
+    rx,
+    cuda_version: str = "",
+    max_cuda_version: str = "",
+) -> tuple[dict | None, str]:
     """Highest build wins; with equal build the higher CUDA version.
 
     cuda_version: optional "major.minor" — filters assets exactly to this
     version (for old drivers without 13.x support).
+    max_cuda_version: optional "major.minor" ceiling — keeps assets whose
+    CUDA runtime <= max_cuda_version when an exact runtime build is absent.
     """
-    want = None
-    if cuda_version:
-        try:
-            want = tuple(int(x) for x in cuda_version.split(".")[:2])
-        except ValueError:
-            want = None
+    want = _parse_cuda_tuple(cuda_version)
+    max_want = _parse_cuda_tuple(max_cuda_version)
     best = None
     best_key = (0, (0,))
     best_tag = ""
@@ -181,20 +194,48 @@ def _pick_asset(releases: list[dict], rx, cuda_version: str = "") -> tuple[dict 
             cv = _cuda_version_of(a.get("name", ""), rx)
             if want is not None and cv[:2] != want:
                 continue
+            if max_want is not None and cv != (0,) and cv[:2] > max_want:
+                continue
             key = (build, cv)
             if key > best_key:
                 best, best_key, best_tag = a, key, rel.get("tag_name", "?")
     return best, best_tag
 
 
+def _find_nvidia_smi() -> str | None:
+    """Locate nvidia-smi on PATH or standard Windows driver locations."""
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    if _IS_WIN:
+        sys_root = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+        prog_files = Path(os.environ.get("ProgramFiles") or r"C:\Program Files")
+        for cand in (
+            sys_root / "System32" / "nvidia-smi.exe",
+            prog_files / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe",
+        ):
+            if cand.is_file():
+                return str(cand)
+    return None
+
+
 def _detect_cuda_version_from_driver() -> str:
     """Read 'CUDA Version: 13.1' from nvidia-smi ('' if not detectable)."""
-    try:
-        out = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
-        m = re.search(r"CUDA Version:\s*(\d+\.\d+)", out.stdout)
-        return m.group(1) if m else ""
-    except Exception:
+    smi = _find_nvidia_smi()
+    if not smi:
         return ""
+    for args in ([smi], [smi, "-q"]):
+        try:
+            out = subprocess.run(
+                args, capture_output=True, text=True, timeout=30,
+                encoding="utf-8", errors="replace",
+            )
+            m = re.search(r"CUDA Version\s*:\s*(\d+\.\d+)", out.stdout)
+            if m:
+                return m.group(1)
+        except Exception:
+            continue
+    return ""
 
 
 def http_json(url: str):
@@ -490,8 +531,12 @@ def main() -> int:
             print(f"       Driver CUDA version: {_det}")
             asset, asset_tag = _pick_asset(releases, rx, _det)
             if asset is None:
-                print(f"       No asset exactly for CUDA {_det} — taking the newest version.")
-                asset, asset_tag = _pick_asset(releases, rx)
+                asset, asset_tag = _pick_asset(releases, rx, max_cuda_version=_det)
+                if asset is not None:
+                    print(f"       No exact CUDA {_det} build — using compatible <= {_det} runtime ({asset['name']}).")
+                else:
+                    print(f"       No asset <= CUDA {_det} — taking the newest version.")
+                    asset, asset_tag = _pick_asset(releases, rx)
         else:
             print("       nvidia-smi not available — taking the newest CUDA version.")
             asset, asset_tag = _pick_asset(releases, rx)

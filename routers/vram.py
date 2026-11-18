@@ -302,8 +302,8 @@ async def set_vram_budget(req: Request):
         return {"ok": False, "error": f"Value outside 1-96 GB: {gb}"}
     settings["vram_budget_gb"] = gb
     try:
-        import backend.llama_server_manager as _lsm_vram
-        _lsm_vram.VRAM_BUDGET_GB = gb
+        from backend.runtime_sync import sync_loader_settings as _sync_vram_budget
+        _sync_vram_budget(settings)
     except Exception:
         pass
     await asyncio.to_thread(save_settings, settings)
@@ -438,16 +438,5 @@ async def ollama_preload_pipeline():
             except Exception as e:
                 results[model] = f"error: {str(e)[:60]}"
         return {"ok": True, "results": results}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@router.post("/kill_all")
-async def llama_kill_all():
-    if _force_kill_all is None:
-        return JSONResponse({"ok": False, "error": "force_kill_all not available"}, status_code=500)
-    try:
-        result = await _force_kill_all()
-        return {"ok": True, **result}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

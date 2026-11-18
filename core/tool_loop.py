@@ -251,6 +251,8 @@ class ToolLoopState:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    gen_ms: float = 0.0
+    decode_tps: float = 0.0
 
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
@@ -310,6 +312,12 @@ class ToolLoop:
         self._pause_gate = pause_gate
         self._custom_executor = custom_executor
         self._emit_status = emit_status
+        self.state = ToolLoopState()
+        self._usage_prompt = 0
+        self._usage_completion = 0
+        self._usage_cached = 0
+        self._usage_gen_ms = 0.0
+        self._usage_decode_tps = 0.0
 
     async def run(self, messages: list[dict]) -> AsyncIterator[dict]:
         """Run the tool-calling loop, yielding events."""
@@ -321,6 +329,8 @@ class ToolLoop:
         self._usage_prompt = 0
         self._usage_completion = 0
         self._usage_cached = 0
+        self._usage_gen_ms = 0.0
+        self._usage_decode_tps = 0.0
         if self._run_id:
             _current_run_id.set(self._run_id)
 
@@ -703,6 +713,8 @@ class ToolLoop:
         state.prompt_tokens = self._usage_prompt
         state.completion_tokens = self._usage_completion
         state.cached_tokens = self._usage_cached
+        state.gen_ms = self._usage_gen_ms
+        state.decode_tps = self._usage_decode_tps
 
         if state.rounds_used >= self.cfg.max_rounds and not state.content_parts:
             _fallback = "[Tool-Agent: Max rounds reached, no output.]"
@@ -767,7 +779,7 @@ class ToolLoop:
         ):
             yield ev
 
-    def _add_usage(self, usage) -> None:
+    def _add_usage(self, usage, timings=None, gen_ms: float = 0.0) -> None:
         """Sum one response's usage block into the per-run counters."""
         if not isinstance(usage, dict):
             return
@@ -776,12 +788,27 @@ class ToolLoop:
                 return int(value or 0)
             except (TypeError, ValueError):
                 return 0
-        self._usage_prompt += _n(usage.get("prompt_tokens"))
-        self._usage_completion += _n(usage.get("completion_tokens"))
+        self._usage_prompt = getattr(self, "_usage_prompt", 0) + _n(usage.get("prompt_tokens"))
+        self._usage_completion = getattr(self, "_usage_completion", 0) + _n(usage.get("completion_tokens"))
         _details = usage.get("prompt_tokens_details")
-        self._usage_cached += (_n(usage.get("cached_tokens"))
-                               or _n((_details or {}).get("cached_tokens"))
-                               or _n(usage.get("cache_n")))
+        self._usage_cached = getattr(self, "_usage_cached", 0) + (
+            _n(usage.get("cached_tokens"))
+            or _n((_details or {}).get("cached_tokens"))
+            or _n(usage.get("cache_n"))
+        )
+        self._usage_gen_ms = float(getattr(self, "_usage_gen_ms", 0.0) or 0.0)
+        self._usage_decode_tps = float(getattr(self, "_usage_decode_tps", 0.0) or 0.0)
+        if gen_ms and gen_ms > 0:
+            self._usage_gen_ms += float(gen_ms)
+        _tim = timings if isinstance(timings, dict) else (usage.get("timings") if isinstance(usage.get("timings"), dict) else {})
+        try:
+            _pred = float((_tim or {}).get("predicted_per_second") or 0.0)
+        except (TypeError, ValueError):
+            _pred = 0.0
+        if _pred > 0:
+            self._usage_decode_tps = _pred
+        elif self._usage_gen_ms > 0 and self._usage_completion > 0:
+            self._usage_decode_tps = self._usage_completion / (self._usage_gen_ms / 1000.0)
         # Keep the published state in sync so a failed POST still reports the
         # tokens spent before the exception.
         _state = getattr(self, "state", None)
@@ -789,3 +816,5 @@ class ToolLoop:
             _state.prompt_tokens = self._usage_prompt
             _state.completion_tokens = self._usage_completion
             _state.cached_tokens = self._usage_cached
+            _state.gen_ms = self._usage_gen_ms
+            _state.decode_tps = self._usage_decode_tps

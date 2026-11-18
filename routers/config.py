@@ -33,6 +33,35 @@ logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="", tags=["Config"])
 
+
+def _sync_vram_preflight_gate(val: bool) -> None:
+    try:
+        import backend.llama_config as _lc_pf
+        import backend.manager_load as _ml_pf
+        import backend.llama_server_manager as _lsm_pf
+    except ImportError as exc:
+        logger.warning("vram_preflight_gate sync skipped: %s", exc)
+        return
+    _lc_pf.VRAM_PREFLIGHT_GATE = val
+    _ml_pf.VRAM_PREFLIGHT_GATE = val
+    _lsm_pf.VRAM_PREFLIGHT_GATE = val
+    try:
+        import backend.llama_start_phases as _lsp_pf
+        _lsp_pf.VRAM_PREFLIGHT_GATE = val
+    except (ImportError, AttributeError):
+        pass
+
+
+def _populate_default_agents(sa: dict) -> None:
+    for _ak, _av in DEFAULT_AGENT_CFG.items():
+        sa.setdefault(_ak, _av)
+        if isinstance(sa[_ak], dict):
+            sa[_ak].setdefault("model", _av.get("model", ""))
+            sa[_ak].setdefault("temperature", _av.get("temperature", 0.3))
+            sa[_ak].setdefault("max_tokens", _av.get("max_tokens", 400))
+            sa[_ak].setdefault("thinking", _av.get("thinking", False))
+            sa[_ak].setdefault("thinking_budget", _av.get("thinking_budget", 0))
+
 # UI-REV (2026-09-09): monotonically incremented on every accepted POST
 # /settings and exposed via GET /settings so the UI can tag its patches.
 # A patch from a stale tab (older ui_rev) touching a protected key loses that
@@ -108,6 +137,7 @@ _PRESET_OVERLAY_KEYS = {
     "duo_coder_ctx_agentic",
     "duo_coder_ctx_normal",
     "duo_planner_ctx_target",
+    "duo_critic_ctx",
 }
 
 
@@ -301,25 +331,7 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
     # it would reset agent budgets to profile defaults and defeat the merge
     # protection pinned by tests/test_preset_agent_merge.py.
     if "vram_preflight_gate" in settings:
-        # SILENT-EXCEPT (2026-10-28): the imports are the only failure mode
-        # (the assignments cannot raise); a missing module is logged instead
-        # of swallowed - the no-new-silent-excepts guard counts this file.
-        try:
-            import backend.llama_config as _lc_pf
-            import backend.manager_load as _ml_pf
-            import backend.llama_server_manager as _lsm_pf
-        except ImportError as exc:
-            logger.warning("[PRESET] vram_preflight_gate sync skipped: %s", exc)
-        else:
-            _pf_val = bool(settings.get("vram_preflight_gate", True))
-            _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            try:
-                import backend.llama_start_phases as _lsp_pf
-                _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            except (ImportError, AttributeError):
-                pass
+        _sync_vram_preflight_gate(bool(settings.get("vram_preflight_gate", True)))
     # PRESET-STALE-TAB (2026-10-28): bump the settings revision like
     # post_settings does, or a second tab holding an older snapshot could
     # overwrite freshly loaded preset values through POST /settings.
@@ -428,14 +440,7 @@ async def get_settings():
     s["git_token"] = "" if _gt_saved else s.get("git_token", "")
     s["git_token_saved"] = _gt_saved
     _sa = s.setdefault("agents", {})
-    for _ak, _av in DEFAULT_AGENT_CFG.items():
-        _sa.setdefault(_ak, _av)
-        if isinstance(_sa[_ak], dict):
-            _sa[_ak].setdefault("model", _av.get("model", ""))
-            _sa[_ak].setdefault("temperature", _av.get("temperature", 0.3))
-            _sa[_ak].setdefault("max_tokens", _av.get("max_tokens", 400))
-            _sa[_ak].setdefault("thinking", _av.get("thinking", False))
-            _sa[_ak].setdefault("thinking_budget", _av.get("thinking_budget", 0))
+    _populate_default_agents(_sa)
     s["_registry"] = registry_all()
     s["_safe_profile_state"] = dict(_state._safe_profile_state)
     s["settings_rev"] = int(_settings_rev)
@@ -691,14 +696,7 @@ async def post_settings(req: Request):
                     _sa[_ak].update(_av)
                 else:
                     _sa[_ak] = _av
-        for _ak, _av in DEFAULT_AGENT_CFG.items():
-            _sa.setdefault(_ak, _av)
-            if isinstance(_sa[_ak], dict):
-                _sa[_ak].setdefault("model", _av.get("model", ""))
-                _sa[_ak].setdefault("temperature", _av.get("temperature", 0.3))
-                _sa[_ak].setdefault("max_tokens", _av.get("max_tokens", 400))
-                _sa[_ak].setdefault("thinking", _av.get("thinking", False))
-                _sa[_ak].setdefault("thinking_budget", _av.get("thinking_budget", 0))
+        _populate_default_agents(_sa)
     _DEEP_MERGE_KEYS = {"soul_evolve_agent", "intent_agent", "exploration_agent"}
     for _dmk in _DEEP_MERGE_KEYS:
         if _dmk in data:
@@ -728,6 +726,12 @@ async def post_settings(req: Request):
     data = _strip_get_only_settings(data)
     if "direct" in _model_changed_roles and "direct_model" not in data:
         settings.pop("direct_model", None)
+    _ctx_ov_roles = (settings.get("ctx_overrides") or {}).get("roles")
+    if isinstance(_ctx_ov_roles, dict):
+        if "duo_coder_ctx_agentic" in data or "duo_coder_ctx_normal" in data:
+            _ctx_ov_roles.pop("duo_coder", None)
+        if "duo_critic_ctx" in data:
+            _ctx_ov_roles.pop("duo_critic", None)
     settings.update(data)
     # UI-SAVE-FLAG-SYNC (2026-10-31, audit F6): a ubatch/cache/checkpoint
     # change through POST /settings used to wait for a restart while the same
@@ -742,21 +746,7 @@ async def post_settings(req: Request):
     # backend modules (same triple-sync as the startup path) so the
     # switch takes effect without a restart.
     if "vram_preflight_gate" in data:
-        try:
-            import backend.llama_config as _lc_pf
-            import backend.manager_load as _ml_pf
-            import backend.llama_server_manager as _lsm_pf
-            _pf_val = bool(data.get("vram_preflight_gate", True))
-            _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            try:
-                import backend.llama_start_phases as _lsp_pf
-                _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
-            except (ImportError, AttributeError):
-                pass
-        except Exception:
-            pass
+        _sync_vram_preflight_gate(bool(data.get("vram_preflight_gate", True)))
     _xa = settings.get("exploration_agent")
     if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
         _xa["model"] = DEFAULT_SETTINGS["exploration_agent"]["model"]
@@ -870,6 +860,11 @@ async def set_agent(req: Request):
             _co.setdefault("roles", {})[key] = _ctx if _ctx > 0 else None
             if _ctx <= 0:
                 _co["roles"].pop(key, None)
+            elif key == "duo_coder":
+                settings["duo_coder_ctx_agentic"] = _ctx
+                settings["duo_coder_ctx_normal"] = _ctx
+            elif key == "duo_critic":
+                settings["duo_critic_ctx"] = _ctx
     except Exception as e:
         logger.warning("[settings/agent] configuration failed (%s): %s", key, e, exc_info=True)
         return JSONResponse({"error": f"Configuration failed: {str(e)[:120]}"}, status_code=500)
@@ -1382,16 +1377,7 @@ async def set_memory(key: str, req: Request):
     if not _state.memory:
         return JSONResponse({"error": "Memory not available"}, status_code=500)
     try:
-        if hasattr(_state.memory, "remember"):
-            _state.memory.remember(key, value)
-        elif hasattr(_state.memory, "store"):
-            _state.memory.store(key, value)
-        elif hasattr(_state.memory, "set"):
-            _state.memory.set(key, value)
-        elif hasattr(_state.memory, "add"):
-            _state.memory.add(key, value)
-        elif _state.pipeline:
-            await _state.pipeline._handle_memory_request(f"Remember: {key} is {value}")
+        _state.memory.remember(key, value)
     except Exception as e:
         return JSONResponse({"error": f"Memory error: {str(e)[:80]}"}, status_code=500)
     return {"ok": True, "key": key, "value": value}

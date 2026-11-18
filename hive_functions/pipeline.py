@@ -168,35 +168,11 @@ class Pipeline:
             ),
         }
 
-    def get_active_models(self) -> list[str]:
-        return list(set(a.model for a in self.agents.values()))
-
     def set_agent_model(self, agent_key: str, model: str):
         if agent_key in self.agents:
             self.agents[agent_key].model = model
             return True
         return False
-
-    def set_all_models(self, model: str):
-        for agent in self.agents.values():
-            agent.model = model
-
-    def print_config(self):
-        """Shows the current agent/model configuration."""
-        table = Table(title="Hivemind Configuration", border_style="yellow")
-        table.add_column("Agent", style="cyan")
-        table.add_column("Model", style="yellow")
-        table.add_column("Temp", style="dim")
-        table.add_column("Max Tokens", style="dim")
-        for agent in self.agents.values():
-            table.add_row(
-                agent.name,
-                agent.model,
-                str(agent.temperature),
-                str(agent.max_tokens),
-            )
-        if console:
-            console.print(table)
 
     # ── Message-Builder ────────────────────────────────────────
 

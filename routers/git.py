@@ -522,20 +522,27 @@ async def git_init_ep(request: Request):
             "github_created": _gh_created, "github_msg": _gh_msg}
 
 
-@router.post("/reset")
-async def git_reset_ep(request: Request):
-    if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_reset is None:
-        return {"ok": False, "error": "git_tools not loaded"}
+async def _git_body_ws(request: Request) -> tuple[dict, str, JSONResponse | None]:
     _bad_ws = await _ws_reject_reason(request)
     if _bad_ws:
-        return JSONResponse(
+        return {}, "", JSONResponse(
             {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
-            status_code=400)
+            status_code=400,
+        )
     try:
         data = await request.json()
     except Exception:
         data = {}
-    ws = _resolve_ws(await _ws_from_body(request))
+    return data if isinstance(data, dict) else {}, _resolve_ws(await _ws_from_body(request)), None
+
+
+@router.post("/reset")
+async def git_reset_ep(request: Request):
+    if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_reset is None:
+        return {"ok": False, "error": "git_tools not loaded"}
+    data, ws, err = await _git_body_ws(request)
+    if err is not None:
+        return err
     target = str(data.get("target", "HEAD"))[:72]
     hard = bool(data.get("hard", False))
     if hard:
@@ -548,16 +555,9 @@ async def git_reset_ep(request: Request):
 async def git_checkout_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_checkout is None:
         return {"ok": False, "error": "git_tools not loaded"}
-    _bad_ws = await _ws_reject_reason(request)
-    if _bad_ws:
-        return JSONResponse(
-            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
-            status_code=400)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    ws = _resolve_ws(await _ws_from_body(request))
+    data, ws, err = await _git_body_ws(request)
+    if err is not None:
+        return err
     target = str(data.get("target", ""))[:120]
     if not target:
         return {"ok": False, "error": "target missing"}
@@ -569,16 +569,9 @@ async def git_checkout_ep(request: Request):
 async def git_stash_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_stash is None:
         return {"ok": False, "error": "git_tools not loaded"}
-    _bad_ws = await _ws_reject_reason(request)
-    if _bad_ws:
-        return JSONResponse(
-            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
-            status_code=400)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    ws = _resolve_ws(await _ws_from_body(request))
+    data, ws, err = await _git_body_ws(request)
+    if err is not None:
+        return err
     action = str(data.get("action", "push"))
     message = str(data.get("message", ""))[:72]
     result = await _state.exec_git_stash(ws, action=action, message=message)

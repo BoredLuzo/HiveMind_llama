@@ -22,6 +22,74 @@ def _resolve_stage_call(ctx, a, model: str, *, mode: str = "") -> tuple[float, b
     _max_tok = min(int(a.max_tokens + _b), max(256, _ctx_tok))
     return _t, _th, _b, _max_tok, _smp
 
+
+async def _stream_stage_once(
+    ctx,
+    model: str,
+    msgs,
+    temp: float,
+    max_tok: int,
+    *,
+    agent_role: str,
+    think: bool,
+    thinking_budget: int,
+    sampler,
+    parts_out: list[str],
+    no_cache: bool = False,
+    error_label: str = "",
+    emit_tokens: bool = True,
+    strip_inline_think: bool = False,
+):
+    """Stream one pipeline stage call into parts_out and yield UI SSE events."""
+    try:
+        if think:
+            async for _c, _th in ctx.pipeline_chat_stream(
+                model, msgs, temp, max_tok,
+                agent_role=agent_role, think=True,
+                thinking_budget=thinking_budget or None,
+                split_thinking=True, no_cache=no_cache, sampler=sampler,
+            ):
+                if ctx.aborted():
+                    break
+                if _th:
+                    yield await ctx.emit({"type": "thinking_token", "content": _th})
+                if _c:
+                    parts_out.append(_c)
+                    if emit_tokens:
+                        yield await ctx.emit({"type": "token", "content": _c})
+        else:
+            _think_open = False
+            async for tok in ctx.pipeline_chat_stream(
+                model, msgs, temp, max_tok,
+                agent_role=agent_role, think=False,
+                no_cache=no_cache, sampler=sampler,
+            ):
+                if ctx.aborted():
+                    break
+                parts_out.append(tok)
+                if not emit_tokens:
+                    continue
+                if strip_inline_think:
+                    if not _think_open and "<think>" in tok:
+                        before = tok.split("<think>")[0]
+                        if before:
+                            yield await ctx.emit({"type": "token", "content": before})
+                        _think_open = True
+                    if _think_open and "</think>" in tok:
+                        _think_open = False
+                        after = tok.split("</think>")[-1]
+                        if after:
+                            yield await ctx.emit({"type": "token", "content": after})
+                    elif not _think_open and "<think>" not in tok:
+                        yield await ctx.emit({"type": "token", "content": tok})
+                else:
+                    yield await ctx.emit({"type": "token", "content": tok})
+    except Exception as e:
+        if error_label:
+            err = f"[{error_label} error: {str(e)[:100]}]"
+            parts_out.append(err)
+            yield await ctx.emit({"type": "token", "content": err})
+
 async def run_pipeline(ctx):
     """Full Hivemind Pipeline mode — multi-agent analysis → synthesis.
 
@@ -301,46 +369,15 @@ async def run_pipeline(ctx):
                     ctx.schedule_prefetch(ctx.registry_get("refiner"), "analyst", t)
                 _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, a.model)
                 _ag_no_cache = bool(_analyst_vision and ctx.images)
-                try:
-                    if _ag_think:
-                        async for _c, _th in ctx.pipeline_chat_stream(
-                                a.model, msgs, _ag_temp, _ag_max,
-                                agent_role="analyst", think=True,
-                                thinking_budget=_ag_budget or None,
-                                split_thinking=True, no_cache=_ag_no_cache,
-                                sampler=_ag_smp):
-                            if ctx.aborted(): break
-                            if _th:
-                                yield await ctx.emit({"type": "thinking_token", "content": _th})
-                            if _c:
-                                parts.append(_c)
-                                yield await ctx.emit({"type": "token", "content": _c})
-                    else:
-                        _think_open = False
-                        async for tok in ctx.pipeline_chat_stream(a.model, msgs, _ag_temp, _ag_max,
-                                                               agent_role="analyst", think=False,
-                                                               no_cache=_ag_no_cache, sampler=_ag_smp):
-                            if ctx.aborted(): break
-                            parts.append(tok)
-                            if not _think_open and "<think>" in tok:
-                                before = tok.split("<think>")[0]
-                                if before:
-                                    yield await ctx.emit({"type": "token", "content": before})
-                                _think_open = True
-                            if _think_open and "</think>" in tok:
-                                _think_open = False
-                                after = tok.split("</think>")[-1]
-                                if after:
-                                    yield await ctx.emit({"type": "token", "content": after})
-                            elif not _think_open and "<think>" not in tok:
-                                yield await ctx.emit({"type": "token", "content": tok})
-                except Exception as e:
-                    err = f"[Analyst error: {str(e)[:100]}]"
-                    parts.append(err)
-                    yield await ctx.emit({"type": "token", "content": err})
+                async for _ev in _stream_stage_once(
+                    ctx, a.model, msgs, _ag_temp, _ag_max,
+                    agent_role="analyst", think=_ag_think,
+                    thinking_budget=_ag_budget, sampler=_ag_smp,
+                    parts_out=parts, no_cache=_ag_no_cache,
+                    error_label="Analyst", strip_inline_think=True,
+                ):
+                    yield _ev
                 analyst_out = "".join(parts)
-                # REMOVED: implicit _re.sub("") — Thinking budget is now explicitly controlled via agent_name="analyst"
-                # If <think> still appears, it's a model bug not a system failure
                 # Truncation check: retry with more tokens if output cut off
                 if ctx.is_truncated(analyst_out) and not ctx.aborted():
                     retry_tokens = min(int(a.max_tokens * 2), 2000)  # INFO-3 FIX: 1200→2000
@@ -348,33 +385,18 @@ async def run_pipeline(ctx):
                     yield await ctx.emit({"type": "clear_agent"})
                     retry_msgs = ctx.make_messages(ctx.pipeline, sys_p, analyst_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_analyst, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
                     retry_parts = []
-                    try:
-                        if _ag_think:
-                            async for _rc, _rth in ctx.pipeline_chat_stream(
-                                    a.model, retry_msgs, _ag_temp, retry_tokens,
-                                    agent_role="analyst", think=True,
-                                    thinking_budget=_ag_budget or None,
-                                    split_thinking=True, sampler=_ag_smp):
-                                if ctx.aborted(): break
-                                if _rth:
-                                    yield await ctx.emit({"type": "thinking_token", "content": _rth})
-                                if _rc:
-                                    retry_parts.append(_rc)
-                                    yield await ctx.emit({"type": "token", "content": _rc})
-                        else:
-                            async for tok in ctx.pipeline_chat_stream(
-                                    a.model, retry_msgs, _ag_temp, retry_tokens,
-                                    agent_role="analyst", think=False, sampler=_ag_smp):
-                                if ctx.aborted(): break
-                                retry_parts.append(tok)
-                                yield await ctx.emit({"type": "token", "content": tok})
-                        retry_out = "".join(retry_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
-                        if retry_out and not ctx.is_truncated(retry_out):
-                            analyst_out = retry_out
-                        elif retry_out and len(retry_out) > len(analyst_out):
-                            analyst_out = retry_out  # take longer version even if still truncated
-                    except Exception:
-                        pass
+                    async for _ev in _stream_stage_once(
+                        ctx, a.model, retry_msgs, _ag_temp, retry_tokens,
+                        agent_role="analyst", think=_ag_think,
+                        thinking_budget=_ag_budget, sampler=_ag_smp,
+                        parts_out=retry_parts,
+                    ):
+                        yield _ev
+                    retry_out = "".join(retry_parts).strip()
+                    if retry_out and not ctx.is_truncated(retry_out):
+                        analyst_out = retry_out
+                    elif retry_out and len(retry_out) > len(analyst_out):
+                        analyst_out = retry_out  # take longer version even if still truncated
                 _elapsed_analyst = round(time.time() - t, 1)
                 ctx.agent_elapsed["analyst"] = _elapsed_analyst
                 ctx.update_prefetch_lead("analyst", _elapsed_analyst, state=ctx.prefetch_state)
@@ -434,32 +456,16 @@ async def run_pipeline(ctx):
                 if "critic" not in ctx.skip_agents:
                     ctx.schedule_prefetch(ctx.registry_get("critic"), "refiner", t)
                 _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, a.model)
-                try:
-                    if _ag_think:
-                        async for _c, _th in ctx.pipeline_chat_stream(
-                                a.model, msgs, _ag_temp, _ag_max,
-                                agent_role=a.key, think=True, thinking_budget=_ag_budget or None,
-                                split_thinking=True, no_cache=_refiner_vision, sampler=_ag_smp):
-                            if ctx.aborted(): break
-                            if _th:
-                                yield await ctx.emit({"type": "thinking_token", "content": _th})
-                            if _c:
-                                parts.append(_c)
-                                yield await ctx.emit({"type": "token", "content": _c})
-                    else:
-                        async for tok in ctx.pipeline_chat_stream(
-                            a.model, msgs, _ag_temp, _ag_max, agent_role=a.key,
-                            think=False, no_cache=_refiner_vision, sampler=_ag_smp,
-                        ):
-                            if ctx.aborted(): break
-                            parts.append(tok)
-                            yield await ctx.emit({"type": "token", "content": tok})
-                except Exception as e:
-                    err = f"[Refiner error: {str(e)[:100]}]"
-                    parts.append(err)
-                    yield await ctx.emit({"type": "token", "content": err})
+                async for _ev in _stream_stage_once(
+                    ctx, a.model, msgs, _ag_temp, _ag_max,
+                    agent_role=a.key, think=_ag_think,
+                    thinking_budget=_ag_budget, sampler=_ag_smp,
+                    parts_out=parts, no_cache=_refiner_vision,
+                    error_label="Refiner",
+                ):
+                    yield _ev
 
-                refiner_out = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
+                refiner_out = "".join(parts).strip()
                 # Truncation check
                 if ctx.is_truncated(refiner_out) and not ctx.aborted():
                     retry_tokens = min(int(a.max_tokens * 2), 2000)  # INFO-3 FIX: 1200→2000
@@ -467,31 +473,16 @@ async def run_pipeline(ctx):
                     yield await ctx.emit({"type": "clear_agent"})
                     retry_msgs2 = ctx.make_messages(ctx.pipeline, sys_p, refiner_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_refiner, False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
                     retry_parts2 = []
-                    try:
-                        if _ag_think:
-                            async for _rc, _rth in ctx.pipeline_chat_stream(
-                                    a.model, retry_msgs2, _ag_temp, retry_tokens,
-                                    agent_role=a.key, think=True,
-                                    thinking_budget=_ag_budget or None,
-                                    split_thinking=True, sampler=_ag_smp):
-                                if ctx.aborted(): break
-                                if _rth:
-                                    yield await ctx.emit({"type": "thinking_token", "content": _rth})
-                                if _rc:
-                                    retry_parts2.append(_rc)
-                                    yield await ctx.emit({"type": "token", "content": _rc})
-                        else:
-                            async for tok in ctx.pipeline_chat_stream(
-                                    a.model, retry_msgs2, _ag_temp, retry_tokens,
-                                    agent_role=a.key, think=False, sampler=_ag_smp):
-                                if ctx.aborted(): break
-                                retry_parts2.append(tok)
-                                yield await ctx.emit({"type": "token", "content": tok})
-                        retry_out2 = "".join(retry_parts2).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
-                        if retry_out2 and len(retry_out2) > len(refiner_out):
-                            refiner_out = retry_out2
-                    except Exception:
-                        pass
+                    async for _ev in _stream_stage_once(
+                        ctx, a.model, retry_msgs2, _ag_temp, retry_tokens,
+                        agent_role=a.key, think=_ag_think,
+                        thinking_budget=_ag_budget, sampler=_ag_smp,
+                        parts_out=retry_parts2,
+                    ):
+                        yield _ev
+                    retry_out2 = "".join(retry_parts2).strip()
+                    if retry_out2 and len(retry_out2) > len(refiner_out):
+                        refiner_out = retry_out2
                 _elapsed_refiner = round(time.time() - t, 1)
                 ctx.agent_elapsed["refiner"] = _elapsed_refiner
                 ctx.update_prefetch_lead("refiner", _elapsed_refiner, state=ctx.prefetch_state)
@@ -566,32 +557,14 @@ async def run_pipeline(ctx):
                 if "synthesizer" not in ctx.skip_agents and _is_last_iter:
                     ctx.schedule_prefetch(ctx.registry_get("synthesizer"), "critic", t)
                 _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, a.model)
-                try:
-                    if _ag_think:
-                        async for _c, _th in ctx.pipeline_chat_stream(
-                                a.model, msgs, _ag_temp, _ag_max,
-                                agent_role=a.key, think=True, thinking_budget=_ag_budget or None,
-                                split_thinking=True, no_cache=_critic_vision, sampler=_ag_smp):
-                            if ctx.aborted(): break
-                            if _th:
-                                yield await ctx.emit({"type": "thinking_token", "content": _th})
-                            if _c:
-                                parts.append(_c)
-                                if not ctx.constraint_mode:
-                                    yield await ctx.emit({"type": "token", "content": _c})
-                    else:
-                        async for tok in ctx.pipeline_chat_stream(
-                            a.model, msgs, _ag_temp, _ag_max, agent_role=a.key,
-                            think=False, no_cache=_critic_vision, sampler=_ag_smp,
-                        ):
-                            if ctx.aborted(): break
-                            parts.append(tok)
-                            if not ctx.constraint_mode:
-                                yield await ctx.emit({"type": "token", "content": tok})
-                except Exception as e:
-                    err = f"[Critic error: {str(e)[:100]}]"
-                    parts.append(err)
-                    yield await ctx.emit({"type": "token", "content": err})
+                async for _ev in _stream_stage_once(
+                    ctx, a.model, msgs, _ag_temp, _ag_max,
+                    agent_role=a.key, think=_ag_think,
+                    thinking_budget=_ag_budget, sampler=_ag_smp,
+                    parts_out=parts, no_cache=_critic_vision,
+                    error_label="Critic", emit_tokens=not ctx.constraint_mode,
+                ):
+                    yield _ev
 
                 _critic_raw = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
                 _tune_lines = [l.strip() for l in _critic_raw.split("\n")
@@ -705,32 +678,16 @@ async def run_pipeline(ctx):
             parts, t = [], time.time()
             _synth_mdl = ctx.registry_get("synthesizer") or a.model
             _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, _synth_mdl)
-            try:
-                if _ag_think:
-                    async for _c, _th in ctx.pipeline_chat_stream(
-                            _synth_mdl, msgs, _ag_temp, _ag_max,
-                            agent_role=a.key, think=True, thinking_budget=_ag_budget or None,
-                            split_thinking=True, no_cache=_synth_vision, sampler=_ag_smp):
-                        if ctx.aborted(): break
-                        if _th:
-                            yield await ctx.emit({"type": "thinking_token", "content": _th})
-                        if _c:
-                            parts.append(_c)
-                            yield await ctx.emit({"type": "token", "content": _c})
-                else:
-                    async for tok in ctx.pipeline_chat_stream(
-                        _synth_mdl, msgs, _ag_temp, _ag_max, agent_role=a.key,
-                        think=False, no_cache=_synth_vision, sampler=_ag_smp,
-                    ):
-                        if ctx.aborted(): break
-                        parts.append(tok)
-                        yield await ctx.emit({"type": "token", "content": tok})
-            except Exception as e:
-                err = f"[Synthesizer error: {str(e)[:100]}]"
-                parts.append(err)
-                yield await ctx.emit({"type": "token", "content": err})
+            async for _ev in _stream_stage_once(
+                ctx, _synth_mdl, msgs, _ag_temp, _ag_max,
+                agent_role=a.key, think=_ag_think,
+                thinking_budget=_ag_budget, sampler=_ag_smp,
+                parts_out=parts, no_cache=_synth_vision,
+                error_label="Synthesizer",
+            ):
+                yield _ev
 
-            synth_out = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
+            synth_out = "".join(parts).strip()
             if ctx.is_truncated(synth_out) and not ctx.aborted():
                 retry_tokens_s = min(int(a.max_tokens * 2), 2000)
                 yield await ctx.emit({"type": "status",
@@ -743,31 +700,16 @@ async def run_pipeline(ctx):
                 )
                 _synth_retry_msgs = ctx.make_messages(ctx.pipeline, sys_p, _synth_retry_input, [], False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
                 _synth_retry_parts: list[str] = []
-                try:
-                    if _ag_think:
-                        async for _rc, _rth in ctx.pipeline_chat_stream(
-                                _synth_mdl, _synth_retry_msgs, _ag_temp, retry_tokens_s,
-                                agent_role=a.key, think=True,
-                                thinking_budget=_ag_budget or None,
-                                split_thinking=True, sampler=_ag_smp):
-                            if ctx.aborted(): break
-                            if _rth:
-                                yield await ctx.emit({"type": "thinking_token", "content": _rth})
-                            if _rc:
-                                _synth_retry_parts.append(_rc)
-                                yield await ctx.emit({"type": "token", "content": _rc})
-                    else:
-                        async for tok in ctx.pipeline_chat_stream(
-                                _synth_mdl, _synth_retry_msgs, _ag_temp, retry_tokens_s,
-                                agent_role=a.key, think=False, sampler=_ag_smp):
-                            if ctx.aborted(): break
-                            _synth_retry_parts.append(tok)
-                            yield await ctx.emit({"type": "token", "content": tok})
-                    _synth_retry_out = "".join(_synth_retry_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
-                    if _synth_retry_out and len(_synth_retry_out) > len(synth_out):
-                        synth_out = _synth_retry_out
-                except Exception:
-                    pass
+                async for _ev in _stream_stage_once(
+                    ctx, _synth_mdl, _synth_retry_msgs, _ag_temp, retry_tokens_s,
+                    agent_role=a.key, think=_ag_think,
+                    thinking_budget=_ag_budget, sampler=_ag_smp,
+                    parts_out=_synth_retry_parts,
+                ):
+                    yield _ev
+                _synth_retry_out = "".join(_synth_retry_parts).strip()
+                if _synth_retry_out and len(_synth_retry_out) > len(synth_out):
+                    synth_out = _synth_retry_out
             _elapsed_synth = round(time.time() - t, 1)
             ctx.agent_elapsed["synthesizer"] = _elapsed_synth
             ctx.update_prefetch_lead("synthesizer", _elapsed_synth, state=ctx.prefetch_state)

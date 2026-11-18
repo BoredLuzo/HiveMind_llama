@@ -111,9 +111,10 @@ DEFAULT_SETTINGS = {
     # cost of a larger VRAM compute buffer. Test lever for slow post-compression
     # prefill; revert to 256 if a load OOMs on tight GPUs.
     # Canonical key (the older llama_ubatch_size below stays as the alias).
-    # 256 is the shipped tight-GPU baseline; 512/1024 is the measured opt-in.
-    "duo_ubatch":              256,
-    "llama_ubatch_size":       256,
+    # 512 is the shipped >=6 GB baseline (+~70% prefill on 4B vs unset/256 for
+    # ~72 MiB compute buffer); tight <6 GB GPUs can lower to 256.
+    "duo_ubatch":              512,
+    "llama_ubatch_size":       512,
     # MoE UBATCH RAISE: 0 = the model profile decides ("ubatch" key, MoE
     # models only — e.g. the 35B-A3B profile ships 512 for the measured
     # +24..55% prefill); a value > 0 forces this ubatch for every MoE model;
@@ -624,8 +625,9 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # N) SUBAGENT-LITE
     # ════════════════════════════════════════════════════════════════════════
-    # SUBAGENT-LITE (2026-08-24, option A from the feasibility report): serial
-    "subagent_lite_enabled":   True,
+    # SUBAGENT-LITE (2026-08-24, option A from the feasibility report): serial,
+    # default off so fresh installs do not spawn extra delegate loads unless enabled.
+    "subagent_lite_enabled":   False,
     "subagent_lite_model_ladder": ["lfm3:1.7b-qad", "minicpm5:2b-sharp",
                                    "qwen3.5:4b-mtp"],
     "subagent_lite_ctx_default": 8192,

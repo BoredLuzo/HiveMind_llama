@@ -22,6 +22,37 @@ from core.duo_helpers import _run_parallel_pre_explore
 from hive_functions.pre_explore import run_pre_explore
 
 
+def _save_repomap_hash(explore_ctx: str) -> None:
+    try:
+        from tools.runner import _current_project_state
+        ps = _current_project_state.get()
+        if ps is not None:
+            repomap_data = json.dumps(explore_ctx, sort_keys=True, default=str)
+            ps.repomap_hash = hashlib.sha256(repomap_data.encode()).hexdigest()[:16]
+            from context.project_state import ProjectStateManager
+            ProjectStateManager().save(ps)
+    except Exception as exc:
+        logger.warning("[PROJECT] Repomap hash-save failed: %s", exc)
+
+
+def _maybe_start_static_map_task(ctx, state: dict, partitions, ws_str: str, cur_task):
+    if cur_task is None and partitions and ws_str:
+        try:
+            from hive_functions.static_repomap import build_static_repomap
+            from hive_functions.ctx_utils import derive_static_map_budget
+            _map_budget = derive_static_map_budget(
+                state.get("_exec_ctx"),
+                ctx.settings.get("duo_planner_ctx_target", 0),
+                ctx.settings.get("duo_static_map_chars", 0),
+            )
+            return asyncio.create_task(
+                build_static_repomap(ws_str, partitions, char_budget=_map_budget)
+            )
+        except Exception as _sm_init:
+            logger.warning("[STATIC-REPO-MAP] init failed: %s", _sm_init)
+    return cur_task
+
+
 # ── Analyse-Fenster-Memo (2026-08-17) ──────────────────────────────────────────
 # PageRank-selektiertes Fenster (voller Walk + regex Import-Graph + PageRank →
 _WINDOW_MEMO: dict[str, tuple[float, list[str]]] = {}
@@ -736,17 +767,7 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
             if isinstance(_static_map_result, str) and _static_map_result:
                 _explore_ctx = _static_map_result + "\n\n" + (_explore_ctx or "")
                 logger.info("[STATIC-REPO-MAP] merged %d chars into explore_ctx", len(_static_map_result))
-                try:
-                    from tools.runner import _current_project_state
-                    ps = _current_project_state.get()
-                    if ps is not None:
-                        import hashlib as _hl_rh
-                        repomap_data = json.dumps(_explore_ctx, sort_keys=True, default=str)
-                        ps.repomap_hash = _hl_rh.sha256(repomap_data.encode()).hexdigest()[:16]
-                        from context.project_state import ProjectStateManager
-                        ProjectStateManager().save(ps)
-                except Exception as _rh_err:
-                    logger.warning("[PROJECT] Repomap hash-save failed: %s", _rh_err)
+                _save_repomap_hash(_explore_ctx)
             elif not _static_map_result:
                 logger.info("[STATIC-REPO-MAP] empty result")
         except Exception as _sm_err:
@@ -779,17 +800,7 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
                     )
                     yield await ctx.emit({"type": "status",
                         "content": "📋 Static repo-map fallback (LLM pre-explore not started)"})
-                    try:
-                        from tools.runner import _current_project_state
-                        ps = _current_project_state.get()
-                        if ps is not None:
-                            import hashlib as _hl_rh
-                            repomap_data = json.dumps(_explore_ctx, sort_keys=True, default=str)
-                            ps.repomap_hash = _hl_rh.sha256(repomap_data.encode()).hexdigest()[:16]
-                            from context.project_state import ProjectStateManager
-                            ProjectStateManager().save(ps)
-                    except Exception as _rh_fb_err:
-                        logger.warning("[PROJECT] Repomap hash-save failed: %s", _rh_fb_err)
+                    _save_repomap_hash(_explore_ctx)
         except Exception as _sm_fb_err:
             logger.warning("[STATIC-REPO-MAP-FALLBACK] failed: %s", _sm_fb_err)
 
@@ -1937,20 +1948,9 @@ async def _phase_pre_explore(ctx, state: dict):
                                     logger.warning("Worker-evict after parallel failure failed: %s", _evict_exc)
                             await _xq.put(None)
 
-                    if _partitions and _ws_str and _static_map_task is None:
-                        try:
-                            from hive_functions.static_repomap import build_static_repomap
-                            from hive_functions.ctx_utils import derive_static_map_budget
-                            _map_budget = derive_static_map_budget(
-                                state.get("_exec_ctx"),
-                                ctx.settings.get("duo_planner_ctx_target", 0),
-                                ctx.settings.get("duo_static_map_chars", 0),
-                            )
-                            _static_map_task = asyncio.create_task(
-                                build_static_repomap(_ws_str, _partitions, char_budget=_map_budget)
-                            )
-                        except Exception as _sm_init:
-                            logger.warning("[STATIC-REPO-MAP] init failed: %s", _sm_init)
+                    _static_map_task = _maybe_start_static_map_task(
+                        ctx, state, _partitions, _ws_str, _static_map_task,
+                    )
 
                     _xtask = asyncio.create_task(_xparallel_task())
                     try:
@@ -2200,31 +2200,12 @@ async def _phase_pre_explore(ctx, state: dict):
                     if not _seq_parts and _seq_window:
                         _seq_parts = _partitions_from_window(_seq_window, _seq_max_files)
                     if not _seq_parts:
-                        import os as _os2
-                        _IGNORE_DIRS2 = {".git", "__pycache__", "node_modules", ".venv",
-                                        "venv", ".mypy_cache", ".pytest_cache", "dist", "build"}
-                        _code_exts2 = {".py", ".js", ".ts", ".jsx", ".tsx", ".go",
-                                      ".rs", ".cpp", ".c", ".h", ".java", ".cs",
-                                      ".rb", ".php", ".swift", ".kt", ".md", ".json",
-                                      ".yaml", ".yml", ".toml", ".cfg", ".ini",
-                                      ".html", ".css", ".scss", ".less", ".sh", ".bat",
-                                      ".ps1", ".sql", ".r", ".lua", ".vim", ".el",
-                                      ".dockerfile", ".makefile", ".cmake",
-                                      ".txt", ".rst", ".tex", ".csv"}
                         try:
-                            for _root2, _dirs2, _files2 in _os2.walk(_ws_str):
-                                _dirs2[:] = [d for d in sorted(_dirs2) if d not in _IGNORE_DIRS2]
-                                _rel2 = _os2.relpath(_root2, _ws_str).replace("\\", "/")
-                                _rel2 = "" if _rel2 == "." else _rel2
-                                _fps2 = [
-                                    _os2.join(_rel2, f).replace("\\", "/").lstrip("/")
-                                    for f in sorted(_files2)
-                                    if _os2.splitext(f)[1].lower() in _code_exts2
-                                ]
-                                if _fps2:
-                                    _seq_parts.append({"paths": _fps2, "label": _rel2 or "__root__"})
+                            _seq_parts = await asyncio.to_thread(
+                                _walk_code_partitions, _ws_str, max(2, _seq_max_files),
+                            )
                         except Exception:
-                            pass
+                            _seq_parts = []
                     _partitions = _seq_parts if _seq_parts else [{"paths": [], "catch_all": True, "label": "__root__"}]
                 async def _xloop_task():
                     try:
@@ -2269,20 +2250,9 @@ async def _phase_pre_explore(ctx, state: dict):
                     finally:
                         await _xq.put(None)
 
-                if _partitions and _ws_str and _static_map_task is None:
-                    try:
-                        from hive_functions.static_repomap import build_static_repomap
-                        from hive_functions.ctx_utils import derive_static_map_budget
-                        _map_budget = derive_static_map_budget(
-                            state.get("_exec_ctx"),
-                            ctx.settings.get("duo_planner_ctx_target", 0),
-                            ctx.settings.get("duo_static_map_chars", 0),
-                        )
-                        _static_map_task = asyncio.create_task(
-                            build_static_repomap(_ws_str, _partitions, char_budget=_map_budget)
-                        )
-                    except Exception as _sm_init:
-                        logger.warning("[STATIC-REPO-MAP] init failed: %s", _sm_init)
+                _static_map_task = _maybe_start_static_map_task(
+                    ctx, state, _partitions, _ws_str, _static_map_task,
+                )
 
                 _xtask = asyncio.create_task(_xloop_task())
                 try:

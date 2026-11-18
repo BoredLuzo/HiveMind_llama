@@ -91,8 +91,8 @@ def test_boot_hardened():
 def test_settings_saves_visible():
     src = APP.read_text(encoding="utf-8")
     n = src.count("_postSettingsFF(")
-    # helper def + at least keepalive/exploration/soul/intent-enabled/intent-model
-    if "function _postSettingsFF(" in src and n >= 6 and "Setting could NOT be saved" in src:
+    # helper def + keepalive/exploration/soul/intent-enabled call sites
+    if "function _postSettingsFF(" in src and n >= 5 and "Setting could NOT be saved" in src:
         ok(f"settings saves visible via _postSettingsFF ({n - 1} call sites)")
     else:
         fail("settings_vis", f"helper/call sites incomplete (n={n})")

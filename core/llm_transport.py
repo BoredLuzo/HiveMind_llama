@@ -311,44 +311,6 @@ async def probe_and_evict_slot(
     return server_alive
 
 
-async def recover_slot_port(
-    model: str,
-    *,
-    num_ctx: int = 4096,
-    vision: bool = False,
-    n_parallel: int = 1,
-    evict_first: bool = True,
-    client: httpx.AsyncClient | None = None,
-    port: int | None = None,
-    check_health: bool = False,
-    crash_sleep_s: float = 0.0,
-) -> tuple[int, bool]:
-    """Probe optional /health, evict stale slot if dead/requested, and ensure_loaded."""
-    server_alive = await probe_and_evict_slot(
-        model,
-        client=client,
-        port=port,
-        check_health=check_health,
-        evict_first=evict_first,
-    )
-    if crash_sleep_s > 0:
-        await asyncio.sleep(crash_sleep_s)
-
-    try:
-        from backend.llama_server_manager import manager as _lsm
-
-        new_port = await _lsm.ensure_loaded(
-            model,
-            num_ctx=int(num_ctx or 4096),
-            n_parallel=int(n_parallel or 1),
-            vision=bool(vision),
-        )
-        return int(new_port), server_alive
-    except (ImportError, RuntimeError, OSError, httpx.HTTPError) as exc:
-        _log.debug("Slot ensure_loaded failed for %s: %s", model, exc)
-        return int(port or 0), server_alive
-
-
 @dataclass
 class ChatJsonResponse:
     """Normalized non-stream /v1/chat/completions response with telemetry."""
@@ -534,11 +496,16 @@ async def stream_chat_chunks(
         yield chunk
 
 
-def _record_tool_loop_usage(loop_obj: Any, usage: dict | None) -> None:
+def _record_tool_loop_usage(
+    loop_obj: Any,
+    usage: dict | None,
+    timings: dict | None = None,
+    gen_ms: float = 0.0,
+) -> None:
     """Accumulate server prompt/completion/cached token counters onto ToolLoop + state."""
     add_fn = getattr(loop_obj, "_add_usage", None)
     if callable(add_fn):
-        add_fn(usage)
+        add_fn(usage, timings=timings, gen_ms=gen_ms)
 
 
 async def _handle_tool_loop_http_error(
@@ -682,26 +649,49 @@ async def iter_tool_loop_post(
                         continue
 
                 if not stream:
+                    _ns_t0 = time.monotonic()
                     await resp.aread()
                     data = resp.json()
-                    _record_tool_loop_usage(loop_obj, data.get("usage") if isinstance(data, dict) else None)
+                    _ns_ms = (time.monotonic() - _ns_t0) * 1000.0
+                    _record_tool_loop_usage(
+                        loop_obj,
+                        data.get("usage") if isinstance(data, dict) else None,
+                        timings=data.get("timings") if isinstance(data, dict) else None,
+                        gen_ms=_ns_ms,
+                    )
                     msg, content_text, tcs = parse_nonstream_chat_response(data, strip_content=False)
                     yield (msg, content_text, tcs)
                     return
 
                 content_parts: list[str] = []
                 tool_calls_acc: dict[int, dict] = {}
+                _st_t0 = time.monotonic()
+                _st_first: float | None = None
+                _last_timings: dict | None = None
+                _last_usage: dict | None = None
                 async for chunk in iter_sse_json(resp):
-                    _record_tool_loop_usage(loop_obj, chunk.get("usage"))
+                    _cu = chunk.get("usage")
+                    _ctim = chunk.get("timings")
+                    if isinstance(_ctim, dict):
+                        _last_timings = _ctim
+                    if isinstance(_cu, dict) and (_cu.get("completion_tokens") or _cu.get("prompt_tokens")):
+                        _last_usage = _cu
+                    else:
+                        _record_tool_loop_usage(loop_obj, _cu, timings=_ctim)
                     choices = chunk.get("choices") or [{}]
                     delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
                     if not isinstance(delta, dict):
                         continue
-                    ct, _ = parse_sse_delta_fn(delta, tool_calls_acc=tool_calls_acc)
+                    ct, tc_delta = parse_sse_delta_fn(delta, tool_calls_acc=tool_calls_acc)
+                    if _st_first is None and (ct or tc_delta or delta.get("reasoning_content") or delta.get("thinking")):
+                        _st_first = time.monotonic()
                     if ct:
                         content_parts.append(ct)
                         yield {"type": "token", "content": ct}
                         partial_stream = True
+                if _last_usage is not None:
+                    _st_ms = (time.monotonic() - (_st_first or _st_t0)) * 1000.0
+                    _record_tool_loop_usage(loop_obj, _last_usage, timings=_last_timings, gen_ms=_st_ms)
 
                 tcs_sorted = [tool_calls_acc[k] for k in sorted(tool_calls_acc.keys())]
                 content = "".join(content_parts).strip()

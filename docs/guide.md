@@ -91,7 +91,7 @@ to `python3` (and PowerShell pipes to `head`/`tail`); install pyright globally i
 you want the lint tier.
 
 CPU hosts: every compression re-prefills the whole prompt, which dominates the
-cost - tune `duo_ubatch` (256 shipped; 512/1024 are measured opt-ins) and the
+cost - tune `duo_ubatch` (512 shipped default; 256 low-VRAM fallback, 1024 MoE opt-in) and the
 thread defaults, and watch the
 `[CACHE]` lines in `logs/hivemind.log`.
 
@@ -235,8 +235,8 @@ Mode-scoped toolset (`tools/definitions.py`):
 Tool scoping per phase: `duo_lean` (minimal orthogonal 8-tool set: `read_file`,
 `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`,
 `task_complete`), `duo_core` (the default coder set: 18 desktop tools +
-optional `+Subagent` = 19, plus `send_file` on Telegram), `duo_full` (33 base +
-extras), `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
+optional `+Subagent` = 19, plus `send_file` on Telegram), `duo_full` (36 inline +
+extras, 39 allowlisted names), `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
 `mcp_agent`, `openai_agent`. Optional toggles (`+Websearch`, `+Git`, `+Subagent`)
 live under **Tools & Optionals** in the sidebar.
 
@@ -772,7 +772,7 @@ empty/missing roles to the installed models in `models.json`:
 |------|----------------------------|
 | Mode | `chat` (direct answers); `code_duo` starts in **agentic** (one model, solo) |
 | Planner | on, and shares the coder context — no second model load |
-| Agent roles | `direct`/pipeline -> `gemma-4:e4b-it-qat`, `duo_coder`/`duo_critic`/`duo_planner` -> `qwen3.5:4b-mtp`, `refiner`/`judge` -> `minicpm5:2b-sharp`, subagent ladder `lfm3:1.7b-qad` -> `minicpm5:2b-sharp` -> `qwen3.5:4b-mtp` |
+| Agent roles | `direct`/pipeline -> `gemma-4:e4b-it-qat`, `duo_coder`/`duo_planner` -> `qwen3.5:4b-mtp`, `duo_critic` -> `minicpm5:2b-sharp`, `refiner`/`judge` -> `minicpm5:2b-sharp`, subagent ladder `lfm3:1.7b-qad` -> `minicpm5:2b-sharp` -> `qwen3.5:4b-mtp` |
 | Vision | `vision_agent_model` = gemma-4:e4b-it-qat (used when the vision agent is enabled) |
 | Context | coder ctx follows the VRAM budget, planner = coder ctx, compression on with automatic floor |
 | Unchanged / off | smart preload, pre-explore, chunking, git autocommit/checkpoints, web search, routing decider |

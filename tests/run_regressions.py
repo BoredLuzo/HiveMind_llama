@@ -161,7 +161,7 @@ SUITES = [
     ("runstate_persistence",   "tests/test_runstate_persistence.py",           60),
     ("gguf_tag_pinning",       "tests/test_gguf_tag_pinning.py",               60),
     ("mmproj_specs",           "tests/test_mmproj_specs.py",                    30),
-    ("git_gate",               "tests/test_git_gate.py",                        60),
+    ("git_gate",               "tests/test_git_gate.py",                        120),
     ("chat_blobs",             "tests/test_chat_blobs.py",                      60),
     ("chat_real_roundtrip",    "tests/test_chat_real_roundtrip.py",             60),
     ("history_source",         "tests/test_history_source.py",                  60),
@@ -179,7 +179,7 @@ SUITES = [
     ("run_python_encoding",    "tests/test_run_python_encoding.py",            60),
     ("browser_blocked_dedup",  "tests/test_browser_blocked_dedup.py",          60),
     ("appjs_error_net",        "tests/test_appjs_error_net.py",                60),
-    ("edit_tool_layer",        "tests/test_edit_tool_layer.py",                60),
+    ("edit_tool_layer",        "tests/test_edit_tool_layer.py",                120),
     ("wedge_handoff",          "tests/test_wedge_handoff.py",                 120),
     ("tools_audit_fixes",      "tests/test_tools_audit_fixes.py",             120),
     ("mini_shrink_retry",      "tests/test_mini_shrink_retry.py",              60),
@@ -190,8 +190,8 @@ SUITES = [
     ("tool_arg_compact",       "tests/test_tool_arg_compact.py",                60),
     ("lint",                   "tests/test_lint.py",                            60),
     ("no_new_silent_excepts",  "tests/test_no_new_silent_excepts.py",           60),
-    ("no_personal_context",    "tests/test_no_personal_context.py",         20),
-    ("updater_optionals",      "tests/test_updater_optionals.py",           30),
+    ("no_personal_context",    "tests/test_no_personal_context.py",         45),
+    ("updater_optionals",      "tests/test_updater_optionals.py",           90),
     ("default_config",         "tests/test_default_config.py",             30),
     ("read_aloud_routing",     "tests/test_read_aloud_routing.py",        20),
     ("bat_block_parens",       "tests/test_bat_block_parens.py",           20),
@@ -208,7 +208,7 @@ SUITES = [
     ("installer_download_skip", "tests/test_installer_download_skip.py",     40),
     ("installer_labels", "tests/test_installer_labels.py",             20),
     ("installer_settings_writer", "tests/test_installer_settings_writer.py", 30),
-    ("installer_sim", "tests/test_installer_sim.py",                 120),
+    ("installer_sim", "tests/test_installer_sim.py",                 180),
     ("installer_hardening", "tests/test_installer_hardening.py",      60),
     ("shell_env",           "tests/test_shell_env.py",               20),
     ("follow_ui",           "tests/test_follow_ui.py",               30),
@@ -264,7 +264,7 @@ SUITES = [
     ("preset_prompts_refix",    "tests/test_preset_prompts_refix.py",          30),
     ("preset_prompt_roles",     "tests/test_preset_prompt_roles.py",           40),
     ("mcp_audit_fixes",         "tests/test_mcp_audit_fixes.py",               60),
-    ("mcp_client",              "tests/test_mcp_client.py",                    90),
+    ("mcp_client",              "tests/test_mcp_client.py",                    150),
     ("mcp_client_budgets",      "tests/test_mcp_client_budgets.py",             90),
     ("write_folder_hint",      "tests/test_write_folder_hint.py",         20),
     ("settings_atomic",       "tests/test_settings_atomic.py",            40),
@@ -273,10 +273,10 @@ SUITES = [
     ("shell_chain_guard",    "tests/test_shell_chain_guard.py",         30),
     ("chunking_fixes",         "tests/test_chunking_fixes.py",               60),
     ("split_audit_fixes",      "tests/test_split_audit_fixes.py",           60),
-    ("git_init_clone",        "tests/test_git_init_clone.py",               120),
+    ("git_init_clone",        "tests/test_git_init_clone.py",               180),
     ("chunk_render_no_write",  "tests/test_chunk_render_no_write_pin.py",      30),
     ("settings_foreign_write", "tests/test_settings_foreign_write_warning.py", 30),
-    ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          90),
+    ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          150),
     ("ws_guards_chats_skills", "tests/test_ws_guards_chats_skills.py",         60),
     ("tts_start_decay",        "tests/test_tts_start_decay_pin.py",            30),
     ("audit_architecture_fixes", "tests/test_audit_architecture_fixes.py",     40),
@@ -341,8 +341,8 @@ SUITES = [
     ("unbound_guards",          "tests/test_unbound_guards.py",              20),
     ("mcp_secret_guard",        "tests/test_mcp_secret_guard.py",            60),
     ("approval_no_run_id",      "tests/test_approval_no_run_id.py",          20),
-    ("git_consolidate_scope",   "tests/test_git_consolidate_scope.py",       90),
-    ("git_commit_scope",        "tests/test_git_commit_scope.py",           120),
+    ("git_consolidate_scope",   "tests/test_git_consolidate_scope.py",       240),
+    ("git_commit_scope",        "tests/test_git_commit_scope.py",           240),
     ("settings_ui",             "tests/test_settings_ui.py",                 20),
     ("settings_split",          "tests/test_settings_split.py",              10),
     ("tool_args_nonobject",     "tests/test_tool_args_nonobject.py",         20),
@@ -397,12 +397,12 @@ SUITES = [
     ("simple_tool_routing",     "tests/test_simple_tool_routing.py",         30),
     ("chat_tools_route_guards", "tests/test_chat_tools_route_guards.py",     30),
     ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
-    ("bench_runner",            "tests/test_bench_runner.py",                60),
+    ("bench_runner",            "tests/test_bench_runner.py",                120),
     ("bench_analyze",           "tests/test_bench_analyze.py",               30),
     ("bench_polyglot",          "tests/test_bench_polyglot.py",              30),
     ("bench_external",          "tests/test_bench_external.py",             60),
     ("external_deepswe",        "tests/test_external_deepswe.py",           20),
-    ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           45),
+    ("deepswe_hivemind",        "tests/test_deepswe_hivemind.py",           120),
     ("bench_container",         "tests/test_bench_container.py",            20),
     ("swebench_hivemind",       "tests/test_swebench_hivemind.py",          45),
     # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
@@ -429,7 +429,7 @@ SUITES = [
     ("deep_retrieval",           "tests/test_deep_retrieval.py",             30),
     ("multi_edit",               "tests/test_multi_edit.py",                 90),
     # D3 patch-native editing + G#2/#3 levers (2026-11-11)
-    ("apply_patch",              "tests/test_apply_patch.py",               120),
+    ("apply_patch",              "tests/test_apply_patch.py",               180),
     ("auto_test_on_edit",        "tests/test_auto_test_on_edit.py",          30),
     ("edit_history_compact",     "tests/test_edit_history_compact.py",       30),
     ("audit_behavior_batch",     "tests/test_audit_behavior_batch.py",     45),
@@ -445,6 +445,7 @@ SUITES = [
     ("dflash_and_recovery_fixes",  "tests/test_dflash_and_recovery_fixes.py",  30),
     ("catalog_tiers_and_wiring",   "tests/test_catalog_tiers_and_wiring.py",   30),
     ("audit_1_6_3_fixes",          "tests/test_audit_1_6_3_fixes.py",          30),
+    ("direct_ui_and_thinkblock",   "tests/test_direct_ui_and_thinkblock.py",   30),
 
 ]
 
@@ -463,14 +464,14 @@ _EXCLUSIVE_SUITES = {
 # LPT. Cap them to 2 workers while fast in-process suites use the main pool.
 _SUBPROCESS_HEAVY_SUITES = {
     "apply_patch", "multi_edit", "searxng_bat", "edit_tool_layer",
-    "bench_runner", "bench_external", "load_mode_ram_guard",
+    "bench_runner", "bench_external", "deepswe_hivemind", "load_mode_ram_guard",
     "35b_perf_levers", "read_after_write", "swebench_hivemind",
     "feature_search_core", "update_flow_audit", "installer_updater_1_6_2",
     "installer_sim", "update_zip_layout", "chat_real_roundtrip",
     "tts_engine", "stt_audio", "agentic_audit",
     "write_guard_and_explore_truth", "preflight_matrix",
     "run_bash_drive_paths", "duo_e2e_smoke", "gateway_lint_gate",
-    "glm_deep_audit_wave2",
+    "glm_deep_audit_wave2", "updater_optionals",
 }
 
 
@@ -930,23 +931,30 @@ def main() -> int:
         key=lambda item: _est_durs.get(item[1], 0.0),
         reverse=True,
     )
-    with ThreadPoolExecutor(max_workers=min(2, max(1, jobs))) as heavy_pool, \
-         ThreadPoolExecutor(max_workers=jobs) as pool:
-        _fut_by_pos = {
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        _light_futs = {
+            pos: pool.submit(_run_suite, pos, rel, timeout)
+            for pos, _name, rel, timeout in _light_pending
+        }
+        for pos, _name, _rel, _timeout in _light_pending:
+            _light_futs[pos].result()
+    with ThreadPoolExecutor(max_workers=min(2, max(1, jobs))) as heavy_pool:
+        _heavy_futs = {
             pos: heavy_pool.submit(_run_suite, pos, rel, timeout)
             for pos, _name, rel, timeout in _heavy_pending
         }
-        for pos, _name, rel, timeout in _light_pending:
-            _fut_by_pos[pos] = pool.submit(_run_suite, pos, rel, timeout)
-        for pos, name, _rel, _timeout in pending:
-            ok, dur, r = _fut_by_pos[pos].result()
-            _report(pos, name, ok, dur, r)
-        _ran.extend(pending)
-        # exclusive lane: sequential, after the parallel batch
-        for pos, name, rel, timeout in exclusive:
-            ok, dur, r = _run_suite(pos, rel, timeout)
-            _report(pos, name, ok, dur, r)
-        _ran.extend(exclusive)
+        for pos, _name, _rel, _timeout in _heavy_pending:
+            _heavy_futs[pos].result()
+    _fut_by_pos = {**_light_futs, **_heavy_futs}
+    for pos, name, _rel, _timeout in pending:
+        ok, dur, r = _fut_by_pos[pos].result()
+        _report(pos, name, ok, dur, r)
+    _ran.extend(pending)
+    # exclusive lane: sequential, after the parallel batch
+    for pos, name, rel, timeout in exclusive:
+        ok, dur, r = _run_suite(pos, rel, timeout)
+        _report(pos, name, ok, dur, r)
+    _ran.extend(exclusive)
 
     results = [r for r in results if r is not None]
     print("=" * 64)

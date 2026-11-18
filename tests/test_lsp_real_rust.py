@@ -79,7 +79,7 @@ async def _flow():
         # A single 5 s read then fails R4 only inside the full gate.
         out["good"] = []
         for _attempt in range(4):
-            out["good"] = await mgr.diagnostics("src/main.rs", wait_s=5.0)
+            out["good"] = await mgr.diagnostics("src/main.rs", wait_s=20.0)
             if not any(d.get("severity") == 1 for d in out["good"]):
                 break
             await asyncio.sleep(1.0)

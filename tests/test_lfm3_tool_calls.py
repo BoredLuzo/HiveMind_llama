@@ -83,8 +83,10 @@ check("6b the override dict is read live, not from the boot import",
       "from . import llama_config as _lc_live" in LOAD)
 check("6c the log names the source", "source=%s" in LOAD)
 SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
+RSYNC = (ROOT / "backend" / "runtime_sync.py").read_text(encoding="utf-8")
 check("6d the settings sync writes the canonical module",
-      "_lc_moe.MOE_CPU_EXPERTS = dict(_moe_map)" in SERVER)
+      "_lc_moe.MOE_CPU_EXPERTS = dict(_moe_map)" in SERVER
+      or ("sync_loader_settings" in SERVER and "_lc.MOE_CPU_EXPERTS = dict(_moe_map)" in RSYNC))
 
 # ── 7. the read-aloud flags are re-read from the server ──────────────────
 check("7a a refresh helper exists", "function refreshVoiceFlags(" in APP)

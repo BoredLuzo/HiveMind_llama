@@ -192,7 +192,7 @@ from hive_functions.hivemind_feature.ast_tools import (
 )
 from hive_functions.memory import Memory
 from hive_functions.prompts import (
-    PROMPTS, VISION_PREPROCESS_PROMPT,
+    VISION_PREPROCESS_PROMPT,
 )
 
 _MAX_TREE_DEPTH = 4
@@ -283,41 +283,22 @@ init_pause_state(_SESSIONS_DIR)
 _logger.info("[VRAM-BUDGET] Startup: settings['vram_budget_gb'] = %s (type=%s)",
              settings.get("vram_budget_gb"), type(settings.get("vram_budget_gb")).__name__)
 def _sync_backend_runtime_config() -> None:
-    """Sync settings → backend runtime globals (llama_server_manager/llama_config)."""
+    """Sync settings -> backend runtime globals (llama_server_manager/llama_config)."""
     try:
         from backend.runtime_sync import sync_loader_settings as _sync_ls
-        _sync_ls(settings)
-        import backend.llama_server_manager as _lsm_init
-        _raw = settings.get("vram_budget_gb")
-        _lsm_init.VRAM_BUDGET_GB = float(_raw) if _raw is not None else DEFAULT_VRAM_BUDGET_GB
-        _moe_cfg = settings.get("moe_cpu_experts", {})
-        # ONE canonical attribute: the load path reads llama_config live (the
-        # manager module only holds a by-value import from boot).
-        _moe_map = ({str(k): int(v or 0) for k, v in _moe_cfg.items()}
-                    if isinstance(_moe_cfg, dict) else {})
-        import backend.llama_config as _lc_moe
-        _lc_moe.MOE_CPU_EXPERTS = dict(_moe_map)
-        _lsm_init.MOE_CPU_EXPERTS = _moe_map
-        # MLOCK-PROPAGATION (audit 2026-10-24): the setting used to land only
-        # on the manager module - the load path (manager_load) holds a by-value
-        # import from boot, so llama_mlock=false never reached the flags.
-        # llama_config is the canonical source; manager_load reads it live.
+        from backend.runtime_flags import apply_runtime_flags as _apply_rf
         import backend.llama_config as _lc_init
-        _lc_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
-        _lsm_init.MLOCK_MODEL = _lc_init.MLOCK_MODEL
-        # EXPERT-CACHE (2026-11-03): live --moe-cache-mib value
-        _cache_mib = int(settings.get("moe_cache_mib", 0) or 0)
-        _lc_init.MOE_CACHE_MIB = _cache_mib
-        _lsm_init.MOE_CACHE_MIB = _cache_mib
-        _lc_init.LLAMA_FIT = bool(settings.get("llama_fit", False))
-        _lc_init.LLAMA_FIT_TARGET_MIB = int(
-            settings.get("llama_fit_target_mib", 0) or 0)
-        _lsm_init.LLAMA_FIT = _lc_init.LLAMA_FIT
-        _lsm_init.LLAMA_FIT_TARGET_MIB = _lc_init.LLAMA_FIT_TARGET_MIB
+        import backend.llama_server_manager as _lsm_init
+        import backend.manager_load as _ml_init
+
+        _boot_settings = dict(settings)
+        if _boot_settings.get("vram_budget_gb") is None:
+            _boot_settings["vram_budget_gb"] = DEFAULT_VRAM_BUDGET_GB
+        _sync_ls(_boot_settings)
+        _apply_rf(_boot_settings)
+
         _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
-        # ENV-WINS (2026-09-19): a repo-shipped settings.json must not defeat
-        # a container/systemd deployment — HIVEMIND_GPU_BACKEND has priority
-        # over the settings.json 'gpu_backend' key.
+        # ENV-WINS (2026-09-19): HIVEMIND_GPU_BACKEND overrides settings.json.
         if str(os.environ.get("HIVEMIND_GPU_BACKEND", "") or "").strip():
             if _gb:
                 _logger.info(
@@ -327,72 +308,15 @@ def _sync_backend_runtime_config() -> None:
             _gb = ""
         if _gb in ("vulkan", "cuda", "rocm", "cpu"):
             _lc_init.sync_runtime_backend(_gb)
-        # CACHE-REUSE-FIX (2026-09-04): server.py hat nur _lsm_init.CACHE_REUSE
-# set; but read back from the constant copied at import time in
-# backend.manager_load (and backend.llama_config as the source). All three
-# module globals are now kept in sync so the UI setting
-# (llama_cache_reuse) really changes the --cache-reuse startup value.
-        _cache_reuse_val = int(settings.get("llama_cache_reuse", 256) or 0)
-        _lc_init.CACHE_REUSE = _cache_reuse_val
-        _lsm_init.CACHE_REUSE = _cache_reuse_val
-        # HOST-RAM-CAP (2026-10-14): settings for the prompt-cache RAM cap and
-        # the per-slot context-checkpoint count (see llama_config) — synced the
-        # same way as CACHE_REUSE so a UI setting changes the startup flags.
-        _lc_init.CACHE_RAM_MIB = int(settings.get("llama_cache_ram_mib", _lc_init.CACHE_RAM_MIB))
-        _lsm_init.CACHE_RAM_MIB = _lc_init.CACHE_RAM_MIB
-        _lc_init.CTX_CHECKPOINTS = int(settings.get("llama_ctx_checkpoints", _lc_init.CTX_CHECKPOINTS))
-        _lsm_init.CTX_CHECKPOINTS = _lc_init.CTX_CHECKPOINTS
-        try:
-            import backend.manager_load as _ml_cram
-            _ml_cram.CACHE_RAM_MIB = _lc_init.CACHE_RAM_MIB
-            _ml_cram.CTX_CHECKPOINTS = _lc_init.CTX_CHECKPOINTS
-        except Exception:
-            pass
-        # VRAM-PREFLIGHT-GATE (2026-10-11): settings "vram_preflight_gate"
-        # synced into the same three modules as CACHE_REUSE.
+
         _pf_val = bool(settings.get("vram_preflight_gate", True))
         _lc_init.VRAM_PREFLIGHT_GATE = _pf_val
         _lsm_init.VRAM_PREFLIGHT_GATE = _pf_val
-        try:
-            import backend.manager_load as _ml_pf
-            _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
-        except Exception:
-            pass
+        _ml_init.VRAM_PREFLIGHT_GATE = _pf_val
         try:
             import backend.llama_start_phases as _lsp_pf
             _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
         except (ImportError, AttributeError):
-            pass
-        # UBATCH-SEAM (2026-09-08): same three-module sync as CACHE_REUSE —
-        # duo_ubatch overrides --ubatch-size (prefill throughput lever for
-        # MoE + CPU expert offload). Shipped default 256; the live install
-        # pins duo_ubatch 1024. Measured 2026-10-30: 119.96 t/s pp8192 at
-        # 1024 vs 77.64 at 256, still off the shared path (206 vs 2348 MiB
-        # at ub 2048). llama_ubatch_size is the older alias; -b follows via
-        # resolve_ubatch_sizes.
-        from backend.llama_config import resolve_ubatch_sizes as _rus
-        _ubatch_val, _batch_val = _rus(settings)
-        _lc_init.LLAMA_UBATCH = _ubatch_val
-        _lsm_init.LLAMA_UBATCH = _ubatch_val
-        # CHECKPOINT/CACHE-RAM SEAM (2026-10-27): a long run got slower the
-        # longer it ran; both knobs bound what llama.cpp keeps per slot.
-        try:
-            _cp_val = int(settings.get("llama_ctx_checkpoints", 4))
-            _cram_val = int(settings.get("llama_cache_ram_mib", 1024))
-            _lc_init.CTX_CHECKPOINTS = _cp_val
-            _lc_init.CACHE_RAM_MIB = _cram_val
-            _lsm_init.CTX_CHECKPOINTS = _cp_val
-            _lsm_init.CACHE_RAM_MIB = _cram_val
-            import backend.manager_load as _ml_cp
-            _ml_cp.CTX_CHECKPOINTS = _cp_val
-            _ml_cp.CACHE_RAM_MIB = _cram_val
-        except (ImportError, AttributeError, TypeError, ValueError):
-            pass
-        try:
-            import backend.manager_load as _ml_init
-            _ml_init.CACHE_REUSE = _cache_reuse_val
-            _ml_init.LLAMA_UBATCH = _ubatch_val
-        except Exception:
             pass
     except Exception:
         pass
@@ -925,25 +849,9 @@ _COMPLEX_DIRECT_MODELS = {
 # PHASE B4-B6: Adaptive Thinking-Budget ─ delegiert an core.duo_helpers
 
 
-# PHASE B2: Planner-Funktionen ─ delegiert an hive_functions.planner
-# (the old module-level aliases were unused; core modules import directly)
+# PHASE B2: Planner-Funktionen -> hive_functions.planner; DUO defaults -> core/duo_runner.py
 
 # ─── run_stream Kernfunktion ────────────────────────────────────────────────────
-
-# DUO prompts: now in prompts.py ─ preset-overridable + separate learned configs
-_DUO_CODER_SYS_DEFAULT   = PROMPTS.get("duo_coder", "Write complete, runnable code for the given task.")
-_DUO_CRITIC_CODE_DEFAULT = PROMPTS.get("duo_critic_code",
-    "Review the code. Respond ONLY in compact format:\n"
-    "approved=true issues=[] verdict=max_10_words_with_underscores\n"
-    "or: approved=false issues=[Problem_1;Problem_2] verdict=max_10_words_with_underscores\n"
-    "approved=true ONLY if code is complete and correctly implemented.")
-_DUO_CRITIC_GEN_DEFAULT  = PROMPTS.get("duo_critic_general",
-    "Review the answer. Respond ONLY in compact format:\n"
-    "approved=true issues=[] verdict=max_10_words_with_underscores\n"
-    "or: approved=false issues=[Missing_Element_1;Logic_Error_2] verdict=max_10_words_with_underscores\n"
-    "approved=true ONLY if the core task is fully fulfilled.")
-
-# Critic answers stay in the compact JSON format.
 
 
 def apply_learned_configs_for_run():
@@ -1299,7 +1207,7 @@ async def stream(req: Request):
     # the run use the UI value even if the settings.json write lagged/failed —
     # no more "16k despite having set 32k".
     for _ctx_key in ("duo_coder_ctx_agentic", "duo_coder_ctx_normal",
-                     "duo_planner_ctx_target", "direct_ctx_target"):
+                     "duo_planner_ctx_target", "duo_critic_ctx", "direct_ctx_target"):
         _cv = body.get(_ctx_key)
         if _cv is not None:
             try:
@@ -1368,6 +1276,8 @@ async def stream(req: Request):
     if "lsp_auto_warm_on_write" in body:
         _model_overrides["lsp_auto_warm_on_write"] = _as_bool(
             body.get("lsp_auto_warm_on_write"))
+    if "smoke_test" in body:
+        _model_overrides["smoke_test"] = _as_bool(body.get("smoke_test"))
 
     # G1 (full audit 2026-10-05): the Telegram gateway sends
     # duo_action_approval_enabled=true with its runs so the documented
@@ -1414,6 +1324,8 @@ async def stream(req: Request):
     duo_agentic_mode       = _as_bool(body.get("duo_agentic_mode",       settings.get("duo_agentic_mode",       False)))
     duo_thinking_per_chunk = _as_bool(_body_or_settings("duo_thinking_per_chunk", default=False))
     duo_agentic_thinking   = _as_bool(body.get("duo_agentic_thinking",   settings.get("duo_agentic_thinking",   False)))
+    if "duo_agentic_thinking" in body:
+        _model_overrides["duo_agentic_thinking"] = duo_agentic_thinking
     _duo_tf_legacy = _body_or_settings("duo_test_feedback", default=False)
     duo_test_feedback_chunk = _as_bool(_body_or_settings("duo_test_feedback_chunk", default=_duo_tf_legacy))
     duo_test_feedback_final = _as_bool(_body_or_settings("duo_test_feedback_final", default=_duo_tf_legacy))
@@ -1925,12 +1837,13 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
     parts = []
     async for chunk in _agent_loop():
         parts.append(chunk)
+    _ag_est = max(len(parts), len("".join(parts)) // 3) if parts else 0
     return {"id": chat_id, "object": "chat.completion", "created": created, "model": raw_model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(parts)}, "finish_reason": "stop"}],
             "stop_reason": _agent_state["stop_reason"],
             "stop_reason_bucket": _stop_bucket(_agent_state["stop_reason"]),
             "_meta": {"tool_calls": _agent_state["tool_calls"], "tool_errors": _agent_state["tool_errors"], "last_tool_error": _agent_state["last_tool_error"]},
-            "usage": {"prompt_tokens": 0, "completion_tokens": len(parts), "total_tokens": len(parts)}}
+            "usage": {"prompt_tokens": 0, "completion_tokens": _ag_est, "total_tokens": _ag_est}}
 
 
 async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream):
@@ -1939,9 +1852,36 @@ async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_s
     Runs in-process through the same direct path as the UI (incl. optional
     chat tools) and returns OpenAI-compatible answers.
     """
-    _user_msg = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
-    if not _user_msg:
+    _last_user_idx = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
+    if _last_user_idx < 0 or not str(msgs[_last_user_idx].get("content") or "").strip():
         return JSONResponse({"error": "no user message"}, status_code=400)
+    _user_msg = str(msgs[_last_user_idx].get("content") or "")
+    _prior_msgs = [m for m in msgs[:_last_user_idx] if m.get("content")]
+    if _prior_msgs:
+        _hist_lines = "\n".join(
+            f"[{str(m.get('role') or 'user').title()}]: {m.get('content')}" for m in _prior_msgs
+        )
+        _user_msg = f"Conversation history:\n{_hist_lines}\n\n[User]: {_user_msg}"
+
+    _direct_overrides: dict = {}
+    _direct_agent_ovr: dict = {}
+    _v1_model = str(raw_model or "").strip()
+    if _v1_model and _v1_model.lower() not in ("direct", "default", "auto", "agent"):
+        _direct_overrides["direct_model"] = _v1_model
+        _direct_agent_ovr["model"] = _v1_model
+    if temp is not None:
+        _direct_agent_ovr["temperature"] = float(temp)
+        _direct_overrides["agents_user_sampling_choice"] = {"direct": ["temperature"]}
+    if max_tok is not None and int(max_tok) > 0:
+        _direct_agent_ovr["max_tokens"] = int(max_tok)
+    if _direct_agent_ovr:
+        _base_agents = dict(settings.get("agents") or {})
+        _dir_cfg = dict(_base_agents.get("direct") or {})
+        _dir_cfg.update(_direct_agent_ovr)
+        _base_agents["direct"] = _dir_cfg
+        _direct_overrides["agents"] = _base_agents
+
+    _v1_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
     async def _direct_loop():
         _parts: list = []
@@ -1949,6 +1889,7 @@ async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_s
             async for _chunk in run_stream(
                 _user_msg, [], "simple", 1, None,
                 constraint_mode=True, force_complexity="simple", chat_id=None,
+                model_overrides=_direct_overrides or None,
             ):
                 _s = _chunk if isinstance(_chunk, str) else ""
                 if not _s.startswith("data: "):
@@ -1957,11 +1898,18 @@ async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_s
                     _d = json.loads(_s[6:])
                 except Exception:
                     continue
-                if _d.get("type") == "token" and _d.get("content"):
+                if _d.get("type") == "usage_meta":
+                    _v1_usage["prompt_tokens"] += int(_d.get("prompt_tokens") or 0)
+                    _v1_usage["completion_tokens"] += int(_d.get("completion_tokens") or 0)
+                elif _d.get("type") == "token" and _d.get("content"):
                     _txt = str(_d["content"])
                     _parts.append(_txt)
                     yield _txt
                 elif _d.get("type") == "done":
+                    if _d.get("prompt_tokens_total"):
+                        _v1_usage["prompt_tokens"] = int(_d["prompt_tokens_total"])
+                    if _d.get("tokens_generated"):
+                        _v1_usage["completion_tokens"] = int(_d["tokens_generated"])
                     return
         except Exception as _e:
             _err = f"[direct error: {type(_e).__name__}: {str(_e)[:200]}]"
@@ -1979,9 +1927,11 @@ async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_s
     parts = []
     async for chunk in _direct_loop():
         parts.append(chunk)
+    _pt = int(_v1_usage["prompt_tokens"] or 0)
+    _ct = int(_v1_usage["completion_tokens"] or 0) or (max(1, len("".join(parts)) // 3) if parts else 0)
     return {"id": chat_id, "object": "chat.completion", "created": created, "model": raw_model,
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(parts)}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 0, "completion_tokens": len(parts), "total_tokens": len(parts)}}
+            "usage": {"prompt_tokens": _pt, "completion_tokens": _ct, "total_tokens": _pt + _ct}}
 
 
 @app.post("/v1/chat/completions")
@@ -2535,9 +2485,6 @@ async def gateway_stop():
             {"ok": False, "error": "gateway liveness probe timed out"},
             status_code=504)
     _verdict = _chk.stdout.strip()
-    if _verdict not in ("py", "recycled", "no"):
-        _verdict = "ps-error: " + (_chk.stderr.strip()[:120]
-                                   or "empty stdout")
     if _verdict not in ("py", "recycled", "no"):
         return JSONResponse(
             {"ok": False,

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
 from utils.token import CHARS_PER_TOKEN as _CPT
@@ -418,26 +417,6 @@ def _extract_signature_block(
             break
 
     return result, end
-
-
-def collect_snippets_from_files(
-    file_paths: list[str], workspace: str = "",
-) -> list[CodeSnippet]:
-    """Re-read files and extract snippets. Called once after explore."""
-    ws = Path(workspace) if workspace else Path(".")
-    snippets: list[CodeSnippet] = []
-    for raw_path in file_paths:
-        p = Path(raw_path)
-        if not p.is_absolute():
-            p = ws / raw_path
-        try:
-            if not p.exists() or not p.is_file():
-                continue
-            content = p.read_text(encoding="utf-8", errors="replace")
-            snippets.extend(extract_code_snippets(content, str(p)))
-        except Exception:
-            continue
-    return snippets
 
 
 # ── Static repo-map / explore-context separation (2026-08-17) ───────────────────

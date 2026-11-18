@@ -78,12 +78,12 @@ a message. Drop any extra `.gguf` weights into `models/` (or
 
 - **OS & Python:** Windows 10/11 or Linux, **Python 3.12–3.14** (auto-installed
   by `uv`).
-- **8 GB+ VRAM GPU:** Recommended for `Simple / Direct` and sequential solo
-  **Code Duo** runs (one active model slot at a time; Vulkan on AMD/Intel, CUDA
-  on NVIDIA, ROCm/CPU supported).
-- **16 GB+ VRAM (or hybrid CPU/MoE offload):** Recommended for **Smart Preload**,
-  multiple simultaneous models (`Critic-Duo`), large MoE weights, or 100k+
-  context windows.
+- **8 GB+ VRAM GPU:** Recommended for `Simple / Direct`, sequential solo
+  **Code Duo**, and **Critic-Duo** when using a small co-resident reviewer
+  (`minicpm5:2b-sharp` or `lfm3:1.7b-qad` alongside the 4B coder — rule: `critic != coder`;
+  Vulkan on AMD/Intel, CUDA on NVIDIA, ROCm/CPU supported).
+- **16 GB+ VRAM (or hybrid CPU/MoE offload):** Recommended for running two large
+  models simultaneously, heavy MoE weights, or 100k+ context windows.
 - **System RAM:** 32 GB+ is recommended when you offload MoE experts to the CPU
   (the offloaded weights live in RAM).
 - **Disk:** model files dominate. A starter set of four small models (for example
@@ -111,7 +111,7 @@ Three coder tool tiers trade schema overhead against breadth (`Tools & Optionals
 
 - **Lean (`duo_lean`, 8 tools):** Minimal orthogonal core (`read_file`, `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`, `task_complete`).
 - **Core (`duo_core`, default — 18 desktop tools + `+Subagent` = 19; `+send_file` on Telegram):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
-- **Full (`duo_full`, 33 base + extras):** Adds `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, MCP client tools, and `remember`.
+- **Full (`duo_full`, 36 inline + extras / 39 allowlisted names):** Adds `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, MCP client tools, and `remember`.
 
 Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 [docs/architecture.md](docs/architecture.md).
@@ -122,7 +122,14 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 
 ## Benchmarks
 
-> **Coming soon** — Standardized multi-run coding benchmark tables (Core 23-task suite, Aider Polyglot 34 tasks, and DeepSWE across local GGUF models, comparing `hivemind_direct`, `hivemind_duo`, `hivemind_duo_lean`, `aider`, `hermes`, and `pi`) are currently being finalized and will be published here shortly. See [bench/README.md](bench/README.md) for the harness design and reproducibility controls.
+Measured local comparison on the 21-task coding starter suite with `qwen3.5:4b-mtp` on `llama-server` (`bench/results/run-full21-core-aider-2026-11-09-clean.json`, see [bench/README.md](bench/README.md)):
+
+| Condition | Pass Rate | Median Wall Time | Notes |
+|---|---|---|---|
+| `hivemind_duo` (`duo_core`) | **95.2%** (20/21) | 27.7 s | Autonomous tool loop + verification gate + edit salvage (~84% cached prefix reuse across rounds) |
+| `aider` | 85.7% (18/21) | 20.9 s | Lower total per-turn prompt tokens; Aider's reported CLI token count is rounded and not cache-aware |
+
+Extended multi-model and Polyglot/DeepSWE harness runs are tracked in [bench/README.md](bench/README.md).
 
 ## Optional integrations
 
@@ -136,7 +143,7 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 | **Vision / Image Processing** | Per-mode multimodal `--mmproj` or `Describe first` preprocessing, mid-run image steers, optional saved uploads | [docs/guide.md](docs/guide.md#image-processing) |
 | **Automations** | Engine-scheduled recurring (`every 40m`, cron) or one-shot runs with tool/MCP access in the `Automations` tab | [docs/guide.md](docs/guide.md#ui-and-control) |
 | **Soul *(experimental)*** | Peer-rating personality/style adaptation stored locally | [docs/guide.md](docs/guide.md#learning-and-memory) |
-| **OpenAI-compatible API** | `/v1/chat/completions` multi-agent pipeline endpoint | [docs/guide.md](docs/guide.md#api) |
+| **OpenAI-compatible API** | `/v1/chat/completions` direct chat (model, history, temperature, `max_tokens`) & token-gated agent tool loop (`model="agent"`) | [docs/guide.md](docs/guide.md#api) |
 
 ## Privacy & network boundaries
 

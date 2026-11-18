@@ -23,9 +23,9 @@ def init_model_picker(pipeline_obj=None, settings_dict=None,
 def _pick_direct_model(complexity: str, task_type: str, available: list) -> str:
 
 
-    # Manuelles direct-Pinning respektieren.
+    # Respect manual direct model selection unless running in AutoMap mode.
     _configured_direct = pipeline.agents["direct"].model if "direct" in pipeline.agents else ""
-    _direct_pinned = "direct" in settings.get("automap_excluded", [])
+    _direct_pinned = "direct" in settings.get("automap_excluded", []) or settings.get("mode") != "automap"
     if _direct_pinned and _configured_direct and _configured_direct in available:
         return _configured_direct
 

@@ -41,6 +41,7 @@ check("1f the subagent ladder only names essential models",
 check("1g the ladder starts small", _ladder[0] == "lfm3:1.7b-qad")
 check("1h agent defaults stay empty (the installer wires them)",
       all(not (cfg.get("model") or "") for cfg in S.DEFAULT_AGENT_CFG.values()))
+check("1i research subagent is off by default", d["subagent_lite_enabled"] is False)
 
 # ── 2. every role in the wiring table is a real role ───────────────────────
 check("2a every wired role exists in DEFAULT_AGENT_CFG or is a known key",

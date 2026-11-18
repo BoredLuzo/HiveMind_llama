@@ -64,6 +64,7 @@ def run_direct(base: str, model: str) -> tuple[bool, str]:
         "force_complexity": "simple",
         "direct_model": model,
         "max_tokens": 64,
+        "smoke_test": True,
     }
     t0 = time.time()
     events, text = _stream(base, body, timeout_s=300)
@@ -101,6 +102,7 @@ def run_duo(base: str, args) -> tuple[bool, str]:
         "duo_test_feedback_chunk": 0,
         "duo_test_feedback_final": 0,
         "until_finished": 0,
+        "smoke_test": True,
     }
     t0 = time.time()
     events, _text = _stream(base, body, timeout_s=args.timeout)

@@ -424,14 +424,6 @@ VISION_PREPROCESS_PROMPT = (
 
 # ── Explore / Pre-Explore ─────────────────────────────────────────────────────
 
-def get_explore_analyst_prompt(label: str) -> str:
-    """System prompt for a partition-scoped code analyst during pre-explore."""
-    return (
-        f"You are a code analyst exploring the '{label}' partition of the codebase.\n"
-        "Map what exists: files, classes, functions, entry points, dependencies.\n"
-        "Output a compact structured summary. No implementation suggestions."
-    )
-
 # ── Partition worker (cartographer) ─────────────────────────────────────────────
 
 PARTITION_WORKER_SYSTEM = """CRITICAL: You are a tool-calling agent. Your FIRST output MUST be a tool call.
@@ -593,20 +585,6 @@ Rules:
 - If the codebase context is empty, state assumptions clearly in one line.
 - When steps share types/imports: note the shared symbol and its origin file to prevent duplication.
 - Max 400 words."""
-
-
-
-def extract_soft_plan_research(plan_text: str) -> list:
-    """Parse '- query: <terms>' lines from anywhere in the soft plan."""
-    import re
-    queries = []
-    for line in plan_text.splitlines():
-        m = re.match(r"\s*-\s*query\s*:\s*(.+)", line, re.IGNORECASE)
-        if m:
-            q = m.group(1).strip()
-            if q:
-                queries.append(q)
-    return queries
 
 
 def build_partition_explore_prompt(

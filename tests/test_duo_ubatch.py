@@ -28,10 +28,10 @@ h = Harness(pad=True, style="plain")
 check = h.check
 
 # default
-check("module default is 256", LLAMA_UBATCH_DEFAULT == 256, f"({LLAMA_UBATCH_DEFAULT})")
-check("module constant matches the default", LLAMA_UBATCH == 256, f"({LLAMA_UBATCH})")
+check("module default is 512", LLAMA_UBATCH_DEFAULT == 512, f"({LLAMA_UBATCH_DEFAULT})")
+check("module constant matches the default", LLAMA_UBATCH == 512, f"({LLAMA_UBATCH})")
 ub, b = resolve_ubatch_sizes({})
-check("no settings -> ub 256", ub == 256, f"({ub})")
+check("no settings -> ub 512", ub == 512, f"({ub})")
 check("no settings -> batch 1024 (>= ub)", b == 1024, f"({b})")
 check("batch >= ubatch (llama.cpp requirement)", b >= ub)
 
@@ -63,9 +63,11 @@ check("None -> default", resolve_ubatch_sizes(None)[0] == LLAMA_UBATCH_DEFAULT)
 # the wiring exists in both places
 root = Path(__file__).resolve().parent.parent
 srv = (root / "server.py").read_text(encoding="utf-8")
+rf_src = (root / "backend" / "runtime_flags.py").read_text(encoding="utf-8")
 mgr = (root / "backend" / "manager_load.py").read_text(encoding="utf-8")
 check("server syncs duo_ubatch via the resolver",
-      "resolve_ubatch_sizes" in srv and "duo_ubatch" in srv)
+      ("resolve_ubatch_sizes" in srv and "duo_ubatch" in srv)
+      or ("apply_runtime_flags" in srv and "resolve_ubatch_sizes" in rf_src and '"duo_ubatch"' in rf_src))
 check("-b follows the effective ubatch in the loader CMD",
       'str(max(1024, _ub_eff))' in mgr)
 check("-ubatch-size uses the same value", '"--ubatch-size",  str(_ub_eff)' in mgr)
