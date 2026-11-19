@@ -1,25 +1,28 @@
 """
 fetch_llamacpp.py
 =================
-Downloads the latest llama.cpp release (Windows and Linux) from GitHub and
-extracts it to <HiveMind>/llama/.
+Downloads the newest llama.cpp nightly release (Windows and Linux) from GitHub
+and extracts it to <HiveMind>/llama/.
 
 Assets are picked per platform: win-*-x64 on Windows, ubuntu-*-x64 on Linux
 (.zip there, .tar.gz on Linux) - see ASSET_REGEX / _OS_TAG below.
 
 Usage (Windows):
-  python deploy\\fetch_llamacpp.py --backend vulkan          # AMD/Intel
-  python deploy\\fetch_llamacpp.py --backend cuda            # NVIDIA
-  python deploy\\fetch_llamacpp.py --backend vulkan --force  # re-download even if a build exists
+  python deploy\\fetch_llamacpp.py --backend vulkan            # AMD/Intel (newest nightly)
+  python deploy\\fetch_llamacpp.py --backend cuda              # NVIDIA (newest nightly)
+  python deploy\\fetch_llamacpp.py --backend vulkan --upgrade  # upgrade if a newer build exists
+  python deploy\\fetch_llamacpp.py --backend vulkan --pinned   # use deploy/llama_build_pin.txt
+  python deploy\\fetch_llamacpp.py --backend vulkan --force    # re-download even if a build exists
 
 Usage (Linux, also run by deploy/install_linux.sh):
-  ./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan|cuda|rocm|cpu
+  ./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan|cuda|rocm|cpu [--upgrade]
 
 Stdlib only (urllib/zipfile/tarfile) — no extra dependencies needed.
 """
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -65,67 +68,127 @@ def _read_pinned_tag(pin_file: Path | None = None) -> str:
     return ""
 
 
+def _configured_update_channel(settings_file: Path | None = None) -> str:
+    """Return 'pinned' when settings.json sets llama_update_channel='pinned', else 'latest'."""
+    sf = settings_file or (ROOT / "settings.json")
+    if not sf.is_file():
+        return "latest"
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8", errors="replace"))
+        if isinstance(data, dict):
+            ch = str(data.get("llama_update_channel") or "").strip().lower()
+            if ch in ("latest", "pinned"):
+                return ch
+    except (OSError, ValueError, TypeError):
+        return "latest"
+    return "latest"
+
+
 def _resolve_releases(
     backend: str,
     rx,
     *,
     tag: str = "",
+    use_pinned: bool = False,
     use_latest: bool = False,
     cuda_version: str = "",
+    max_cuda_version: str = "",
 ) -> list[dict]:
-    """Resolve release metadata: pinned tag first (unless `use_latest`), else newest nightly/latest."""
-    def _has_matching_asset(rel: dict) -> bool:
+    """Resolve release metadata: newest nightly by default, or pinned/explicit tag."""
+    want = _parse_cuda_tuple(cuda_version)
+    max_want = _parse_cuda_tuple(max_cuda_version)
+
+    def _has_matching_asset(rel: dict, *, ignore_cuda: bool = False) -> bool:
         assets = rel.get("assets") or []
-        if not cuda_version:
-            return any(rx.match(str(a.get("name", "") or "")) for a in assets)
-        try:
-            want = tuple(int(x) for x in cuda_version.split(".")[:2])
-        except ValueError:
-            want = None
         for a in assets:
             name = str(a.get("name", "") or "")
-            if rx.match(name) and (want is None or _cuda_version_of(name, rx)[:2] == want):
+            if not rx.match(name):
+                continue
+            if ignore_cuda or (want is None and max_want is None):
                 return True
+            cv = _cuda_version_of(name, rx)
+            if want is not None and cv[:2] != want:
+                continue
+            if max_want is not None and cv != (0,) and cv[:2] > max_want:
+                continue
+            return True
         return False
 
-    want_tag = "" if use_latest else (tag or os.environ.get("HIVEMIND_LLAMA_TAG", "") or _read_pinned_tag()).strip()
+    explicit_tag = tag.strip()
+    if not explicit_tag and not use_latest:
+        explicit_tag = os.environ.get("HIVEMIND_LLAMA_TAG", "").strip()
+    pin_tag = _read_pinned_tag()
+    want_tag = explicit_tag or (pin_tag if (use_pinned and not use_latest) else "")
     if want_tag:
         try:
             pin_rel = http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{want_tag}")
-            if _has_matching_asset(pin_rel):
-                print(f"       Using pinned llama.cpp release: {want_tag} (pass --latest for newest nightly)")
+            allow_unfiltered = bool(explicit_tag and not cuda_version)
+            if _has_matching_asset(pin_rel, ignore_cuda=allow_unfiltered):
+                label = "pinned" if (use_pinned and not explicit_tag) else "requested"
+                print(f"       Using {label} llama.cpp release: {want_tag} (default is newest nightly)")
                 return [pin_rel]
-            print(f"       [INFO] Pinned release '{want_tag}' has no {backend} asset for {_OS_TAG} - falling back to newest nightly")
-        except (OSError, ValueError) as e:
-            print(f"       [INFO] Pinned release '{want_tag}' unavailable ({e}) - falling back to newest nightly")
+            print(f"       [INFO] Release '{want_tag}' has no compatible {backend} asset for {_OS_TAG} - falling back to newest nightly")
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            print(f"       [INFO] Release '{want_tag}' unavailable ({e}) - falling back to newest nightly")
 
     releases: list[dict] = []
+    raw_matches: list[dict] = []
     try:
         _rels = http_json("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100")
-        for _rel in _rels:
-            _tag = str(_rel.get("tag_name") or "")
-            if not re.fullmatch(r"b\d{4,}", _tag):
-                continue
-            if _has_matching_asset(_rel):
-                releases = [_rel]
-                break
+        if isinstance(_rels, list):
+            for _rel in _rels:
+                if not isinstance(_rel, dict):
+                    continue
+                _tag = str(_rel.get("tag_name") or "")
+                if not re.fullmatch(r"b\d{4,}", _tag):
+                    continue
+                if _has_matching_asset(_rel):
+                    releases.append(_rel)
+                    if len(releases) >= 5:
+                        break
+                elif (want is not None or max_want is not None) and len(raw_matches) < 5 and _has_matching_asset(_rel, ignore_cuda=True):
+                    raw_matches.append(_rel)
+        if not releases and raw_matches:
+            releases = raw_matches
         if releases:
-            print(f"       Newest nightly with {backend} asset: {releases[0].get('tag_name')}")
+            _tags_preview = ", ".join(str(r.get("tag_name") or "?") for r in releases[:3])
+            print(f"       Newest nightly candidate(s) with {backend} asset: {_tags_preview}")
     except Exception as e:
         print(f"       [WARNING] Nightly list could not be fetched: {e}")
+
+    main_rel: dict | None = None
     if not releases:
-        main_rel = http_json(API_LATEST)
-        nt = next((a for a in main_rel.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
-        if nt:
-            try:
-                _tag = http_text(nt["browser_download_url"]).strip()
-                if _tag:
-                    releases = [http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{_tag}")]
-                    print(f"       Nightly release resolved (stable pointer): {_tag}")
-            except Exception as e:
-                print(f"       [WARNING] Nightly tag could not be resolved: {e}")
-        if not releases:
-            releases = [main_rel]
+        try:
+            main_rel = http_json(API_LATEST)
+            if isinstance(main_rel, dict):
+                nt = next((a for a in main_rel.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
+                if nt:
+                    try:
+                        _tag = http_text(nt["browser_download_url"]).strip()
+                        if _tag:
+                            _nt_rel = http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{_tag}")
+                            if _has_matching_asset(_nt_rel) or _has_matching_asset(_nt_rel, ignore_cuda=(not cuda_version)):
+                                releases = [_nt_rel]
+                                print(f"       Nightly release resolved (stable pointer): {_tag}")
+                    except Exception as e:
+                        print(f"       [WARNING] Nightly tag could not be resolved: {e}")
+                if not releases and (_has_matching_asset(main_rel) or _has_matching_asset(main_rel, ignore_cuda=(not cuda_version))):
+                    releases = [main_rel]
+                    print(f"       Latest release resolved: {main_rel.get('tag_name', '?')}")
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            print(f"       [WARNING] Latest release could not be fetched: {e}")
+
+    if not releases and not use_latest and pin_tag and pin_tag != want_tag:
+        try:
+            pin_rel = http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{pin_tag}")
+            if _has_matching_asset(pin_rel) or _has_matching_asset(pin_rel, ignore_cuda=(not cuda_version)):
+                print(f"       [INFO] GitHub latest unavailable - falling back to pinned release: {pin_tag}")
+                return [pin_rel]
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            print(f"       [WARNING] Pinned fallback '{pin_tag}' unavailable: {e}")
+
+    if not releases and isinstance(main_rel, dict):
+        releases = [main_rel]
     return releases
 
 _IS_WIN = platform.system() == "Windows"
@@ -239,10 +302,14 @@ def _detect_cuda_version_from_driver() -> str:
 
 
 def http_json(url: str):
-    req = urllib.request.Request(url, headers={
+    headers = {
         "User-Agent": "HiveMind-Installer",
         "Accept": "application/vnd.github+json",
-    })
+    }
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode("utf-8"))
 
@@ -498,47 +565,72 @@ def _verify_backend_dlls(exe: Path, backend: str) -> list[str]:
     return missing
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=["vulkan", "cuda", "cpu", "rocm"], default="vulkan")
     ap.add_argument("--cuda-version", default="",
                     help="Pick the CUDA runtime exactly (e.g. 12.4 or 13.3). Default: "
                          "driver version via nvidia-smi, otherwise the newest available.")
     ap.add_argument("--force", action="store_true", help="Re-download even if a build already exists")
-    ap.add_argument("--tag", default="", help="Override release tag (default: deploy/llama_build_pin.txt)")
-    ap.add_argument("--latest", action="store_true", help="Ignore pinned build tag and install newest nightly")
-    args = ap.parse_args()
+    ap.add_argument("--upgrade", action="store_true",
+                    help="Check target release and download only if a newer build is available")
+    ap.add_argument("--tag", default="", help="Override release tag (default: newest nightly)")
+    ap.add_argument("--latest", action="store_true",
+                    help="Install newest nightly (default; kept for backward compatibility)")
+    ap.add_argument("--pinned", action="store_true",
+                    help="Use the pinned build tag from deploy/llama_build_pin.txt")
+    args = ap.parse_args(argv)
 
     have = existing_build(args.backend)
-    if have and not args.force:
+    if have and not args.force and not args.upgrade:
         print(f"[OK] llama.cpp b{have[0]} ({args.backend}) already installed: {have[1]}")
-        print("     (use --force to re-download)")
+        print("     (use --upgrade to check for a newer build, or --force to re-download)")
         return 0
 
     print(f"[1/3] Fetching llama.cpp release info ({args.backend})...")
     rx = ASSET_REGEX[args.backend]
-    releases = _resolve_releases(
-        args.backend, rx, tag=args.tag, use_latest=args.latest,
-        cuda_version=args.cuda_version or "",
-    )
 
-    # CUDA-VERSION-SELECTION (2026-08-27, FIX): prefer exactly the driver
-    # version (nvidia-smi), otherwise the newest available CUDA runtime.
-    # Previously cuda-12.4 was always chosen even though cuda-13.3 exists.
+    _det = ""
     if args.backend == "cuda" and not args.cuda_version:
         _det = _detect_cuda_version_from_driver()
         if _det:
             print(f"       Driver CUDA version: {_det}")
-            asset, asset_tag = _pick_asset(releases, rx, _det)
-            if asset is None:
-                asset, asset_tag = _pick_asset(releases, rx, max_cuda_version=_det)
-                if asset is not None:
-                    print(f"       No exact CUDA {_det} build — using compatible <= {_det} runtime ({asset['name']}).")
-                else:
-                    print(f"       No asset <= CUDA {_det} — taking the newest version.")
-                    asset, asset_tag = _pick_asset(releases, rx)
         else:
             print("       nvidia-smi not available — taking the newest CUDA version.")
+
+    _use_pinned = bool(
+        args.pinned or (not args.latest and not args.tag and _configured_update_channel() == "pinned")
+    )
+    releases = _resolve_releases(
+        args.backend,
+        rx,
+        tag=args.tag,
+        use_pinned=_use_pinned,
+        use_latest=args.latest,
+        cuda_version=args.cuda_version or "",
+        max_cuda_version=_det,
+    )
+
+    if not releases:
+        if have and args.upgrade and not args.force:
+            print(f"[WARNING] Could not check latest llama.cpp release; keeping existing b{have[0]} ({args.backend}): {have[1]}")
+            return 0
+        print(f"[ERROR] Could not resolve any llama.cpp release for '{args.backend}'.")
+        print("         Manual: https://github.com/ggml-org/llama.cpp/releases")
+        return 1
+
+    # CUDA-VERSION-SELECTION (2026-08-27, FIX): prefer the driver version
+    # (nvidia-smi) or highest compatible <= driver runtime on the newest build.
+    # Previously cuda-12.4 was always chosen even though cuda-13.3 exists.
+    if args.backend == "cuda" and not args.cuda_version and _det:
+        asset, asset_tag = _pick_asset(releases, rx, max_cuda_version=_det)
+        if asset is not None:
+            _picked_cv = _cuda_version_of(asset["name"], rx)
+            _det_tup = _parse_cuda_tuple(_det)
+            if _det_tup and _picked_cv[:2] != _det_tup:
+                print(f"       No exact CUDA {_det} build — using compatible <= {_det} runtime ({asset['name']}).")
+        else:
+            print(f"       No asset <= CUDA {_det} — taking the newest version.")
             asset, asset_tag = _pick_asset(releases, rx)
     else:
         asset, asset_tag = _pick_asset(releases, rx, args.cuda_version or "")
@@ -550,6 +642,10 @@ def main() -> int:
 
     tag = asset_tag
     build_num = int(rx.match(asset["name"]).group(1))
+    if have and args.upgrade and not args.force and build_num <= have[0]:
+        print(f"[OK] llama.cpp b{have[0]} ({args.backend}) is already up to date")
+        print(f"     Installed: {have[1]} (target: b{build_num})")
+        return 0
     _cv = _cuda_version_of(asset["name"], rx)
     _cv_txt = f" (CUDA {'.'.join(str(x) for x in _cv)})" if _cv != (0,) else ""
     print(f"[2/3] Downloading {asset['name']}{_cv_txt} (release {tag}, build b{build_num})...")
@@ -621,7 +717,11 @@ def main() -> int:
             rf"^cudart-llama(?:-b\d+)?-bin-{_OS_TAG}-cuda-([\d.]+)-x64{_ASSET_EXT}$",
             re.IGNORECASE,
         )
-        for _a in (releases[0].get("assets") or []):
+        picked_rel = next(
+            (r for r in releases if r.get("tag_name") == asset_tag),
+            releases[0],
+        )
+        for _a in (picked_rel.get("assets") or []):
             _an = str(_a.get("name") or "")
             _mm = _cu_rx.match(_an)
             if _mm and (not _cuda_ver or _mm.group(1) == _cuda_ver):

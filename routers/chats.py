@@ -46,10 +46,38 @@ _REF_KEYS = {"content", "diffText", "text", "preview"}
 
 
 _BLOB_MAGIC = b"HIVEBLOB1\n"
+_BLOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _valid_blob_id(h: object) -> str | None:
+    """Return *h* only when it is a strict 16-hex blob identifier."""
+    if not isinstance(h, str) or not _BLOB_ID_RE.fullmatch(h):
+        return None
+    return h
 
 
 def _blob_dir(chat_id: str) -> Path:
     return _state._SESSIONS_DIR / f"{chat_id}.blobs"
+
+
+def _safe_blob_path(chat_id: str, h: object) -> Path | None:
+    """Resolve blob path and verify strict containment inside _blob_dir(chat_id)."""
+    bid = _valid_blob_id(h)
+    if bid is None or _state._SESSIONS_DIR is None:
+        return None
+    try:
+        sessions_root = _state._SESSIONS_DIR.resolve()
+        bdir = _blob_dir(chat_id).resolve()
+        bdir_rel = bdir.relative_to(sessions_root)
+        if len(bdir_rel.parts) != 1:
+            return None
+        target = (bdir / bid).resolve()
+        rel = target.relative_to(bdir)
+        if not rel.parts or target == bdir:
+            return None
+        return target
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def _blob_hash(data: str) -> str:
@@ -74,12 +102,15 @@ def _store_blob(chat_id: str, data: str) -> str:
 
 
 def _read_blob(chat_id: str, h: str) -> str | None:
+    p = _safe_blob_path(chat_id, h)
+    if p is None:
+        return None
     try:
-        raw = (_blob_dir(chat_id) / h).read_bytes()
+        raw = p.read_bytes()
     except OSError:
         return None
     if raw.startswith(_BLOB_MAGIC):
-        return raw[len(_BLOB_MAGIC):].decode("utf-8")
+        return raw[len(_BLOB_MAGIC):].decode("utf-8", errors="replace")
     # Legacy repair (text-mode writes) is WINDOWS-ONLY (audit 2026-10-24):
     # the \r\n expansion the repair reverses happens in Windows text-mode
     # writes. A POSIX-written legacy blob holds genuine \r\n — repairing
@@ -91,12 +122,38 @@ def _read_blob(chat_id: str, h: str) -> str | None:
     return raw.replace(b"\r\n", b"\n").decode("utf-8", errors="replace")
 
 
+def _sanitize_invalid_refs(node) -> None:
+    """Neutralize client-injected {"_ref": ...} dicts with invalid blob IDs."""
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if isinstance(v, dict) and "_ref" in v:
+                if _valid_blob_id(v.get("_ref")) is None:
+                    if k == "html":
+                        node[k] = ""
+                    elif k == "preview":
+                        node[k] = _IMG_PLACEHOLDER
+                    else:
+                        node[k] = _BLOB_PLACEHOLDER
+            elif isinstance(v, (dict, list)):
+                _sanitize_invalid_refs(v)
+    elif isinstance(node, list):
+        for i, item in enumerate(list(node)):
+            if isinstance(item, dict) and "_ref" in item:
+                if _valid_blob_id(item.get("_ref")) is None:
+                    node[i] = _BLOB_PLACEHOLDER
+            elif isinstance(item, (dict, list)):
+                _sanitize_invalid_refs(item)
+
+
 def _extract_refs(chat_id: str, node) -> None:
     """Recursively replace big whitelisted strings with {"_ref": hash}."""
     if isinstance(node, dict):
         for k, v in list(node.items()):
             if isinstance(v, dict):
-                if "_ref" not in v:
+                if "_ref" in v:
+                    if _valid_blob_id(v.get("_ref")) is None:
+                        node[k] = _IMG_PLACEHOLDER if k == "preview" else _BLOB_PLACEHOLDER
+                else:
                     _extract_refs(chat_id, v)
             elif isinstance(v, list):
                 for item in v:
@@ -105,21 +162,34 @@ def _extract_refs(chat_id: str, node) -> None:
                   and len(v) >= _BLOB_MIN_CHARS
                   and not v.startswith(_BLOB_PLACEHOLDER)):
                 node[k] = {"_ref": _store_blob(chat_id, v)}
+    elif isinstance(node, list):
+        for i, item in enumerate(list(node)):
+            if isinstance(item, dict) and "_ref" in item:
+                if _valid_blob_id(item.get("_ref")) is None:
+                    node[i] = _BLOB_PLACEHOLDER
+            elif isinstance(item, (dict, list)):
+                _extract_refs(chat_id, item)
 
 
 def _restore_refs(chat_id: str, node) -> None:
-    """Inverse of _extract_refs; a missing blob becomes a placeholder."""
+    """Inverse of _extract_refs; a missing or invalid blob becomes a placeholder."""
     if isinstance(node, dict):
         for k, v in list(node.items()):
-            if isinstance(v, dict) and isinstance(v.get("_ref"), str):
-                _txt = _read_blob(chat_id, v["_ref"])
+            if isinstance(v, dict) and "_ref" in v:
+                _bid = _valid_blob_id(v.get("_ref"))
+                _txt = _read_blob(chat_id, _bid) if _bid is not None else None
                 node[k] = _txt if _txt is not None else (
                     _IMG_PLACEHOLDER if k == "preview" else _BLOB_PLACEHOLDER)
             elif isinstance(v, (dict, list)):
                 _restore_refs(chat_id, v)
     elif isinstance(node, list):
-        for item in node:
-            _restore_refs(chat_id, item)
+        for i, item in enumerate(list(node)):
+            if isinstance(item, dict) and "_ref" in item:
+                _bid = _valid_blob_id(item.get("_ref"))
+                _txt = _read_blob(chat_id, _bid) if _bid is not None else None
+                node[i] = _txt if _txt is not None else _BLOB_PLACEHOLDER
+            elif isinstance(item, (dict, list)):
+                _restore_refs(chat_id, item)
 
 
 def _blobify_messages(chat_id: str, messages) -> None:
@@ -129,6 +199,7 @@ def _blobify_messages(chat_id: str, messages) -> None:
     for m in messages or []:
         if not isinstance(m, dict):
             continue
+        _sanitize_invalid_refs(m)
         # HTML-BLOB (audit A6, 2026-10-23): the rendered answer html is the
         # biggest per-message payload (measured 1.1-2.7 MB per chat, 15-50x
         # the cp snapshots) and used to stay inline in the json.
@@ -141,10 +212,15 @@ def _blobify_messages(chat_id: str, messages) -> None:
         imgs = m.get("images")
         if isinstance(imgs, list):
             for im in imgs:
-                if (isinstance(im, dict) and isinstance(im.get("preview"), str)
+                if not isinstance(im, dict):
+                    continue
+                if (isinstance(im.get("preview"), str)
                         and len(im["preview"]) >= _BLOB_MIN_CHARS
                         and "_ref" not in im):
                     im["preview"] = {"_ref": _store_blob(chat_id, im["preview"])}
+                elif isinstance(im.get("preview"), dict) and "_ref" in im["preview"]:
+                    if _valid_blob_id(im["preview"].get("_ref")) is None:
+                        im["preview"] = _IMG_PLACEHOLDER
 
 
 def _restore_messages(chat_id: str, messages) -> None:
@@ -153,17 +229,19 @@ def _restore_messages(chat_id: str, messages) -> None:
             continue
         # HTML-BLOB: a missing blob restores as "" — the frontend renders the
         # plain-text content field when html is empty (loadChat fallback).
-        if isinstance(m.get("html"), dict) and isinstance(m["html"].get("_ref"), str):
-            _txt = _read_blob(chat_id, m["html"]["_ref"])
+        if isinstance(m.get("html"), dict) and "_ref" in m["html"]:
+            _bid = _valid_blob_id(m["html"].get("_ref"))
+            _txt = _read_blob(chat_id, _bid) if _bid is not None else None
             m["html"] = _txt if _txt is not None else ""
         if isinstance(m.get("cp"), dict):
             _restore_refs(chat_id, m["cp"])
         imgs = m.get("images")
         if isinstance(imgs, list):
             for im in imgs:
-                if isinstance(im, dict) and isinstance(im.get("preview"), dict):
+                if isinstance(im, dict) and isinstance(im.get("preview"), dict) and "_ref" in im["preview"]:
                     ref = im["preview"]
-                    _txt = _read_blob(chat_id, ref.get("_ref", ""))
+                    _bid = _valid_blob_id(ref.get("_ref"))
+                    _txt = _read_blob(chat_id, _bid) if _bid is not None else None
                     im["preview"] = _txt if _txt is not None else _IMG_PLACEHOLDER
 
 
@@ -360,7 +438,7 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
             return None
 
         _msgs = stored.get("messages", [])
-        _last = _msgs[-1].get("content", "") if _msgs else ""
+        _last = _msgs[-1].get("content", "") if (_msgs and isinstance(_msgs[-1], dict)) else ""
         with _cache_lock:
             _chats_cache[chat_id] = {
                 "id": stored.get("id", chat_id),
@@ -372,6 +450,11 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
                 "_preview": _last[:80] if isinstance(_last, str) else "",
                 "_file": _file,
             }
+
+        # Sanitize any client-injected invalid _ref payloads before blobification
+        # or disk serialization so even an OSError in _store_blob cannot leave
+        # traversal refs in the saved JSON.
+        _sanitize_invalid_refs(stored.get("messages", []))
 
         # BLOB EXTRACTION (2026-10-03): after the meta block counted
         # tokens/previews on the INLINE payloads, shrink the stored form.

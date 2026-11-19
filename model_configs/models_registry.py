@@ -37,6 +37,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -45,6 +46,8 @@ logger = logging.getLogger("hivemind.models_registry")
 
 _THIS_DIR = Path(__file__).resolve().parent
 _MODELS_DIR = _THIS_DIR / "models"
+USER_DIR = _THIS_DIR / "user"
+_ARCH_COMPAT_FILE = _THIS_DIR / "arch_compat.json"
 
 # Filename encoding: ':' is forbidden in Windows filenames. Canonical
 # names are stored as  <base>_<tag>.json  (":" → "_"). An optional
@@ -53,14 +56,16 @@ _UNDERSCORE_PLACEHOLDER = ":"
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
 _profile_cache: dict[str, dict] = {}     # canonical/base → merged config
+_shipped_cache: dict[str, dict] = {}     # canonical/base → shipped config
+_user_cache: dict[str, dict] = {}        # canonical/base → user override config
 _profile_mtimes: dict[str, float] = {}
 _cache_ts: float = 0.0
 _CACHE_TTL: float = 30.0
 
-_FILE_CACHE: dict[str, dict] = {}        # filename → raw config
+_FILE_CACHE: dict[str, dict] = {}        # cache key → raw config
 _FILE_MTIMES: dict[str, float] = {}
 
-# Canonical mapping: filename stem → (canonical name, base name)
+# Canonical mapping: cache key → (canonical name, base name)
 _FILE_KEYS: dict[str, tuple[str, str]] = {}
 
 
@@ -84,50 +89,59 @@ def _load_file(path: Path) -> dict:
         return {}
 
 
-def _scan() -> dict[str, dict]:
-    """Lade alle JSON-Dateien aus model_configs/models/ (mtime-cached)."""
-    global _FILE_CACHE, _FILE_MTIMES, _FILE_KEYS
-    if not _MODELS_DIR.is_dir():
+def _scan_dir(directory: Path, layer: str = "shipped") -> dict[str, dict]:
+    """Load all JSON files from `directory` (mtime-cached per layer)."""
+    if not directory or not directory.is_dir():
+        prefix = f"{layer}:" if layer else ""
+        for old in [k for k in _FILE_CACHE if (not prefix or k.startswith(prefix))]:
+            _FILE_CACHE.pop(old, None)
+            _FILE_MTIMES.pop(old, None)
+            _FILE_KEYS.pop(old, None)
         return {}
 
+    prefix = f"{layer}:" if layer else ""
     out: dict[str, dict] = {}
-    _new_keys: dict[str, tuple[str, str]] = {}
 
-    for p in sorted(_MODELS_DIR.glob("*.json")):
+    for p in sorted(directory.glob("*.json")):
+        ckey = f"{prefix}{p.name}"
         try:
             mtime = p.stat().st_mtime
         except OSError:
             continue
-        if _FILE_CACHE.get(p.name) is not None and _FILE_MTIMES.get(p.name) == mtime:
-            out[p.name] = _FILE_CACHE[p.name]
-            _new_keys[p.name] = _FILE_KEYS[p.name]
+        if _FILE_CACHE.get(ckey) is not None and _FILE_MTIMES.get(ckey) == mtime:
+            out[ckey] = _FILE_CACHE[ckey]
             continue
 
         data = _load_file(p)
-        if not data:
+        if not isinstance(data, dict) or not data:
             continue
-        _FILE_CACHE[p.name] = data
-        _FILE_MTIMES[p.name] = mtime
-        out[p.name] = data
-        # Canonical name: explicit "model" field > filename (last "_" = ":").
-        _canonical = _canonical_from_file(p, data)
-        _new_keys[p.name] = (_canonical, _canonical.split(":")[0])
+        _FILE_CACHE[ckey] = data
+        _FILE_MTIMES[ckey] = mtime
+        out[ckey] = data
+        canonical = _canonical_from_file(p, data)
+        _FILE_KEYS[ckey] = (canonical, canonical.split(":")[0])
 
-    # Remove orphaned cache entries (deleted files)
+    # Remove orphaned cache entries (deleted files in this layer)
     for old in list(_FILE_CACHE):
-        if old not in out:
+        if (not prefix or old.startswith(prefix)) and old not in out:
             _FILE_CACHE.pop(old, None)
             _FILE_MTIMES.pop(old, None)
             _FILE_KEYS.pop(old, None)
 
-    _FILE_KEYS = _new_keys
     return out
 
 
+def _scan() -> dict[str, dict]:
+    """Load all shipped JSON files from model_configs/models/ (mtime-cached)."""
+    return _scan_dir(_MODELS_DIR, "")
+
+
 def refresh() -> None:
-    """Discard the cache — the next access rescans."""
-    global _profile_cache, _cache_ts
+    """Discard the cache — the next access rescans both shipped and user dirs."""
+    global _profile_cache, _shipped_cache, _user_cache, _cache_ts
     _profile_cache = {}
+    _shipped_cache = {}
+    _user_cache = {}
     _profile_mtimes.clear()
     _FILE_CACHE.clear()
     _FILE_MTIMES.clear()
@@ -136,24 +150,45 @@ def refresh() -> None:
 
 
 def _ensure_cache() -> dict[str, dict]:
-    global _profile_cache, _cache_ts
+    global _profile_cache, _shipped_cache, _user_cache, _cache_ts
     now = time.time()
     if not _profile_cache or (now - _cache_ts) > _CACHE_TTL:
-        _files = _scan()
-        tmp: dict[str, dict] = {}
-        for fname, data in _files.items():
-            canonical, base = _FILE_KEYS.get(fname, (fname, fname.split(":")[0]))
-            tmp[canonical] = data
-            tmp.setdefault(base, {})
-        _profile_cache = tmp
+        shipped_files = _scan_dir(_MODELS_DIR, "shipped")
+        user_files = _scan_dir(USER_DIR, "user")
+
+        shipped_tmp: dict[str, dict] = {}
+        for ckey, data in shipped_files.items():
+            canonical, base = _FILE_KEYS.get(ckey, (ckey, ckey.split(":")[0]))
+            shipped_tmp[canonical] = data
+            shipped_tmp.setdefault(base, {})
+
+        user_tmp: dict[str, dict] = {}
+        for ckey, data in user_files.items():
+            canonical, base = _FILE_KEYS.get(ckey, (ckey, ckey.split(":")[0]))
+            user_tmp[canonical] = data
+            user_tmp.setdefault(base, {})
+
+        merged_tmp: dict[str, dict] = dict(shipped_tmp)
+        for k, uval in user_tmp.items():
+            existing = merged_tmp.get(k)
+            if isinstance(existing, dict) and existing and isinstance(uval, dict) and uval:
+                merged_tmp[k] = _merge(existing, uval)
+            elif uval or k not in merged_tmp:
+                merged_tmp[k] = uval
+
+        _shipped_cache = shipped_tmp
+        _user_cache = user_tmp
+        _profile_cache = merged_tmp
         _cache_ts = now
     return _profile_cache
 
 
 def _merge(base: dict, over: dict) -> dict:
-    """Recursive dict merge (preserves nested 'sampling' / 'capabilities' keys)."""
+    """Recursive dict merge (preserves nested 'sampling' / 'capabilities' keys; None inherits base)."""
     result = dict(base)
     for k, v in over.items():
+        if v is None:
+            continue
         if isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = _merge(result[k], v)
         else:
@@ -213,31 +248,29 @@ def _walkback_variant_profile(reg: dict[str, dict], canonical: str):
     return None
 
 
-def get_profile(model_name: str) -> dict:
-    """Returns the merged config for a model (canonical → base → {}).
-
-    ALIAS-KEY-FIX (2026-11-12): strip only a trailing `#N` alias and a
-    trailing `:latest`; the old `model.replace("#", "")` turned
-    "qwen3.6:35b-a3b-ud#2" into "...ud2" and missed every profile. Lookup is
-    case-insensitive (GGUF aliases are), so role configs with different
-    casing still resolve ubatch/moe/load_mode/mmproj settings.
-    """
+def _normalize_model_key(model_name: str) -> tuple[str, str]:
+    """Return normalized (canonical, base) pair with #N and :latest stripped."""
     model = (model_name or "").strip()
     if not model:
-        return {}
+        return "", ""
     canonical = re.sub(r"#\d+$", "", model)
     canonical = re.sub(r":latest$", "", canonical, flags=re.IGNORECASE)
     base = canonical.split(":")[0] if ":" in canonical else canonical
+    return canonical, base
 
-    _reg = _ensure_cache()
+
+def _resolve_layer(reg: dict[str, dict], canonical: str, base: str) -> tuple[dict, bool]:
+    """Resolve (merged_profile, matched) within a single registry layer dict."""
+    if not reg:
+        return {}, False
 
     def _resolve_pair(canon_name: str, base_name: str):
-        ck = _registry_key(_reg, canon_name)
-        bk = _registry_key(_reg, base_name)
-        d = _reg.get(ck) if ck is not None else None
+        ck = _registry_key(reg, canon_name)
+        bk = _registry_key(reg, base_name)
+        d = reg.get(ck) if ck is not None else None
         if d is None:
-            d = _walkback_variant_profile(_reg, canon_name)
-        f = _reg.get(bk) if bk is not None else None
+            d = _walkback_variant_profile(reg, canon_name)
+        f = reg.get(bk) if bk is not None else None
         return d, f
 
     direct, fallback = _resolve_pair(canonical, base)
@@ -251,12 +284,77 @@ def get_profile(model_name: str) -> dict:
         direct, fallback = _resolve_pair(_norm_sc, _norm_sb)
 
     if direct and fallback is not None and direct is not fallback:
-        return copy.deepcopy(_merge(fallback, direct))
+        return _merge(fallback, direct), True
     if direct is not None:
-        return copy.deepcopy(direct)
-    if fallback is not None:
-        return copy.deepcopy(fallback)
+        return (direct, bool(direct))
+    if fallback is not None and fallback:
+        return fallback, True
+    return {}, False
+
+
+def get_profile(model_name: str) -> dict:
+    """Return merged config for a model (user > shipped > base > {})."""
+    canonical, base = _normalize_model_key(model_name)
+    if not canonical:
+        return {}
+
+    _ensure_cache()
+    shipped_prof, has_shipped = _resolve_layer(_shipped_cache, canonical, base)
+    user_prof, has_user = _resolve_layer(_user_cache, canonical, base)
+
+    if has_user and has_shipped:
+        return copy.deepcopy(_merge(shipped_prof, user_prof))
+    if has_user:
+        return copy.deepcopy(user_prof)
+    if has_shipped:
+        return copy.deepcopy(shipped_prof)
     return {}
+
+
+def get_profile_source(model_name: str) -> str:
+    """Return profile resolution source: 'user', 'shipped', 'gguf_auto', or 'generic'."""
+    canonical, base = _normalize_model_key(model_name)
+    if not canonical:
+        return "generic"
+
+    _ensure_cache()
+    _, has_user = _resolve_layer(_user_cache, canonical, base)
+    if has_user:
+        return "user"
+    _, has_shipped = _resolve_layer(_shipped_cache, canonical, base)
+    if has_shipped:
+        return "shipped"
+
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
+        meta = _read_gguf_meta(model_name)
+        if meta:
+            return "gguf_auto"
+    except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
+        logger.debug("models_registry.get_profile_source gguf_meta skipped for %s: %s", model_name, _e)
+    return "generic"
+
+
+def iter_all_profiles() -> dict[str, dict]:
+    """Return a deep copy of all active non-empty profiles (user overriding shipped)."""
+    reg = _ensure_cache()
+    return {
+        k: copy.deepcopy(v)
+        for k, v in reg.items()
+        if isinstance(v, dict) and v
+    }
+
+
+def load_arch_compat() -> dict:
+    """Load architecture compatibility defaults from model_configs/arch_compat.json."""
+    if not _ARCH_COMPAT_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(_ARCH_COMPAT_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, ValueError) as _e:
+        logger.debug("models_registry: failed reading arch_compat.json: %s", _e)
+        return {}
 
 
 # ── Accessors ──────────────────────────────────────────────────────────────────
@@ -444,30 +542,77 @@ def get_moe_pin(model_name: str) -> bool | None:
     return bool(v) if v is not None else None
 
 
-def set_profile_key(model_name: str, key: str, value) -> Path | None:
-    """Patch a single key in the model's OWN profile file (not the merged
-    view). value=None removes the key. Returns the file path, or None when
-    no profile file exists for this exact model name."""
-    _MODELS_DIR.mkdir(parents=True, exist_ok=True)
+def _find_in_dir(directory: Path, model_name: str) -> Path | None:
+    """Locate the JSON profile file matching `model_name` inside `directory`."""
     want = (model_name or "").strip().casefold()
-    if not want:
+    if not want or not directory or not directory.is_dir():
         return None
-    for p in sorted(_MODELS_DIR.glob("*.json")):
+    for p in sorted(directory.glob("*.json")):
         try:
             raw = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError):
             continue
         if isinstance(raw, dict) and _canonical_from_file(p, raw).casefold() == want:
-            if value is None:
-                raw.pop(key, None)
-            else:
-                raw[key] = value
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(p)
-            refresh()
             return p
     return None
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Atomically write JSON dict to `path` via a unique sibling temp file."""
+    tmp = path.parent / f".{path.name}.tmp.{os.getpid()}"
+    try:
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError as _cleanup_err:
+                logger.debug("models_registry: failed cleaning temp file %s: %s", tmp, _cleanup_err)
+        raise
+
+
+_SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _validate_user_slug(model_name: str) -> tuple[str, str]:
+    """Validate `model_name` for safe user-profile storage and return (clean_name, slug)."""
+    clean = (model_name or "").strip()
+    if not clean:
+        raise ValueError("model_name must not be empty")
+    if "/" in clean or "\\" in clean or ".." in clean or clean.startswith("."):
+        raise ValueError(f"Unsafe model_name for user profile: {model_name!r}")
+    if any(ord(c) < 32 or c in '<>"|?*' for c in clean):
+        raise ValueError(f"Invalid control/filename characters in model_name: {model_name!r}")
+    slug = clean.replace(":", "_")
+    if ".." in slug or not _SAFE_SLUG_RE.fullmatch(slug):
+        raise ValueError(f"Invalid slug derived from model_name: {model_name!r}")
+    return clean, slug
+
+
+def set_profile_key(model_name: str, key: str, value) -> Path | None:
+    """Patch a single key in the model's OWN profile file (not the merged
+    view). value=None removes the key. Searches USER_DIR first, then _MODELS_DIR.
+    Returns the file path, or None when no profile file exists for this exact model name."""
+    want = (model_name or "").strip()
+    if not want:
+        return None
+    p = _find_in_dir(USER_DIR, want) or _find_in_dir(_MODELS_DIR, want)
+    if p is None:
+        return None
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    if value is None:
+        raw.pop(key, None)
+    else:
+        raw[key] = value
+    _atomic_write_json(p, raw)
+    refresh()
+    return p
 
 
 def get_gpu_layers(model_name: str) -> int | None:
@@ -570,36 +715,78 @@ def get_thinking_budget(model_name: str) -> int | None:
 
 
 def find_profile_file(model_name: str) -> Path | None:
-    want = (model_name or "").strip().casefold()
-    if not want or not _MODELS_DIR.is_dir():
-        return None
-    for p in sorted(_MODELS_DIR.glob("*.json")):
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(raw, dict) and _canonical_from_file(p, raw).casefold() == want:
-            return p
-    return None
+    """Find profile JSON file for `model_name`, checking USER_DIR before _MODELS_DIR."""
+    return _find_in_dir(USER_DIR, model_name) or _find_in_dir(_MODELS_DIR, model_name)
 
 
 def save_profile(model_name: str, data: dict) -> Path:
-    """Schreibt eine Config-Datei nach model_configs/models/<name>.json."""
+    """Write a shipped/local profile file to model_configs/models/<name>.json."""
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     safe = (model_name or "model").replace("/", "_").replace("\\", "_")
     safe = "".join(c if c not in '<>:"|?*' else "_" for c in safe)
-    path = find_profile_file(model_name) or (_MODELS_DIR / f"{safe}.json")
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    path = _find_in_dir(_MODELS_DIR, model_name) or (_MODELS_DIR / f"{safe}.json")
+    _atomic_write_json(path, data)
     refresh()
+    _ensure_cache()
     return path
+
+
+def save_user_profile(model_name: str, profile_dict: dict) -> Path:
+    """Validate slug, atomically write user override to USER_DIR, and refresh index."""
+    if not isinstance(profile_dict, dict):
+        raise TypeError("profile_dict must be a dict")
+    clean, slug = _validate_user_slug(model_name)
+    USER_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing = _find_in_dir(USER_DIR, clean)
+    target = existing if existing is not None else (USER_DIR / f"{slug}.json")
+    resolved_target = target.resolve()
+    resolved_target.relative_to(USER_DIR.resolve())
+
+    payload = copy.deepcopy(profile_dict)
+    if not payload.get("model"):
+        payload["model"] = clean
+
+    _atomic_write_json(target, payload)
+    refresh()
+    _ensure_cache()
+    return target
+
+
+def delete_user_profile(model_name: str) -> bool:
+    """Remove a user override profile from USER_DIR and refresh index."""
+    clean = (model_name or "").strip()
+    if not clean or not USER_DIR.is_dir():
+        return False
+
+    target = _find_in_dir(USER_DIR, clean)
+    if target is None:
+        try:
+            _, slug = _validate_user_slug(clean)
+        except ValueError:
+            return False
+        candidate = USER_DIR / f"{slug}.json"
+        if candidate.is_file():
+            target = candidate
+
+    if target is None or not target.is_file():
+        return False
+
+    try:
+        target.resolve().relative_to(USER_DIR.resolve())
+    except ValueError:
+        return False
+
+    target.unlink()
+    refresh()
+    _ensure_cache()
+    return True
 
 
 def upsert_profile(model_name: str, patch: dict) -> Path:
     """Create or deep-merge a per-model defaults JSON file atomically."""
     clean = (model_name or "").strip()
-    existing_path = find_profile_file(clean)
+    existing_path = _find_in_dir(_MODELS_DIR, clean)
     if existing_path and existing_path.is_file():
         try:
             base = json.loads(existing_path.read_text(encoding="utf-8"))

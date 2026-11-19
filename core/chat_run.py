@@ -7,6 +7,7 @@ and delegates to run_stream_orchestrated (core/stream.py).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 from utils.bg_tasks import spawn  # noqa: E402
 import json
@@ -174,7 +175,7 @@ async def run_stream(
     async with _top_lock:
         _run_id_seen = ""
         try:
-            async for _ev in _run_stream_locked(
+            _locked_stream = _run_stream_locked(
                 user_input,
                 images,
                 mode,
@@ -189,15 +190,17 @@ async def run_stream(
                 model_overrides=model_overrides,
                 request_workspace=request_workspace,
                 agentic_force=agentic_force,
-            ):
-                if isinstance(_ev, str) and '"run_id"' in _ev and not _run_id_seen:
-                    try:
-                        _parsed = json.loads(_ev[6:]) if _ev.startswith("data: ") else {}
-                        if isinstance(_parsed, dict) and _parsed.get("type") == "run_id":
-                            _run_id_seen = str(_parsed.get("run_id") or "")
-                    except (ValueError, TypeError):
-                        pass
-                yield _ev
+            )
+            async with contextlib.aclosing(_locked_stream):
+                async for _ev in _locked_stream:
+                    if isinstance(_ev, str) and '"run_id"' in _ev and not _run_id_seen:
+                        try:
+                            _parsed = json.loads(_ev[6:]) if _ev.startswith("data: ") else {}
+                            if isinstance(_parsed, dict) and _parsed.get("type") == "run_id":
+                                _run_id_seen = str(_parsed.get("run_id") or "")
+                        except (ValueError, TypeError):
+                            pass
+                    yield _ev
         finally:
             _rid_cleanup = _run_id_seen or get_active_top_run_id()
             set_active_top_run_id("")
@@ -436,11 +439,13 @@ async def _run_stream_locked(
         _usage: dict = {}
         _t0 = time.perf_counter()
         _t_first = None
-        async for tok in _pipeline_chat_stream(model, msgs, temp, max_tok,
-                                               usage_out=_usage, **kw):
-            if _t_first is None:
-                _t_first = time.perf_counter()
-            yield tok
+        _pipe_stream = _pipeline_chat_stream(model, msgs, temp, max_tok,
+                                             usage_out=_usage, **kw)
+        async with contextlib.aclosing(_pipe_stream):
+            async for tok in _pipe_stream:
+                if _t_first is None:
+                    _t_first = time.perf_counter()
+                yield tok
         _end = time.perf_counter()
         _gen_ms = max(0.0, (_end - (_t_first if _t_first is not None else _t0)) * 1000.0)
         _ct = int(_usage.get("completion_tokens") or 0)
@@ -951,8 +956,9 @@ async def _run_stream_locked(
         pipeline_soul=_pipeline_soul,
         carry={"emit": emit, "_done_event": _done_event},
     )
-    async for _ev in _chat_memory_shortcuts(_sc_ps):
-        yield _ev
+    async with contextlib.aclosing(_chat_memory_shortcuts(_sc_ps)) as _sc_stream:
+        async for _ev in _sc_stream:
+            yield _ev
     if _sc_ps.handled:
         return
     # OUTSOURCED (split 3.2): image persistence + vision preprocess →
@@ -965,8 +971,9 @@ async def _run_stream_locked(
         image_description=image_description or "",
         carry={"emit": emit},
     )
-    async for _ev in _chat_vision_pre(_vp_ps):
-        yield _ev
+    async with contextlib.aclosing(_chat_vision_pre(_vp_ps)) as _vp_stream:
+        async for _ev in _vp_stream:
+            yield _ev
     if _vp_ps._judge_gb is not None:
         _judge_gb = _vp_ps._judge_gb
     _saved_image_paths = _vp_ps._saved_image_paths
@@ -1003,8 +1010,9 @@ async def _run_stream_locked(
         _done_event=_done_event,
         _collect_done_metrics=_collect_done_metrics,
     )
-    async for _ev in _chat_route_pre(_rp_ps):
-        yield _ev
+    async with contextlib.aclosing(_chat_route_pre(_rp_ps)) as _rp_stream:
+        async for _ev in _rp_stream:
+            yield _ev
     if _rp_ps.handled:
         return
     _complexity_source = _rp_ps._complexity_source
@@ -1034,8 +1042,9 @@ async def _run_stream_locked(
         _pipeline_sess_msgs=_pipeline_sess_msgs,
         chat_id=chat_id or "",
             )
-    async for _ev in _chat_route_decision(_rd_ps):
-        yield _ev
+    async with contextlib.aclosing(_chat_route_decision(_rd_ps)) as _rd_stream:
+        async for _ev in _rd_stream:
+            yield _ev
     _complexity_source = _rd_ps._complexity_source
     _effective_task_type = _rd_ps._effective_task_type
     _judge_toolsize = _rd_ps._judge_toolsize
@@ -1054,14 +1063,16 @@ async def _run_stream_locked(
         )
         _has_valid_desc = bool(image_description and not is_vision_error_text(image_description))
         if effective_duo_image_mode(_run_settings, _vision_cfg) == "preprocess" and not _has_valid_desc:
-            async for _ev in _run_duo_preprocess_branch(
+            _duo_pre_stream = _run_duo_preprocess_branch(
                 images, user_input, emit, _run_settings, _vision_cfg, existing_description=image_description or ""
-            ):
-                if isinstance(_ev, dict) and "_duo_desc" in _ev:
-                    image_description = _ev["_duo_desc"]
-                    _prepro_success = bool(image_description)
-                else:
-                    yield _ev
+            )
+            async with contextlib.aclosing(_duo_pre_stream):
+                async for _ev in _duo_pre_stream:
+                    if isinstance(_ev, dict) and "_duo_desc" in _ev:
+                        image_description = _ev["_duo_desc"]
+                        _prepro_success = bool(image_description)
+                    else:
+                        yield _ev
         elif _prepro_success:
             _vm_dyn = str((_vision_cfg or {}).get("model") or "").strip()
             _pm_dyn, _cm_dyn = resolve_duo_role_models(_run_settings)
@@ -1086,8 +1097,9 @@ async def _run_stream_locked(
             emit=emit, done_event=_done_event,
             collect_done_metrics=_collect_done_metrics,
         )
-        async for _ev in _chat_tools_route(_tool_ps):
-            yield _ev
+        async with contextlib.aclosing(_chat_tools_route(_tool_ps)) as _tools_stream:
+            async for _ev in _tools_stream:
+                yield _ev
         if _tool_ps.stop:
             return
 
@@ -1217,14 +1229,15 @@ async def _run_stream_locked(
     # --- Route to extracted runner ---
     _ctx = _build_run_context()
     logger.warning("[RUN-TRACE] vor runner-dispatch complexity=%s", _ctx.complexity)
-    async for event in run_stream_orchestrated(_ctx):
-        if isinstance(event, dict) and event.get("type") == "ctx_meter":
-            _est = int(event.get("est_tokens") or 0)
-            _lim = int(event.get("ctx_limit") or 0)
-            if _est > 0:
-                _ctx_peak_tokens = max(_ctx_peak_tokens, _est)
-                _ctx_limit_seen = max(_ctx_limit_seen, _lim)
-                if _lim > 0:
-                    _ctx_pressure_peak = max(_ctx_pressure_peak, _est / _lim)
-        yield event
+    async with contextlib.aclosing(run_stream_orchestrated(_ctx)) as _orch_stream:
+        async for event in _orch_stream:
+            if isinstance(event, dict) and event.get("type") == "ctx_meter":
+                _est = int(event.get("est_tokens") or 0)
+                _lim = int(event.get("ctx_limit") or 0)
+                if _est > 0:
+                    _ctx_peak_tokens = max(_ctx_peak_tokens, _est)
+                    _ctx_limit_seen = max(_ctx_limit_seen, _lim)
+                    if _lim > 0:
+                        _ctx_pressure_peak = max(_ctx_pressure_peak, _est / _lim)
+            yield event
     return

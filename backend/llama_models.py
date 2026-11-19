@@ -21,6 +21,7 @@ _MODELS_JSON = _THIS_DIR / "models.json"
 # ── Cache ──────────────────────────────────────────────────────────────────────
 _index_cache: dict[str, Path] | None = {}     # canonical_name → Path (None = invalidated)
 _index_ts: float = 0.0
+_index_stamp: tuple | None = None
 _INDEX_TTL: float = 30.0
 # NAMES_TTL must never exceed INDEX_TTL (2026-11-05 audit): the name
 # list is DERIVED from the index — a longer names TTL kept listing a
@@ -271,14 +272,8 @@ def _build_index() -> dict[str, Path]:
 
     for gguf in gguf_files:
         fname_lower = gguf.name.lower()
-        if any(pat in fname_lower for pat in _NON_MODEL_PATTERNS):
+        if is_non_model_gguf(gguf.name):
             _logger.debug(f"Skipping non-model: {gguf.name}")
-            continue
-        # MTP-DRAFTER (2026-09-12): "mtp-<model>.gguf" sidecars (gemma-4 QAT)
-        # are spec-dec drafters, not standalone models. PREFIX-only check —
-        # mid-name MTP (Hermes …-MTP-APEX-Compact) must keep registering.
-        if fname_lower.startswith("mtp-"):
-            _logger.debug(f"Skipping MTP drafter: {gguf.name}")
             continue
 
         # Skip secondary shards of split GGUFs (only shard 00001 loads the full model)
@@ -288,6 +283,9 @@ def _build_index() -> dict[str, Path]:
             continue
 
         canonical_names = _parse_gguf_filename(gguf.name)
+        if not canonical_names:
+            fallback_canon = _canonicalize(gguf.stem)
+            canonical_names = [fallback_canon] if fallback_canon else []
         if not canonical_names:
             _logger.debug(f"Cannot parse filename: {gguf.name}")
             continue
@@ -399,16 +397,44 @@ def _resolve_index_collisions(index: dict[str, Path],
                              _alt, _loser.name)
 
 
+def _models_dir_stamp() -> tuple | None:
+    """Cheap directory + models.json mtime signature to skip no-op TTL rebuilds."""
+    try:
+        if not MODELS_DIR.is_dir():
+            return None
+        stamps: list[tuple[str, int]] = []
+        for root_dir, _dirs, _files in os.walk(MODELS_DIR):
+            try:
+                stamps.append((root_dir, os.stat(root_dir).st_mtime_ns))
+            except OSError:
+                continue
+        stamps.sort()
+        cfg_mt = 0
+        try:
+            if _MODELS_JSON.is_file():
+                cfg_mt = _MODELS_JSON.stat().st_mtime_ns
+        except OSError:
+            cfg_mt = 0
+        return (str(MODELS_DIR), cfg_mt, tuple(stamps))
+    except OSError:
+        return None
+
+
 def _get_index() -> dict[str, Path]:
-    global _index_cache, _index_ts
+    global _index_cache, _index_ts, _index_stamp
     now = _time_module.time()
     if not _index_cache or (now - _index_ts) > _INDEX_TTL:
+        stamp = _models_dir_stamp()
+        if _index_cache and _index_ts > 0.0 and stamp is not None and stamp == _index_stamp:
+            _index_ts = now
+            return _index_cache
         if _index_ts <= 0.0:
             _logger.info(f"Building initial GGUF index (trigger={_index_trigger_callers()})")
         else:
             _age = now - _index_ts
             _logger.info(f"GGUF index cache expired (age={_age:.0f}s > TTL={_INDEX_TTL:.0f}s) — rebuilding (trigger={_index_trigger_callers()})")
         _index_cache = _build_index()
+        _index_stamp = stamp
         _index_ts = _time_module.time()
     return _index_cache
 
@@ -600,10 +626,7 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
         n = _norm(path.name)
         return bool(_nfam) and _nfam in n
 
-    # 1. User-config (model_configs/models/*.json) WINS: exact per-model
-    #    intent, immune to stale models.json family mappings (live:
-    #    gemma-4:e4b-it-qat resolved the E2B projector because the family
-    #    entry pointed at the only gemma mmproj that existed back then).
+    # 1. Model registry (user > shipped) WINS: exact per-model intent.
     try:
         from model_configs.models_registry import get_mmproj_filename as _reg_mmproj
         _reg_fn = _reg_mmproj(model)
@@ -618,18 +641,16 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
                         return _cand
             elif _reg_p.exists():
                 return _reg_p
-    except Exception:
-        pass
+    except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
+        _logger.debug("resolve_mmproj_path registry lookup skipped for %s: %s", model, _e)
 
     # 2. models.json overrides - only when the file relates to the family.
-    #    (Stale cross-family entries mapped e.g. minicpm5 to a gemma
-    #    projector; a wrong projector size corrupts image embeddings.)
     overrides = _load_overrides()
     _okeys = [f"{model}_mmproj"]
     if _tag:
         _sm = re.match(r"(e?\d+(?:\.\d+)?)b", _tag.lower())
         if _sm:
-            _okeys.insert(1, f"{_base}:{_sm.group(1).replace(".", "")}b_mmproj")
+            _okeys.insert(1, f"{_base}:{_sm.group(1).replace('.', '')}b_mmproj")
     if _tag:
         _okeys.extend([f"{_base}:latest_mmproj", f"{_base}_mmproj"])
     for k in _okeys:
@@ -640,12 +661,20 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
         if _p.exists() and _relates(_p):
             return _p
 
-    # 3. Filename search in the models dir - family first, then family+size:
-    #    "qwen3.5:4b-mtp" must get the 4B projector, not the alphabetically
-    #    first family file (live: it resolved the 0.8B projector; mismatched
-    #    projector sizes produce garbage image embeddings). A bare size
-    #    match ("4b" in "e4b") is NOT enough - family and size must BOTH
-    #    appear in the filename.
+    # 3. GGUF-first sibling auto-detection in the resolved GGUF's directory.
+    try:
+        _gguf_path = resolve_model_path(model)
+        if _gguf_path and _gguf_path.is_file():
+            from backend.gguf_meta import detect_sibling_files as _detect_sibs
+            _sib_mm = _detect_sibs(_gguf_path).get("mmproj")
+            if _sib_mm:
+                _sib_p = Path(_sib_mm)
+                if _sib_p.is_file():
+                    return _sib_p
+    except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
+        _logger.debug("resolve_mmproj_path sibling scan skipped for %s: %s", model, _e)
+
+    # 4. Filename search in MODELS_DIR - family+size first, then family, then legacy generic.
     if MODELS_DIR.exists():
         _cands = sorted(MODELS_DIR.rglob("*mmproj*.gguf"))
         if _nsize:
@@ -656,12 +685,31 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
         for _cp in _cands:
             if _relates(_cp):
                 return _cp
-        # legacy generic-name fallbacks (repos shipping unbranded mmproj-BF16.gguf / mmproj-F16.gguf)
         if _nfam in ("qwen36", "hermes36"):
             for _cp in _cands:
                 _cn = _norm(_cp.name)
                 if _cn in ("mmprojbf16gguf", "mmprojf16gguf"):
                     return _cp
+    return None
+
+
+def resolve_sibling_drafter(model_name: str, kind: str) -> Path | None:
+    """Resolve an auto-detected sibling drafter GGUF ('mtp', 'dflash', 'dspark') for `model_name`."""
+    clean_kind = str(kind or "").strip().lower()
+    if clean_kind not in ("mtp", "dflash", "dspark"):
+        return None
+    try:
+        gguf_path = resolve_model_path(model_name)
+        if not gguf_path or not gguf_path.is_file():
+            return None
+        from backend.gguf_meta import detect_sibling_files as _detect_sibs
+        sib = _detect_sibs(gguf_path).get(clean_kind)
+        if sib:
+            sib_p = Path(sib)
+            if sib_p.is_file():
+                return sib_p
+    except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
+        _logger.debug("resolve_sibling_drafter(%s, %s) failed: %s", model_name, clean_kind, _e)
     return None
 
 
@@ -672,9 +720,10 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
         # HALF-REFRESH (2026-11-05 audit): force_refresh used to rebuild
         # only the names cache while the index behind it stayed TTL-gated —
         # a renamed file kept listing under its old name.
-        global _index_cache, _index_ts
+        global _index_cache, _index_ts, _index_stamp
         _index_cache = None
         _index_ts = 0.0
+        _index_stamp = None
     if not force_refresh and _names_cache and (now - _names_cache_ts) < _NAMES_TTL:
         return _names_cache
 
@@ -820,10 +869,11 @@ def invalidate_caches() -> None:
     list did not rebuild the index behind it. Callers: save_model_mapping,
     add_model, and anything that touches files under MODELS_DIR.
     """
-    global _index_cache, _index_ts, _names_cache, _names_cache_ts
+    global _index_cache, _index_ts, _index_stamp, _names_cache, _names_cache_ts
     global _filename_tag_map
     _index_cache = None
     _index_ts = 0.0
+    _index_stamp = None
     _names_cache = None
     _names_cache_ts = 0.0
     _filename_tag_map = None

@@ -73,6 +73,8 @@ ASSETS = {
 }
 MIN_BINARY_BYTES = 1 * 1024 * 1024      # a whisper.cpp zip is 8-21 MB
 MIN_MODEL_BYTES = 50 * 1024 * 1024      # the smallest model is 74 MB
+_STATE_WRITE_INTERVAL_S = 2.0
+_STATE_WRITE_BYTES = 8 * 1024 * 1024
 
 
 def _build_number(tag: str) -> int:
@@ -181,6 +183,8 @@ def _download(url: str, dest: Path, min_bytes: int = 0, max_attempts: int = 3) -
                     have = 0
                     got = 0
                 total = have + int(resp.headers.get("Content-Length") or 0)
+                last_state_t = time.monotonic()
+                last_state_bytes = got
                 with open(tmp, "ab" if append else "wb") as out:
                     while True:
                         chunk = resp.read(1024 * 256)
@@ -190,7 +194,14 @@ def _download(url: str, dest: Path, min_bytes: int = 0, max_attempts: int = 3) -
                         got += len(chunk)
                         if total:
                             pct = min(100.0, 100.0 * got / total)
-                            _progress("running", pct, dest.name)
+                            now = time.monotonic()
+                            if (
+                                (now - last_state_t) >= _STATE_WRITE_INTERVAL_S
+                                or (got - last_state_bytes) >= _STATE_WRITE_BYTES
+                            ):
+                                last_state_t = now
+                                last_state_bytes = got
+                                _progress("running", pct, dest.name)
                             print(f"\r  {dest.name}: {got / 1048576:6.1f} / "
                                   f"{total / 1048576:6.1f} MB ({pct:5.1f} %)", end="")
                         elif got % (10 * 1048576) < 262144:

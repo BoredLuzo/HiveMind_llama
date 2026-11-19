@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger("hivemind.subagent_lite")
 
 _LADDER_DEFAULT = ["lfm3:1.7b-qad", "lfm2.5:2.6b", "qwen3.5:0.8b-ud"]
 _ALLOWED_TOOLS = ("read_file", "list_dir", "search_code")
@@ -95,10 +98,27 @@ def _slot_can_open_for_subagent(slot) -> bool:
     return True
 
 
+def _resolve_subagent_ladder(cfg: dict) -> list[str]:
+    """Return explicit subagent_lite_model_ladder, else installed small tool-capable models."""
+    explicit = [m for m in (cfg.get("subagent_lite_model_ladder") or []) if m]
+    if explicit:
+        return explicit
+    try:
+        from routing.model_automap import pick_installed_small_tool_models
+        discovered = pick_installed_small_tool_models()
+        if discovered:
+            return discovered
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _e:
+        logger.debug("subagent_lite dynamic ladder resolution skipped: %s", _e)
+    if "subagent_lite_model_ladder" in cfg and cfg.get("subagent_lite_model_ladder") == []:
+        return []
+    return list(_LADDER_DEFAULT)
+
+
 async def pick_delegate_model() -> tuple[str, int]:
 
     cfg = _cfg()
-    ladder = [m for m in (cfg.get("subagent_lite_model_ladder") or _LADDER_DEFAULT) if m]
+    ladder = _resolve_subagent_ladder(cfg)
     min_ram = float(_s("subagent_lite_min_free_ram_gb", 5.0))
     margin = int(_s("subagent_lite_safety_margin_mib", 256))
     ctx_default = int(_s("subagent_lite_ctx_default", 8192))

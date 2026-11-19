@@ -39,6 +39,24 @@ its comment) in either file, then re-run the generator.
 """
 
 
+def _defaults_lines(path: Path) -> list[str]:
+    """Return lines for DEFAULT_SETTINGS (skipping metadata/internal blocks)."""
+    raw = path.read_text(encoding="utf-8").splitlines()
+    if path.name != "settings_defaults.py":
+        return raw
+    block: list[str] = []
+    in_defaults = False
+    for line in raw:
+        if line.startswith("DEFAULT_SETTINGS = {"):
+            in_defaults = True
+            continue
+        if in_defaults and line.startswith("}"):
+            break
+        if in_defaults:
+            block.append(line)
+    return block
+
+
 def _comments() -> dict[str, str]:
     """Note for a key: its trailing comment, else the comment block above.
 
@@ -49,7 +67,7 @@ def _comments() -> dict[str, str]:
     """
     lines: list[str] = []
     for _src in SRC_FILES:
-        lines.extend(_src.read_text(encoding="utf-8").splitlines())
+        lines.extend(_defaults_lines(_src))
     out: dict[str, str] = {}
     for i, line in enumerate(lines):
         m = re.match(r'\s*"([a-z0-9_]+)":\s*[^#]*,\s*(?:#\s*(.*))?$', line)

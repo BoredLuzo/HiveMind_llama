@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 import json
 import logging
 import time
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncGenerator, AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -427,6 +428,51 @@ async def post_chat_json(
     return await _execute(get_shared_local_client())
 
 
+@dataclass
+class _SlotStreamError:
+    """HTTP >= 400 details captured before releasing port lock and closing stream."""
+
+    status_code: int
+    body_bytes: bytes
+    response: httpx.Response
+
+
+async def _stream_slot_once(
+    port: int,
+    http_client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    timeout: httpx.Timeout,
+    *,
+    stream_sse: bool = True,
+    port_lock_fn: Callable[[int], asyncio.Lock] | None = None,
+) -> AsyncGenerator[Any, None]:
+    """Execute one POST attempt holding `get_port_lock(port)` only around the active stream.
+
+    Must be consumed inside `contextlib.aclosing(...)` so early breaks, errors, or
+    cancellation close the HTTP stream and release the port lock immediately.
+    """
+    lock_fn = port_lock_fn or get_port_lock
+    async with lock_fn(port), http_client.stream(
+        "POST", url, json=payload, timeout=timeout,
+    ) as resp:
+        if resp.status_code >= 400:
+            body_bytes = await resp.aread()
+            yield _SlotStreamError(
+                status_code=resp.status_code,
+                body_bytes=body_bytes,
+                response=resp,
+            )
+            return
+        if not stream_sse:
+            await resp.aread()
+            yield resp.json()
+            return
+        async with contextlib.aclosing(iter_sse_json(resp)) as sse_chunks:
+            async for chunk in sse_chunks:
+                yield chunk
+
+
 async def stream_chat_chunks(
     port: int,
     payload: dict,
@@ -449,51 +495,55 @@ async def stream_chat_chunks(
             partial = False
             retry_delay: float | None = None
             try:
-                async with get_port_lock(port), http_client.stream("POST", url, json=send_payload, timeout=eff_timeout) as resp:
-                    if resp.status_code >= 400:
-                        err_body = await extract_response_error_text(resp, limit=2000)
-                        if should_retry_http_status(resp.status_code, err_body, attempt, eff_attempts):
-                            retry_delay = retry_backoff(attempt, resp.status_code)
-                            _log.debug(
-                                "[%s] retryable stream HTTP %d (attempt %d/%d) — sleeping %.2fs",
-                                log_label, resp.status_code, attempt + 1, eff_attempts, retry_delay,
-                            )
-                        else:
+                async with contextlib.aclosing(
+                    _stream_slot_once(port, http_client, url, send_payload, eff_timeout)
+                ) as slot_stream:
+                    async for item in slot_stream:
+                        if isinstance(item, _SlotStreamError):
+                            err_body = (item.response.text or "")[:2000]
+                            if should_retry_http_status(item.status_code, err_body, attempt, eff_attempts):
+                                retry_delay = retry_backoff(attempt, item.status_code)
+                                _log.debug(
+                                    "[%s] retryable stream HTTP %d (attempt %d/%d) — sleeping %.2fs",
+                                    log_label, item.status_code, attempt + 1, eff_attempts, retry_delay,
+                                )
+                                break
                             raise RuntimeError(
-                                f"{log_label} HTTP {resp.status_code}: {err_body[:200]}"
+                                f"{log_label} HTTP {item.status_code}: {err_body[:200]}"
                             )
+                        partial = True
+                        yield item
                     else:
-                        async for chunk in iter_sse_json(resp):
-                            partial = True
-                            yield chunk
                         return
-                if retry_delay is not None:
-                    await asyncio.sleep(retry_delay)
-                    continue
             except httpx.ConnectError as exc:
                 if partial or attempt >= eff_attempts - 1:
                     raise
                 _log.debug("[%s] ConnectError before stream on port %s (attempt %d/%d): %s",
                            log_label, port, attempt + 1, eff_attempts, exc)
-                await asyncio.sleep(float(connect_sleep_s))
+                retry_delay = float(connect_sleep_s)
             except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as exc:
                 if partial or attempt >= eff_attempts - 1:
                     raise
                 _log.debug("[%s] read interruption before stream on port %s (attempt %d/%d): %s",
                            log_label, port, attempt + 1, eff_attempts, exc)
-                await asyncio.sleep(retry_backoff(attempt))
+                retry_delay = retry_backoff(attempt)
+            if retry_delay is not None:
+                await asyncio.sleep(retry_delay)
 
     if client is not None:
-        async for chunk in _open_and_yield(client):
-            yield chunk
+        async with contextlib.aclosing(_open_and_yield(client)) as chunks:
+            async for chunk in chunks:
+                yield chunk
         return
     if httpx.AsyncClient is not _ORIG_ASYNC_CLIENT:
         async with httpx.AsyncClient(timeout=eff_timeout) as owned_client:
-            async for chunk in _open_and_yield(owned_client):
-                yield chunk
+            async with contextlib.aclosing(_open_and_yield(owned_client)) as chunks:
+                async for chunk in chunks:
+                    yield chunk
         return
-    async for chunk in _open_and_yield(get_shared_local_client()):
-        yield chunk
+    async with contextlib.aclosing(_open_and_yield(get_shared_local_client())) as chunks:
+        async for chunk in chunks:
+            yield chunk
 
 
 def _record_tool_loop_usage(
@@ -611,7 +661,7 @@ async def iter_tool_loop_post(
     inject_feedback_fn: Callable[..., None],
     parse_sse_delta_fn: Callable[..., tuple[str, str]],
     use_gbnf_grammar: bool = True,
-) -> AsyncIterator[dict | tuple[dict, str, list[dict]]]:
+) -> AsyncGenerator[dict | tuple[dict, str, list[dict]], None]:
     """Execute ToolLoop stream or non-stream POST with unified retry & SSE parsing.
 
     Yields UI events ('status', 'ctx_overflow', 'token') and concludes with the
@@ -626,50 +676,34 @@ async def iter_tool_loop_post(
 
     for attempt in range(max(1, int(cfg.max_post_attempts or 1))):
         partial_stream = False
+        err_info: _SlotStreamError | None = None
+        nonstream_data: dict | None = None
+        _ns_t0 = time.monotonic()
+        content_parts: list[str] = []
+        tool_calls_acc: dict[int, dict] = {}
+        _st_t0 = time.monotonic()
+        _st_first: float | None = None
+        _last_timings: dict | None = None
+        _last_usage: dict | None = None
         try:
-            async with get_port_lock(port), loop_obj._client.stream("POST", url, json=send_payload, timeout=timeout) as resp:
-                if resp.status_code >= 400:
-                    err_events: list[dict] = []
-                    action, send_payload = await _handle_tool_loop_http_error(
-                        loop_obj,
-                        resp,
-                        send_payload,
-                        attempt,
-                        retry_allowed_fn=retry_allowed_fn,
-                        inject_feedback_fn=inject_feedback_fn,
-                        build_grammar_fn=build_grammar_fn,
-                        grammar_compatible_fn=grammar_compatible_fn,
-                        use_gbnf_grammar=use_gbnf_grammar,
-                        fdbk_injected=fdbk_injected,
-                        events_out=err_events,
-                    )
-                    for ev in err_events:
-                        yield ev
-                    if action == "retry":
-                        continue
-
-                if not stream:
-                    _ns_t0 = time.monotonic()
-                    await resp.aread()
-                    data = resp.json()
-                    _ns_ms = (time.monotonic() - _ns_t0) * 1000.0
-                    _record_tool_loop_usage(
-                        loop_obj,
-                        data.get("usage") if isinstance(data, dict) else None,
-                        timings=data.get("timings") if isinstance(data, dict) else None,
-                        gen_ms=_ns_ms,
-                    )
-                    msg, content_text, tcs = parse_nonstream_chat_response(data, strip_content=False)
-                    yield (msg, content_text, tcs)
-                    return
-
-                content_parts: list[str] = []
-                tool_calls_acc: dict[int, dict] = {}
-                _st_t0 = time.monotonic()
-                _st_first: float | None = None
-                _last_timings: dict | None = None
-                _last_usage: dict | None = None
-                async for chunk in iter_sse_json(resp):
+            async with contextlib.aclosing(
+                _stream_slot_once(
+                    port,
+                    loop_obj._client,
+                    url,
+                    send_payload,
+                    timeout,
+                    stream_sse=stream,
+                )
+            ) as slot_stream:
+                async for item in slot_stream:
+                    if isinstance(item, _SlotStreamError):
+                        err_info = item
+                        break
+                    if not stream:
+                        nonstream_data = item if isinstance(item, dict) else {}
+                        break
+                    chunk = item
                     _cu = chunk.get("usage")
                     _ctim = chunk.get("timings")
                     if isinstance(_ctim, dict):
@@ -689,21 +723,55 @@ async def iter_tool_loop_post(
                         content_parts.append(ct)
                         yield {"type": "token", "content": ct}
                         partial_stream = True
-                if _last_usage is not None:
-                    _st_ms = (time.monotonic() - (_st_first or _st_t0)) * 1000.0
-                    _record_tool_loop_usage(loop_obj, _last_usage, timings=_last_timings, gen_ms=_st_ms)
 
-                tcs_sorted = [tool_calls_acc[k] for k in sorted(tool_calls_acc.keys())]
-                content = "".join(content_parts).strip()
-                if content and "<think" in content:
-                    content = _RE_THINK_CLEANUP.sub("", content).strip()
-                msg = {
-                    "role": "assistant",
-                    "content": content or None,
-                    "tool_calls": tcs_sorted,
-                }
-                yield (msg, content or "", tcs_sorted)
+            if err_info is not None:
+                err_events: list[dict] = []
+                action, send_payload = await _handle_tool_loop_http_error(
+                    loop_obj,
+                    err_info.response,
+                    send_payload,
+                    attempt,
+                    retry_allowed_fn=retry_allowed_fn,
+                    inject_feedback_fn=inject_feedback_fn,
+                    build_grammar_fn=build_grammar_fn,
+                    grammar_compatible_fn=grammar_compatible_fn,
+                    use_gbnf_grammar=use_gbnf_grammar,
+                    fdbk_injected=fdbk_injected,
+                    events_out=err_events,
+                )
+                for ev in err_events:
+                    yield ev
+                if action == "retry":
+                    continue
+
+            if not stream:
+                data = nonstream_data if nonstream_data is not None else {}
+                _ns_ms = (time.monotonic() - _ns_t0) * 1000.0
+                _record_tool_loop_usage(
+                    loop_obj,
+                    data.get("usage") if isinstance(data, dict) else None,
+                    timings=data.get("timings") if isinstance(data, dict) else None,
+                    gen_ms=_ns_ms,
+                )
+                msg, content_text, tcs = parse_nonstream_chat_response(data, strip_content=False)
+                yield (msg, content_text, tcs)
                 return
+
+            if _last_usage is not None:
+                _st_ms = (time.monotonic() - (_st_first or _st_t0)) * 1000.0
+                _record_tool_loop_usage(loop_obj, _last_usage, timings=_last_timings, gen_ms=_st_ms)
+
+            tcs_sorted = [tool_calls_acc[k] for k in sorted(tool_calls_acc.keys())]
+            content = "".join(content_parts).strip()
+            if content and "<think" in content:
+                content = _RE_THINK_CLEANUP.sub("", content).strip()
+            msg = {
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": tcs_sorted,
+            }
+            yield (msg, content or "", tcs_sorted)
+            return
 
         except httpx.ConnectError:
             if retry_allowed_fn(cfg, "connect", attempt):

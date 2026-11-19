@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""ModelSlot — ein laufender llama-server-Prozess auf einem festen Port.
+"""ModelSlot — a running llama-server process bound to a fixed port.
 
-Aus backend/llama_server_manager.py extrahiert (M3b).
+Extracted from backend/llama_server_manager.py (M3b).
 """
 from __future__ import annotations
 
@@ -24,22 +24,24 @@ from .llama_manager_utils import (
 logger = logging.getLogger("llama_manager")
 
 class ModelSlot:
-    """Ein laufender llama-server-Prozess auf einem festen Port."""
+    """A running llama-server process on a fixed port."""
 
     def __init__(self, slot_id: int):
         self.slot_id   = slot_id
         self.port      = BASE_PORT + slot_id
-        self.model     = None
+        self.model: Optional[str] = None
         self.process: Optional[subprocess.Popen] = None
         self.loaded_at = 0.0
         self.last_used = 0.0
         self.pinned    = False
         self._idle_timeout: Optional[float] = None
         self._ready_event  = asyncio.Event()
+        self._ready_loop: Optional[asyncio.AbstractEventLoop] = None
         self._loading      = False
         self._lifecycle_gen: int = 0
         self._wait_abort_ev: Optional[asyncio.Event] = None
         self._wait_abort_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._entry_load_seq: Optional[int] = None
         self.pinned_at     = 0.0   # PIN EXPIRY (2026-10-02): set on pin, LRU ignores pins older than 30 min
         self._orphan_port: Optional[int] = None
         self._vision       = False
@@ -131,26 +133,63 @@ class ModelSlot:
         # MONOTONIC (audit A3): pairs with the idle monitor's clock
         self.last_used = time.monotonic()
 
+    @staticmethod
+    def _wake_event_loop_safe(
+        ev: Optional[asyncio.Event],
+        fallback_loop: Optional[asyncio.AbstractEventLoop] = None,
+    ) -> None:
+        """Set an asyncio.Event safely even when invoked off the event-loop thread."""
+        if ev is None:
+            return
+        if not isinstance(ev, asyncio.Event):
+            ev.set()
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        candidate_loops: list[asyncio.AbstractEventLoop] = []
+        try:
+            waiters = list(getattr(ev, "_waiters", ()) or ())
+        except RuntimeError:
+            waiters = []
+        for w in waiters:
+            w_loop = w.get_loop() if hasattr(w, "get_loop") else None
+            if w_loop is not None and w_loop not in candidate_loops:
+                candidate_loops.append(w_loop)
+        if fallback_loop is not None and fallback_loop not in candidate_loops:
+            candidate_loops.append(fallback_loop)
+
+        dispatched = False
+        for loop in candidate_loops:
+            if loop is running:
+                try:
+                    ev.set()
+                    return
+                except RuntimeError:
+                    continue
+            is_running_fn = getattr(loop, "is_running", None)
+            loop_running = is_running_fn() if callable(is_running_fn) else True
+            if not loop.is_closed() and loop_running:
+                try:
+                    loop.call_soon_threadsafe(ev.set)
+                    dispatched = True
+                except RuntimeError:
+                    pass
+        if not dispatched:
+            try:
+                ev.set()
+            except RuntimeError:
+                pass
+
     def abort_wait(self) -> None:
         """Bump lifecycle generation and wake any active wait_ready() immediately."""
         self._lifecycle_gen = int(getattr(self, "_lifecycle_gen", 0)) + 1
         ev = getattr(self, "_wait_abort_ev", None)
         if ev is not None:
             loop = getattr(self, "_wait_abort_loop", None)
-            try:
-                running = asyncio.get_running_loop()
-            except RuntimeError:
-                running = None
-            if loop is not None and running is not loop and not loop.is_closed():
-                try:
-                    loop.call_soon_threadsafe(ev.set)
-                    return
-                except RuntimeError:
-                    pass
-            try:
-                ev.set()
-            except RuntimeError:
-                pass
+            self._wake_event_loop_safe(ev, loop)
 
     async def wait_ready(
         self,
@@ -171,9 +210,11 @@ class ModelSlot:
         if hasattr(self, "_lifecycle_gen"):
             _abort_ev = asyncio.Event()
             try:
-                self._wait_abort_loop = asyncio.get_running_loop()
+                _loop = asyncio.get_running_loop()
             except RuntimeError:
-                self._wait_abort_loop = None
+                _loop = None
+            self._wait_abort_loop = _loop
+            self._ready_loop = _loop
             self._wait_abort_ev = _abort_ev
 
         def _aborted() -> bool:
@@ -265,57 +306,78 @@ class ModelSlot:
                     pass
 
     def kill(self):
-        self.abort_wait()
-        if self._orphan_port is not None:
-            try:
-                _kill_port_sync(self._orphan_port)
-            except Exception as e:
-                logger.warning(f"kill(): orphan-port cleanup failed for port {self._orphan_port}: {e}")
-        if self.process and self.process.poll() is None:
-            if platform.system() == "Windows" and self.process.pid:
+        """Terminate any tracked process/orphan port and reset slot state safely."""
+        wait_loop = getattr(self, "_wait_abort_loop", None) or getattr(self, "_ready_loop", None)
+        try:
+            self.abort_wait()
+            if self._orphan_port is not None:
                 try:
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(self.process.pid)],
-                        capture_output=True, timeout=5,
-                        creationflags=_WIN_CNF,
-                    )
+                    _kill_port_sync(self._orphan_port)
                 except Exception as e:
-                    logger.warning(f"kill(): taskkill failed for {self.model} (pid={self.process.pid}): {e}")  # Fallback: normales terminate unten
-            # Re-check: taskkill /T on Windows kills process tree incl. this process.
-            # If process already dead, skip terminate/kill to avoid ProcessLookupError.
-            if self.process.poll() is not None:
-                pass  # already dead — skip down to cleanup
-            else:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
+                    logger.warning(f"kill(): orphan-port cleanup failed for port {self._orphan_port}: {e}")
+            proc = self.process
+            if proc and proc.poll() is None:
+                if platform.system() == "Windows" and getattr(proc, "pid", None):
                     try:
-                        self.process.wait(timeout=2)
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                            capture_output=True, timeout=5,
+                            creationflags=_WIN_CNF,
+                        )
                     except Exception as e:
-                        logger.warning(f"kill(): process for '{self.model}' (pid={self.process.pid}, slot={self.slot_id}) did not confirm exit after kill() — possible zombie, VRAM may not be released. Slot will be marked free regardless. ({e})")
-        self.process        = None
-        self.model          = None
-        self.pinned         = False
-        self.pinned_at      = 0.0
-        self._idle_timeout  = None
-        self._loading       = False
-        self._orphan_port   = None
-        self._vision        = False
-        self._num_ctx       = 0
-        self._n_parallel    = 1
-        self._jinja         = False
-        # AUDIT M1 (2026-10-24): the AMD commit-wait token must not survive a
-        # recycle — a stale equal seq made the wait skip on slots whose next
-        # start came from a path that never bumps the sequence.
-        self._entry_load_seq = None
-        self.swa_window     = 0
-        self.vision_active  = None
-        # A.2 FIX: Object-swap wake — set() on old Event instance wakes all
-        # already-registered waiters; new Event instance prevents new callers
-        # from ever hitting a stale event. model=None (line above) ensures
-        # _find_loaded never matches this slot anyway — double-safe.
-        old = self._ready_event
-        old.set()
-        self._ready_event = asyncio.Event()
+                        logger.warning(f"kill(): taskkill failed for {self.model} (pid={proc.pid}): {e}")
+                # Re-check: taskkill /T on Windows kills process tree incl. this process.
+                # If process already dead, skip terminate/kill to avoid ProcessLookupError.
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except (OSError, ValueError, RuntimeError) as e:
+                        logger.warning(
+                            f"kill(): terminate failed for {self.model} (pid={getattr(proc, 'pid', None)}): {e}"
+                        )
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except (OSError, ValueError, RuntimeError) as e:
+                            logger.warning(
+                                f"kill(): process.kill failed for {self.model} (pid={getattr(proc, 'pid', None)}): {e}"
+                            )
+                        try:
+                            proc.wait(timeout=2)
+                        except Exception as e:
+                            logger.warning(
+                                f"kill(): process for '{self.model}' (pid={getattr(proc, 'pid', None)}, slot={self.slot_id}) "
+                                f"did not confirm exit after kill() — possible zombie, VRAM may not be released. "
+                                f"Slot will be marked free regardless. ({e})"
+                            )
+                    except (OSError, ValueError, RuntimeError) as e:
+                        logger.warning(
+                            f"kill(): wait failed for {self.model} (pid={getattr(proc, 'pid', None)}): {e}"
+                        )
+        finally:
+            self.process        = None
+            self.model          = None
+            self.pinned         = False
+            self.pinned_at      = 0.0
+            self._idle_timeout  = None
+            self._loading       = False
+            self._orphan_port   = None
+            self._vision        = False
+            self._num_ctx       = 0
+            self._n_parallel    = 1
+            self._jinja         = False
+            # AUDIT M1 (2026-10-24): the AMD commit-wait token must not survive a
+            # recycle — a stale equal seq made the wait skip on slots whose next
+            # start came from a path that never bumps the sequence.
+            self._entry_load_seq = None
+            self.swa_window     = 0
+            self.vision_active  = None
+            # A.2 FIX: Object-swap wake — set() on old Event instance wakes all
+            # already-registered waiters; new Event instance prevents new callers
+            # from ever hitting a stale event. model=None (line above) ensures
+            # _find_loaded never matches this slot anyway — double-safe.
+            old = self._ready_event
+            self._ready_event = asyncio.Event()
+            self._wake_event_loop_safe(old, wait_loop)

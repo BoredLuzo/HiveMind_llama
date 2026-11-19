@@ -390,9 +390,11 @@ async def _cfgpush_flow():
 
 
 _push = asyncio.run(_cfgpush_flow())
+_push_py = (_push["state"]["config_push"] or {}).get("python") or {}
 check("4i didChangeConfiguration carries the workspace settings",
-      _push["start"] and _push["state"]["config_push"]
-      == {"python": {"analysis": {"typeCheckingMode": "basic"}}},
+      _push["start"]
+      and _push_py.get("analysis") == {"typeCheckingMode": "basic"}
+      and bool(_push_py.get("pythonPath")),
       f"({_push['state']['config_push']})")
 
 

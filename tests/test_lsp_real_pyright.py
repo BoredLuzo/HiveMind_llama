@@ -47,8 +47,31 @@ async def _flow():
         sample.write_text(GOOD, encoding="utf-8")
         out["good"] = await mgr.diagnostics("sample.py", wait_s=20.0)
         out["clean_text_len"] = len(GOOD)
+        # R6: sibling module created AFTER Pyright started must resolve once
+        # broadcast_watched_change(..., created=True) fires (live bug 2026-11-19).
+        (ws / "helper_mod.py").write_text("VALUE: int = 7\n", encoding="utf-8")
+        mgr.broadcast_watched_change(["helper_mod.py"], created=True)
+        await asyncio.sleep(0)
+        sample.write_text("from helper_mod import VALUE\nx: int = VALUE + 1\n", encoding="utf-8")
+        out["sibling"] = await mgr.diagnostics("sample.py", wait_s=20.0)
+        # R7: built-in pythonPath default points at workspace .venv when present, else sys.executable
+        py_conn = mgr._conns.get("python")
+        out["python_path"] = ((getattr(py_conn, "config_settings", {}) or {}).get("python") or {}).get("pythonPath")
     finally:
         await mgr.close_all()
+    # R8: real vscode-css-language-server validates broken CSS with built-in css.validate=True
+    if shutil.which("vscode-css-language-server") is not None:
+        css_ws = Path(tempfile.mkdtemp(prefix="hm_lsp_css_"))
+        css_f = css_ws / "broken.css"
+        css_f.write_text("body { color: ; }\n", encoding="utf-8")
+        css_mgr = LspManager(css_ws, {"lsp_client_timeout_s": 20})
+        try:
+            out["css_started"] = await css_mgr.start_language("css")
+            out["css_bad"] = await css_mgr.diagnostics("broken.css", wait_s=8.0)
+            css_f.write_text("body { color: red; }\n", encoding="utf-8")
+            out["css_good"] = await css_mgr.diagnostics("broken.css", wait_s=8.0)
+        finally:
+            await css_mgr.close_all()
     return out
 
 
@@ -66,5 +89,17 @@ check("R4 the parser reports the correct 1-based line",
 check("R5 the fixed file publishes no error diagnostics",
       not any(d.get("severity") == 1 for d in res["good"]),
       f"({res['good']})")
+check("R6 newly created sibling module resolves after created=True watch notification",
+      not any(d.get("severity") == 1 for d in res["sibling"]),
+      f"({res['sibling']})")
+check("R7 python LSP defaults python.pythonPath to active interpreter",
+      bool(res.get("python_path")),
+      f"({res.get('python_path')!r})")
+if "css_started" in res:
+    check("R8 real CSS LSP validates broken CSS and clears after fix",
+          res["css_started"] is True
+          and len(res["css_bad"]) >= 1
+          and len(res["css_good"]) == 0,
+          f"(bad={len(res['css_bad'])}, good={len(res['css_good'])})")
 
 sys.exit(h.finish("lsp_real_pyright"))

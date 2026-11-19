@@ -169,7 +169,7 @@ def _track_focus_path(dargs, dname, tool_ctx_lru, recent_focus_paths, max_focus_
 def _note_successful_write(dname, dresult, result, round_state, total_tool_errors) -> None:
     """Decrement parse errors on a successful write/patch (U5)."""
     if dname in ("patch_file", "edit_file", "write_file", "write_file_append",
-                 "apply_patch") and not _tool_call_failed(dresult, dname):
+                 "apply_patch", "replace_lines", "edit_ast") and not _tool_call_failed(dresult, dname):
         result.verify_mutation_serial += 1
         round_state.parse_errors = max(0, round_state.parse_errors - 1)
         total_tool_errors[0] = 0
@@ -767,16 +767,10 @@ async def _handle_ask_user(_dname, _dargs, hooks, exec_model, cached_coder_port,
     """
     if _dname != "ask_user":
         return
-    if hooks.evict_model is not None:
-        try:
-            await hooks.evict_model(exec_model)
-            cached_coder_port[0] = None
-        except Exception:
-            pass
-    # ASK-USER-GATE-FIX (2026-09-02): only announce the pause when the run will
-    # actually block (gate == "open"). In until_finished / throttled mode the
-    # real handler (tools/runner.py) answers autonomously and the run keeps
-    # going — emitting "Your input is needed" here was misleading.
+    # ASK-USER-GATE-FIX (2026-09-02): only announce the pause (and evict the
+    # coder model) when the run will actually block (gate == "open"). In
+    # until_finished / throttled mode tools/runner.py answers autonomously and
+    # the run keeps going — evicting here would force an unnecessary cold reload.
     try:
         from tools.runner import _ask_user_gate as _ask_gate_cv
         _ask_gate_val = _ask_gate_cv.get("open")
@@ -789,6 +783,12 @@ async def _handle_ask_user(_dname, _dargs, hooks, exec_model, cached_coder_port,
         "[ASK-DIAG] S6 gate=%s pauses=%s run_id=%s", _ask_gate_val, _ask_pauses, run_id_global)
     if not _ask_pauses:
         return
+    if hooks.evict_model is not None:
+        try:
+            await hooks.evict_model(exec_model)
+            cached_coder_port[0] = None
+        except Exception:
+            pass
     # Emit agent_asking for duo_runner (runner.py only emits via _tool_loop_emit)
     # initiate_pause + wait_for_resume handled by runner.py's _handle_ask_user
     await hooks.emit({"type": "agent_asking",
@@ -1137,7 +1137,10 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_t)
         return
-    _fc_path = _dargs.get("path", "")
+    if _dname not in ("write_file", "edit_file", "write_file_append",
+                      "patch_file", "replace_lines", "edit_ast"):
+        return
+    _fc_path = (_dargs or {}).get("path", "")
     if _fc_path and not _tool_call_failed(_dresult, _dname):
         _fc_content = ""
         # SYNC-IO-ASYNC (2026-09-09): file read off the event loop.
@@ -1232,6 +1235,21 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
             file_changes[_fc_path] = {"op": "edited", "lines_added": _rl_added, "lines_removed": _rl_removed}
             await hooks.emit({"type": "file_change", "path": _fc_path,
                               "op": "edited", "lines_added": _rl_added, "lines_removed": _rl_removed,
+                              "content": _fc_content})
+            if result.last_run_bash_failure:
+                result.changed_since_failure.add(_fc_path)
+        elif _dname == "edit_ast":
+            _ea_m = re.search(r"\(lines\s+(\d+)-(\d+)\)", str(_dresult or ""))
+            _ea_removed = max(0, int(_ea_m.group(2)) - int(_ea_m.group(1)) + 1) if _ea_m else 0
+            _ea_new = (_dargs or {}).get("new_code", "")
+            _ea_added = (
+                len(str(_ea_new).strip("\n").splitlines())
+                if isinstance(_ea_new, str) and _ea_new.strip()
+                else 0
+            )
+            file_changes[_fc_path] = {"op": "edited", "lines_added": _ea_added, "lines_removed": _ea_removed}
+            await hooks.emit({"type": "file_change", "path": _fc_path,
+                              "op": "edited", "lines_added": _ea_added, "lines_removed": _ea_removed,
                               "content": _fc_content})
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_fc_path)

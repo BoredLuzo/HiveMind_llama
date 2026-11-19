@@ -12,11 +12,20 @@ the log handlers (see redaction.py) — the URLs contain the token.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import httpx
 
 TELEGRAM_BASE = "https://api.telegram.org"
+
+
+def _encode_reply_parameters(reply_to_message_id: int) -> str:
+    """Serialize ReplyParameters for multipart form fields."""
+    return json.dumps({
+        "message_id": reply_to_message_id,
+        "allow_sending_without_reply": True,
+    })
 
 
 class TelegramApiError(RuntimeError):
@@ -148,9 +157,8 @@ class TelegramApi:
         if caption:
             form["caption"] = caption
         if reply_to_message_id is not None:
-            form["reply_parameters"] = {
-                "message_id": reply_to_message_id,
-                "allow_sending_without_reply": True}
+            form["reply_parameters"] = _encode_reply_parameters(
+                reply_to_message_id)
         files = {"document": (filename, data)}
         try:
             r = await c.post(f"{self._base}/sendDocument", data=form,
@@ -208,9 +216,8 @@ class TelegramApi:
         if duration_s:
             form["duration"] = int(duration_s)
         if reply_to_message_id is not None:
-            form["reply_parameters"] = {
-                "message_id": reply_to_message_id,
-                "allow_sending_without_reply": True}
+            form["reply_parameters"] = _encode_reply_parameters(
+                reply_to_message_id)
         files = {"voice": ("voice.ogg", ogg_bytes, "audio/ogg")}
         try:
             r = await c.post(f"{self._base}/sendVoice", data=form, files=files)

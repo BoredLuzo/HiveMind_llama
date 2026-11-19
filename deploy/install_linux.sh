@@ -111,6 +111,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude 'node_modules' --exclude 'settings.json' --exclude 'presets.json' \
       --exclude 'gateway.toml' --exclude '/model_configs/gguf_filename_tags.json' \
       --exclude '/model_configs/learned' \
+      --exclude '/model_configs/user' \
       --exclude '/models.json' --exclude '/memory.json' --exclude '/vision_model.json' \
       --exclude '/routing_weights.json' --exclude '/soul.json' --exclude '/automations.json' \
       --exclude '/memories_db.json' --exclude '/gateway_state.json' \
@@ -136,6 +137,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude='./presets.json' --exclude='./gateway.toml' \
       --exclude='./model_configs/gguf_filename_tags.json' \
       --exclude='./model_configs/learned' \
+      --exclude='./model_configs/user' \
       --exclude='./models.json' --exclude='./memory.json' --exclude='./vision_model.json' \
       --exclude='./routing_weights.json' --exclude='./soul.json' --exclude='./automations.json' \
       --exclude='./memories_db.json' --exclude='./gateway_state.json' \
@@ -196,7 +198,7 @@ fi
 
 echo "[5/8] Fetching llama.cpp (backend: $LLAMA_BACKEND)..."
 cd "$INSTALL_DIR"
-if ! "$INSTALL_DIR/.venv/bin/python" deploy/fetch_llamacpp.py --backend "$LLAMA_BACKEND"; then
+if ! "$INSTALL_DIR/.venv/bin/python" deploy/fetch_llamacpp.py --backend "$LLAMA_BACKEND" --upgrade; then
   echo "  [WARN] llama.cpp download failed — install manually into $INSTALL_DIR/llama/"
   echo "         (github.com/ggml-org/llama.cpp/releases → ubuntu-x64 asset, extract,"
   echo "          chmod +x the llama-server binary inside a llama-bXXXX-... folder)"

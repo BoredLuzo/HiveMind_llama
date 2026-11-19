@@ -25,7 +25,11 @@ if TYPE_CHECKING:
     from core.plan_tracker import PlanTracker
     from hive_functions.planner import PlannerResult
 
-from context.compression import _compress_rule_based, _compress_tool_context
+from context.compression import (
+    _compress_rule_based,
+    _compress_tool_context,
+    _evict_stale_tool_outputs,
+)
 from context.ctx_guard import (
     plan_partial_cut_index as _ctx_plan_partial_cut_index,
     should_use_partial as _ctx_should_use_partial,
@@ -42,6 +46,20 @@ from utils.file import normalize_tool_path as _normalize_tool_path
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
 
 logger = logging.getLogger("hivemind.duo")
+
+# Synced via backend.runtime_flags.apply_runtime_flags; overridden per run by ctx.settings["duo_compress_mode"].
+DUO_COMPRESS_MODE: str = "auto"
+_VALID_DUO_COMPRESS_MODES = frozenset({"auto", "mask_only", "partial", "full"})
+
+
+def _resolve_duo_compress_mode(ctx) -> str:
+    """Resolve effective duo_compress_mode from ctx.settings or runtime DUO_COMPRESS_MODE."""
+    s = getattr(ctx, "settings", None)
+    raw = s.get("duo_compress_mode") if isinstance(s, dict) else None
+    if raw is None or not str(raw).strip():
+        raw = DUO_COMPRESS_MODE
+    mode = str(raw or "auto").strip().lower()
+    return mode if mode in _VALID_DUO_COMPRESS_MODES else "auto"
 
 # F4 (deep audit 2026-11-07): the post-compress re-anchor inventory is a full
 # os.walk over the workspace - synchronous I/O that must never run on the
@@ -204,9 +222,16 @@ async def _duo_compress_cycle(ctx, ps):
     # partial keeps a large raw tail byte-identical
     # at the end -> llama.cpp --cache-reuse KV shift
     # can rescue the suffix after the rebuild.
+    _duo_mode = _resolve_duo_compress_mode(ctx)
+    _effective_local_only = bool(_compress_local_only or _duo_mode == "mask_only")
     _comp_mode = "full"
     _comp_cut = -1
-    if _partial_compression and not _partial_escalated:
+    _want_partial = (
+        False if _duo_mode in ("full", "mask_only")
+        else True if _duo_mode == "partial"
+        else bool(_partial_compression)
+    )
+    if _want_partial and not _partial_escalated:
         if _ctx_should_use_partial(partial_enabled=True, messages=_dtool_msgs):
             _cut_ratio = (
                 (int(_guard_tokens) / int(_est_tokens))
@@ -220,7 +245,7 @@ async def _duo_compress_cycle(ctx, ps):
             )
             if _comp_cut is not None and int(_comp_cut) >= 2:
                 _comp_mode = "partial"
-    _msgs_before_compress = _dtool_msgs
+    _msgs_before_compress = [dict(m) if isinstance(m, dict) else m for m in _dtool_msgs]
     # EST-REUSE: _est_tokens stays current through the round.
     _est_tokens_before_compress = int(_est_tokens)
     # COMPRESSION-MODEL (2026-09-05): the summary runs
@@ -243,7 +268,7 @@ async def _duo_compress_cycle(ctx, ps):
     # loading a light compressor (up to 240s wait, can
     # evict the coder) would be pure wasted pause.
     if (_comp_llm_cfg and _comp_llm_cfg != exec_mdl
-            and not _compress_local_only):
+            and not _effective_local_only):
         try:
             from backend.llama_server_manager import manager as _lsm_comp
             # NO-EVICT (2026-10-14, audit phase 4): the
@@ -358,67 +383,108 @@ async def _duo_compress_cycle(ctx, ps):
         _sync_state()
         ps.stop = True
         return
-    _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
-    # MINI-SHRINK-RETRY (2026-09-07): if the full compression
-    # barely shrank (<15% of the before value), an early
-    # next 2-minute compress follows (cost cascade). Then
-    # ONE escalated retry (aggressive_retry=soft escalation
-    # instead of a hard token target). The retry runs
-    # BEFORE validation — the existing
-    # _validate_compression_summary flow (+ rule fallback)
-    # below checks the RETRY result.
-    # LOCAL-ONLY: the local summary is deterministic — a
-    # second identical attempt cannot shrink more.
-    if (not _mini_retry_done
-            and not _compress_local_only
-            and not is_ctx_aborted(ctx)
-            and str(_comp_mode or "full") == "full"
-            and int(_est_tokens_before_compress or 0) > 2048):
-        _mini_retry_done = True
-        _after1_est = int(_estimate_ctx_tokens(_dtool_msgs))
-        _shrink1 = (int(_est_tokens_before_compress) - _after1_est) / max(1, int(_est_tokens_before_compress))
-        if _shrink1 < 0.15 and not is_ctx_aborted(ctx):
-            logger.warning(
-                "[CTX-COMPRESS-RETRY] before=%d after1=%d shrink=%.2f < 0.15 — starting escalated retry",
-                int(_est_tokens_before_compress), _after1_est, _shrink1,
+    _cs_summary = ""
+    _cs_valid = False
+    if _duo_mode == "mask_only":
+        _comp_mode = "mask_only"
+        _compress_usage = {}
+        _cs_summary = ""
+        _masked_msgs = [dict(m) if isinstance(m, dict) else m for m in _dtool_msgs]
+        _mask_target = (
+            int(_compress_threshold)
+            if int(_compress_threshold or 0) > 0
+            else max(1, int(_est_tokens_before_compress * 0.70))
+        )
+        _mask_floor = min(
+            max(1, int(int(_dtool_ctx or 0) * 0.62)),
+            max(1, int(_est_tokens_before_compress * 0.75)),
+        )
+        _masked_n = 0
+        if hasattr(_tool_ctx_lru, "candidates") and hasattr(_tool_ctx_lru, "mark_evicted"):
+            _masked_n = _evict_stale_tool_outputs(
+                messages=_masked_msgs,
+                lru=_tool_ctx_lru,
+                target_token_budget=_mask_target,
+                hard_floor_tokens=_mask_floor,
             )
-            yield await ctx.emit({"type": "status",
-                "content": "🗜 Mini-shrink detected — second (escalated) compression attempt …"})
-            _dtool_msgs2, _condensed_files2, _compress_usage2 = await _compress_tool_context(messages=_msgs_before_compress, **_comp_kwargs, aggressive_retry=True)
-            _after2_est = int(_estimate_ctx_tokens(_dtool_msgs2))
-            _retry_helped = bool(
-                (_after2_est < int(_after1_est * 0.85))
-                or ((int(_est_tokens_before_compress) - _after2_est)
-                    / max(1, int(_est_tokens_before_compress)) >= 0.15)
+        _after_mask_est = _estimate_ctx_tokens(_masked_msgs)
+        if _masked_n > 0 and _after_mask_est < _est_tokens_before_compress * 0.90:
+            _dtool_msgs = _masked_msgs
+            _condensed_files = []
+        else:
+            _rule_msgs, _rule_evicted = _compress_rule_based(
+                messages=_msgs_before_compress,
+                target_tokens=_mask_target,
+                keep_recent_msgs=(18 if ctx.duo_config.until_finished else 12),
+                tail_tool_max_chars=int(ctx.settings.get("duo_compress_tail_tool_max_chars", 8000) or 0),
             )
-            logger.warning(
-                "[CTX-COMPRESS-RETRY] before=%d after1=%d after2=%d retry_helped=%s",
-                int(_est_tokens_before_compress), _after1_est, _after2_est,
-                _retry_helped,
-            )
-            _dtool_msgs = _dtool_msgs2
-            # POST-COMPRESS RE-ANCHOR (2026-10-08,
-            # owner-approved fix 1+2): compression
-            # replaces file contents with summaries -
-            # the model loses the exact file state and
-            # starts editing from memory (the
-            # old_text-not-found loops). Re-anchor with
-            # a fresh project inventory right after the
-            # compressed messages are installed.
-            try:
-                # F4 (deep audit 2026-11-07): the os.walk inventory is sync
-                # I/O — run it on a worker thread, never on the loop.
-                _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
-                if _inv:
-                    _dtool_msgs.append({"role": "user", "content":
-                        "[PROJECT FILES - these exist in the workspace "
-                        "right now]\n" + "\n".join(_inv[:80])
-                        + "\nread_file any file before editing it - "
-                        "do not edit from memory."})
-            except (OSError, RuntimeError, ValueError, TypeError) as _inv_err:
-                logger.debug("[COMPRESS-INVENTORY] workspace inventory skipped: %s", _inv_err)
-            _condensed_files = _condensed_files2
-            _compress_usage = _compress_usage2
+            _dtool_msgs = _rule_msgs
+            _condensed_files = [str(p) for p in (_rule_evicted or [])]
+            if _estimate_ctx_tokens(_dtool_msgs) < _est_tokens_before_compress * 0.90:
+                _rule_compress_used = True
+        _cs_valid = True
+    else:
+        _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
+        # MINI-SHRINK-RETRY (2026-09-07): if the full compression
+        # barely shrank (<15% of the before value), an early
+        # next 2-minute compress follows (cost cascade). Then
+        # ONE escalated retry (aggressive_retry=soft escalation
+        # instead of a hard token target). The retry runs
+        # BEFORE validation — the existing
+        # _validate_compression_summary flow (+ rule fallback)
+        # below checks the RETRY result.
+        # LOCAL-ONLY: the local summary is deterministic — a
+        # second identical attempt cannot shrink more.
+        if (not _mini_retry_done
+                and not _compress_local_only
+                and not is_ctx_aborted(ctx)
+                and str(_comp_mode or "full") == "full"
+                and int(_est_tokens_before_compress or 0) > 2048):
+            _mini_retry_done = True
+            _after1_est = int(_estimate_ctx_tokens(_dtool_msgs))
+            _shrink1 = (int(_est_tokens_before_compress) - _after1_est) / max(1, int(_est_tokens_before_compress))
+            if _shrink1 < 0.15 and not is_ctx_aborted(ctx):
+                logger.warning(
+                    "[CTX-COMPRESS-RETRY] before=%d after1=%d shrink=%.2f < 0.15 — starting escalated retry",
+                    int(_est_tokens_before_compress), _after1_est, _shrink1,
+                )
+                yield await ctx.emit({"type": "status",
+                    "content": "🗜 Mini-shrink detected — second (escalated) compression attempt …"})
+                _dtool_msgs2, _condensed_files2, _compress_usage2 = await _compress_tool_context(messages=_msgs_before_compress, **_comp_kwargs, aggressive_retry=True)
+                _after2_est = int(_estimate_ctx_tokens(_dtool_msgs2))
+                _retry_helped = bool(
+                    (_after2_est < int(_after1_est * 0.85))
+                    or ((int(_est_tokens_before_compress) - _after2_est)
+                        / max(1, int(_est_tokens_before_compress)) >= 0.15)
+                )
+                logger.warning(
+                    "[CTX-COMPRESS-RETRY] before=%d after1=%d after2=%d retry_helped=%s",
+                    int(_est_tokens_before_compress), _after1_est, _after2_est,
+                    _retry_helped,
+                )
+                _dtool_msgs = _dtool_msgs2
+                # POST-COMPRESS RE-ANCHOR (2026-10-08,
+                # owner-approved fix 1+2): compression
+                # replaces file contents with summaries -
+                # the model loses the exact file state and
+                # starts editing from memory (the
+                # old_text-not-found loops). Re-anchor with
+                # a fresh project inventory right after the
+                # compressed messages are installed.
+                try:
+                    # F4 (deep audit 2026-11-07): the os.walk inventory is sync
+                    # I/O — run it on a worker thread, never on the loop.
+                    _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
+                    if _inv:
+                        _dtool_msgs.append({"role": "user", "content":
+                            "[PROJECT FILES - these exist in the workspace "
+                            "right now]\n" + "\n".join(_inv[:80])
+                            + "\nread_file any file before editing it - "
+                            "do not edit from memory."})
+                except (OSError, RuntimeError, ValueError, TypeError) as _inv_err:
+                    logger.debug("[COMPRESS-INVENTORY] workspace inventory skipped: %s", _inv_err)
+                _condensed_files = _condensed_files2
+                _compress_usage = _compress_usage2
     if _compress_usage and _compress_usage.get("completion_tokens"):
         yield await ctx.emit({"type": "usage_meta", "phase": "coder",
             "completion_tokens": int(_compress_usage["completion_tokens"]),
@@ -441,25 +507,26 @@ async def _duo_compress_cycle(ctx, ps):
                     "[READ-GUARD] Compression: removed %d compacted read_file paths from the read guard (keep for tail remains)",
                     len(_removed_read),
                 )
-    # Validate compression summary quality
-    _cs_summary = (_dtool_msgs[1].get("content", "") if len(_dtool_msgs) >= 2 else "")
-    from context.compression import _validate_compression_summary
-    _known_parts = re.findall(r'partition\s*=\s*"([^"]+)"', _explore_ctx or "")
-    _cs_valid = _validate_compression_summary(
-        _cs_summary, _written_files, _done_tasks,
-        known_partitions=_known_parts,
-        plan_anchor=_plan_anchor_text)
-    if not _cs_valid:
-        logger.warning("[COMPRESSION] Summary failed validation — using enriched fallback")
-    # BUG-2 FIX: only bypass semantic validation for the deterministic local fallback.
-    if not _cs_valid and (
-        _compress_local_only
-        or "## State Reconstruction (compression model unavailable)" in _cs_summary
-    ):
-        # Allow deterministic structural fallback (no "COMPRESSION FAILED" sentinel)
-        _cs_valid = "COMPRESSION FAILED" not in (
-            _dtool_msgs[-1].get("content", "") or ""
-        )
+    if _duo_mode != "mask_only":
+        # Validate compression summary quality
+        _cs_summary = (_dtool_msgs[1].get("content", "") if len(_dtool_msgs) >= 2 else "")
+        from context.compression import _validate_compression_summary
+        _known_parts = re.findall(r'partition\s*=\s*"([^"]+)"', _explore_ctx or "")
+        _cs_valid = _validate_compression_summary(
+            _cs_summary, _written_files, _done_tasks,
+            known_partitions=_known_parts,
+            plan_anchor=_plan_anchor_text)
+        if not _cs_valid:
+            logger.warning("[COMPRESSION] Summary failed validation — using enriched fallback")
+        # BUG-2 FIX: only bypass semantic validation for the deterministic local fallback.
+        if not _cs_valid and (
+            _compress_local_only
+            or "## State Reconstruction (compression model unavailable)" in _cs_summary
+        ):
+            # Allow deterministic structural fallback (no "COMPRESSION FAILED" sentinel)
+            _cs_valid = "COMPRESSION FAILED" not in (
+                _dtool_msgs[-1].get("content", "") or ""
+            )
     if not _cs_valid:
         _llm_compress_fails += 1
         # RULE-BASED FALLBACK (2026-09-04): compress

@@ -570,6 +570,34 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                             # instead. The ctx/VRAM guard (vram_guard) already
                             # catches the worst mismatches pre-run; this branch
                             # is for everything the guard's table misses.
+                            # VRAM-BLOCK-CTX-CASCADE (2026-10-11): a pre-flight block is not a
+                            # model mismatch - same model, smaller ctx. Cascade like the generic
+                            # retry instead of hard-stopping (mellum @120832 blocked, @49152
+                            # fits). Falls through to hard_stop on the last attempt or at floor.
+                            if _cl_attempt < 4 and _coder_ctx_try > 8192:
+                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
+                                logger.warning(
+                                    "[CODER-VRAM] %s not loadable at ctx=%s (free=%d MiB, external=%d MiB) — "
+                                    "retrying at ctx=%s",
+                                    exec_mdl, _coder_ctx_try, _vpf.free_mib,
+                                    _vpf.external_usage_est_mib, _next_ctx,
+                                )
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"⟳ Coder does not fit at ctx={_coder_ctx_try} "
+                                              f"(only {_vpf.free_mib} MiB free) — retrying "
+                                              f"attempt {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
+                                await asyncio.sleep(4.0)
+                                if is_ctx_aborted(ctx):
+                                    async for _ev in _abort_preloop(
+                                        ctx, "aborted",
+                                        ["⏹ Coder load aborted (run was stopped during retry wait)"],
+                                        _ws_str, _explore_ctx, _done_tasks, _written_files,
+                                    ):
+                                        yield _ev
+                                    ps.stop = True
+                                    return
+                                _coder_ctx_try = _next_ctx
+                                continue
                             logger.warning(
                                 "[CODER-VRAM] %s not loadable (free=%d MiB, external=%d MiB, ctx_try=%s) — "
                                 "aborting, no fallback",
@@ -584,18 +612,6 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                     "No fallback loaded — reduce the ctx slider, close GPU-heavy "
                                     "apps, or pick a model that fits. Run ended with a resume block."
                                 )})
-                            # VRAM-BLOCK-CTX-CASCADE (2026-10-11): a pre-flight block is not a
-                            # model mismatch - same model, smaller ctx. Cascade like the generic
-                            # retry instead of hard-stopping (mellum @120832 blocked, @49152
-                            # fits). Falls through to hard_stop on the last attempt or at floor.
-                            if _cl_attempt < 4 and _coder_ctx_try > 8192:
-                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⟳ Coder does not fit at ctx={_coder_ctx_try} — retrying "
-                                              f"attempt {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
-                                await asyncio.sleep(4.0)
-                                _coder_ctx_try = _next_ctx
-                                continue
                             _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                             break
                         except Exception as _cl_err:

@@ -341,7 +341,8 @@ def running_install_processes(base: Path) -> list[str]:
              "$b = [IO.Path]::GetFullPath($env:HM_UPD_BASE).TrimEnd('\\').ToLowerInvariant(); "
              "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
              "Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and "
-             "($_.CommandLine.ToLowerInvariant().Contains($b) -or $_.Name -eq 'llama-server.exe') -and "
+             "($_.CommandLine.ToLowerInvariant().Contains($b) -or "
+             "($_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant().Contains($b))) -and "
              "$_.CommandLine -match 'hivemind_gateway|mcp_server|run\\.py|server\\.py|llama-server' } | "
              "ForEach-Object { '{0} (pid {1})' -f $_.Name, $_.ProcessId }"],
             capture_output=True, text=True, timeout=30,
@@ -376,6 +377,7 @@ def apply_cmd(exroot: Path, base: Path) -> list[str]:
              str(exroot / "context" / "projects"),
              str(exroot / "learning" / "sessions"),
              str(exroot / "model_configs" / "learned"),
+             str(exroot / "model_configs" / "user"),
              "/NFL", "/NDL", "/NJH", "/NP", "/NJS"]
     return cmd
 

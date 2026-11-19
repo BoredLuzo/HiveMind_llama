@@ -3,175 +3,116 @@
 
 from __future__ import annotations
 
-
+from collections.abc import Set as _AbstractSet
 import logging
 import re
 
+from .llama_config import _ud_candidates
+
 _logger = logging.getLogger("llama_vram_table")
 
-# ── VRAM-Tabelle: kanonischer_name → GB bei ctx=4096 ──────────────────────────
-# Basis: echte Messungen (Vulkan, 99 GPU-Layers).
-_VRAM_TABLE: dict[str, float] = {
-    # qwen3.5 Familie
-    "qwen3.5:0.8b":      0.6,
-    "qwen3.5:0.8b-ud":   0.7,
-    "qwen3.5:2b":        1.5,
-    "qwen3.5:2b-ud":     1.7,
-    # Sharp-MiniCPM5-2B — dense llama arch, 42 full-attention layers.
-    # One tag for both tiers; value is the conservative Q6_K_XL estimate
-    # (~2.1GB weights + q8_0 KV@4096), Q4_K_XL sits under it.
-    "minicpm5:2b-sharp": 2.0,
-    # LFM2.5 — 8B total, 1B active, Q4_K_M ~2.5GB weights + 0.2GB KV@4096
-    "lfm2.5:8b-a1b":     5.1,
-    # LFM2.5 dense 2.6B (Q4_K_M ~1.6GB weights + KV@4096) — Subagent-Ladder Default
-    "lfm2.5:2.6b":       1.9,
-    "lfm2.5:2.6b-instruct": 1.9,
-    "lfm3:1.7b-qad": 1.0,
-    "qwen3.5:4b":        2.8,
-    "qwen3.5:4b-ud":     3.0,
-    "qwen3.5:4b-d":      3.2,
-    "qwen3.5:4b-d-q6-k-1": 3.8,
-    "qwen3.5:9b":        5.5,
-    "qwen3.5:9b-ud":     5.8,
+_INITIAL_KV_CACHE_TYPE: str = "q4_0"
+KV_CACHE_TYPE: str = _INITIAL_KV_CACHE_TYPE
+VRAM_PRE_FLIGHT_MARGIN_MIB: int = 768
+TOTAL_VRAM_MIB_OVERRIDE: int = 0
+
+# Compatibility views populated dynamically from model_configs/arch_compat.json
+# and model_configs/{user,models}/*.json via reload_compat_views().
+_VRAM_TABLE: dict[str, float] = {}
+_MOE_TABLE: dict[str, dict] = {}
+VRAM_GB: dict[str, float] = {}
+_FINETUNE_TO_BASE: dict[str, str] = {}
+_OVERFLOW_MODELS_SET: set[str] = set()
+_CTX_KV_KB_PER_TOKEN: dict[str, float] = {}
 
 
-    # Qwen3-VL
-    "qwen3-vl:2b-instruct": 1.6,
+def reload_compat_views() -> None:
+    """Populate VRAM/MoE/KV compatibility tables dynamically from arch_compat.json + profiles."""
+    try:
+        from model_configs.models_registry import (
+            iter_all_profiles as _iter_profiles,
+            load_arch_compat as _load_compat,
+        )
+        compat = _load_compat()
+        profiles = _iter_profiles()
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        _logger.debug("[VRAM] compat table reload skipped: %s", _e)
+        return
 
-    # Gemma
-    "gemma-4:e4b-it-obliterated": 5.8,
-    "gemma-4:e4b-it-qat":         4.24,
-    "gemma-4:e4b-it":             3.0,
-    "gemma-4:e2b-it-qat":         2.8,
-    "google-gemma-3:4b-it":       2.8,
-    # NVIDIA Nemotron-3.5-Bolt-E4B-4GB (Gemma-4-E4B base: 8B total / 4B effective)
-    "nvidia-nemotron-3.5-bolt:e4b":     4.4,
-    "nvidia-nemotron-3.5-bolt:e4b-4gb": 4.4,
-    "nemotron-3.5-bolt:e4b":            4.4,
-    "nemotron-3.5-bolt:e4b-4gb":        4.4,
+    vram_table: dict[str, float] = {
+        str(k).lower(): float(v)
+        for k, v in (compat.get("vram_table") or {}).items()
+        if v is not None
+    }
+    moe_table: dict[str, dict] = {
+        str(k).lower(): dict(v)
+        for k, v in (compat.get("moe_table") or {}).items()
+        if isinstance(v, dict)
+    }
+    for alias, target in (compat.get("moe_table_aliases") or {}).items():
+        tk = str(target).lower()
+        if tk in moe_table:
+            moe_table[str(alias).lower()] = moe_table[tk]
 
-    # Ministral
-    "ministral:3b-instruct-2410": 2.0,
-    "ministral:8b-instruct-2410": 4.8,
+    for key, prof in profiles.items():
+        lk = str(key).lower()
+        try:
+            ov = float(prof.get("vram_gb_override") or 0)
+        except (TypeError, ValueError):
+            ov = 0.0
+        try:
+            moe = int(prof.get("moe_cpu_experts") or 0)
+        except (TypeError, ValueError):
+            moe = 0
+        if ov > 0 and moe > 0 and lk not in moe_table:
+            entry: dict = {
+                "active_gpu_gb": round(ov, 2),
+                "source": "profile",
+                "n_cpu_moe": moe,
+                "calibrated_n_cpu_moe": moe,
+            }
+            try:
+                kv_bpt = float(prof.get("kv_bytes_per_token") or 0)
+            except (TypeError, ValueError):
+                kv_bpt = 0.0
+            if kv_bpt > 0:
+                entry["measured_bytes_per_token"] = int(kv_bpt)
+            moe_table[lk] = entry
+        elif ov > 0 and moe <= 0 and lk not in vram_table:
+            vram_table[lk] = round(ov, 2)
 
-    # OmniCoder
-    "omnicoder:9b":       5.5,
+    _VRAM_TABLE.clear()
+    _VRAM_TABLE.update(vram_table)
 
-    # Granite
-    "granite4:1b":       1.0,
-    "granite-4.1:3b":       2.1,
+    _MOE_TABLE.clear()
+    _MOE_TABLE.update(moe_table)
 
-    # Ternary-Bonsai
-    "ternary-bonsai:8b":   4.8,
-    "ternary-bonsai-2:27b": 5.98,
+    VRAM_GB.clear()
+    VRAM_GB.update(_VRAM_TABLE)
+    VRAM_GB.update({k: float(v["active_gpu_gb"]) for k, v in _MOE_TABLE.items() if "active_gpu_gb" in v})
 
-    # Ling-3.0-tiny (InclusionAI): hybrid MoE, 7.9B total / 1.3B active,
-    # 128 routed + 1 shared expert (8 active), KDA/MLA. Q4_K_L ~4.75GB weights
-    # — fits in 8GB, faster than expert offloading via PCIe.
-    "ling-3.0-tiny":     4.8,
-    "k2-horizon:7b":      6.2,
-    "k2-horizon:3.7b":   3.5,
+    _FINETUNE_TO_BASE.clear()
+    _FINETUNE_TO_BASE.update({
+        str(k).lower(): str(v).lower()
+        for k, v in (compat.get("finetune_to_base") or {}).items()
+        if v
+    })
 
-    # Qwen3.6
-    "qwen3-6:27b":       7.0,
+    _OVERFLOW_MODELS_SET.clear()
+    _OVERFLOW_MODELS_SET.update(
+        str(m).lower() for m in (compat.get("overflow_models") or []) if m
+    )
 
-    # Qwen3
-    "qwen-qwen3:14b-iq4-nl": 7.5,
-
-    # TwIL-8B (Granite 4.2 8.8B dense Q4_K_M: 5.35 GB weights + ~0.25 GB base KV)
-    "twil:8b":           5.6,
-}
-
-# ── MoE (Mixture of Experts) VRAM-Tabelle ──────────────────────────────────────
-_MOE_TABLE: dict[str, dict] = {
-    # (d.h. moe_cpu_experts-Override=0 → Tabellenwert 35 aus llama_config._MOE_EXPERT_COUNTS).
-    #   base   = load_tensors "Vulkan0 model buffer size" + llama_memory_recurrent "RS buffer size"
-    #            + llama_context "output buffer size" + FIXER Anteil von sched_reserve "compute buffer size"
-    # Messung @--n-cpu-moe=35, q4_0-KV:
-    #   model 4309.34 + RS 62.81 + output 0.95 + compute-Intercept 395.00 MiB = 4768.10 MiB ≈ 4.66 GB
-    "qwen3.6:35b-a3b": {
-        "active_gpu_gb":            4.66,
-        "measured_bytes_per_token": 6272,
-        "calibrated_n_cpu_moe":     35,
-    },
-    "mellum2.1:12b-a2.5b-thinking": {
-        # N=3 b12001/Vulkan measurement @ncmoe=18, q4_0 KV: model 4498 + compute 331 MiB,
-        # KV 80.7 MiB @16k (~5.2 KB/token), pid_ded_peak 4986 MiB (~4.74 GB @4k).
-        "active_gpu_gb": 4.74,
-        "measured_bytes_per_token": 5200,
-        "calibrated_n_cpu_moe": 18,
-    },
-    "qwen3.6:35b-a3b-ud": {
-        "active_gpu_gb":            4.66,
-        "measured_bytes_per_token": 6272,
-        "calibrated_n_cpu_moe":     35,
-    },
-    "qwen3.6:35b-a3b-mtp": {
-        "active_gpu_gb":            4.66,
-        "measured_bytes_per_token": 6272,
-        "calibrated_n_cpu_moe":     35,
-    },
-    "qwen3.6:35b-a3b-uncensored": {
-        "active_gpu_gb":            4.66,
-        "measured_bytes_per_token": 6272,
-        "calibrated_n_cpu_moe":     35,
-    },
-    "hermes3.6:35b-a3b": {
-        "active_gpu_gb":            4.66,
-        "measured_bytes_per_token": 6272,
-        "calibrated_n_cpu_moe":     35,
-    },
-    # Ling-3.0-tiny: hybrid KDA/MLA — most blocks are linear attention with a
-    # CONSTANT state (no per-token KV), so the generic full-attention KV math
-    # (~30 KB/tok) massively overestimated ctx cost and blocked 70k ctx on an
-    # 8 GB card that actually fits. 12 KB/tok covers the few full-attention
-    # layers + recurrent-state growth; refine after a real load if needed.
-    "ling-3.0-tiny": {
-        "active_gpu_gb":            4.8,
-        "measured_bytes_per_token": 12288,
-    },
-    # MiniCPM-V 4.7 35B-A3B (qwen35moe, 256x2.6B). Calibrated on b12001/Vulkan
-    # @ncmoe=35, q4_0 KV (undrafted): model 2953 + RS 63 + compute 260 MiB (~3.25 GB @4k),
-    # KV 90/180 MiB @16k/32k (~6.8 KB/tok peak delta). DSpark Q6 adds ~1600 MiB
-    # (via profile draft_overhead_mib); F16 mmproj loads cleanly (+1153 MiB peak).
-    "minicpm-v-4.7:35b": {
-        "active_gpu_gb":            3.25,
-        "measured_bytes_per_token": 6800,
-        "calibrated_n_cpu_moe":     35,
-    },
-    # Same architecture class as minicpm-v-4.7:35b above; dash-tagged mix quant.
-    "minicpm-v-4-7:35b-a3b-mix": {
-        "active_gpu_gb":            3.25,
-        "measured_bytes_per_token": 6800,
-        "calibrated_n_cpu_moe":     35,
-    },
-    # LFM2.5-24B-A2B (lfm2moe, 64x1.4B: 2 dense + 38 MoE blocks). The catalog
-    # tag is `lfm2.5:24b-a2b` - the prefix match below maps it onto this row,
-    # and the profile carries the calibrated 24. Measured
-    # 2026-10-14 (-lv 5 fit projection @c4096, f16 KV): n-cpu-moe 24 ->
-    # 6051 MiB, 1289 MiB left free, fit "no changes needed". (23 missed the
-    # 1024-free target by 58 MiB, 20 projected 7347/7341 — fit aborts on
-    # user -ngl.) KV: 10/40 layers, 8 kv-heads x 64; live q4_0 KV halves
-    # the per-token cost vs the f16 probe (see minicpm note).
-    "lfm2.5:24b": {
-        "active_gpu_gb":            5.91,
-        "measured_bytes_per_token": 20480,
-        "calibrated_n_cpu_moe":     24,
-    },
-    # Air-26B-A4B (Gemma 4 26B-A4B MoE, 30 blocks, b12001/Vulkan): @ncmoe=26 with q4_0 KV
-    # avoids the 2.66 GiB shared-VRAM spill (3836 model + 460 compute ≈ 4.26 GB @4k,
-    # 804 MiB KV @131k ≈ 6.45 KB/token).
-    "air:26b-a4b": {
-        "active_gpu_gb":            4.26,
-        "measured_bytes_per_token": 6450,
-        "calibrated_n_cpu_moe":     26,
-    },
-}
+    _CTX_KV_KB_PER_TOKEN.clear()
+    _CTX_KV_KB_PER_TOKEN.update({
+        str(k).lower(): float(v)
+        for k, v in (compat.get("ctx_kv_kb_per_token") or {}).items()
+        if v is not None
+    })
 
 
-# exact catalog tag for the LFM2.5 MoE (the bare "lfm2.5:24b" row stays
-# exact-only now that prefix matching requires a MoE marker).
-_MOE_TABLE.setdefault("lfm2.5:24b-a2b", _MOE_TABLE["lfm2.5:24b"])
+reload_compat_views()
+_OVERFLOW_MODELS_BASE: frozenset[str] = frozenset(_OVERFLOW_MODELS_SET)
 
 
 def _read_profile(model_name: str) -> dict:
@@ -222,7 +163,11 @@ def _profile_moe_cfg(model_name: str) -> dict | None:
 
 def _profile_dense_vram(model_name: str) -> tuple[float | None, float | None]:
     """Optional `vram_gb_override` + `kv_bytes_per_token` for dense profiles."""
-    prof = _read_profile(model_name)
+    prof: dict = {}
+    for _cand in _ud_candidates(model_name):
+        prof = _read_profile(_cand)
+        if prof:
+            break
     if not prof:
         return None, None
     try:
@@ -249,21 +194,39 @@ _MOE_PREFIX_EXTRA = {"ling-3.0-tiny"}
 _PROFILE_MOE_LOGGED: set[str] = set()
 
 
+def _is_user_profile(model_name: str) -> bool:
+    """Return True if a user layer override exists for `model_name`."""
+    try:
+        from model_configs.models_registry import get_profile_source as _gps
+        for _cand in _ud_candidates(model_name):
+            if _gps(_cand) == "user":
+                return True
+    except (ImportError, OSError, ValueError, TypeError, AttributeError):
+        return False
+    return False
+
+
 def moe_cfg_for(model_name: str) -> dict | None:
     """_MOE_TABLE resolution shared by vram_of_moe and the /vram/estimate route:
-    exact, -ud-stripped, then prefix (GGUF auto-discovery appends quant/finetune
-    suffixes the table keys deliberately do not carry)."""
-    key = model_name.strip().lower()
-    # SUFFIX-ONLY (audit 2026-11-03): replace("-ud", "") also rewrote a
-    # "-ud" substring inside a real name; only a trailing tag is a tag.
-    _key_no_ud = key[:-3] if key.endswith("-ud") else key
-    cfg = _MOE_TABLE.get(key) or _MOE_TABLE.get(_key_no_ud)
+    user override > exact, -ud-stripped, then prefix > shipped/local profile."""
+    cands = [c.lower() for c in _ud_candidates(model_name) if c]
+    if not cands:
+        return None
+    key = cands[0]
+
+    if _is_user_profile(model_name):
+        for _cand in cands:
+            user_cfg = _profile_moe_cfg(_cand)
+            if user_cfg is not None:
+                return user_cfg
+
+    cfg = None
+    for _cand in cands:
+        cfg = _MOE_TABLE.get(_cand)
+        if cfg is not None:
+            break
     if not cfg:
-        # PREFIX-WITH-MARKER (2026-10-31, audit): prefix matching is for the
-        # GGUF auto-discovery suffixes on MoE families. A bare row such as
-        # "lfm2.5:24b" must not swallow a future dense sibling; only rows
-        # that name the MoE shape may prefix-match.
-        for table_key in _MOE_TABLE:
+        for table_key in sorted(_MOE_TABLE, key=len, reverse=True):
             if table_key == key:
                 continue
             if not (any(m in table_key for m in ("a3b", "a2b", "a2.5b", "35b"))
@@ -272,14 +235,11 @@ def moe_cfg_for(model_name: str) -> dict | None:
             if key.startswith(table_key):
                 return _MOE_TABLE[table_key]
     if cfg is None:
-        # No table entry: a local profile may still describe the MoE. This is
-        # the path that used to require a hand-written table line for every new
-        # MoE model (and the pre-flight then blocked the load).
-        cfg = _profile_moe_cfg(key)
+        for _cand in cands:
+            cfg = _profile_moe_cfg(_cand)
+            if cfg is not None:
+                break
         if cfg:
-            # LOG-ONCE (2026-10-31, audit): this runs from can_fit, both
-            # budget sums, vram_of and the ctx ladder - 10-25 INFO lines per
-            # load. One line per model, DEBUG after.
             if key not in _PROFILE_MOE_LOGGED:
                 _PROFILE_MOE_LOGGED.add(key)
                 _logger.info("moe_cfg_for(%s): no table entry, using the profile "
@@ -383,18 +343,54 @@ def vram_of_moe(
     return round(base + overhead_gb, 2)
 
 
-VRAM_GB: dict[str, float] = dict(_VRAM_TABLE)
-VRAM_GB.update({k: v["active_gpu_gb"] for k, v in _MOE_TABLE.items()})
+_TIGHT_VRAM_OVERFLOW_THRESHOLD_MIB: int = 12288
 
-_FINETUNE_TO_BASE: dict[str, str] = {
-    "omnicoder":  "qwen3.5",    # OmniCoder = Qwen3.5-based
-}
 
-VRAM_OVERFLOW_MODELS: set[str] = {
-    "qwen-qwen3:14b-iq4-nl",
-    "qwen3.6:27b",
-    "qwen3-6:27b",
-}
+def _current_gpu_backend() -> str:
+    try:
+        from . import llama_config as _lc
+        return str(getattr(_lc, "GPU_BACKEND", "") or "").strip().lower()
+    except (ImportError, AttributeError):
+        return ""
+
+
+def _is_tight_vram_gpu() -> bool:
+    if _current_gpu_backend() == "cpu":
+        return False
+    return _effective_total_vram_mib() <= _TIGHT_VRAM_OVERFLOW_THRESHOLD_MIB
+
+
+class _TightVramOverflowModels(_AbstractSet[str]):
+    """Dynamic set view of VRAM_OVERFLOW_MODELS gated to tight-VRAM GPUs."""
+
+    def _active(self) -> frozenset[str]:
+        return frozenset(_OVERFLOW_MODELS_SET) if _is_tight_vram_gpu() else frozenset()
+
+    def __contains__(self, item: object) -> bool:
+        return item in self._active()
+
+    def __iter__(self):
+        return iter(self._active())
+
+    def __len__(self) -> int:
+        return len(self._active())
+
+    def __bool__(self) -> bool:
+        return bool(self._active())
+
+    def __repr__(self) -> str:
+        return repr(set(self._active()))
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (set, frozenset, _AbstractSet)):
+            return self._active() == other
+        return NotImplemented
+
+    def copy(self) -> set[str]:
+        return set(self._active())
+
+
+VRAM_OVERFLOW_MODELS: _AbstractSet[str] = _TightVramOverflowModels()
 
 # ── ctx-Overhead ───────────────────────────────────────────────────────────────
 # KV-Cache Overhead pro 1024 ctx-Tokens (q4_0 Quantisierung).
@@ -418,11 +414,10 @@ def _extract_size_gb(model_name: str) -> float | None:
 
 
 def vram_of(model_name: str) -> float:
-
-
-    name = model_name.strip().lower()
-    if not name:
+    cands = [c.lower() for c in _ud_candidates(model_name) if c]
+    if not cands:
         return 4.0
+    name = cands[0]
 
     # 0. PROFILE-FIRST (2026-10-30, audit fix): a model whose profile carries
     #    moe_cpu_experts + vram_gb_override is sized by its own profile
@@ -440,23 +435,32 @@ def vram_of(model_name: str) -> float:
     if _dense_ov is not None:
         return _dense_ov
 
-    # 1. Exakter Match
-    if name in _VRAM_TABLE:
-        return _VRAM_TABLE[name]
+    # 1. Exact match (exact -ud key first, then -ud-stripped fallback)
+    for _cand in cands:
+        if _cand in _VRAM_TABLE:
+            return _VRAM_TABLE[_cand]
+
+    for _cand in cands:
+        if ":" not in _cand:
+            continue
+        base, tag = _cand.split(":", 1)
+        if not base or not tag:
+            continue
+        for key, val in _VRAM_TABLE.items():
+            if ":" not in key:
+                continue
+            key_base, key_tag = key.split(":", 1)
+            if key_base == base and tag in key_tag:
+                return val
 
     base = name.split(":")[0] if ":" in name else ""
-    tag = name.split(":")[1] if ":" in name else ""
-    for key, val in _VRAM_TABLE.items():
-        key_base = key.split(":")[0] if ":" in key else ""
-        key_tag = key.split(":")[1] if ":" in key else ""
-        if key_base == base and tag in key_tag:
-            return val
-
     if base in _FINETUNE_TO_BASE:
         base_name = _FINETUNE_TO_BASE[base]
-        base_lookup = f"{base_name}:{tag}" if tag else base_name
-        if base_lookup in _VRAM_TABLE:
-            return _VRAM_TABLE[base_lookup]
+        for _cand in cands:
+            tag = _cand.split(":")[1] if ":" in _cand else ""
+            base_lookup = f"{base_name}:{tag}" if tag else base_name
+            if base_lookup in _VRAM_TABLE:
+                return _VRAM_TABLE[base_lookup]
         size = _extract_size_gb(name)
         if size is not None:
             for key, val in _VRAM_TABLE.items():
@@ -482,17 +486,6 @@ def vram_of(model_name: str) -> float:
     # 4. Konservativer Fallback
     _logger.debug(f"VRAM estimate for '{model_name}': fallback 4.0GB")
     return 4.0
-
-
-# MODEL-KV-KB-T (2026-10-11): KV KB per token (q4_0) for models whose geometry
-# the generic formula gets wrong (hybrid attention, SWA-MoE, dense-large-KV).
-# Dense models only: MoE-sized models are delegated to vram_of_moe
-# before this table is consulted (2026-10-30).
-_CTX_KV_KB_PER_TOKEN: dict[str, float] = {
-    "qwen3.5":             9.2,   # hybrid: 8/33 layers carry KV (measured 990 MiB @112640)
-    "k2-horizon:7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
-    "k2-horizon:3.7b":     78.0,  # same geometry, q8_0 override
-}
 
 
 def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
@@ -527,12 +520,14 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
     # (36x4x128 -> 30 MB/1k) ueberschaetzt die qwen35-KV ~2x und blockte
     # Realruns am PRE-FLIGHT-Gate (VRAMPreFlightError, 09.10.). Nur der
     # belegte 4B-Wert; andere Groessen unbestaetigt (alter Pfad).
-    _bn = model_name.strip().lower().split(":")[0]
+    _cands = [c.lower() for c in _ud_candidates(model_name) if c]
     _kb = None
-    _nm = model_name.strip().lower()
-    for _key, _kv in _CTX_KV_KB_PER_TOKEN.items():
-        if _nm.startswith(_key):
-            _kb = _kv
+    for _cand in _cands:
+        for _key, _kv in _CTX_KV_KB_PER_TOKEN.items():
+            if _cand.startswith(_key):
+                _kb = _kv
+                break
+        if _kb is not None:
             break
     if _kb is not None:
         extra_ctx = num_ctx - 4096
@@ -540,13 +535,18 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
             return round(base_vram + (extra_ctx / 1024) * _kb / 1000, 2)
 
     try:
+        from backend import llama_config as _lc
         from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
-        from backend.llama_config import KV_CACHE_TYPE, dense_kv_cache_type
         _meta = _read_gguf_meta(model_name)
         _kv_q4 = _meta.get("kv_bytes_per_token_q4")
         _kv_f16 = _meta.get("kv_bytes_per_token_f16")
         if _kv_q4 and _kv_f16:
-            _kv_type = dense_kv_cache_type(model_name, KV_CACHE_TYPE)
+            _kv_default = (
+                KV_CACHE_TYPE
+                if KV_CACHE_TYPE != _INITIAL_KV_CACHE_TYPE
+                else getattr(_lc, "KV_CACHE_TYPE", KV_CACHE_TYPE)
+            )
+            _kv_type = _lc.dense_kv_cache_type(model_name, _kv_default)
             if _kv_type in ("f16", "bf16"):
                 _bpt = float(_kv_f16)
             elif _kv_type == "q8_0":
@@ -566,9 +566,194 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
 
 
 # ── Live-VRAM-Query (Windows WDDM Performance-Counter via pywin32/PDH) ──────────
-# Generic default (no device-specific measurement). Adjusted per system as
-# needed or calibrated to the real card by the pre-flight check.
-TOTAL_VRAM_MIB: int = 8192
+_DETECTED_TOTAL_VRAM_CACHE: int | None = None
+_DETECTED_TOTAL_VRAM_PROBED: bool = False
+
+
+def _probe_nvidia_smi_total_mib() -> int | None:
+    """Query total GPU VRAM in MiB via nvidia-smi (None if unavailable)."""
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    nsmi = _shutil.which("nvidia-smi")
+    if not nsmi:
+        return None
+    try:
+        cnf = getattr(_subprocess, "CREATE_NO_WINDOW", 0)
+        res = _subprocess.run(
+            [nsmi, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, timeout=5, creationflags=cnf,
+        )
+        if res.returncode != 0:
+            return None
+        vals: list[int] = []
+        out = res.stdout.decode("ascii", "replace")
+        for tok in out.replace(",", " ").split():
+            try:
+                v = float(tok)
+                if v > 0:
+                    vals.append(int(v))
+            except ValueError:
+                continue
+        return max(vals) if vals else None
+    except (OSError, ValueError, _subprocess.SubprocessError) as exc:
+        _logger.debug("detect_gpu_total_vram_mib: nvidia-smi failed: %s", exc)
+        return None
+
+
+def _probe_gpu_total_vram_mib() -> int | None:
+    """Detect physical GPU total dedicated VRAM in MiB (None if unavailable)."""
+    import platform as _platform
+
+    if _platform.system() != "Windows":
+        try:
+            from pathlib import Path as _P
+            sysfs_total = 0.0
+            for card in _P("/sys/class/drm").glob("card[0-9]*/device"):
+                tf = card / "mem_info_vram_total"
+                if not tf.exists():
+                    continue
+                try:
+                    tv = float(tf.read_text(encoding="utf-8", errors="replace").strip())
+                except (OSError, ValueError):
+                    continue
+                if tv > 0:
+                    sysfs_total = max(sysfs_total, tv)
+            if sysfs_total > 0:
+                return int(sysfs_total / (1024 * 1024))
+        except OSError as exc:
+            _logger.debug("detect_gpu_total_vram_mib: sysfs probe failed: %s", exc)
+        return _probe_nvidia_smi_total_mib()
+
+    # Windows: 1) PDH Dedicated Limit when exposed, 2) WDDM adapter registry
+    # HardwareInformation.qwMemorySize, 3) nvidia-smi fallback.
+    h = None
+    try:
+        import win32pdh
+        pdh_err = getattr(win32pdh, "error", OSError)
+        try:
+            paths = win32pdh.ExpandCounterPath(r"\GPU Adapter Memory(*)\Dedicated Limit")
+            if paths:
+                h = win32pdh.OpenQuery()
+                counters = [(p, win32pdh.AddCounter(h, p)) for p in paths]
+                win32pdh.CollectQueryData(h)
+                best_bytes = 0.0
+                for _p, c in counters:
+                    try:
+                        _typ, val = win32pdh.GetFormattedCounterValue(c, win32pdh.PDH_FMT_LARGE)
+                        if float(val) > best_bytes:
+                            best_bytes = float(val)
+                    except (OSError, ValueError, TypeError, pdh_err):
+                        continue
+                win32pdh.CloseQuery(h)
+                h = None
+                if best_bytes > 0:
+                    return int(best_bytes / (1024 * 1024))
+        except (OSError, ValueError, TypeError, RuntimeError, pdh_err) as exc:
+            _logger.debug("detect_gpu_total_vram_mib: PDH Dedicated Limit unavailable: %s", exc)
+            if h is not None:
+                try:
+                    win32pdh.CloseQuery(h)
+                except (OSError, pdh_err):
+                    pass
+    except ImportError:
+        pass
+
+    try:
+        import winreg
+        base = r"SYSTEM\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+        best_bytes = 0
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as k:
+            idx = 0
+            while True:
+                try:
+                    sub = winreg.EnumKey(k, idx)
+                    idx += 1
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(k, sub) as sk:
+                        sz, _ = winreg.QueryValueEx(sk, "HardwareInformation.qwMemorySize")
+                        raw = (
+                            int.from_bytes(sz, "little")
+                            if isinstance(sz, (bytes, bytearray))
+                            else int(sz)
+                        )
+                        if raw > best_bytes:
+                            best_bytes = raw
+                except (OSError, ValueError, TypeError):
+                    continue
+        if best_bytes > 0:
+            return int(best_bytes / (1024 * 1024))
+    except (ImportError, OSError, ValueError, TypeError) as exc:
+        _logger.debug("detect_gpu_total_vram_mib: registry VRAM probe skipped: %s", exc)
+
+    return _probe_nvidia_smi_total_mib()
+
+
+def detect_gpu_total_vram_mib(*, refresh: bool = False) -> int | None:
+    """Cached physical GPU total dedicated VRAM in MiB (None if unavailable)."""
+    global _DETECTED_TOTAL_VRAM_CACHE, _DETECTED_TOTAL_VRAM_PROBED
+    if _DETECTED_TOTAL_VRAM_PROBED and not refresh:
+        return _DETECTED_TOTAL_VRAM_CACHE
+    _DETECTED_TOTAL_VRAM_CACHE = _probe_gpu_total_vram_mib()
+    _DETECTED_TOTAL_VRAM_PROBED = True
+    return _DETECTED_TOTAL_VRAM_CACHE
+
+
+def _configured_vram_budget_gb() -> float:
+    """Return configured vram_budget_gb from llama_manager_utils or settings."""
+    try:
+        import sys as _sys
+        _lmu = _sys.modules.get("backend.llama_manager_utils")
+        if _lmu is not None and hasattr(_lmu, "VRAM_BUDGET_GB"):
+            return float(_lmu.VRAM_BUDGET_GB)
+    except (TypeError, ValueError):
+        pass
+    try:
+        from settings import load_settings as _ls
+        _raw = _ls().get("vram_budget_gb", 7.5)
+        return float(_raw if _raw is not None else 7.5)
+    except (ImportError, OSError, TypeError, ValueError):
+        return 7.5
+
+
+def _buffered_total_vram_mib(detected_mib: int | None, vram_budget_gb: float) -> int:
+    """Apply defensive rounding buffer near 8 GiB cards reporting ~8176 MiB."""
+    buf_mib = int(float(vram_budget_gb) * 1024 + 512)
+    if detected_mib is None or detected_mib <= 0:
+        return max(8192, buf_mib)
+    if detected_mib < buf_mib and (buf_mib - detected_mib) <= 512:
+        return max(detected_mib, buf_mib)
+    return int(detected_mib)
+
+
+_INITIAL_TOTAL_VRAM_MIB: int = _buffered_total_vram_mib(
+    detect_gpu_total_vram_mib(), _configured_vram_budget_gb()
+)
+TOTAL_VRAM_MIB: int = _INITIAL_TOTAL_VRAM_MIB
+
+
+def _effective_total_vram_mib() -> int:
+    """Effective GPU total VRAM (MiB).
+
+    Honors explicit monkeypatches to module-level TOTAL_VRAM_MIB first, then
+    runtime TOTAL_VRAM_MIB_OVERRIDE (> 0), before dynamic GPU detection.
+    """
+    if TOTAL_VRAM_MIB != _INITIAL_TOTAL_VRAM_MIB:
+        return int(TOTAL_VRAM_MIB)
+    if TOTAL_VRAM_MIB_OVERRIDE > 0:
+        return int(TOTAL_VRAM_MIB_OVERRIDE)
+    try:
+        from backend import llama_config as _lc
+        lc_ov = int(getattr(_lc, "TOTAL_VRAM_MIB_OVERRIDE", 0) or 0)
+        if lc_ov > 0:
+            return lc_ov
+    except (ImportError, TypeError, ValueError) as _e:
+        _logger.debug("[VRAM] TOTAL_VRAM_MIB_OVERRIDE read skipped: %s", _e)
+    return _buffered_total_vram_mib(
+        detect_gpu_total_vram_mib(), _configured_vram_budget_gb()
+    )
 
 _sel_path_cache: str | None = None
 
@@ -679,7 +864,7 @@ def get_live_gpu_free_mib() -> float | None:
                 _sel_path.rsplit("(", 1)[-1].split(")")[0], _inst_desc,
             )
         used_mib = _by_path[_sel_path] / (1024 * 1024)
-        free_mib = TOTAL_VRAM_MIB - used_mib
+        free_mib = _effective_total_vram_mib() - used_mib
         if free_mib < 0:
             free_mib = 0.0
         return round(free_mib, 1)

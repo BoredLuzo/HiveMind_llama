@@ -988,7 +988,7 @@ async def _inline_tool_lsp_format(args: dict, workspace: Path,
             f"{exc}", tool=tool)
 
 
-def notify_watched_change(workspace: Path, paths) -> int:
+def notify_watched_change(workspace: Path, paths, *, created: bool = False) -> int:
     """Fire workspace/didChangeWatchedFiles for files HiveMind wrote.
 
     Fire-and-forget from the write path: no manager / no live server / any
@@ -1006,7 +1006,33 @@ def notify_watched_change(workspace: Path, paths) -> int:
                              id(loop)))
         if mgr is None:
             return 0
-        return mgr.broadcast_watched_change(list(paths or []))
-    except Exception as exc:
+        plist = list(paths or [])
+        if created:
+            try:
+                return mgr.broadcast_watched_change(plist, created=True)
+            except TypeError:
+                return mgr.broadcast_watched_change(plist)
+        return mgr.broadcast_watched_change(plist)
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
         logger.debug("[LSP] watched-change notify skipped: %s", exc)
+        return 0
+
+
+def notify_config_changed(workspace: Path,
+                          languages: tuple[str, ...] | None = None) -> int:
+    """Fire workspace/didChangeConfiguration on active LSP servers (best-effort)."""
+    try:
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        try:
+            ws_key = str(Path(workspace).resolve())
+        except OSError:
+            ws_key = str(workspace)
+        mgr = _MANAGERS.get((ws_key.lower() if os.name == "nt" else ws_key,
+                             id(loop)))
+        if mgr is None or not hasattr(mgr, "refresh_config"):
+            return 0
+        return mgr.refresh_config(languages)
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as exc:
+        logger.debug("[LSP] config-refresh notify skipped: %s", exc)
         return 0

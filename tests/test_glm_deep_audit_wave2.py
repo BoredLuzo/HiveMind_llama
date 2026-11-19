@@ -251,15 +251,162 @@ with tempfile.TemporaryDirectory(prefix="hm_p2_6_") as _td:
     check("P2-6 model_configs rejects traversal/separator identifiers", _all_blocked)
 
 
-# ── P2-7: fetch_llamacpp build pin ───────────────────────────────────────────
+# ── P2-7: fetch_llamacpp build pin & latest-default / upgrade ─────────────────
+import io as _io  # noqa: E402
+import os as _os  # noqa: E402
+import tarfile as _tarfile  # noqa: E402
+import zipfile as _zipfile  # noqa: E402
+from unittest import mock as _mock  # noqa: E402
 import deploy.fetch_llamacpp as _fl  # noqa: E402
 
 _pin_file = ROOT / "deploy" / "llama_build_pin.txt"
 check("P2-7 llama_build_pin.txt exists and _read_pinned_tag parses bNNNN",
       _pin_file.is_file() and _fl._read_pinned_tag().startswith("b"))
 _fl_src = (ROOT / "deploy" / "fetch_llamacpp.py").read_text(encoding="utf-8")
-check("P2-7 fetch_llamacpp exposes --tag and --latest",
-      '"--tag"' in _fl_src and '"--latest"' in _fl_src)
+check("P2-7 fetch_llamacpp exposes --tag, --latest, --pinned, and --upgrade",
+      all(f in _fl_src for f in ('"--tag"', '"--latest"', '"--pinned"', '"--upgrade"')))
+
+
+def _p2_7_verify() -> None:
+    os_tag = _fl._OS_TAG
+    ext = "zip" if _fl._IS_WIN else "tar.gz"
+    pin_tag = _fl._read_pinned_tag()
+
+    # 1) Default resolution hits newest nightlies and skips incomplete newer CUDA nightly
+    seen_urls: list[str] = []
+    fake_rels = [
+        {
+            "tag_name": "b12501",
+            "assets": [{"name": f"llama-b12501-bin-{os_tag}-cuda-13.1-x64.{ext}"}],
+        },
+        {
+            "tag_name": "b12500",
+            "assets": [
+                {"name": f"llama-b12500-bin-{os_tag}-cuda-12.4-x64.{ext}"},
+                {"name": f"llama-b12500-bin-{os_tag}-cuda-13.1-x64.{ext}"},
+            ],
+        },
+    ]
+
+    def _fake_http_json_cuda(url: str):
+        seen_urls.append(url)
+        if "releases?per_page=100" in url:
+            return fake_rels
+        raise AssertionError(f"unexpected URL in default nightly test: {url}")
+
+    with _mock.patch.object(_fl, "http_json", side_effect=_fake_http_json_cuda), \
+            _mock.patch.dict(_os.environ, {"HIVEMIND_LLAMA_TAG": ""}, clear=False):
+        rels = _fl._resolve_releases("cuda", _fl.ASSET_REGEX["cuda"], max_cuda_version="12.8")
+    picked, picked_tag = _fl._pick_asset(rels, _fl.ASSET_REGEX["cuda"], max_cuda_version="12.8")
+    check("P2-7 default resolution uses nightlies (not pin) & skips incomplete CUDA 13-only nightly",
+          any("releases?per_page=100" in u for u in seen_urls)
+          and not any(f"/tags/{pin_tag}" in u for u in seen_urls)
+          and picked_tag == "b12500"
+          and picked is not None
+          and "cuda-12.4" in picked["name"])
+
+    # 2) --pinned (use_pinned=True) resolves pinned tag; default falls back to pin when latest fails
+    pinned_urls: list[str] = []
+
+    def _fake_http_json_pinned(url: str):
+        pinned_urls.append(url)
+        if f"/tags/{pin_tag}" in url:
+            return {
+                "tag_name": pin_tag,
+                "assets": [{"name": f"llama-{pin_tag}-bin-{os_tag}-vulkan-x64.{ext}"}],
+            }
+        raise OSError("GitHub latest unavailable")
+
+    with _mock.patch.object(_fl, "http_json", side_effect=_fake_http_json_pinned), \
+            _mock.patch.dict(_os.environ, {"HIVEMIND_LLAMA_TAG": ""}, clear=False):
+        pin_rels = _fl._resolve_releases("vulkan", _fl.ASSET_REGEX["vulkan"], use_pinned=True)
+        fb_rels = _fl._resolve_releases("vulkan", _fl.ASSET_REGEX["vulkan"])
+    check("P2-7 --pinned targets deploy/llama_build_pin.txt and latest failure falls back to pin",
+          len(pin_rels) == 1 and pin_rels[0]["tag_name"] == pin_tag
+          and len(fb_rels) == 1 and fb_rels[0]["tag_name"] == pin_tag
+          and any(f"/tags/{pin_tag}" in u for u in pinned_urls))
+
+    # 3) http_json attaches Authorization: Bearer when GITHUB_TOKEN / GH_TOKEN is set
+    captured_auth: list[str] = []
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def _fake_urlopen(req, timeout=60):
+        captured_auth.append(req.get_header("Authorization") or "")
+        return _FakeResp()
+
+    with _mock.patch.object(_fl.urllib.request, "urlopen", side_effect=_fake_urlopen), \
+            _mock.patch.dict(_os.environ, {"GITHUB_TOKEN": "secret-tok-123"}, clear=False):
+        res_tok = _fl.http_json("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=1")
+    check("P2-7 http_json sends Bearer token when GITHUB_TOKEN is set",
+          res_tok == {"ok": True} and captured_auth == ["Bearer secret-tok-123"])
+
+    # 4) --upgrade skips when installed build >= target and upgrades when target is newer
+    with tempfile.TemporaryDirectory(prefix="hm_p2_7_") as td:
+        llama_dir = Path(td) / "llama"
+        cur_dir = llama_dir / f"llama-b12000-bin-{os_tag}-vulkan-x64"
+        cur_dir.mkdir(parents=True)
+        (cur_dir / _fl.SERVER_NAME).write_text("old", encoding="utf-8")
+
+        def _fake_dl(_url: str, dest: Path) -> None:
+            lib_name = "ggml-vulkan.dll" if _fl._IS_WIN else "lib/libggml-vulkan.so"
+            if dest.name.endswith(".tar.gz"):
+                with _tarfile.open(dest, "w:gz") as tf:
+                    for arc_name, data in ((_fl.SERVER_NAME, b"new-bin"), (lib_name, b"so")):
+                        ti = _tarfile.TarInfo(arc_name)
+                        ti.size = len(data)
+                        tf.addfile(ti, _io.BytesIO(data))
+            else:
+                with _zipfile.ZipFile(dest, "w") as zf:
+                    zf.writestr(_fl.SERVER_NAME, b"MZ-new")
+                    zf.writestr(lib_name, b"DLL")
+
+        def _rel_for(build_num: int) -> list[dict]:
+            return [{
+                "tag_name": f"b{build_num}",
+                "assets": [{
+                    "name": f"llama-b{build_num}-bin-{os_tag}-vulkan-x64.{ext}",
+                    "browser_download_url": f"https://example.invalid/b{build_num}.{ext}",
+                }],
+            }]
+
+        orig_llama_dir = _fl.LLAMA_DIR
+        _fl.LLAMA_DIR = llama_dir
+        try:
+            dl_calls: list[str] = []
+
+            def _dl_spy(url: str, dest: Path) -> None:
+                dl_calls.append(url)
+                _fake_dl(url, dest)
+
+            buf_skip = _io.StringIO()
+            with _mock.patch.object(_fl, "http_json", return_value=_rel_for(12000)), \
+                    _mock.patch.object(_fl, "download", side_effect=_dl_spy), \
+                    _mock.patch.object(sys, "stdout", buf_skip):
+                rc_skip = _fl.main(["--backend", "vulkan", "--upgrade"])
+            check("P2-7 --upgrade skips download when installed build is already current",
+                  rc_skip == 0 and not dl_calls and "already up to date" in buf_skip.getvalue())
+
+            with _mock.patch.object(_fl, "http_json", return_value=_rel_for(12500)), \
+                    _mock.patch.object(_fl, "download", side_effect=_dl_spy):
+                rc_up = _fl.main(["--backend", "vulkan", "--upgrade"])
+            new_have = _fl.existing_build("vulkan")
+            check("P2-7 --upgrade downloads and installs when newer build is available",
+                  rc_up == 0 and len(dl_calls) == 1
+                  and new_have is not None and new_have[0] == 12500)
+        finally:
+            _fl.LLAMA_DIR = orig_llama_dir
+
+
+_p2_7_verify()
 
 
 # ── Bench runner + Colab autopilot notebook ──────────────────────────────────

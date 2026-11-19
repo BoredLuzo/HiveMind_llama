@@ -2,9 +2,9 @@
 from fastapi import APIRouter, Request, Query
 from fastapi.responses import JSONResponse
 
-from vision.preprocess import _load_vision_model_cfg, _save_vision_model_cfg
+from vision.preprocess import _load_vision_model_cfg, _save_vision_model_cfg, _vision_cfg
 from backend import api_tags as _bk_tags
-from core.state import _vision_cfg, S_models_cache
+from core.state import S_models_cache
 
 router = APIRouter(prefix="/vision", tags=["Vision"])
 
@@ -12,6 +12,7 @@ router = APIRouter(prefix="/vision", tags=["Vision"])
 @router.get("/config")
 async def get_vision_config():
     cfg = _load_vision_model_cfg()
+    _vision_cfg.clear()
     _vision_cfg.update(cfg)
     return _vision_cfg
 
@@ -19,8 +20,12 @@ async def get_vision_config():
 @router.post("/config")
 async def set_vision_config(req: Request):
     data = await req.json()
+    if not isinstance(data, dict):
+        return JSONResponse({"ok": False, "reason": "Expected JSON object"}, status_code=400)
     allowed = {"model", "enabled", "prompt"}
     patch = {k: v for k, v in data.items() if k in allowed}
+    if not _vision_cfg:
+        _vision_cfg.update(_load_vision_model_cfg())
     _vision_cfg.update(patch)
     _save_vision_model_cfg(_vision_cfg)
     return {"ok": True, "config": _vision_cfg}

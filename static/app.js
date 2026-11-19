@@ -2187,6 +2187,11 @@ function _voiceStopAudio() {
     try { _ttsAudio.pause(); } catch (e) { /* already stopped */ }
     _ttsAudio = null;
   }
+  try {
+    document.querySelectorAll('.msg-speak.playing').forEach(function (el) {
+      el.classList.remove('playing');
+    });
+  } catch (e) { /* non-DOM test env */ }
 }
 
 async function _ttsFetchBlob(text, opts) {
@@ -2245,6 +2250,7 @@ async function voiceSpeakText(text, btn) {
     _voiceStopAudio();
     _ttsAudio = _ttsAudioFromBlob(blob);
     _ttsAudio.onended = function () { if (btn && btn.classList) btn.classList.remove('playing'); };
+    _ttsAudio.onerror = function () { if (btn && btn.classList) btn.classList.remove('playing'); };
     await _ttsAudio.play();
   } catch (e) {
     if (btn && btn.classList) btn.classList.remove('playing');
@@ -2406,6 +2412,7 @@ var _ANSWER_CHROME_SEL = [
   '.think-block', '.think-body', '.planner-think-block',
   '.amsg-foot', '.msg-speak', '.duo-verdict', '.critic-box', '.img-desc-box',
   '.budget-bar', '.ctx-cut', '.files-summary', '.status-txt', '.pload',
+  '.steer-note', '.fc-preview', '.repair-badge',
   'details', 'pre', 'code', '.pre-call-reasoning'
 ].join(',');
 
@@ -2553,7 +2560,12 @@ function _syncSpeakButtons(scope) {
     var btn = wrap.querySelector('.amsg-foot .msg-speak');
     if (!btn) return;
     var body = wrap.querySelector('.abody');
-    var hasText = _answerLenOnly(body) > 8;
+    // Keep the speaker button hidden while the bubble is still streaming (.live):
+    // pre-call text before a tool_call gets collapsed into .pre-call-reasoning,
+    // which otherwise flashed the button in and left it stuck under tool chips
+    // with nothing to read aloud.
+    var isLive = !!(body && body.classList && body.classList.contains('live'));
+    var hasText = !isLive && _answerLenOnly(body) > 8;
     btn.style.display = (hasText && S && S.ttsEnabled) ? '' : 'none';
   });
 }
@@ -5535,6 +5547,7 @@ function _liveMdRawOf(body) {
 }
 
 function _liveMdReset(body) {
+  if (_liveMdTrailT) { clearTimeout(_liveMdTrailT); _liveMdTrailT = null; }
   body._liveRaw = null;
   body._liveEl  = null;
   body._textRun = null;
@@ -5549,6 +5562,7 @@ function _liveMdAppend(body, text) {
 
 function _liveMdRender(body, force) {
   if (!body) return;
+  if (force && _liveMdTrailT) { clearTimeout(_liveMdTrailT); _liveMdTrailT = null; }
   var raw = _liveMdRawOf(body);
   if (!raw && !body._liveEl) return;  // nothing to render, no element to create
   if (raw.length > _liveMdMaxLen && !force) {
@@ -5606,6 +5620,10 @@ var _tgCards = {};
 var _tgPanelLastRender = 0;
 var _TG_PANEL_RENDER_MS = 120;
 var _TG_PENDING_KEY = '\u0000pending-write';   // panel tab key until the path parses
+var _tgPanelRafId = null;
+var _tgPanelRafIsTimer = false;
+var _tgPanelDirty = false;
+var _tgPendingCards = new Set();
 // Stream-follow state (2026-09-21): which file the panel auto-follows, the
 // last tick time per streaming file (sticky switch, no two-file yoyo), and
 // the file a live stream currently feeds (for the panel-open jump).
@@ -5798,14 +5816,76 @@ function _tgPanelDropPending() {
   });
 }
 
+function _tgCancelPanelRaf() {
+  if (!_tgPanelRafId) return;
+  if (_tgPanelRafIsTimer) clearTimeout(_tgPanelRafId);
+  else if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_tgPanelRafId);
+  _tgPanelRafId = null;
+  _tgPanelRafIsTimer = false;
+}
+
+function _tgSyncCardMeta(st) {
+  if (!st) return;
+  if (!st.path) {
+    var pm = st.buf.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (pm) {
+      var p = _tgUnescape(pm[1]);
+      if (p !== st.path) {
+        st.path = p;
+        if (st.chip) {
+          var pathEl = st.chip.querySelector('.tg-path');
+          if (pathEl) pathEl.textContent = p;
+          st.chip.title = 'click: watch the code stream into the panel';
+        }
+      }
+    }
+  }
+  if (st.chip) {
+    var charsEl = st.chip.querySelector('.tg-chars');
+    if (charsEl) charsEl.textContent = st.buf.length + ' chars';
+  }
+}
+
+function _tgSchedulePanelStream(st) {
+  if (st) _tgPendingCards.add(st);
+  _tgPanelDirty = true;
+  if (_tgPanelRafId) return;
+  var _run = function() {
+    _tgPanelRafId = null;
+    _tgPanelRafIsTimer = false;
+    if (!_tgPanelDirty && !_tgPendingCards.size) return;
+    _tgPanelDirty = false;
+    var cards = Array.from(_tgPendingCards);
+    _tgPendingCards.clear();
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      if (c && _tgCards[c.idx] === c) {
+        _tgSyncCardMeta(c);
+        _tgPanelStream(c);
+      }
+    }
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    _tgPanelRafIsTimer = false;
+    _tgPanelRafId = requestAnimationFrame(_run);
+  } else {
+    _tgPanelRafIsTimer = true;
+    _tgPanelRafId = setTimeout(_run, 16);
+  }
+}
+
 function _tgPanelFlush() {
   // Final unthrottled render of every streaming tab (throttle may have
   // skipped the tail of the stream). Pending entries move to their real
   // path when known; a path-less pending tab is dropped by _toolGenDone
   // (the file_change event brings the real file after execution).
+  _tgCancelPanelRaf();
+  _tgPanelDirty = false;
+  _tgPendingCards.clear();
   for (var k in _tgCards) {
     var st = _tgCards[k];
     if (!st) continue;
+    _tgSyncCardMeta(st);
     var txt;
     if (st.tool === 'edit_file') {
       var _otE = _tgFieldSpan(st.buf, 'old_text');
@@ -5901,17 +5981,7 @@ function _toolGenStream(d) {
       st.chip.querySelector('.tc-name').textContent = d.name;
       st.chip.querySelector('.tc-icon').textContent = _TOOL_ICONS[d.name] || '\u270d\ufe0f';
     }
-    var pm = st.buf.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    if (pm) {
-      var p = _tgUnescape(pm[1]);
-      if (p !== st.path) {
-        st.path = p;
-        st.chip.querySelector('.tg-path').textContent = p;
-        st.chip.title = 'click: watch the code stream into the panel';
-      }
-    }
-    st.chip.querySelector('.tg-chars').textContent = st.buf.length + ' chars';
-    _tgPanelStream(st);
+    _tgSchedulePanelStream(st);
   } catch(e) { /* never break the stream */ }
 }
 
@@ -6156,6 +6226,7 @@ function doneAgent(elapsed) {
   const lh = document.getElementById('lh-' + S.curAgent.tid);
   if (lh) lh.style.display = 'none';
   S.curAgent.body.classList.remove('live');
+  if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons(S.curAgent.body.closest('.ablock'));
   const t = document.getElementById(S.curAgent.tid);
   if (t) {
     var _tokRate = Number(S.perfTokRate || 0);
@@ -6733,22 +6804,136 @@ function rmEl(id) {
 
 function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
-// CHAT-STRUCTURE-FIX (2026-08-07): clean saved chat HTML before it is
-// inserted into the DOM on load — strip active script/embed content and event handlers.
+// CHAT-STRUCTURE-FIX (2026-08-07) + DOMParser allowlist (C6): clean saved
+// chat HTML before it is inserted into the DOM on load.
+var _CHAT_DROP_TAGS = new Set([
+  'script', 'iframe', 'object', 'embed', 'style', 'link', 'meta', 'base',
+  'form', 'svg', 'math', 'set', 'template', 'noscript', 'noembed', 'xmp', 'textarea'
+]);
+var _CHAT_ALLOW_TAGS = new Set([
+  'div', 'span', 'p', 'br', 'hr', 'pre', 'code', 'details', 'summary',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'ul', 'ol', 'li',
+  'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i',
+  'u', 's', 'del', 'sub', 'sup', 'a', 'img', 'button'
+]);
+var _CHAT_SAFE_ATTRS = new Set([
+  'class', 'title', 'open', 'colspan', 'rowspan', 'alt', 'width', 'height',
+  'target', 'rel', 'type', 'value', 'start', 'disabled'
+]);
+
+function _isSafeSanitizedUrl(rawUrl, isImgSrc) {
+  var s = String(rawUrl || '').trim();
+  if (!s) return false;
+  var compact = s.replace(/[\u0000-\u0020]+/g, '');
+  var lower = compact.toLowerCase();
+  if (lower.indexOf('javascript:') === 0 || lower.indexOf('vbscript:') === 0) return false;
+  if (isImgSrc) {
+    if (/^data:image\/(?:png|jpeg|jpg|gif|webp);base64,[a-z0-9+/=]+$/i.test(compact)) return true;
+    if (lower.indexOf('data:') === 0) return false;
+    if (lower.indexOf('http://') === 0 || lower.indexOf('https://') === 0) return true;
+    if (s[0] === '/' && s[1] !== '/') return true;
+    return false;
+  }
+  if (lower.indexOf('data:') === 0) return false;
+  if (lower.indexOf('http://') === 0 || lower.indexOf('https://') === 0 || lower.indexOf('mailto:') === 0) return true;
+  if ((s[0] === '/' && s[1] !== '/') || s[0] === '#') return true;
+  return false;
+}
+
+function _sanitizeStyleAttr(rawStyle) {
+  var cleaned = String(rawStyle || '').replace(/\/\*[\s\S]*?\*\//g, '');
+  var kept = [];
+  cleaned.split(';').forEach(function(part) {
+    var decl = part.trim();
+    if (!decl) return;
+    var norm = decl.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+    if (/url\(|expression\(|@import|behavior:|-moz-binding|\\/.test(norm)) return;
+    kept.push(decl);
+  });
+  return kept.join('; ');
+}
+
+function _sanitizeChatNode(node, outDoc) {
+  if (!node) return null;
+  if (node.nodeType === 3) {
+    return outDoc.createTextNode(node.nodeValue || '');
+  }
+  if (node.nodeType !== 1) return null;
+  var tag = String(node.tagName || '').toLowerCase();
+  if (_CHAT_DROP_TAGS.has(tag)) return null;
+  if (!_CHAT_ALLOW_TAGS.has(tag)) {
+    var frag = outDoc.createDocumentFragment();
+    Array.prototype.forEach.call(node.childNodes || [], function(ch) {
+      var cleanCh = _sanitizeChatNode(ch, outDoc);
+      if (cleanCh) frag.appendChild(cleanCh);
+    });
+    return frag;
+  }
+  var el = outDoc.createElement(tag);
+  var attrs = node.attributes || [];
+  var forceRelNoopener = false;
+  for (var i = 0; i < attrs.length; i++) {
+    var attr = attrs[i];
+    if (!attr) continue;
+    var aname = String(attr.name || '').toLowerCase();
+    var aval = String(attr.value || '');
+    if (!aname || aname.indexOf('on') === 0 || aname === 'srcdoc' || aname === 'formaction' || aname === 'xlink:href') {
+      continue;
+    }
+    if (aname === 'href') {
+      if (tag === 'a' && _isSafeSanitizedUrl(aval, false)) {
+        el.setAttribute('href', aval.trim());
+      }
+      continue;
+    }
+    if (aname === 'src') {
+      if (tag === 'img' && _isSafeSanitizedUrl(aval, true)) {
+        el.setAttribute('src', aval.trim());
+      }
+      continue;
+    }
+    if (aname === 'style') {
+      var safeCss = _sanitizeStyleAttr(aval);
+      if (safeCss) el.setAttribute('style', safeCss);
+      continue;
+    }
+    if (aname === 'target') {
+      if (tag === 'a' && (aval === '_blank' || aval === '_self')) {
+        el.setAttribute('target', aval);
+        if (aval === '_blank') forceRelNoopener = true;
+      }
+      continue;
+    }
+    if (_CHAT_SAFE_ATTRS.has(aname) || /^data-[a-z0-9_-]+$/.test(aname)) {
+      el.setAttribute(aname, aval);
+    }
+  }
+  if (forceRelNoopener) el.setAttribute('rel', 'noopener noreferrer');
+  Array.prototype.forEach.call(node.childNodes || [], function(ch) {
+    var cleanCh = _sanitizeChatNode(ch, outDoc);
+    if (cleanCh) el.appendChild(cleanCh);
+  });
+  return el;
+}
+
 function _sanitizeChatHtml(html) {
-  return String(html || '')
-    .replace(/<script[\s\S]*?(?:<\/script>|$)/gi, '')
-    .replace(/<iframe[\s\S]*?(?:<\/iframe>|$)/gi, '')
-    .replace(/<object[\s\S]*?(?:<\/object>|$)/gi, '')
-    .replace(/<embed[\s\S]*?>/gi, '')
-    .replace(/<set\b[\s\S]*?>/gi, '')
-    // XSS (audit 2026-11-03): match handlers without a leading space
-    // (<img src=x/onerror=...>), entity-encoded javascript: schemes, and
-    // quoted URLs that hide the scheme behind HTML entities.
-    .replace(/\/?on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/(?:href|src|xlink:href)\s*=\s*["']?\s*(?:javascript|vbscript|data)\s*:[^"'\s>]*["']?/gi, 'href="#"')
-    .replace(/&#(?:x0*6a|0*106);?/gi, '')
-    .replace(/(?:javascript|vbscript)\s*:/gi, '');
+  var raw = String(html || '');
+  if (!raw) return '';
+  if (typeof DOMParser === 'undefined') return _escHtml(raw);
+  try {
+    var parsed = new DOMParser().parseFromString(raw, 'text/html');
+    var root = document.createElement('div');
+    if (parsed && parsed.body) {
+      Array.prototype.forEach.call(parsed.body.childNodes || [], function(ch) {
+        var cleanCh = _sanitizeChatNode(ch, document);
+        if (cleanCh) root.appendChild(cleanCh);
+      });
+    }
+    return root.innerHTML;
+  } catch (e) {
+    console.warn('[_sanitizeChatHtml] DOMParser fallback:', e);
+    return _escHtml(raw);
+  }
 }
 
 function _workerBaseModelName(model) {
@@ -7406,6 +7591,7 @@ async function sendMsg() {
   } catch(e) {
     if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
     _cleanupLoadTimers();
+    _toolGenDone();
     // STREAM-ERROR-UX (2026-09-04): "Error in input stream" ist ein
     // Transportabbruch (Stop/Verbindung), kein Modell-Fehler - nicht als roten
     // Fehler-Bubble ausgeben, sondern als neutralen/amber Hinweis.
@@ -7414,15 +7600,20 @@ async function sendMsg() {
     const _isConnDrop = !_isAbort && /input stream|network|fetch failed|body stream/i.test(_errMsg);
     const _hadBody = S.curAgent && S.curAgent.body && String(S.curAgent.body.textContent || '').trim();
     if (S.curAgent) {
+      var _setNotice = function (el, msg, col) {
+        var sp = document.createElement('span');
+        sp.className = 'status-txt';
+        sp.style.color = col;
+        sp.textContent = msg;
+        el.textContent = '';
+        el.appendChild(sp);
+      };
       if (!_hadBody && _isAbort) {
-        S.curAgent.body.textContent = '[Run aborted]';
-        S.curAgent.body.style.color = '#7a8fa8';
+        _setNotice(S.curAgent.body, '[Run aborted]', '#7a8fa8');
       } else if (!_hadBody && _isConnDrop) {
-        S.curAgent.body.textContent = '[Connection lost - run may be parked]';
-        S.curAgent.body.style.color = '#7a8fa8';
+        _setNotice(S.curAgent.body, '[Connection lost - run may be parked]', '#7a8fa8');
       } else if (!_hadBody && !_isAbort) {
-        S.curAgent.body.textContent = '[Error: ' + _errMsg + ']';
-        S.curAgent.body.style.color = '#b04040';
+        _setNotice(S.curAgent.body, '[Error: ' + _errMsg + ']', '#b04040');
       }
       S.curAgent.body.classList.remove('live');
       S.curAgent = null;
@@ -7447,8 +7638,11 @@ async function sendMsg() {
     }
     document.querySelectorAll('.abody.live').forEach(function(b) {
       if (!b.textContent.trim()) {
-        b.textContent = '[No output - stream aborted]';
-        b.style.color = '#7a8fa8';
+        var sp = document.createElement('span');
+        sp.className = 'status-txt';
+        sp.style.color = '#7a8fa8';
+        sp.textContent = '[No output - stream aborted]';
+        b.appendChild(sp);
       }
       b.classList.remove('live');
     });
@@ -7456,6 +7650,8 @@ async function sendMsg() {
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch
+    _toolGenDone();
+    document.querySelectorAll('#chat .abody.live').forEach(function (b) { b.classList.remove('live'); });
     if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons();
     // READ ALOUD at run end: direct reads the whole answer, an agentic run reads
     // the coder's final answer (the plan was already spoken when it appeared).
@@ -8233,6 +8429,7 @@ function handleEvent(d) {
     }
   }
   else if (d.type === 'agent_done')     {
+    _toolGenDone();
     // tune format: critic_tune arrives in the agent_done event
     if (d.critic_tune && S.curAgent) {
       const body = S.curAgent.body;
@@ -8246,7 +8443,11 @@ function handleEvent(d) {
   else if (d.type === 'clear_agent') {
     if (S.curAgent) {
       const body = document.getElementById('ab-' + S.curAgent.tid) || S.curAgent.body;
-      if (body) body.textContent = '';
+      if (body) {
+        body.textContent = '';
+        _liveMdReset(body);
+        if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons(body.closest('.ablock'));
+      }
       S.curAgent._thinkBuf = '';
       S.curAgent._inThink  = false;
       S.curAgent._toolXmlCarry = '';
@@ -8633,6 +8834,7 @@ function handleEvent(d) {
         if (_arnd) _arnd.textContent = ' \u00B7 R' + d.round;
         _existingCoderBlock.classList.add('live');
         if (S.curAgent.body) S.curAgent.body.classList.add('live');
+        if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons(_existingCoderBlock);
         S._thinkBlockId = null;
       } else {
         startDuoAgent('coder', 'Coder', d.model || '', 'R' + d.round);
@@ -9334,6 +9536,7 @@ function handleEvent(d) {
   }
   else if (d.type === 'done') {
     S._sawDoneEvent = true;
+    _toolGenDone();
     try { sessionStorage.removeItem('hm_run_id'); } catch (e) {}
     _cleanupLoadTimers();
     _perfOnDone(d);
@@ -9665,6 +9868,7 @@ function handleEvent(d) {
       _tcBody.appendChild(_wsSep);
     }
     _pruneToolCallRows(_tcBody, 200);
+    if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons(_tcBody.closest('.ablock'));
     scrollBtmIfNearBottom(60);
   }
   else if (d.type === 'tool_result') {
@@ -9708,9 +9912,10 @@ function handleEvent(d) {
       var _trChip = _trLastRow.querySelector('.tool-call-chip');
       if (_trChip) _trChip.classList.add('tc-error');
     }
-    // Short: <120 chars AND text matches full (both stripped server-side now)
-    var _trShort = _trFull.length < 120 && _trText === _trFull;
+    // Short: single-line <120 chars AND text matches full (multi-line output
+    // must render in <pre>, never jammed into the flex <summary> row).
     var _trLines = _trFull.split('\n').length;
+    var _trShort = _trFull.length < 120 && _trLines === 1 && _trText === _trFull;
     var _trBlock = document.createElement('details');
     _trBlock.className = 'tool-result-block' + (_trOk ? '' : ' err') + (_trShort ? ' short' : '');
     // BUG-1 FIX: always open short results — content is in _trPre which is
@@ -9821,7 +10026,7 @@ function handleEvent(d) {
     if (_trToolName === 'task_complete' && _trOk) {
       var _trTcStatus = 'untested';
       try { var _trJ = JSON.parse(_trFull); _trTcStatus = (_trJ.build_status || _trJ.status || '').toLowerCase(); } catch(_) {
-        var _trRe = /(?:build_status|status)["\s:]+(\w+)/i; var _trM = _trFull.match(_trRe); if (_trM) _trTcStatus = _trM[1].toLowerCase();
+        var _trRe = /(?:build_status|build|status)["\s:]+(\w+)/i; var _trM = _trFull.match(_trRe); if (_trM) _trTcStatus = _trM[1].toLowerCase();
       }
       var _trTcColor = /^(passing|completed|success)$/i.test(_trTcStatus) ? '#22c55e' : /^(failing|blocked|error)$/i.test(_trTcStatus) ? '#c04040' : '#686868';
       _trTcBadge = '<span style="display:inline-block;font-size:10px;font-weight:700;background:' + _trTcColor + '1a;color:' + _trTcColor + ';border:1px solid ' + _trTcColor + '40;border-radius:3px;padding:0 5px;margin-right:4px;">' + esc(_trTcStatus) + '</span>';
@@ -10549,7 +10754,11 @@ function showEvalResult(msg, suggestions, model) {
         '<span style="color:#7a8fa8">\u2192</span>' +
         '<span style="color:#3a9960;font-weight:600">' + s.suggested + '</span>' +
       '</div>' +
-      '<button onclick="applyEvalSuggestion(\'' + esc(model) + '\',\'' + esc(s.agent) + '\',\'' + esc(s.field) + '\',' + s.suggested + ',this)" ' +
+      '<button type="button" class="eval-apply-btn" ' +
+        'data-model="' + esc(model) + '" ' +
+        'data-agent="' + esc(s.agent) + '" ' +
+        'data-field="' + esc(s.field) + '" ' +
+        'data-suggested="' + esc(String(s.suggested)) + '" ' +
         'style="background:none;border:1px solid #3a9960;border-radius:4px;padding:3px 10px;' +
         'color:#3a9960;font-family:\'IBM Plex Mono\',monospace;font-size:10px;cursor:pointer;transition:all .15s">' +
         '\u2713 Apply' +
@@ -10557,6 +10766,16 @@ function showEvalResult(msg, suggestions, model) {
     '</div>';
   });
   c.innerHTML = html;
+  if (!c._evalDelegated) {
+    c._evalDelegated = true;
+    c.addEventListener('click', function(ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('.eval-apply-btn') : null;
+      if (!btn || !c.contains(btn)) return;
+      var val = parseFloat(btn.dataset.suggested);
+      if (!isFinite(val)) return;
+      applyEvalSuggestion(btn.dataset.model || '', btn.dataset.agent || '', btn.dataset.field || '', val, btn);
+    });
+  }
 }
 
 async function applyEvalSuggestion(model, agent, field, value, btn) {
@@ -14061,9 +14280,8 @@ async function refreshVram(fromTimer) {
         var ttl    = fmtTtl(m.expires_at);
         var ttlCol = ttl==='\u221e' ? '#3a9960' : (parseInt(ttl)<5 && ttl.includes('m')) ? '#b04040' : '#556677';
         var segW   = TOTAL > 0 ? Math.max(2, m.vram_gb/TOTAL*100).toFixed(1) : '0';
-        var mEsc   = m.name.replace(/'/g,"\\'");
         var approx = m.from_lookup ? '~' : '';
-        var safeTitle = esc(m.name).replace(/"/g,'&quot;');
+        var safeTitle = esc(m.name);
 
         rows += '<div class="vram-model-card">'
           +'<div class="vram-model-top">'
@@ -14075,7 +14293,7 @@ async function refreshVram(fromTimer) {
           +'<div class="vram-model-meta">'
           +(ttl ? '<span class="vram-model-ttl" style="color:'+ttlCol+'">'+ttl+'</span>' : '')
           +'<span class="vram-model-size">'+approx+m.vram_gb.toFixed(1)+' GB</span>'
-          +'<button class="vram-model-unload" onclick="unloadModel(\''+mEsc+'\')" title="Unload">&#215;</button>'
+          +'<button type="button" class="vram-model-unload" data-model="'+safeTitle+'" title="Unload">&#215;</button>'
           +'</div>'
           +'</div>'
           +'<div class="vram-model-meter"><div class="vram-model-meter-fill" style="width:'+segW+'%;background:'+modelColor+'"></div></div>'
@@ -14122,7 +14340,18 @@ async function refreshVram(fromTimer) {
         +'Then restart Ollama (tray → Quit).</span>'
         +'</div>';
     }
-    if (listEl) listEl.innerHTML = rows;
+    if (listEl) {
+      listEl.innerHTML = rows;
+      if (!listEl._unloadDelegated) {
+        listEl._unloadDelegated = true;
+        listEl.addEventListener('click', function(ev) {
+          var btn = ev.target && ev.target.closest ? ev.target.closest('.vram-model-unload') : null;
+          if (!btn || !listEl.contains(btn)) return;
+          var mName = btn.dataset.model || '';
+          if (mName) unloadModel(mName);
+        });
+      }
+    }
 
     // force kill button: show when the VRAM bar is >10% but no models are listed
     // (= suspected orphan process — e.g. after a server restart), OR whenever a
@@ -14346,8 +14575,7 @@ function _renderAvailableModels(models, filter) {
     var btnClass = isLoaded ? 'avail-load-btn loaded' : 'avail-load-btn';
     var btnLabel = isLoaded ? '&#215; Unload' : '&#9654; Load';
     var btnTitle = isLoaded ? 'Unload from VRAM' : 'Load into VRAM';
-    var mEsc = m.name.replace(/'/g, "\\'");
-    var safeTitle = esc(m.name).replace(/"/g,'&quot;');
+    var safeTitle = esc(m.name);
     var pct = m.vram_gb && budget > 0 ? Math.min(100, (m.vram_gb / budget) * 100) : 0;
     var barColor = m.vram_gb >= budget * 0.9 ? '#b04040' : (m.vram_gb >= budget * 0.75 ? '#e09030' : '#4878c0');
     var meterClass = m.vram_gb ? 'avail-model-meter' : 'avail-model-meter unknown';
@@ -14361,11 +14589,20 @@ function _renderAvailableModels(models, filter) {
       + '</div>'
       + '<div class="avail-model-actions">'
       + '<span class="avail-model-gb">' + gb + '</span>'
-      + '<button class="' + btnClass + '" title="' + btnTitle + '" onclick="toggleAvailModel(\'' + mEsc + '\', this)">' + btnLabel + '</button>'
+      + '<button type="button" class="' + btnClass + '" title="' + btnTitle + '" data-model="' + safeTitle + '">' + btnLabel + '</button>'
       + '</div>'
       + '</div>';
   }).join('');
   list.innerHTML = rows;
+  if (!list._availDelegated) {
+    list._availDelegated = true;
+    list.addEventListener('click', function(ev) {
+      var btn = ev.target && ev.target.closest ? ev.target.closest('.avail-load-btn') : null;
+      if (!btn || !list.contains(btn)) return;
+      var mName = btn.dataset.model || '';
+      if (mName) toggleAvailModel(mName, btn);
+    });
+  }
 }
 
 function filterAvailableModels(val) {
@@ -14373,10 +14610,11 @@ function filterAvailableModels(val) {
 }
 
 async function toggleAvailModel(name, btn) {
+  if (!btn || btn.disabled || btn.classList.contains('loading')) return;
   var isLoaded = btn.classList.contains('loaded');
+  btn.disabled = true;
   btn.classList.add('loading');
   btn.textContent = isLoaded ? 'Unloading...' : 'Loading...';
-  btn.onclick = null;
   try {
     if (isLoaded) {
       var r = await fetch('/vram/unload', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -14384,6 +14622,8 @@ async function toggleAvailModel(name, btn) {
       if (!r.ok) throw new Error('Unload failed: ' + r.status);
       showStatus(name.split(':')[0] + ' unloaded');
       await Promise.all([refreshVram(), refreshAvailableModels()]);
+      btn.disabled = false;
+      btn.classList.remove('loading');
     } else {
       var ka = document.getElementById('model-keepalive-sel') ? document.getElementById('model-keepalive-sel').value : '10m';
       // start the load request (returns immediately, llama-server loads in the background)
@@ -14418,12 +14658,14 @@ async function toggleAvailModel(name, btn) {
         showStatus(logMsg);
       }
       await Promise.all([refreshVram(), refreshAvailableModels()]);
+      btn.disabled = false;
+      btn.classList.remove('loading');
     }
   } catch(e) {
+    btn.disabled = false;
     btn.classList.remove('loading');
     btn.classList.toggle('loaded', isLoaded);
     btn.innerHTML = isLoaded ? '&#215; Unload' : '&#9654; Load';
-    btn.onclick = function(){toggleAvailModel(name,btn);};
     var msg = e && e.message ? e.message : String(e);
     showStatus((isLoaded ? 'Unload' : 'Load') + ' failed: ' + msg.slice(0, 80));
     console.warn('toggleAvailModel:', e);
@@ -15860,7 +16102,9 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
      ['mcp-client-toggle', 'MCP server (external tools)', null, 'Backend',
       'mcp model context protocol server external tools 8090 stdio http client hivemind tools'],
      ['p-configs', 'External clients / API access', null, 'Backend',
-      'api openai compatible endpoint v1 chat completions external client integration rest']].forEach(function(d) {
+      'api openai compatible endpoint v1 chat completions external client integration rest'],
+     ['adv-engine-settings-card', 'Advanced / Engine Settings', null, 'Settings',
+      'advanced engine settings schema kv cache spec decode mtp dflash vram margin duo compress sampling override']].forEach(function(d) {
       var card = document.getElementById(d[0]) ?
         document.querySelector('.cfg-card:has(#' + d[0] + ')') : null;
       var el = document.getElementById(d[0]);
@@ -15979,7 +16223,11 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
           var n = h.el;
           while (n && n !== document.body) {
             if (n.style && n.style.display === 'none') n.style.display = '';
+            if (n.tagName === 'DETAILS' && !n.open) n.open = true;
             n = n.parentElement;
+          }
+          if (h.el.id === 'adv-engine-settings-card' && typeof loadAdvancedSettingsSchema === 'function') {
+            loadAdvancedSettingsSchema();
           }
         }
         setTimeout(function() { _flash(h.el); }, 120);
@@ -16063,3 +16311,792 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
 
   window.hivemindFeatureSearch = { open: _open, rebuild: function() { _fsIndex = _buildIndex(); } };
 })();
+
+// ── Advanced / Engine Settings Drawer (C3) ──────────────────────────────────
+var _advSettingsSchema = null;
+
+function _advDeepEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_advDeepEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (typeof a === 'object') {
+    var ka = Object.keys(a).sort();
+    var kb = Object.keys(b).sort();
+    if (ka.length !== kb.length) return false;
+    for (var j = 0; j < ka.length; j++) {
+      if (ka[j] !== kb[j] || !_advDeepEqual(a[ka[j]], b[kb[j]])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function _advSetDrawerStatus(msg, isErr) {
+  var st = document.getElementById('adv-settings-status');
+  if (!st) return;
+  st.textContent = msg || '';
+  st.style.color = isErr ? '#c06060' : 'var(--tx2, #7a8fa8)';
+}
+
+function _advScopeBadgeStyle(mode) {
+  if (mode === 'restart') {
+    return 'color:#c06060;border:1px solid rgba(192,96,96,.4);background:rgba(192,96,96,.08)';
+  }
+  if (mode === 'next_load') {
+    return 'color:#e09030;border:1px solid rgba(224,144,48,.4);background:rgba(224,144,48,.08)';
+  }
+  return 'color:#3a9960;border:1px solid rgba(58,153,96,.4);background:rgba(58,153,96,.08)';
+}
+
+async function _advSaveEntry(entry, newVal, rowStatusEl, modBadgeEl, resetBtnEl) {
+  if (rowStatusEl) {
+    rowStatusEl.textContent = 'Saving...';
+    rowStatusEl.style.color = 'var(--tx2, #7a8fa8)';
+  }
+  try {
+    var patch = {};
+    patch[entry.key] = newVal;
+    await postSettings(patch);
+    entry.value = newVal;
+    var modified = !_advDeepEqual(entry.value, entry.default);
+    if (modBadgeEl) modBadgeEl.style.display = modified ? 'inline-block' : 'none';
+    if (resetBtnEl) resetBtnEl.disabled = !modified;
+    var scopeNote = entry.apply_mode === 'restart'
+      ? 'Saved (restart required)'
+      : (entry.apply_mode === 'next_load' ? 'Saved (next load)' : 'Saved');
+    if (rowStatusEl) {
+      rowStatusEl.textContent = scopeNote;
+      rowStatusEl.style.color = '#3a9960';
+    }
+    _advSetDrawerStatus(entry.key + ': ' + scopeNote, false);
+  } catch (e) {
+    console.warn('[adv-settings] save failed for ' + entry.key + ':', e);
+    if (rowStatusEl) {
+      rowStatusEl.textContent = 'Save failed: ' + (e && e.message || e);
+      rowStatusEl.style.color = '#c06060';
+    }
+    _advSetDrawerStatus('Save failed for ' + entry.key, true);
+  }
+}
+
+function _advBuildInput(entry, rowStatusEl, modBadgeEl, resetBtnEl) {
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap';
+  var hasChoices = Array.isArray(entry.choices) && entry.choices.length > 0;
+
+  if (hasChoices) {
+    var sel = document.createElement('select');
+    sel.className = 'fld-input';
+    sel.style.cssText = 'flex:1;min-width:140px;padding:4px 6px;font-size:10.5px';
+    if (entry.nullable) {
+      var nullOpt = document.createElement('option');
+      nullOpt.value = '__null__';
+      nullOpt.textContent = '(null / auto)';
+      sel.appendChild(nullOpt);
+    }
+    var seenVals = new Set();
+    entry.choices.forEach(function(ch) {
+      var sv = String(ch);
+      seenVals.add(sv);
+      var opt = document.createElement('option');
+      opt.value = sv;
+      opt.textContent = sv;
+      sel.appendChild(opt);
+    });
+    if (entry.value != null && !seenVals.has(String(entry.value))) {
+      var curOpt = document.createElement('option');
+      curOpt.value = String(entry.value);
+      curOpt.textContent = String(entry.value);
+      sel.appendChild(curOpt);
+    }
+    sel.value = (entry.value == null && entry.nullable) ? '__null__' : String(entry.value != null ? entry.value : '');
+    sel.addEventListener('change', function() {
+      var v = (entry.nullable && sel.value === '__null__') ? null : sel.value;
+      _advSaveEntry(entry, v, rowStatusEl, modBadgeEl, resetBtnEl);
+    });
+    wrap.appendChild(sel);
+    return { wrap: wrap, syncValue: function(v) { sel.value = (v == null && entry.nullable) ? '__null__' : String(v != null ? v : ''); } };
+  }
+
+  if (entry.type === 'bool') {
+    if (entry.nullable) {
+      var bsel = document.createElement('select');
+      bsel.className = 'fld-input';
+      bsel.style.cssText = 'width:auto;min-width:110px;padding:4px 6px;font-size:10.5px';
+      [['__null__', 'auto (null)'], ['true', 'true'], ['false', 'false']].forEach(function(pair) {
+        var o = document.createElement('option');
+        o.value = pair[0];
+        o.textContent = pair[1];
+        bsel.appendChild(o);
+      });
+      bsel.value = entry.value === true ? 'true' : (entry.value === false ? 'false' : '__null__');
+      bsel.addEventListener('change', function() {
+        var v = bsel.value === '__null__' ? null : (bsel.value === 'true');
+        _advSaveEntry(entry, v, rowStatusEl, modBadgeEl, resetBtnEl);
+      });
+      wrap.appendChild(bsel);
+      return { wrap: wrap, syncValue: function(v) { bsel.value = v === true ? 'true' : (v === false ? 'false' : '__null__'); } };
+    }
+    var lbl = document.createElement('label');
+    lbl.className = 'cfl-sw';
+    lbl.style.margin = '0';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!entry.value;
+    var sl = document.createElement('span');
+    sl.className = 'sl';
+    lbl.appendChild(cb);
+    lbl.appendChild(sl);
+    cb.addEventListener('change', function() {
+      _advSaveEntry(entry, !!cb.checked, rowStatusEl, modBadgeEl, resetBtnEl);
+    });
+    wrap.appendChild(lbl);
+    return { wrap: wrap, syncValue: function(v) { cb.checked = !!v; } };
+  }
+
+  if (entry.type === 'int' || entry.type === 'float') {
+    var num = document.createElement('input');
+    num.type = 'number';
+    num.className = 'fld-input';
+    num.style.cssText = 'flex:1;min-width:110px;padding:4px 6px;font-size:10.5px';
+    if (entry.min != null) num.min = String(entry.min);
+    if (entry.max != null) num.max = String(entry.max);
+    if (entry.step != null) num.step = String(entry.step);
+    else num.step = entry.type === 'int' ? '1' : 'any';
+    if (entry.nullable) num.placeholder = 'null (auto)';
+    num.value = (entry.value === null || entry.value === undefined) ? '' : String(entry.value);
+    num.addEventListener('change', function() {
+      var raw = num.value.trim();
+      if (raw === '') {
+        if (entry.nullable) {
+          _advSaveEntry(entry, null, rowStatusEl, modBadgeEl, resetBtnEl);
+        } else {
+          if (rowStatusEl) {
+            rowStatusEl.textContent = 'Value required';
+            rowStatusEl.style.color = '#c06060';
+          }
+        }
+        return;
+      }
+      var numVal = Number(raw);
+      var parsed = entry.type === 'int' ? parseInt(raw, 10) : numVal;
+      if (!isFinite(numVal) || (entry.type === 'int' && !Number.isInteger(numVal))) {
+        if (rowStatusEl) {
+          rowStatusEl.textContent = 'Invalid ' + entry.type;
+          rowStatusEl.style.color = '#c06060';
+        }
+        return;
+      }
+      if (entry.min != null && parsed < entry.min) {
+        if (rowStatusEl) { rowStatusEl.textContent = 'Min ' + entry.min; rowStatusEl.style.color = '#c06060'; }
+        return;
+      }
+      if (entry.max != null && parsed > entry.max) {
+        if (rowStatusEl) { rowStatusEl.textContent = 'Max ' + entry.max; rowStatusEl.style.color = '#c06060'; }
+        return;
+      }
+      _advSaveEntry(entry, parsed, rowStatusEl, modBadgeEl, resetBtnEl);
+    });
+    wrap.appendChild(num);
+    if (entry.nullable) {
+      var clrBtn = document.createElement('button');
+      clrBtn.type = 'button';
+      clrBtn.className = 'btn';
+      clrBtn.style.cssText = 'padding:2px 6px;font-size:9px';
+      clrBtn.textContent = 'Null';
+      clrBtn.addEventListener('click', function() {
+        num.value = '';
+        _advSaveEntry(entry, null, rowStatusEl, modBadgeEl, resetBtnEl);
+      });
+      wrap.appendChild(clrBtn);
+    }
+    return { wrap: wrap, syncValue: function(v) { num.value = (v === null || v === undefined) ? '' : String(v); } };
+  }
+
+  if (entry.type === 'object' || entry.type === 'list') {
+    var ta = document.createElement('textarea');
+    ta.className = 'fld-input';
+    ta.rows = 3;
+    ta.style.cssText = 'width:100%;padding:5px 7px;font-size:10px';
+    ta.value = JSON.stringify(entry.value != null ? entry.value : (entry.type === 'list' ? [] : {}), null, 2);
+    var applyJson = function() {
+      try {
+        var parsed = JSON.parse(ta.value);
+        if (entry.type === 'list' && !Array.isArray(parsed)) {
+          throw new Error('Expected JSON array');
+        }
+        if (entry.type === 'object' && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
+          throw new Error('Expected JSON object');
+        }
+        _advSaveEntry(entry, parsed, rowStatusEl, modBadgeEl, resetBtnEl);
+      } catch (e) {
+        if (rowStatusEl) {
+          rowStatusEl.textContent = 'Invalid JSON: ' + (e && e.message || e);
+          rowStatusEl.style.color = '#c06060';
+        }
+      }
+    };
+    ta.addEventListener('change', applyJson);
+    var saveJsonBtn = document.createElement('button');
+    saveJsonBtn.type = 'button';
+    saveJsonBtn.className = 'btn';
+    saveJsonBtn.style.cssText = 'padding:3px 8px;font-size:9.5px';
+    saveJsonBtn.textContent = 'Apply JSON';
+    saveJsonBtn.addEventListener('click', applyJson);
+    wrap.appendChild(ta);
+    wrap.appendChild(saveJsonBtn);
+    return {
+      wrap: wrap,
+      syncValue: function(v) {
+        ta.value = JSON.stringify(v != null ? v : (entry.type === 'list' ? [] : {}), null, 2);
+      }
+    };
+  }
+
+  var txt = document.createElement('input');
+  txt.type = 'text';
+  txt.className = 'fld-input';
+  txt.style.cssText = 'flex:1;min-width:140px;padding:4px 6px;font-size:10.5px';
+  if (entry.nullable) txt.placeholder = 'null (auto)';
+  txt.value = (entry.value === null || entry.value === undefined) ? '' : String(entry.value);
+  txt.addEventListener('change', function() {
+    var v = (entry.nullable && txt.value === '') ? null : txt.value;
+    _advSaveEntry(entry, v, rowStatusEl, modBadgeEl, resetBtnEl);
+  });
+  wrap.appendChild(txt);
+  return { wrap: wrap, syncValue: function(v) { txt.value = (v === null || v === undefined) ? '' : String(v); } };
+}
+
+function renderAdvancedSettingsList() {
+  var listEl = document.getElementById('adv-settings-list');
+  var countEl = document.getElementById('adv-settings-count');
+  if (!listEl) return;
+  if (!_advSettingsSchema || !Array.isArray(_advSettingsSchema.entries)) {
+    listEl.innerHTML = '';
+    if (countEl) countEl.textContent = 'not loaded';
+    return;
+  }
+  var searchEl = document.getElementById('adv-settings-search');
+  var groupEl = document.getElementById('adv-settings-group');
+  var modOnlyEl = document.getElementById('adv-settings-modified-only');
+  var q = searchEl ? searchEl.value.toLowerCase().trim() : '';
+  var tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+  var grp = groupEl ? groupEl.value : '';
+  var modOnly = !!(modOnlyEl && modOnlyEl.checked);
+
+  var allEntries = _advSettingsSchema.entries;
+  var filtered = allEntries.filter(function(entry) {
+    if (grp && entry.group !== grp) return false;
+    var isMod = !_advDeepEqual(entry.value, entry.default);
+    if (modOnly && !isMod) return false;
+    if (tokens.length) {
+      var hay = ((entry.key || '') + ' ' + (entry.group || '') + ' ' + (entry.description || '')).toLowerCase();
+      if (!tokens.every(function(tok) { return hay.indexOf(tok) >= 0; })) return false;
+    }
+    return true;
+  });
+
+  if (countEl) {
+    countEl.textContent = filtered.length + ' / ' + allEntries.length + ' keys';
+  }
+  listEl.innerHTML = '';
+  if (!filtered.length) {
+    var empty = document.createElement('div');
+    empty.className = 'fld-hint';
+    empty.textContent = 'No matching settings.';
+    listEl.appendChild(empty);
+    return;
+  }
+
+  var frag = document.createDocumentFragment();
+  filtered.forEach(function(entry) {
+    var isMod = !_advDeepEqual(entry.value, entry.default);
+    var row = document.createElement('div');
+    row.className = 'adv-setting-row';
+    row.style.cssText = 'border:1px solid var(--b,#1e2435);border-radius:5px;padding:7px 9px;background:var(--bg2,#10131a)';
+    if (entry.description) row.title = entry.description;
+
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px';
+
+    var keyLbl = document.createElement('span');
+    keyLbl.style.cssText = "font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:700;color:var(--txh,#e5ecf4);word-break:break-all";
+    keyLbl.textContent = entry.key;
+    head.appendChild(keyLbl);
+
+    var modBadge = document.createElement('span');
+    modBadge.className = 'adv-mod-badge';
+    modBadge.textContent = 'Modified';
+    modBadge.style.cssText = 'font-size:8.5px;padding:1px 5px;border-radius:3px;border:1px solid rgba(224,144,48,.45);color:#e09030;background:rgba(224,144,48,.1);display:' + (isMod ? 'inline-block' : 'none');
+    head.appendChild(modBadge);
+
+    var scopePill = document.createElement('span');
+    scopePill.className = 'adv-scope-pill scope-' + (entry.apply_mode || 'live');
+    scopePill.textContent = entry.apply_mode || 'live';
+    scopePill.style.cssText = 'font-size:8.5px;padding:1px 5px;border-radius:3px;' + _advScopeBadgeStyle(entry.apply_mode || 'live');
+    head.appendChild(scopePill);
+
+    var grpSpan = document.createElement('span');
+    grpSpan.style.cssText = 'font-size:8.5px;color:var(--tx3,#6b7f94);margin-left:auto';
+    grpSpan.textContent = entry.group || 'general';
+    head.appendChild(grpSpan);
+
+    var resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'btn adv-reset-btn';
+    resetBtn.textContent = 'Reset';
+    resetBtn.disabled = !isMod;
+    resetBtn.style.cssText = 'padding:2px 6px;font-size:9px';
+    head.appendChild(resetBtn);
+    row.appendChild(head);
+
+    if (entry.description) {
+      var desc = document.createElement('div');
+      desc.className = 'fld-hint';
+      desc.style.cssText = 'margin:0 0 6px;font-size:9.5px;line-height:1.4';
+      desc.textContent = entry.description;
+      row.appendChild(desc);
+    }
+
+    var rowStatus = document.createElement('div');
+    rowStatus.style.cssText = 'font-size:9px;margin-top:4px;min-height:12px;color:var(--tx2,#7a8fa8)';
+    var ctrl = _advBuildInput(entry, rowStatus, modBadge, resetBtn);
+    resetBtn.addEventListener('click', function() {
+      var defVal = entry.default !== undefined ? JSON.parse(JSON.stringify(entry.default)) : null;
+      ctrl.syncValue(defVal);
+      _advSaveEntry(entry, defVal, rowStatus, modBadge, resetBtn);
+    });
+
+    row.appendChild(ctrl.wrap);
+    row.appendChild(rowStatus);
+    frag.appendChild(row);
+  });
+  listEl.appendChild(frag);
+}
+
+async function loadAdvancedSettingsSchema() {
+  var listEl = document.getElementById('adv-settings-list');
+  var countEl = document.getElementById('adv-settings-count');
+  if (countEl) countEl.textContent = 'loading...';
+  _advSetDrawerStatus('Loading /settings/schema...', false);
+  try {
+    var resp = await fetch('/settings/schema');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var data = await resp.json();
+    if (!data || !data.ok) throw new Error((data && data.error) || 'Invalid schema response');
+    _advSettingsSchema = data;
+    if (data.settings_rev) S.settingsRev = parseInt(data.settings_rev, 10) || S.settingsRev;
+    var groupEl = document.getElementById('adv-settings-group');
+    if (groupEl) {
+      var prevGrp = groupEl.value;
+      groupEl.innerHTML = '<option value="">All groups</option>';
+      (data.groups || []).forEach(function(g) {
+        var opt = document.createElement('option');
+        opt.value = g;
+        opt.textContent = g;
+        groupEl.appendChild(opt);
+      });
+      if (prevGrp) groupEl.value = prevGrp;
+    }
+    _advSetDrawerStatus('', false);
+    renderAdvancedSettingsList();
+  } catch (e) {
+    console.warn('[adv-settings] schema fetch failed:', e);
+    _advSetDrawerStatus('Failed to load schema: ' + (e && e.message || e), true);
+    if (countEl) countEl.textContent = 'error';
+    if (listEl) listEl.innerHTML = '<div class="fld-hint" style="color:#c06060">Failed to load /settings/schema.</div>';
+  }
+}
+
+function _initAdvancedSettingsDrawer() {
+  var card = document.getElementById('adv-engine-settings-card');
+  if (!card || card._advWired) return;
+  card._advWired = true;
+  card.addEventListener('toggle', function() {
+    if (card.open) loadAdvancedSettingsSchema();
+  });
+  var searchEl = document.getElementById('adv-settings-search');
+  if (searchEl) searchEl.addEventListener('input', renderAdvancedSettingsList);
+  var groupEl = document.getElementById('adv-settings-group');
+  if (groupEl) groupEl.addEventListener('change', renderAdvancedSettingsList);
+  var modEl = document.getElementById('adv-settings-modified-only');
+  if (modEl) modEl.addEventListener('change', renderAdvancedSettingsList);
+  var reloadBtn = document.getElementById('adv-settings-reload-btn');
+  if (reloadBtn) reloadBtn.addEventListener('click', loadAdvancedSettingsSchema);
+}
+
+// ── Model Profiles Modal (C3) ───────────────────────────────────────────────
+var _mpState = { currentModel: '', loading: false };
+
+function _mpSetStatus(msg, isErr) {
+  var st = document.getElementById('mp-status');
+  if (!st) return;
+  st.textContent = msg || '';
+  st.style.color = isErr ? '#c06060' : 'var(--tx2, #7a8fa8)';
+}
+
+function _mpApplySourceBadge(badgeEl, source) {
+  if (!badgeEl) return;
+  var src = String(source || 'generic');
+  badgeEl.textContent = src;
+  badgeEl.className = 'cfg-card-badge';
+  if (src === 'user') {
+    badgeEl.style.cssText = 'font-size:9px;color:#c7a8ff;border:1px solid rgba(168,126,242,.5);background:rgba(168,126,242,.12)';
+  } else if (src === 'shipped') {
+    badgeEl.style.cssText = 'font-size:9px;color:#70d898;border:1px solid rgba(58,153,96,.45);background:rgba(58,153,96,.1)';
+  } else if (src === 'gguf_auto') {
+    badgeEl.style.cssText = 'font-size:9px;color:#7cc0ff;border:1px solid rgba(96,160,224,.45);background:rgba(96,160,224,.1)';
+  } else {
+    badgeEl.style.cssText = 'font-size:9px;color:var(--tx2,#7a8fa8);border:1px solid var(--b2,#2a3644);background:transparent';
+  }
+}
+
+function _mpRenderModelList() {
+  var listEl = document.getElementById('mp-model-list');
+  var selEl = document.getElementById('mp-model-sel');
+  var searchEl = document.getElementById('mp-model-search');
+  var filter = searchEl ? searchEl.value : '';
+  var models = Array.isArray(S.models) ? S.models.slice() : [];
+  if (selEl) {
+    selEl.innerHTML = '';
+    models.forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      selEl.appendChild(opt);
+    });
+    if (_mpState.currentModel) selEl.value = _mpState.currentModel;
+  }
+  if (!listEl) return;
+  var filtered = filter ? models.filter(function(m) { return _modelMatchesFilter(m, filter); }) : models;
+  listEl.innerHTML = '';
+  if (!filtered.length) {
+    var emp = document.createElement('div');
+    emp.className = 'fld-hint';
+    emp.textContent = models.length ? 'No matching models.' : 'No models found.';
+    listEl.appendChild(emp);
+    return;
+  }
+  var frag = document.createDocumentFragment();
+  filtered.forEach(function(m) {
+    var profInfo = (S.modelProfiles && S.modelProfiles[m]) || {};
+    var src = profInfo.source || 'generic';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mp-model-item';
+    btn.dataset.model = m;
+    var active = m === _mpState.currentModel;
+    btn.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 7px;border-radius:4px;cursor:pointer;text-align:left;font-family:inherit;font-size:10px;border:1px solid '
+      + (active ? 'var(--amber,#e09030)' : 'transparent') + ';background:'
+      + (active ? 'rgba(224,144,48,.12)' : 'transparent') + ';color:var(--tx,#c8d4e0)';
+    var nm = document.createElement('span');
+    nm.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    nm.textContent = m;
+    nm.title = m;
+    var bdg = document.createElement('span');
+    _mpApplySourceBadge(bdg, src);
+    btn.appendChild(nm);
+    btn.appendChild(bdg);
+    frag.appendChild(btn);
+  });
+  listEl.appendChild(frag);
+}
+
+function _mpTriStateSet(id, val) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.value = (val === true) ? 'true' : (val === false ? 'false' : '');
+}
+
+function _mpTriStateGet(id) {
+  var el = document.getElementById(id);
+  if (!el) return null;
+  if (el.value === 'true') return true;
+  if (el.value === 'false') return false;
+  return null;
+}
+
+function _mpPopulateForm(data) {
+  var prof = (data && data.profile) || {};
+  var gguf = (data && data.gguf) || {};
+  var src = (data && data.source) || 'generic';
+  _mpApplySourceBadge(document.getElementById('mp-source-badge'), src);
+  var fileEl = document.getElementById('mp-file-badge');
+  if (fileEl) fileEl.textContent = data && data.file ? ('(' + data.file + ')') : '';
+
+  var sumEl = document.getElementById('mp-gguf-summary');
+  if (sumEl) {
+    if (!gguf || !Object.keys(gguf).length) {
+      sumEl.textContent = 'No GGUF metadata detected on disk for ' + (data && data.model || _mpState.currentModel) + '.';
+    } else {
+      var parts = [];
+      if (gguf.architecture) parts.push('arch: ' + gguf.architecture);
+      if (gguf.context_length) parts.push('ctx: ' + gguf.context_length);
+      parts.push('is_moe: ' + (gguf.is_moe ? 'yes' : 'no'));
+      parts.push('thinking: ' + (gguf.has_thinking ? 'yes' : 'no'));
+      parts.push('vision: ' + (gguf.has_vision ? 'yes' : 'no'));
+      parts.push('tool_call: ' + (gguf.has_tool_call ? 'yes' : 'no'));
+      var sibs = gguf.siblings || {};
+      var sibList = [];
+      ['mmproj', 'mtp', 'dflash', 'dspark'].forEach(function(sk) {
+        if (sibs[sk]) sibList.push(sk + '=' + sibs[sk]);
+      });
+      if (sibList.length) parts.push('siblings: ' + sibList.join(', '));
+      sumEl.textContent = parts.join(' | ');
+    }
+  }
+
+  var setVal = function(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.value = (v === null || v === undefined) ? '' : String(v);
+  };
+  setVal('mp-kv-cache-type', prof.kv_cache_type || '');
+  _mpTriStateSet('mp-flash-attn', prof.flash_attn);
+  setVal('mp-load-mode', prof.load_mode || '');
+  setVal('mp-num-ctx', prof.num_ctx);
+  setVal('mp-moe-cpu-experts', prof.moe_cpu_experts);
+  setVal('mp-gpu-layers', prof.gpu_layers);
+  setVal('mp-ubatch', prof.ubatch);
+  _mpTriStateSet('mp-mtp', prof.mtp);
+  setVal('mp-mtp-draft', prof.mtp_draft_filename || '');
+  setVal('mp-dflash-draft', prof.dflash_draft_filename || '');
+  setVal('mp-dspark-draft', prof.dspark_draft_filename || '');
+  setVal('mp-mmproj', prof.mmproj_filename || '');
+  var caps = prof.capabilities || {};
+  _mpTriStateSet('mp-cap-thinking', caps.thinking);
+  _mpTriStateSet('mp-cap-vision', caps.vision);
+  _mpTriStateSet('mp-cap-toolcall', caps.tool_call);
+  setVal('mp-extra-args', Array.isArray(prof.extra_args) ? prof.extra_args.join(' ') : (prof.extra_args || ''));
+  setVal('mp-sampling', (prof.sampling && Object.keys(prof.sampling).length) ? JSON.stringify(prof.sampling, null, 2) : '');
+}
+
+async function loadModelProfileInModal(modelName) {
+  if (!modelName) return;
+  _mpState.currentModel = modelName;
+  _mpRenderModelList();
+  _mpSetStatus('Loading profile for ' + modelName + '...', false);
+  try {
+    var resp = await fetch('/models/profile/' + encodeURIComponent(modelName));
+    var data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    }
+    if (S.modelProfiles && S.modelProfiles[modelName]) {
+      S.modelProfiles[modelName].source = data.source || 'generic';
+    }
+    _mpPopulateForm(data);
+    _mpRenderModelList();
+    _mpSetStatus('', false);
+  } catch (e) {
+    console.warn('[model-profiles] load failed for ' + modelName + ':', e);
+    _mpSetStatus('Load failed: ' + (e && e.message || e), true);
+  }
+}
+
+async function openModelProfilesModal(preferredModel) {
+  var modal = document.getElementById('model-profiles-modal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  if (!Array.isArray(S.models) || !S.models.length) {
+    try { await loadModels(); } catch (e) { console.warn('[model-profiles] loadModels failed:', e); }
+  }
+  var target = preferredModel || _mpState.currentModel || (cfgState && cfgState.currentModel) || (S.models && S.models[0]) || '';
+  _mpState.currentModel = target;
+  _mpRenderModelList();
+  if (target) await loadModelProfileInModal(target);
+}
+
+function closeModelProfilesModal() {
+  var modal = document.getElementById('model-profiles-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveModelProfileOverride() {
+  var model = _mpState.currentModel;
+  if (!model) { _mpSetStatus('Select a model first.', true); return; }
+  var intOrNull = function(id) {
+    var el = document.getElementById(id);
+    if (!el) return null;
+    var s = el.value.trim();
+    if (!s) return null;
+    var n = parseInt(s, 10);
+    return isFinite(n) ? n : NaN;
+  };
+  var strOrNull = function(id) {
+    var el = document.getElementById(id);
+    if (!el) return null;
+    var s = el.value.trim();
+    return s || null;
+  };
+  var numCtx = intOrNull('mp-num-ctx');
+  var moeCpu = intOrNull('mp-moe-cpu-experts');
+  var gpuLayers = intOrNull('mp-gpu-layers');
+  var ubatch = intOrNull('mp-ubatch');
+  if (Number.isNaN(numCtx) || Number.isNaN(moeCpu) || Number.isNaN(gpuLayers) || Number.isNaN(ubatch)) {
+    _mpSetStatus('Numeric fields must be valid integers.', true);
+    return;
+  }
+  var samplingVal = null;
+  var sampEl = document.getElementById('mp-sampling');
+  var sampRaw = sampEl ? sampEl.value.trim() : '';
+  if (sampRaw) {
+    try {
+      samplingVal = JSON.parse(sampRaw);
+      if (!samplingVal || typeof samplingVal !== 'object' || Array.isArray(samplingVal)) {
+        throw new Error('sampling must be a JSON object');
+      }
+    } catch (e) {
+      _mpSetStatus('Invalid sampling JSON: ' + (e && e.message || e), true);
+      return;
+    }
+  }
+  var extraRaw = strOrNull('mp-extra-args');
+  var payload = {};
+  var putIfSet = function(k, v) { if (v !== null && v !== undefined) payload[k] = v; };
+  putIfSet('kv_cache_type', strOrNull('mp-kv-cache-type'));
+  putIfSet('flash_attn', _mpTriStateGet('mp-flash-attn'));
+  putIfSet('load_mode', strOrNull('mp-load-mode'));
+  putIfSet('num_ctx', numCtx);
+  putIfSet('moe_cpu_experts', moeCpu);
+  putIfSet('gpu_layers', gpuLayers);
+  putIfSet('ubatch', ubatch);
+  putIfSet('mtp', _mpTriStateGet('mp-mtp'));
+  putIfSet('mtp_draft_filename', strOrNull('mp-mtp-draft'));
+  putIfSet('dflash_draft_filename', strOrNull('mp-dflash-draft'));
+  putIfSet('dspark_draft_filename', strOrNull('mp-dspark-draft'));
+  putIfSet('mmproj_filename', strOrNull('mp-mmproj'));
+  var capsPatch = {};
+  var cThink = _mpTriStateGet('mp-cap-thinking');
+  var cVis = _mpTriStateGet('mp-cap-vision');
+  var cTool = _mpTriStateGet('mp-cap-toolcall');
+  if (cThink !== null) capsPatch.thinking = cThink;
+  if (cVis !== null) capsPatch.vision = cVis;
+  if (cTool !== null) capsPatch.tool_call = cTool;
+  if (Object.keys(capsPatch).length) payload.capabilities = capsPatch;
+  if (extraRaw) payload.extra_args = extraRaw.split(/\s+/).filter(Boolean);
+  if (samplingVal) payload.sampling = samplingVal;
+  _mpSetStatus('Saving override...', false);
+  try {
+    var resp = await fetch('/models/profile/' + encodeURIComponent(model), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    var data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    }
+    if (S.modelProfiles && S.modelProfiles[model]) {
+      S.modelProfiles[model].source = data.source || 'user';
+    }
+    await loadModelProfileInModal(model);
+    if (typeof loadModels === 'function') await loadModels();
+    if (cfgState && cfgState.currentTab === 'defaults' && cfgState.currentModel === model && typeof loadModelDefaults === 'function') {
+      await loadModelDefaults(model);
+    }
+    _mpSetStatus('Saved user override (' + (data.file || model) + ').', false);
+  } catch (e) {
+    console.warn('[model-profiles] save failed for ' + model + ':', e);
+    _mpSetStatus('Save failed: ' + (e && e.message || e), true);
+  }
+}
+
+async function resetModelProfileOverride() {
+  var model = _mpState.currentModel;
+  if (!model) return;
+  _mpSetStatus('Resetting override...', false);
+  try {
+    var resp = await fetch('/models/profile/' + encodeURIComponent(model), { method: 'DELETE' });
+    var data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    }
+    await loadModelProfileInModal(model);
+    if (typeof loadModels === 'function') await loadModels();
+    if (cfgState && cfgState.currentTab === 'defaults' && cfgState.currentModel === model && typeof loadModelDefaults === 'function') {
+      await loadModelDefaults(model);
+    }
+    _mpSetStatus(data.deleted ? ('Reset to ' + (data.source || 'default') + '.') : 'No user override to remove.', false);
+  } catch (e) {
+    console.warn('[model-profiles] reset failed for ' + model + ':', e);
+    _mpSetStatus('Reset failed: ' + (e && e.message || e), true);
+  }
+}
+
+async function rescanModelProfiles() {
+  var btn = document.getElementById('mp-rescan-btn');
+  if (btn) btn.disabled = true;
+  _mpSetStatus('Rescanning GGUFs on disk...', false);
+  try {
+    var resp = await fetch('/models/rescan', { method: 'POST' });
+    var data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error((data && data.error) || ('HTTP ' + resp.status));
+    }
+    S.models = Array.isArray(data.models) ? data.models : [];
+    if (typeof loadModels === 'function') await loadModels();
+    if (typeof refreshCfgModelList === 'function') await refreshCfgModelList();
+    if (typeof refreshAvailableModels === 'function') await refreshAvailableModels();
+    var target = (_mpState.currentModel && S.models.indexOf(_mpState.currentModel) >= 0)
+      ? _mpState.currentModel
+      : (S.models[0] || '');
+    _mpState.currentModel = target;
+    _mpRenderModelList();
+    if (target) await loadModelProfileInModal(target);
+    _mpSetStatus('Rescanned ' + (data.count != null ? data.count : S.models.length) + ' models.', false);
+  } catch (e) {
+    console.warn('[model-profiles] rescan failed:', e);
+    _mpSetStatus('Rescan failed: ' + (e && e.message || e), true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function _initModelProfilesModal() {
+  var modal = document.getElementById('model-profiles-modal');
+  if (!modal || modal._mpWired) return;
+  modal._mpWired = true;
+  modal.addEventListener('click', function(e) {
+    if (e.target === modal) closeModelProfilesModal();
+  });
+  var closeBtn = document.getElementById('mp-close-btn');
+  if (closeBtn) closeBtn.addEventListener('click', closeModelProfilesModal);
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && modal.style.display !== 'none') {
+      closeModelProfilesModal();
+    }
+  });
+  var searchEl = document.getElementById('mp-model-search');
+  if (searchEl) searchEl.addEventListener('input', _mpRenderModelList);
+  var selEl = document.getElementById('mp-model-sel');
+  if (selEl) {
+    selEl.addEventListener('change', function() {
+      if (selEl.value) loadModelProfileInModal(selEl.value);
+    });
+  }
+  var listEl = document.getElementById('mp-model-list');
+  if (listEl) {
+    listEl.addEventListener('click', function(ev) {
+      var item = ev.target && ev.target.closest ? ev.target.closest('[data-model]') : null;
+      if (!item || !listEl.contains(item)) return;
+      var m = item.dataset.model || '';
+      if (m) loadModelProfileInModal(m);
+    });
+  }
+  var saveBtn = document.getElementById('mp-save-btn');
+  if (saveBtn) saveBtn.addEventListener('click', saveModelProfileOverride);
+  var resetBtn = document.getElementById('mp-reset-btn');
+  if (resetBtn) resetBtn.addEventListener('click', resetModelProfileOverride);
+  var rescanBtn = document.getElementById('mp-rescan-btn');
+  if (rescanBtn) rescanBtn.addEventListener('click', rescanModelProfiles);
+}
+
+_initAdvancedSettingsDrawer();
+_initModelProfilesModal();

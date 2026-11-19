@@ -641,8 +641,7 @@ class AgenticToolLoop(ToolLoop):
                                 if _pre_raw and _parse_appr_ans(_pre_raw) == "deny":
                                     _deny_tool = str(_pre_dec.get("tool") or "")
                                     _deny_note = str(_pre_dec.get("note", "") or "")
-                                    _tr_stage._approval_pre_decisions.pop(_appr_scope, None)
-                                    _tr_stage._card_staged.pop(_appr_scope, None)
+                                    _tr_stage._clear_staged_approval(_appr_scope)
                                     _dr_denied_mid = True
                                     logger.warning(
                                         "[APPROVAL] denied mid-stream: %s (scope=%r) — aborting generation",
@@ -677,7 +676,7 @@ class AgenticToolLoop(ToolLoop):
                                 # streamen ihre Argument-Deltas — das Frontend
                                 # zeigt daraus live Pfad/Kommando auf der
                                 # Approval-Card ("welcher file/welcher bash").
-                                if _acc_fn in _gated_tool_names:
+                                if _acc_fn in _gated_tool_names or _acc_fn.startswith("mcp_"):
                                     await self._emit({"type": "tool_gen",
                                                       "name": _acc_fn,
                                                       "index": _tc_idx,
@@ -690,10 +689,21 @@ class AgenticToolLoop(ToolLoop):
                             # consumes. stage_approval_card is idempotent
                             # per run; _card_live just skips the per-delta
                             # calls once this stream staged its card.
-                            if not _card_live and _stage_fn in _gated_tool_names \
+                            if not _card_live and (_stage_fn in _gated_tool_names or _stage_fn.startswith("mcp_")) \
                                     and _tr_stage._approval_active_for(_stage_fn):
+                                _stage_args = None
+                                _raw_sa = (_acc.get("function") or {}).get("arguments")
+                                if isinstance(_raw_sa, dict):
+                                    _stage_args = _raw_sa
+                                elif isinstance(_raw_sa, str) and _raw_sa.strip().startswith("{"):
+                                    try:
+                                        _parsed_sa = json.loads(_raw_sa)
+                                        if isinstance(_parsed_sa, dict) and _parsed_sa:
+                                            _stage_args = _parsed_sa
+                                    except ValueError:
+                                        _stage_args = None
                                 await _tr_stage.stage_approval_card(
-                                    _appr_scope, _stage_fn, self._emit)
+                                    _appr_scope, _stage_fn, self._emit, args=_stage_args)
                                 if _appr_scope:
                                     _card_live = True
                         # drift check at SSE-delta level (outer loop scope —
@@ -701,6 +711,8 @@ class AgenticToolLoop(ToolLoop):
                         if not _drift_cut and _arg_drift(_drift_args_buf):
                             _drift_cut = True
                             _dr_finish_reason = "drift"
+                            if _appr_scope:
+                                _tr_stage._clear_staged_approval(_appr_scope)
                             await self._emit({"type": "status",
                                 "content": "⚠ repetition drift in tool-call arguments — cutting generation early"})
                             break
@@ -899,30 +911,77 @@ class AgenticToolLoop(ToolLoop):
                     except Exception:
                         pass
                     _dr_tcs = [result["dr_tool_calls_acc"][k] for k in sorted(result["dr_tool_calls_acc"].keys())]
-                    # CARD-REFRESH (2026-10-06, live deadlock report): the
-                    # staged card carried "(generating, content streams in
-                    # the panel)" - the args are FINAL here. Refresh the
-                    # pending entry with the real preview and re-emit, so
-                    # the UI card and the phone mirror show the actual
-                    # command instead of a placeholder that never updates.
-                    try:
-                        _tr_scope = str(_tr_stage._current_run_id.get() or "")
-                        if _tr_scope and _tr_stage._pending_approvals.get(_tr_scope, {}).get("preview", "").startswith("(generating"):
+                    _tr_scope = str(_tr_stage._current_run_id.get() or "")
+                    _has_truncated_args = False
+                    for _ctc in _dr_tcs:
+                        _raw_cargs = (_ctc.get("function") or {}).get("arguments")
+                        if isinstance(_raw_cargs, str) and _raw_cargs.strip():
+                            try:
+                                _parsed_chk = json.loads(_raw_cargs)
+                                if not isinstance(_parsed_chk, dict):
+                                    _has_truncated_args = True
+                                    break
+                            except ValueError:
+                                _has_truncated_args = True
+                                break
+                    if _drift_cut or _dr_aborted_mid or _dr_finish_reason in ("drift", "length") or _has_truncated_args:
+                        if _tr_scope:
+                            _tr_stage._clear_staged_approval(_tr_scope)
+                    elif _tr_scope:
+                        # CARD-REFRESH + C5a/b canonical args binding:
+                        # Bind staged card / pending approval / unbound pre-decision
+                        # to the finalized call's canonical approval_key & args_hash,
+                        # and re-emit approval_request when the card carried "(generating...".
+                        try:
+                            _matched_gated = False
                             for _ctc in _dr_tcs:
                                 _cfn = str((_ctc.get("function") or {}).get("name", "") or "")
-                                if _cfn in _tr_stage._APPROVAL_TOOLS:
-                                    try:
-                                        _cargs = json.loads((_ctc.get("function") or {}).get("arguments") or "{}")
-                                    except ValueError:
+                                if _cfn in _tr_stage._APPROVAL_TOOLS or _tr_stage._approval_active_for(_cfn):
+                                    _matched_gated = True
+                                    _raw_cargs = (_ctc.get("function") or {}).get("arguments")
+                                    if isinstance(_raw_cargs, dict):
+                                        _cargs = _raw_cargs
+                                    elif isinstance(_raw_cargs, str) and _raw_cargs.strip():
+                                        _cargs = json.loads(_raw_cargs)
+                                    else:
                                         _cargs = {}
-                                    _real_prev = _tr_stage._approval_preview(_cargs)
-                                    _tr_stage._pending_approvals[_tr_scope]["preview"] = _real_prev
-                                    await self._emit({"type": "approval_request",
-                                                      "run_id": _tr_scope, "tool": _cfn,
-                                                      "preview": _real_prev})
+                                    _canon_key = _tr_stage._canonical_approval_key(_cfn, _cargs)
+                                    _args_hash = _tr_stage._canonical_args_hash(_cfn, _cargs)
+                                    _real_prev = _tr_stage._approval_preview(_cargs, tool=_cfn)
+                                    if _card_live or _tr_scope in _tr_stage._card_staged:
+                                        _tr_stage._card_staged[_tr_scope] = {
+                                            "tool": _cfn,
+                                            "approval_key": _canon_key,
+                                            "args_hash": _args_hash,
+                                        }
+                                    _pre_dec = _tr_stage._approval_pre_decisions.get(_tr_scope)
+                                    if isinstance(_pre_dec, dict) and _card_live:
+                                        _pre_tool = _pre_dec.get("tool")
+                                        if _pre_tool and _pre_tool != _cfn:
+                                            _tr_stage._clear_staged_approval(_tr_scope)
+                                        elif not _pre_dec.get("args_hash") and not _pre_dec.get("approval_key"):
+                                            _pre_dec["tool"] = _pre_tool or _cfn
+                                            _pre_dec["approval_key"] = _canon_key
+                                            _pre_dec["args_hash"] = _args_hash
+                                    _pend = _tr_stage._pending_approvals.get(_tr_scope)
+                                    if isinstance(_pend, dict):
+                                        _was_generating = str(_pend.get("preview", "")).startswith("(generating")
+                                        _pend["approval_key"] = _canon_key
+                                        _pend["args_hash"] = _args_hash
+                                        if _was_generating:
+                                            _pend["preview"] = _real_prev
+                                            await self._emit({
+                                                "type": "approval_request",
+                                                "run_id": _tr_scope,
+                                                "tool": _cfn,
+                                                "preview": _real_prev,
+                                                "approval_key": _canon_key,
+                                            })
                                     break
-                    except (KeyError, AttributeError, TypeError):
-                        pass
+                            if _card_live and not _matched_gated:
+                                _tr_stage._clear_staged_approval(_tr_scope)
+                        except (KeyError, AttributeError, TypeError, ValueError):
+                            pass
                     _dr_content_joined = "".join(result["dr_content_parts"]).strip()
                     if _dr_content_joined and "<think" in _dr_content_joined:
                         _dr_content_joined = _RE_THINK_CLEANUP.sub("", _dr_content_joined).strip()
@@ -986,6 +1045,8 @@ class AgenticToolLoop(ToolLoop):
                 else:
                     raise
             except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as _dr_rt_err:
+                from tools import runner as _tr_err
+                _tr_err._clear_staged_approval(str(_tr_err._current_run_id.get() or ""))
                 _dr_post_errors[type(_dr_rt_err).__name__] = _dr_post_errors.get(type(_dr_rt_err).__name__, 0) + 1
                 if _dr_stream_partial:
                     raise RuntimeError(

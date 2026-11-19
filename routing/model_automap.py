@@ -17,89 +17,10 @@ from pathlib import Path
 
 logger = logging.getLogger("hivemind.model_automap")
 
-#         vision (image input), tool_call (function calling).
-MODEL_PROFILES: dict[str, dict] = {
-    "qwen3.5":     {"thinking": True,  "vision": True, "tool_call": True},
-    "qwen3-d":     {"thinking": True,  "vision": False, "tool_call": False},
-    "qwen3.6":     {"thinking": True,  "vision": True, "tool_call": True},  # embedded encoder / mmproj
-    "hermes3.6":   {"thinking": True,  "vision": True, "tool_call": True},
-    "lfm2.5":      {"thinking": False, "vision": False, "tool_call": True},
-    # LFM3 (LiquidAI, 2026-10): post-trained for agentic harnesses, tool
-    # calls and structured output. Reasoning is on by default in the
-    # template (enable_thinking=False to opt out).
-    "lfm3":        {"thinking": True,  "vision": False, "tool_call": True},
-    "lfm3-omni":   {"thinking": False, "vision": True,  "tool_call": True},
-    # Ling-3.0-tiny (InclusionAI, 2026-08-19): MoE, Thinking per Default an.
-    "ling-3.0-tiny": {"thinking": True, "vision": False, "tool_call": True},
-    "k2-horizon":  {"thinking": True,  "vision": False, "tool_call": True},
-    "mellum2.1":   {"thinking": True,  "vision": False, "tool_call": True},
-    "groot":       {"thinking": True,  "vision": False, "tool_call": True},
-    # MiniCPM5-2B (openbmb): LlamaForCausalLM, thinking via template
-    # (enable_thinking), XML-style tool calls handled by --jinja.
-    "minicpm5":    {"thinking": True, "vision": False, "tool_call": True},
-    # Spark-X2.6 (XHToken, 2026-10): replaces the X2.5 line (4B/1.7B).
-    # Dense 4B, Apache-2.0, thinking via the template's enable_thinking,
-    # structured <tool_call> output handled by --jinja. The X2.5 keys stay as
-    # aliases so existing installs keep working.
-    "spark-x2.6":      {"thinking": True, "vision": False, "tool_call": True},
-    "spark-x2.5":      {"thinking": True, "vision": False, "tool_call": True},
-    "spark-x2.5-4b":   {"thinking": True, "vision": False, "tool_call": True},
-    "spark-x2.5-1.7b": {"thinking": True, "vision": False, "tool_call": True},
-    "qwq":         {"thinking": True,  "vision": False, "tool_call": True},
-    "bonsai":      {"thinking": True,  "vision": False, "tool_call": False},
-    "ternary-bonsai-2": {"thinking": True, "vision": False, "tool_call": True},
-    "magistral":   {"thinking": True,  "vision": False, "tool_call": True},
-    "thinker":     {"thinking": True,  "vision": False, "tool_call": False},
-    # ── webAI TwIL & Air (2026-11) ───────────────────────────────────────
-    "twil":        {"thinking": True,  "vision": False, "tool_call": True},
-    "air":         {"thinking": True,  "vision": False, "tool_call": True},
-    # ── IBM Granite ──────────────────────────────────────────────────────
-    "granite4":    {"thinking": False, "vision": False, "tool_call": True},
-    "granite3":    {"thinking": False, "vision": False, "tool_call": True},
-    "granite":     {"thinking": False, "vision": False, "tool_call": True},
-    # ── Mistral / Ministral / Devstral ───────────────────────────────────
-    "ministral":   {"thinking": False, "vision": False, "tool_call": True},
-    "mistral-small":{"thinking": False, "vision": False, "tool_call": True},
-    "devstral":    {"thinking": False, "vision": False, "tool_call": True},
-    "mistral":     {"thinking": False, "vision": False, "tool_call": True},
-    "mixtral":     {"thinking": False, "vision": False, "tool_call": True},
-    "qwen3-coder":   {"thinking": False, "vision": False, "tool_call": True},
-    "codestral":     {"thinking": False, "vision": False, "tool_call": True},
-    "llava":         {"thinking": False, "vision": True,  "tool_call": False},
-    "llava-next":    {"thinking": False, "vision": True,  "tool_call": False},
-    "minicpm-v":     {"thinking": False, "vision": True,  "tool_call": False},
-    "llama3.2-vision":{"thinking": False, "vision": True,  "tool_call": False},
-    "pixtral":       {"thinking": False, "vision": True,  "tool_call": False},
-    "gemma3-vl":     {"thinking": False, "vision": True,  "tool_call": False},
-    "llama3.1":      {"thinking": False, "vision": False, "tool_call": True},
-    "llama3":        {"thinking": False, "vision": False, "tool_call": True},
-    "llama3.2":      {"thinking": False, "vision": False, "tool_call": True},
-    "llama3.3":      {"thinking": False, "vision": False, "tool_call": True},
-    "phi3":          {"thinking": False, "vision": False, "tool_call": True},
-    "phi3.5":        {"thinking": False, "vision": False, "tool_call": True},
-    "phi4":          {"thinking": False, "vision": False, "tool_call": True},
-    "gemma3":        {"thinking": False, "vision": False, "tool_call": True},
-    # VISION-FIX (2026-08-19): gemma-4 is based on gemma2/3 arch -> embedded
-    "gemma-4:e4b-it-obliterated": {"thinking": True, "vision": False, "tool_call": True},
-    "gemma-4:e4b-it": {"thinking": True, "vision": True,  "tool_call": True},
-    "gemma-4":        {"thinking": True, "vision": True,  "tool_call": True},
-    "gemma-4:e4b-it-qat": {"thinking": False, "vision": True, "tool_call": True},
-    # NVIDIA Nemotron-3.5-Bolt-E4B-4GB (Gemma-4 E4B post-trained: thinking + multi-turn tools, text GGUF)
-    "nvidia-nemotron-3.5-bolt": {"thinking": True, "vision": False, "tool_call": True},
-    "nemotron-3.5-bolt":        {"thinking": True, "vision": False, "tool_call": True},
-    "qwen":          {"thinking": False, "vision": False, "tool_call": False},
-    # ── Command-R / Hermes / Dolphin ────────────────────────────────────
-    "command-r":     {"thinking": False, "vision": False, "tool_call": True},
-    "hermes":        {"thinking": False, "vision": False, "tool_call": True},
-    "hermes3":       {"thinking": True,  "vision": False, "tool_call": True},
-    "dolphin":       {"thinking": False, "vision": False, "tool_call": True},
-    "dolphin3":      {"thinking": True,  "vision": False, "tool_call": True},
-    # ── RNJ / Custom Models ──────────────────────────────────────────────
-    "rnj":           {"thinking": False, "vision": False, "tool_call": True},
-    # ── InternLM ────────────────────────────────────────────────────────
-    "internlm2":     {"thinking": False, "vision": False, "tool_call": True},
-    "internlm3":     {"thinking": True,  "vision": False, "tool_call": True},
-}
+# Compatibility views populated dynamically from model_configs/arch_compat.json
+# and model_configs/{user,models}/*.json (family keys include "spark-x2.6",
+# legacy "spark-x2.5" aliases, etc.).
+MODEL_PROFILES: dict[str, dict] = {}
 
 # ── VRAM-Estimation: Modellname → geschaetzte Parameterzahl (Milliarden) ────
 # Boundary regex avoids substring collisions ("35b-a3b" != 5B, "24b-a2b" != 4B,
@@ -197,11 +118,53 @@ def _estimate_vram_gb_for_model(model_name: str, quant: str = "q4") -> float:
 
 
 # ── Vision preprocessing allowlist ──────────────────────────────────────────
-_VISION_PREPROCESSING_ALLOWLIST: list[str] = [
-    "minicpm-v", "llava", "qwen2-vl", "qwen2.5-vl", "pixtral",
-    "llava-next", "gemma3-vl", "internvl",
-    "qwen3.5", "qwen3.6", "hermes3.6", "hermes", "gemma-4",
-]
+_VISION_PREPROCESSING_ALLOWLIST: list[str] = []
+
+
+def reload_compat_views() -> None:
+    """Populate MODEL_PROFILES and _VISION_PREPROCESSING_ALLOWLIST from arch_compat.json + registry."""
+    try:
+        from model_configs.models_registry import (
+            iter_all_profiles as _iter_profiles,
+            load_arch_compat as _load_compat,
+        )
+        compat = _load_compat()
+        profiles = _iter_profiles()
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        logger.debug("model_automap compat reload skipped: %s", _e)
+        return
+
+    mprofs: dict[str, dict] = {
+        str(k).lower(): dict(v)
+        for k, v in (compat.get("model_profiles") or {}).items()
+        if isinstance(v, dict)
+    }
+    vis_allow: list[str] = [
+        str(x) for x in (compat.get("vision_preprocessing_allowlist") or []) if x
+    ]
+    vis_seen = {x.lower() for x in vis_allow}
+
+    for key, prof in profiles.items():
+        lk = str(key).lower()
+        caps = prof.get("capabilities")
+        if isinstance(caps, dict):
+            mprofs[lk] = {
+                "thinking": bool(caps.get("thinking", False)),
+                "vision": bool(caps.get("vision", False)),
+                "tool_call": bool(caps.get("tool_call", False)),
+            }
+        if prof.get("vision_preprocessing") is True:
+            base_k = str(key).split(":")[0]
+            if base_k.lower() not in vis_seen:
+                vis_allow.append(base_k)
+                vis_seen.add(base_k.lower())
+
+    MODEL_PROFILES.clear()
+    MODEL_PROFILES.update(mprofs)
+    _VISION_PREPROCESSING_ALLOWLIST[:] = vis_allow
+
+
+reload_compat_views()
 
 # ── Automap-State ──────────────────────────────────────────────────────────
 _automap_data: dict = {}
@@ -516,15 +479,20 @@ def get_model_capabilities(model_name: str) -> dict:
     profile = MODEL_PROFILES.get(model_name.lower(), MODEL_PROFILES.get(base.lower(), {}))
     if profile:
         return dict(profile)
-    # GGUF header metadata for arbitrary dropped models (thinking/vision/chat_template)
+    # GGUF header metadata for arbitrary dropped models (thinking/vision/has_tool_call)
     try:
         from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
         _meta = _read_gguf_meta(model_name)
         if _meta:
+            tool_capable = (
+                bool(_meta["has_tool_call"])
+                if "has_tool_call" in _meta
+                else bool(_meta.get("has_chat_template"))
+            )
             return {
                 "thinking": bool(_meta.get("has_thinking")),
                 "vision": bool(_meta.get("has_vision")),
-                "tool_call": bool(_meta.get("has_chat_template")),
+                "tool_call": tool_capable,
             }
     except (ImportError, OSError, ValueError, TypeError) as _e:
         logger.debug("gguf_meta capabilities skipped for %s: %s", model_name, _e)
@@ -544,3 +512,66 @@ def get_model_capabilities(model_name: str) -> dict:
     if any(x in lo for x in ("coder", "code", "instruct", "devstral", "command-r")):
         return {"thinking": False, "vision": False, "tool_call": True}
     return {"thinking": False, "vision": False, "tool_call": False}
+
+
+def _model_footprint_key(model_name: str) -> tuple[float, float, str]:
+    """Return ascending sort key (gguf_or_vram_gb, param_b, lower_name) for model size."""
+    gb = 0.0
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _read_meta
+        meta = _read_meta(model_name)
+        gb = float((meta or {}).get("file_size_gb") or 0.0)
+    except (ImportError, OSError, ValueError, TypeError):
+        gb = 0.0
+    if gb <= 0.0:
+        gb = float(_estimate_vram_gb_for_model(model_name))
+    pb = float(_estimate_param_b(model_name))
+    return (round(gb, 3), pb, model_name.lower())
+
+
+def _safe_installed_models(available: list[str] | None = None) -> list[str]:
+    """Return clean unique list of installed model names without raising."""
+    if available is not None:
+        return [str(m).strip() for m in available if str(m).strip()]
+    try:
+        from backend.llama_models import list_available_models as _list_models
+        return [str(m).strip() for m in (_list_models() or []) if str(m).strip()]
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _e:
+        logger.debug("list_available_models skipped in automap picker: %s", _e)
+        return []
+
+
+def pick_installed_vision_model(available: list[str] | None = None) -> str:
+    """Return the smallest installed vision-capable model, or '' if none installed."""
+    candidates: list[str] = []
+    for m in _safe_installed_models(available):
+        if get_model_capabilities(m).get("vision"):
+            candidates.append(m)
+    if not candidates:
+        return ""
+    candidates.sort(key=_model_footprint_key)
+    return candidates[0]
+
+
+def pick_installed_small_tool_models(
+    available: list[str] | None = None,
+    *,
+    max_vram_gb: float = 5.5,
+) -> list[str]:
+    """Return installed tool-capable models ordered smallest-first by GGUF size/VRAM."""
+    small_fits: list[str] = []
+    larger: list[str] = []
+    for m in _safe_installed_models(available):
+        if not get_model_capabilities(m).get("tool_call"):
+            continue
+        pb = _estimate_param_b(m)
+        if _is_moe_model(m) and pb >= 12.0:
+            continue
+        vram = _estimate_vram_gb_for_model(m)
+        if vram <= max_vram_gb:
+            small_fits.append(m)
+        else:
+            larger.append(m)
+    small_fits.sort(key=_model_footprint_key)
+    larger.sort(key=_model_footprint_key)
+    return small_fits if small_fits else larger

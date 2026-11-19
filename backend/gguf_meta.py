@@ -83,6 +83,37 @@ _SPLIT_SHARD_RE = re.compile(r'^(?P<base>.+)-(?P<idx>\d{5})-of-(?P<total>\d{5})$
 _MMPROJ_DTYPE_TOKENS = frozenset({
     "mmproj", "f16", "f32", "bf16", "q8", "q8_0", "q4", "q5", "q6", "vision", "projector",
 })
+_SIBLING_NOISE_TOKENS = _MMPROJ_DTYPE_TOKENS | frozenset({
+    "0", "1", "k", "m", "s", "l", "xs", "xl", "xxl", "nl", "ud", "iq1", "iq2", "iq3", "iq4",
+    "mtp", "dflash", "dspark", "draft", "spec", "sidecar", "encoder", "vl",
+})
+_SIZE_TOKEN_RE = re.compile(r"^(?:e?\d+(?:\.\d+)?b|a\d+(?:\.\d+)?b)$", re.IGNORECASE)
+_TOOL_CALL_TEMPLATE_RE = re.compile(
+    r"(?:"
+    r"\{%[^%]*\btools\b"
+    r"|\{\{\s*tools\b"
+    r"|<tools>"
+    r"|\bfor\s+tool\s+in\b"
+    r"|\btool_calls?\b"
+    r"|\btool_response\b"
+    r"|\btool_declaration\b"
+    r"|\[TOOL_CALLS\]"
+    r"|\bfunction_call\b"
+    r"|<function[=\s>]"
+    r"|<\|tool"
+    r"|<\|call:"
+    r"|<\|plugin\|>"
+    r"|\bavailable_tools\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _detect_has_tool_call(chat_tpl_str: str | None) -> bool:
+    """Detect tool/function-calling capability from GGUF tokenizer.chat_template."""
+    if not chat_tpl_str:
+        return False
+    return bool(_TOOL_CALL_TEMPLATE_RE.search(chat_tpl_str))
 
 
 def _skip_value(f: BinaryIO, vtype: int, _depth: int = 0) -> None:
@@ -155,48 +186,114 @@ def _needs_key(key: str) -> bool:
     return any(key.endswith(sfx) for sfx in _WANT_SUFFIXES)
 
 
-def _sibling_has_mmproj(path: Path) -> bool:
+def _is_helper_gguf_name(name: str) -> bool:
+    """Return True if a .gguf filename is a sidecar/projector/drafter rather than a base model."""
+    low = name.lower()
+    return (
+        "mmproj" in low
+        or "projector" in low
+        or "vision_encoder" in low
+        or "vl-encoder" in low
+        or low.startswith("mtp-")
+        or "dflash" in low
+        or "dspark" in low
+    )
+
+
+def _split_tokens(stem: str, strip_set: frozenset[str] = frozenset()) -> list[str]:
+    return [
+        t for t in stem.lower().replace("_", "-").split("-")
+        if t and t not in strip_set
+    ]
+
+
+def detect_sibling_files(path: Path) -> dict[str, str | None]:
+    """Auto-detect sibling projector/drafter .gguf files in `path.parent`.
+
+    Detects `mmproj`, `mtp-*`, `*dflash*`, and `*dspark*` without any Python
+    model allowlist while preserving multi-model directory isolation.
+    """
+    found: dict[str, str | None] = {
+        "mmproj": None,
+        "mtp": None,
+        "dflash": None,
+        "dspark": None,
+    }
+    if not path or not path.parent.is_dir():
+        return found
+
     base_stem = _SPLIT_SHARD_RE.sub(r"\g<base>", path.stem)
-    stem_tokens = [t for t in base_stem.lower().replace("_", "-").split("-") if t]
+    stem_tokens = _split_tokens(base_stem)
     stem_set = set(stem_tokens)
+
     try:
-        siblings = list(path.parent.glob("*mmproj*.gguf"))
+        all_ggufs = sorted(path.parent.glob("*.gguf"), key=lambda p: p.name.lower())
     except OSError:
-        return False
-    if not siblings:
-        return False
-    for sib in siblings:
+        return found
+
+    other_models: list[Path] = []
+    for p in all_ggufs:
+        if p == path or _is_helper_gguf_name(p.name):
+            continue
+        if _SPLIT_SHARD_RE.sub(r"\g<base>", p.stem) == base_stem:
+            continue
+        other_models.append(p)
+
+    best_scores: dict[str, int] = {k: -1 for k in found}
+
+    for sib in all_ggufs:
+        if sib == path:
+            continue
+        low_name = sib.name.lower()
+        kind: str | None = None
+        if "mmproj" in low_name or "projector" in low_name:
+            kind = "mmproj"
+        elif low_name.startswith("mtp-") or "-mtp-draft" in low_name or "_mtp_draft" in low_name:
+            kind = "mtp"
+        elif "dflash" in low_name:
+            kind = "dflash"
+        elif "dspark" in low_name:
+            kind = "dspark"
+        if kind is None:
+            continue
+
         try:
-            if sib.stat().st_size < 1024 * 1024:
+            if not sib.is_file() or sib.stat().st_size <= 0:
                 continue
         except OSError:
             continue
-        sib_tokens = [
-            t for t in sib.stem.lower().replace("_", "-").split("-")
-            if t and t not in _MMPROJ_DTYPE_TOKENS
-        ]
-        # Named projector (e.g. mmproj-Qwen3.5-9B-F16.gguf): every model token must match this file's stem.
-        if sib_tokens:
-            if len(sib_tokens) >= 2 and all(tok in stem_set for tok in sib_tokens):
-                return True
-            if len(sib_tokens) == 1 and sib_tokens[0] in stem_set:
-                return True
-            continue
-        # Generic projector (e.g. mmproj-F16.gguf): only match when this dir holds a single model.
-        try:
-            from backend.llama_models import is_non_model_gguf
-            other_models = [
-                p for p in path.parent.glob("*.gguf")
-                if "mmproj" not in p.name.lower()
-                and not p.name.lower().startswith("mtp-")
-                and not is_non_model_gguf(p.name)
-                and _SPLIT_SHARD_RE.sub(r'\g<base>', p.stem) != _SPLIT_SHARD_RE.sub(r'\g<base>', path.stem)
-            ]
-        except (OSError, ImportError):
-            other_models = []
-        if not other_models:
-            return True
-    return False
+
+        if kind == "mmproj":
+            sib_tokens = _split_tokens(sib.stem, _MMPROJ_DTYPE_TOKENS)
+            score = -1
+            if sib_tokens:
+                if (len(sib_tokens) >= 2 and all(tok in stem_set for tok in sib_tokens)) or (
+                    len(sib_tokens) == 1 and sib_tokens[0] in stem_set
+                ):
+                    score = 100 + len(sib_tokens)
+            elif not other_models:
+                score = 10
+        else:
+            sib_tokens = _split_tokens(sib.stem, _SIBLING_NOISE_TOKENS)
+            fam_tokens = [t for t in sib_tokens if not _SIZE_TOKEN_RE.match(t)]
+            score = -1
+            if sib_tokens and all(tok in stem_set for tok in sib_tokens):
+                score = 100 + len(sib_tokens)
+            elif fam_tokens and all(tok in stem_set for tok in fam_tokens):
+                score = 50 + len(fam_tokens)
+            elif not other_models:
+                score = 10 if (not sib_tokens or not fam_tokens) else 5
+
+        if score > best_scores[kind]:
+            best_scores[kind] = score
+            found[kind] = str(sib)
+
+    return found
+
+
+def _sibling_has_mmproj(path: Path) -> bool:
+    """Return True if a matching vision projector exists alongside `path`."""
+    return bool(detect_sibling_files(path).get("mmproj"))
 
 
 def _derive_kv_bytes(
@@ -290,7 +387,10 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
         or "<think>" in tpl_low
         or "[think]" in tpl_low
     )
-    has_vision = bool(vision_blocks > 0 or _sibling_has_mmproj(path))
+    has_tool_call = _detect_has_tool_call(chat_tpl_str)
+    siblings = detect_sibling_files(path)
+    has_embedded_vision = vision_blocks > 0
+    has_vision = bool(has_embedded_vision or siblings.get("mmproj"))
     kv_q4, kv_f16 = _derive_kv_bytes(
         block_count, head_count, head_kv, emb_len, k_len, v_len, full_attn_int
     )
@@ -314,8 +414,11 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
         "full_attention_interval": full_attn_int,
         "chat_template": chat_tpl_str,
         "has_chat_template": bool(chat_tpl_str),
+        "has_tool_call": has_tool_call,
         "has_thinking": has_thinking,
+        "has_embedded_vision": has_embedded_vision,
         "has_vision": has_vision,
+        "siblings": siblings,
         "is_moe": expert_count > 0,
         "kv_bytes_per_token_q4": kv_q4,
         "kv_bytes_per_token_f16": kv_f16,
@@ -367,7 +470,11 @@ def read_gguf_metadata(path_or_model: str | Path) -> dict[str, Any]:
     total_size = _total_gguf_size_bytes(p, st.st_size)
     cached = _META_CACHE.get(key)
     if cached and cached[0] == st.st_mtime_ns and cached[1] == total_size:
-        return dict(cached[2])
+        out = dict(cached[2])
+        siblings = detect_sibling_files(p)
+        out["siblings"] = siblings
+        out["has_vision"] = bool(out.get("has_embedded_vision") or siblings.get("mmproj"))
+        return out
     try:
         parsed = _parse_gguf_file(p, total_size)
     except (OSError, struct.error, ValueError, EOFError, UnicodeDecodeError, OverflowError, TypeError) as exc:

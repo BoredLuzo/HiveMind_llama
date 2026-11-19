@@ -451,9 +451,24 @@ async def get_placeholder_workspace_info():
     }
 
 
+def _active_run_busy() -> bool:
+    """True when the engine has an active top-level or abort-registered run."""
+    from infra import run_control as _rc
+    if _rc._top_run_lock is not None and _rc._top_run_lock.locked():
+        return True
+    if _rc.get_top_run_lock().locked():
+        return True
+    return bool(_rc.get_active_top_run_id() or _rc.live_run_ids())
+
+
 @router.post("/workspace/placeholder/clear")
 async def post_placeholder_workspace_clear():
     """Clear all files inside the built-in placeholder workspace on new chat."""
+    if _active_run_busy():
+        return JSONResponse(
+            {"ok": False, "error": "An active HiveMind run is in progress."},
+            status_code=409,
+        )
     from utils.workspace_resolve import (
         clear_placeholder_workspace as _ph_clear,
         get_placeholder_workspace as _ph_ws,

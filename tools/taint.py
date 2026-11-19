@@ -74,7 +74,7 @@ def wrap_result(name: str, text: str) -> str:
     """Wrap a tool result from an untrusted source (idempotent)."""
     if not is_untrusted_tool(name) or not isinstance(text, str) or not text:
         return text
+    mark(name)
     if text.lstrip().startswith("[UNTRUSTED CONTENT"):
         return text
-    mark(name)
     return MARKER_OPEN.format(src=name) + text + MARKER_CLOSE

@@ -19,6 +19,7 @@ from routers import config as RC                   # noqa: E402
 
 ML = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
       + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
+ME = (ROOT / "backend" / "manager_evict.py").read_text(encoding="utf-8")
 MP = (ROOT / "backend" / "manager_process.py").read_text(encoding="utf-8")
 SRV = (ROOT / "server.py").read_text(encoding="utf-8")
 CH = (ROOT / "routers" / "chats.py").read_text(encoding="utf-8")
@@ -95,7 +96,7 @@ check("6d peer eviction skips in-flight slots",
 check("6e _find_loaded uses explicit lock ownership",
       "lock_held: bool = False" in MP
       and "self._lock.locked()" not in MP
-      and "lock_held=True" in ML)
+      and ("lock_held=True" in ML or "lock_held=True" in ME))
 check("6f oversize chat saves answer 413", 'status_code=413' in CH
       and '"chat_too_large"' in CH)
 check("6g Linux install keeps models/llama/.cache",
@@ -126,8 +127,12 @@ _c = _caps("lfm3-omni:2b") or {}
 check("8a lfm3-omni is declared multimodal", _c.get("vision") is True)
 check("8b lfm3-omni carries its projector",
       str(_mmproj("lfm3-omni:2b") or "").lower().startswith("mmproj-lfm3-omni"))
+from backend.llama_manager_utils import (
+    _VISION_CAPABLE_BASES,
+    _needs_mmproj,
+)
 check("8c the loader treats the base as vision-capable",
-      '"lfm3-omni"' in (ROOT / "backend" / "llama_manager_utils.py").read_text(encoding="utf-8"))
+      "lfm3-omni" in _VISION_CAPABLE_BASES and _needs_mmproj("lfm3-omni:2b", vision=True))
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

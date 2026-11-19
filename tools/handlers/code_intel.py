@@ -6,6 +6,7 @@ from pathlib import Path
 from utils.file import (
     _inline_resolve_path,
     _inline_check_workspace,
+    _is_junction,
     is_secret_path,
     filter_secret_search_rows,
 )
@@ -132,26 +133,67 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
     if err := _inline_check_workspace(base, workspace_lock, "find_files"):
         return err
     try:
+        base_resolved = base.resolve()
+        lock_resolved = Path(workspace_lock).resolve() if workspace_lock is not None else base_resolved
+
+        def _entry_allowed(fp: Path) -> bool:
+            try:
+                rel = fp.relative_to(base)
+            except ValueError:
+                return False
+            if any(part in _SKIP_SEARCH_DIRS for part in rel.parts):
+                return False
+            cur = base
+            for part in rel.parts:
+                cur = cur / part
+                if cur.is_symlink() or _is_junction(cur):
+                    return False
+            try:
+                fp_res = fp.resolve()
+            except (OSError, RuntimeError):
+                return False
+            if not fp_res.is_file():
+                return False
+            if not (fp_res.is_relative_to(base_resolved) and fp_res.is_relative_to(lock_resolved)):
+                return False
+            if _inline_check_workspace(fp, workspace_lock, "find_files") is not None:
+                return False
+            if _inline_check_workspace(fp_res, workspace_lock, "find_files") is not None:
+                return False
+            if is_secret_path(fp, base) or is_secret_path(fp_res, base_resolved):
+                return False
+            return True
+
+        def _dir_allowed(dp: Path) -> bool:
+            if dp.is_symlink() or _is_junction(dp):
+                return False
+            try:
+                dp_res = dp.resolve()
+            except (OSError, RuntimeError):
+                return False
+            return dp_res.is_relative_to(base_resolved) and dp_res.is_relative_to(lock_resolved)
+
         def _collect() -> list[Path]:
             if "**" not in pattern:
                 return [
                     m for m in sorted(base.glob(pattern))
-                    if m.is_file()
-                    and not any(part in _SKIP_SEARCH_DIRS for part in m.parts)
-                    and not is_secret_path(m, base)
+                    if _entry_allowed(m)
                 ]
             import fnmatch
             sub_pat = pattern[3:] if pattern.startswith("**/") else pattern
             found: list[Path] = []
-            for dp, dns, fns in os.walk(base):
-                dns[:] = [d for d in sorted(dns) if d not in _SKIP_SEARCH_DIRS]
+            for dp, dns, fns in os.walk(base, followlinks=False):
+                dns[:] = [
+                    d for d in sorted(dns)
+                    if d not in _SKIP_SEARCH_DIRS and _dir_allowed(Path(dp) / d)
+                ]
                 for fn in sorted(fns):
                     fp = Path(dp) / fn
                     rel_s = fp.relative_to(base).as_posix()
                     if (fnmatch.fnmatch(rel_s, pattern)
                             or fnmatch.fnmatch(fn, sub_pat)
                             or fnmatch.fnmatch(rel_s, sub_pat)):
-                        if not is_secret_path(fp, base):
+                        if _entry_allowed(fp):
                             found.append(fp)
             return sorted(found)
 

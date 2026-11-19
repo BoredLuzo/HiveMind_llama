@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from hive_functions.tree_scout import parse_contract_summary
 import re
 
@@ -70,13 +71,29 @@ def _normalize_hybrid_contract(raw: str) -> str:
     text = text.strip()
     if not text or text[0] != '{':
         return text
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+    text_tc = re.sub(r',\s*([}\]])', r'\1', text)
+    try:
+        json.loads(text_tc)
+        return text_tc
+    except json.JSONDecodeError:
+        pass
     text = re.sub(r'("\s*)\s*=\s*([\"\d\[\{tfn])', r'\1: \2', text)
-    text = re.sub(r'(\])\s*"', r'\1', text)
-    text = re.sub(r'(\})\s*"', r'\1', text)
-    text = re.sub(r'(\d)\s*"', r'\1', text)
-    text = re.sub(r'(true|false)\s*"', r'\1', text)
+    text = re.sub(r'(:\s*-?\d+(?:\.\d+)?)\s*"(?=\s*[,}\]\n])', r'\1', text)
+    text = re.sub(r'(:\s*(?:true|false))\s*"(?=\s*[,}\]\n])', r'\1', text)
     text = re.sub(r',\s*([}\]])', r'\1', text)
     text = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', text)
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+    text = re.sub(r'(\])\s*"', r'\1', text)
+    text = re.sub(r'(\})\s*"', r'\1', text)
     return text
 
 
@@ -101,7 +118,7 @@ def _extract_contract(raw: str, partition_label: str) -> dict | None:
         if _func_match:
             _candidate = _func_match.group(1).strip()
             _repaired = _try_repair_json_mixed(_candidate)
-            if _repaired and _repaired.get("exports"):
+            if isinstance(_repaired, dict) and _repaired.get("exports"):
                 raw = json.dumps(_repaired)
 
     # Detect markdown-fenced JSON — model writes ```json{...}``` instead of raw JSON
@@ -113,10 +130,11 @@ def _extract_contract(raw: str, partition_label: str) -> dict | None:
             _inner = _inner.strip()
             try:
                 data = json.loads(_inner)
-                return _build_contract_dict(data, partition_label)
+                if isinstance(data, dict):
+                    return _build_contract_dict(data, partition_label)
             except json.JSONDecodeError:
                 _repaired = _try_repair_json_mixed(_inner)
-                if _repaired:
+                if isinstance(_repaired, dict):
                     return _build_contract_dict(_repaired, partition_label)
 
     # Strip {json}/{toml} format-annotation prefix before JSON object
@@ -135,10 +153,14 @@ def _extract_contract(raw: str, partition_label: str) -> dict | None:
         _fn2 if _fn2 >= 0 else len(raw),
         _fw  if _fw  >= 0 else len(raw),
     )
-    if _cut > 0:
+    if 0 < _cut < len(raw):
         raw = raw[_cut:]
-    # Strip // inline comments — invalid JSON but models produce them
-    raw = re.sub(r'//[^\n]*', '', raw)
+    # Strip // inline comments outside quoted strings (preserves URLs inside strings)
+    raw = re.sub(
+        r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(//[^\n]*)''',
+        lambda m: m.group(0) if m.group(1) is None else '',
+        raw,
+    )
     # {write_contract(param="...")} — curly-brace format (no <function= prefix)
     _wc_pos = raw.find("write_contract(")
     if _wc_pos >= 0:
@@ -266,27 +288,43 @@ def _extract_contract(raw: str, partition_label: str) -> dict | None:
     if raw.startswith("{"):
         try:
             data = json.loads(raw)
-            if "write_contract" in data and isinstance(data["write_contract"], dict):
-                data = data["write_contract"]
-            elif data.get("type") == "write_contract" and isinstance(data.get("json"), dict):
-                data = data["json"]
-            return _build_contract_dict(data, partition_label)
+            if isinstance(data, dict):
+                if "write_contract" in data and isinstance(data["write_contract"], dict):
+                    data = data["write_contract"]
+                elif data.get("type") == "write_contract" and isinstance(data.get("json"), dict):
+                    data = data["json"]
+                return _build_contract_dict(data, partition_label)
         except Exception as _je:
             logger.debug("[CONTRACT] JSON strict parse failed: %s — trying repair", _je)
             # U0: Repair mixed JSON+TOML (semicolon-separated trailing garbage)
             data = _try_repair_json_mixed(raw)
-            if data is not None:
+            if isinstance(data, dict):
                 return _build_contract_dict(data, partition_label)
             # U1: Fallback to lenient parser for common 2B model mistakes
             data = _try_parse_json_lenient(raw)
-            if data is not None:
+            if isinstance(data, dict):
                 return _build_contract_dict(data, partition_label)
     # Path B: TOML (sanitized) → parse_contract_summary
     _sanitized = _sanitize_toml(raw)
     _fenced    = f"```toml\n{_sanitized}\n```"
-    _parsed    = parse_contract_summary(_fenced)
+    try:
+        _parsed = parse_contract_summary(_fenced)
+    except (ValueError, TypeError):
+        _parsed = []
+        try:
+            import tomllib
+            _raw_toml = tomllib.loads(_sanitized)
+            if isinstance(_raw_toml, dict):
+                _c = _raw_toml.get("contract") if isinstance(_raw_toml.get("contract"), dict) else _raw_toml
+                if isinstance(_c, dict) and _c:
+                    _parsed = [_build_contract_dict(_c, partition_label)]
+        except (ImportError, ValueError, TypeError):
+            _parsed = []
     if _parsed:
-        return _parsed[0]
+        _out = _parsed[0]
+        if isinstance(_out, dict):
+            _out["complexity_score"] = _sanitize_complexity_score(_out.get("complexity_score", 0.5))
+        return _out
     global _contract_fail_count
     _contract_fail_count += 1
     _log_fn = logger.warning if _contract_fail_count <= 3 else logger.debug
@@ -298,19 +336,104 @@ def _extract_contract(raw: str, partition_label: str) -> dict | None:
     return None
 
 
+_COMPLEXITY_LABELS: dict[str, float] = {
+    "trivial": 0.1,
+    "very_low": 0.1,
+    "very low": 0.1,
+    "config": 0.1,
+    "low": 0.3,
+    "simple": 0.3,
+    "easy": 0.3,
+    "utility": 0.3,
+    "medium": 0.5,
+    "moderate": 0.5,
+    "mid": 0.5,
+    "normal": 0.5,
+    "standard": 0.5,
+    "average": 0.5,
+    "high": 0.7,
+    "complex": 0.7,
+    "hard": 0.7,
+    "very_high": 0.9,
+    "very high": 0.9,
+    "critical": 0.9,
+    "extreme": 0.9,
+}
+
+
+def _sanitize_complexity_score(val: object, default: float = 0.5) -> float:
+    """Coerce complexity_score (numeric or qualitative label) into [0.0, 1.0]."""
+    if val is None or isinstance(val, bool):
+        return default
+    if isinstance(val, (int, float)):
+        f = float(val)
+        return max(0.0, min(1.0, f)) if math.isfinite(f) else default
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if not s:
+            return default
+        if s in _COMPLEXITY_LABELS:
+            return _COMPLEXITY_LABELS[s]
+        try:
+            f = float(s)
+            return max(0.0, min(1.0, f)) if math.isfinite(f) else default
+        except ValueError:
+            return default
+    return default
+
+
+def _coerce_str(val: object) -> str:
+    """Coerce a contract text field to string safely."""
+    if val is None or isinstance(val, bool):
+        return ""
+    if isinstance(val, (list, tuple)):
+        return ", ".join(str(x).strip() for x in val if x is not None and str(x).strip())
+    return str(val)
+
+
+def _coerce_str_list(val: object) -> list[str]:
+    """Coerce a contract list field into a clean list of non-empty strings."""
+    if val is None or isinstance(val, (bool, int, float, dict)):
+        return []
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return []
+        if "," in s:
+            return [part.strip() for part in s.split(",") if part.strip()]
+        return [s]
+    if isinstance(val, (list, tuple, set)):
+        items = sorted(val, key=str) if isinstance(val, set) else val
+        return [str(x).strip() for x in items if x is not None and str(x).strip()]
+    return []
+
+
+def _validate_contract(data: dict, partition_label: str = "") -> dict:
+    """Sanitize and normalize parsed contract fields without raising."""
+    if not isinstance(data, dict):
+        data = {}
+    _part_raw = data.get("partition")
+    _partition = str(_part_raw).strip() if _part_raw not in (None, "") else str(partition_label or "")
+    _tbt_raw = data.get("touched_by_task", "yes")
+    _tbt_str = str(_tbt_raw).strip().lower() if _tbt_raw is not None else "no"
+    _df_raw = data.get("data_flow")
+    if _df_raw in (None, ""):
+        _df_raw = data.get("hint", "")
+    return {
+        "partition":        _partition,
+        "role":             _coerce_str(data.get("role", "")),
+        "exports":          _coerce_str_list(data.get("exports")),
+        "files_read":       _coerce_str_list(data.get("files_read")),
+        "touched_by_task":  "yes" if _tbt_str in ("yes", "true", "1", "likely") else "no",
+        "complexity_score": _sanitize_complexity_score(data.get("complexity_score", 0.5)),
+        "data_flow":        _coerce_str(_df_raw),
+        "imports_internal": _coerce_str_list(data.get("imports_internal")),
+    }
+
+
 def _build_contract_dict(data: dict, partition_label: str) -> dict:
     """Build standardized contract dict from parsed data."""
-    return {
-        "partition":        data.get("partition", partition_label),
-        "role":             data.get("role", ""),
-        "exports":          data.get("exports", []),
-        "files_read":       data.get("files_read", []),
-        "touched_by_task":  "yes" if str(data.get("touched_by_task","yes")).lower()
-                            in ("yes","true","1") else "no",
-        "complexity_score": float(data.get("complexity_score", 0.5)),
-        "data_flow":        data.get("data_flow", data.get("hint", "")),
-        "imports_internal": data.get("imports_internal", []),
-    }
+    return _validate_contract(data, partition_label)
 
 
 def _try_repair_json_mixed(raw: str) -> dict | None:

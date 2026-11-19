@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 _smp_log = logging.getLogger("hivemind.sampling")
 
@@ -22,6 +23,18 @@ DEFAULT_PROFILE = {
         "cache_prompt": True,
     },
 }
+
+_FALLBACK_UNPROFILED_SAMPLING: dict[str, float | int] = {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 40,
+    "min_p": 0.05,
+    "repeat_penalty": 1.05,
+    "presence_penalty": 0.0,
+}
+
+# Synced at boot and on POST /settings via backend.runtime_flags.apply_runtime_flags.
+DEFAULT_UNPROFILED_SAMPLING: dict[str, float | int] = dict(_FALLBACK_UNPROFILED_SAMPLING)
 
 
 _FLAT_SAMPLING_KEYS = (
@@ -131,13 +144,58 @@ def _pick_profile_subdict(profile: dict, _mode_key: str, thinking: bool) -> dict
     return {}
 
 
+def _sanitize_unprofiled_sampling(raw: object) -> dict[str, float | int]:
+    """Extract valid numeric sampling fields from settings or runtime globals."""
+    if not isinstance(raw, dict):
+        return {}
+    clean: dict[str, float | int] = {}
+    for k in _FLAT_SAMPLING_KEYS:
+        if k not in raw:
+            continue
+        v = raw[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        if not math.isfinite(float(v)):
+            continue
+        clean[k] = int(v) if k in ("top_k", "seed") else float(v)
+    return clean
+
+
+def _apply_unprofiled_layer(target: dict[str, float | int], layer: dict[str, float | int]) -> None:
+    if not layer:
+        return
+    if "repetition_penalty" in layer and "repeat_penalty" not in layer:
+        target["repeat_penalty"] = layer["repetition_penalty"]
+    elif "repeat_penalty" in layer and "repetition_penalty" not in layer:
+        target["repetition_penalty"] = layer["repeat_penalty"]
+    target.update(layer)
+    _sync_repeat_penalty(target, target)
+
+
+def _resolve_unprofiled_sampling_layer(settings: dict | None = None) -> dict[str, float | int]:
+    """Merge fallback -> runtime DEFAULT_UNPROFILED_SAMPLING -> settings override."""
+    resolved: dict[str, float | int] = dict(_FALLBACK_UNPROFILED_SAMPLING)
+    _apply_unprofiled_layer(resolved, _sanitize_unprofiled_sampling(DEFAULT_UNPROFILED_SAMPLING))
+    if isinstance(settings, dict):
+        _apply_unprofiled_layer(
+            resolved, _sanitize_unprofiled_sampling(settings.get("default_unprofiled_sampling")),
+        )
+    return resolved
+
+
 def get_sampling_profile(model_name: str, thinking: bool = False, settings: dict | None = None, *, mode: str = "") -> dict:
-    """Resolve sampling for model_name: DEFAULT_PROFILE <- model JSON <- UI/runtime override."""
+    """Resolve sampling for model_name: DEFAULT_PROFILE (+ unprofiled defaults) <- model JSON <- UI/runtime override."""
     _mode_key = mode or ("thinking" if thinking else "non_thinking")
     base = _pick_profile_subdict(DEFAULT_PROFILE, _mode_key, thinking)
     _sync_repeat_penalty(base, base)
 
-    _apply_override_layer(base, _registry_sampling(model_name), _mode_key, thinking)
+    reg_sampling = _registry_sampling(model_name)
+    if not reg_sampling:
+        _apply_override_layer(
+            base, _resolve_unprofiled_sampling_layer(settings), _mode_key, thinking,
+        )
+    else:
+        _apply_override_layer(base, reg_sampling, _mode_key, thinking)
     _apply_override_layer(base, _settings_sampling_override(model_name, settings), _mode_key, thinking)
 
     _sync_repeat_penalty(base, base)

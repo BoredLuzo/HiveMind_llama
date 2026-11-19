@@ -10,6 +10,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
+from urllib.parse import urlparse
 
 CONFIG_ENV_VAR = "HIVEMIND_GATEWAY_CONFIG"
 DEFAULT_CONFIG_NAME = "gateway.toml"
@@ -60,9 +61,22 @@ class GatewayConfig:
     document_max_bytes: int = 20 * 1024 * 1024
 
     def validate(self) -> None:
-        base = self.hive_base_url.rstrip("/").lower()
-        loopback = ("http://127.0.0.1", "http://[::1]", "http://localhost")
-        if not base.startswith(loopback):
+        raw_url = (self.hive_base_url or "").strip()
+        try:
+            parsed = urlparse(raw_url)
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError(
+                "hive_base_url must be loopback — the gateway talks to "
+                f"HiveMind via 127.0.0.1 only (got {self.hive_base_url!r})"
+            ) from exc
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme.lower() not in ("http", "https")
+            or parsed.username is not None
+            or parsed.password is not None
+            or host not in ("127.0.0.1", "localhost", "::1")
+        ):
             raise ValueError(
                 "hive_base_url must be loopback — the gateway talks to "
                 f"HiveMind via 127.0.0.1 only (got {self.hive_base_url!r})")

@@ -14,20 +14,23 @@ import httpx
 import logging
 import os
 import platform
+import shlex
 import subprocess
 import time
 from pathlib import Path
 
 from . import llama_config as _llama_cfg
+from . import llama_manager_utils as _llama_utils
 from .llama_config import (
     BINARY_MIN_BUILD,
     DFLASH_DRAFT_N_MAX, DFLASH_DRAFT_N_MIN, DFLASH_DRAFT_P_MIN,
     DFLASH_MIN_BUILD, DFLASH_SPEC_TYPE,
     DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE,
-    GPU_BACKEND, GPU_LAYERS, KV_CACHE_TYPE,
-    LLAMA_BIN, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
-    MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VULKAN_DEVICE, VRAM_PREFLIGHT_GATE,
-    _GPU_LAYERS_TABLE, _MTP_MODELS, _MOE_EXPERT_COUNTS,
+    GPU_BACKEND, GPU_DEVICE, GPU_LAYERS, KV_CACHE_TYPE,
+    LLAMA_BIN, LLAMA_EXTRA_ARGS, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
+    MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, SPEC_DECODE_MODE, VULKAN_DEVICE,
+    VRAM_PREFLIGHT_GATE,
+    _GPU_LAYERS_TABLE, _MTP_MODELS, _MOE_EXPERT_COUNTS, _ud_candidates,
     dense_kv_cache_type, llama_gpu_layers_auto, moe_kv_cache_types,
     resolve_gpu_layers, ubatch_extra_mib,
 )
@@ -43,13 +46,42 @@ from .llama_manager_utils import (
 )
 from .llama_models import _strip_alias, resolve_model_path
 from .llama_vram_table import (
-    TOTAL_VRAM_MIB,
+    TOTAL_VRAM_MIB, _effective_total_vram_mib,
     get_live_gpu_free_mib, mmproj_surcharge_mib, slot_mmproj_vram_mib,
     vram_of_moe, wait_for_vram_reclaim,
 )
 from .manager_process import _slot_in_flight
 
 logger = logging.getLogger("llama_manager")
+
+_INIT_VULKAN_DEVICE = VULKAN_DEVICE
+_INIT_GPU_DEVICE = GPU_DEVICE
+_INIT_KV_CACHE_TYPE = KV_CACHE_TYPE
+_INIT_SPEC_DECODE_MODE = SPEC_DECODE_MODE
+_INIT_LLAMA_EXTRA_ARGS = LLAMA_EXTRA_ARGS
+_INIT_MTP_DRAFT_N_MAX = MTP_DRAFT_N_MAX
+_INIT_MTP_DRAFT_P_MIN = MTP_DRAFT_P_MIN
+_INIT_DFLASH_DRAFT_P_MIN = DFLASH_DRAFT_P_MIN
+_INIT_PREFLIGHT_MARGIN = VRAM_PRE_FLIGHT_MARGIN_MIB
+
+
+def _live_cfg(name: str, local_val, init_val):
+    """Prefer explicit monkeypatches on this module, else read live `_llama_cfg.<name>`."""
+    if local_val != init_val:
+        return local_val
+    return getattr(_llama_cfg, name, local_val)
+
+
+def _live_gpu_device() -> int:
+    """Resolve active GPU device index honoring VULKAN_DEVICE and GPU_DEVICE."""
+    if VULKAN_DEVICE != _INIT_VULKAN_DEVICE:
+        return int(VULKAN_DEVICE)
+    if GPU_DEVICE != _INIT_GPU_DEVICE:
+        return int(GPU_DEVICE)
+    lc_gpu = int(getattr(_llama_cfg, "GPU_DEVICE", _INIT_GPU_DEVICE) or 0)
+    if lc_gpu != _INIT_GPU_DEVICE:
+        return lc_gpu
+    return int(getattr(_llama_cfg, "VULKAN_DEVICE", _INIT_VULKAN_DEVICE) or 0)
 
 
 @dataclasses.dataclass
@@ -150,25 +182,25 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
                 to_kill = _unpinned
                 if to_kill:
                     _evicted_here = True
-                for rs in to_kill:
-                    logger.info(f"Vulkan-Serialisierung (VRAM {current_vram:.1f}+{new_vram:.1f}>{VRAM_BUDGET_GB}GB): evicte {rs.model} (pinned={rs.pinned})")
-                    await _kill_slot_async(rs)
-                for rs in to_kill:
-                    for _ in range(20):
-                        alive = await self._port_alive(rs.port)
-                        if not alive:
-                            break
-                        await asyncio.sleep(0.05)
-                await asyncio.sleep(0.5)
-                # VRAM reclaim wait: port dead != VRAM free (Vulkan is async)
-                _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB), timeout_sec=45, stall_abort_s=12.0)
-                if not _reclaimed:
-                    _free_now = get_live_gpu_free_mib()
-                    logger.warning(
-                        "Vulkan: VRAM reclaim timeout after eviction — "
-                        "pre-flight could still block (only %.0fMiB free)",
-                        _free_now if _free_now is not None else -1,
-                    )
+                    for rs in to_kill:
+                        logger.info(f"Vulkan-Serialisierung (VRAM {current_vram:.1f}+{new_vram:.1f}>{VRAM_BUDGET_GB}GB): evicte {rs.model} (pinned={rs.pinned})")
+                        await _kill_slot_async(rs)
+                    for rs in to_kill:
+                        for _ in range(20):
+                            alive = await self._port_alive(rs.port)
+                            if not alive:
+                                break
+                            await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.5)
+                    # VRAM reclaim wait: port dead != VRAM free (Vulkan is async)
+                    _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB), timeout_sec=45, stall_abort_s=12.0)
+                    if not _reclaimed:
+                        _free_now = get_live_gpu_free_mib()
+                        logger.warning(
+                            "Vulkan: VRAM reclaim timeout after eviction — "
+                            "pre-flight could still block (only %.0fMiB free)",
+                            _free_now if _free_now is not None else -1,
+                        )
         else:
             _live_free = get_live_gpu_free_mib()
             # STALL-FIX (2026-09-07): reclaim target with REDUCED margin —
@@ -216,23 +248,31 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
                     )
                 if _to_kill:
                     _evicted_here = True
-                for rs in _to_kill:
-                    logger.info("Vulkan: live VRAM pressure - evicting %s", rs.model)
-                    await _kill_slot_async(rs)
-                for rs in _to_kill:
-                    for _ in range(20):
-                        alive = await self._port_alive(rs.port)
-                        if not alive:
-                            break
-                        await asyncio.sleep(0.05)
-                await asyncio.sleep(0.5)
-                _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45, stall_abort_s=12.0)
-                if not _reclaimed:
-                    _free_now = get_live_gpu_free_mib()
+                    for rs in _to_kill:
+                        logger.info("Vulkan: live VRAM pressure - evicting %s", rs.model)
+                        await _kill_slot_async(rs)
+                    for rs in _to_kill:
+                        for _ in range(20):
+                            alive = await self._port_alive(rs.port)
+                            if not alive:
+                                break
+                            await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.5)
+                    _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45, stall_abort_s=12.0)
+                    if not _reclaimed:
+                        _free_now = get_live_gpu_free_mib()
+                        logger.warning(
+                            "Vulkan: VRAM reclaim timeout after eviction — "
+                            "pre-flight could still block (only %.0fMiB free)",
+                            _free_now if _free_now is not None else -1,
+                        )
+                else:
                     logger.warning(
-                        "Vulkan: VRAM reclaim timeout after eviction — "
-                        "pre-flight could still block (only %.0fMiB free)",
-                        _free_now if _free_now is not None else -1,
+                        "Vulkan: live VRAM pressure for %s (free=%s < needed=%.0fMiB), "
+                        "but no running peer is evictable — skipping reclaim wait",
+                        model,
+                        f"{_live_free:.0f}MiB" if _live_free is not None else "N/A",
+                        _need_mib,
                     )
             else:
                 _free_str = f"{_live_free:.0f}MiB" if _live_free is not None else "N/A"
@@ -257,19 +297,20 @@ _EXTERNAL_DRAFT_VALUE_FLAGS = frozenset({
 
 
 @dataclasses.dataclass
-class _ExternalDrafter:
-    """Resolved external speculative drafter configuration (DSpark / DFlash)."""
+class _SpecConfig:
+    """Resolved speculative decoding configuration (MTP / DSpark / DFlash)."""
     spec_type: str
-    path: Path
+    draft_path: Path | None
     n_max: int
     n_min: int
     p_min: float | None
     min_build: int
     label: str
+    is_mtp: bool = False
 
 
 def _find_external_drafter_path(draft_fn: str) -> Path | None:
-    """Resolve an external drafter GGUF (DSpark/DFlash) under MODELS_DIR."""
+    """Resolve an external drafter GGUF (MTP sidecar / DSpark / DFlash) under MODELS_DIR."""
     dp = Path(draft_fn)
     if dp.is_absolute() and dp.exists():
         return dp
@@ -285,10 +326,32 @@ def _find_external_drafter_path(draft_fn: str) -> Path | None:
     return None
 
 
-async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = False) -> _ExternalDrafter | None:
-    """Resolve an enabled, on-disk, binary-supported DSpark/DFlash drafter."""
+async def _resolve_spec_config(
+    self, model: str, *, log_warnings: bool = False,
+) -> _SpecConfig | None:
+    """Resolve unified speculative decoding config (DSpark / DFlash / MTP).
+
+    Evaluates exact `-ud`-qualified model keys before stripping the `-ud`
+    suffix, honors runtime `SPEC_DECODE_MODE`, enforces `HIVEMIND_*_SPEC`
+    off-switches, discovers sibling drafter files automatically when omitted
+    from profiles, verifies on-disk drafter files, and checks binary flags.
+    """
+    spec_mode = str(
+        _live_cfg("SPEC_DECODE_MODE", SPEC_DECODE_MODE, _INIT_SPEC_DECODE_MODE) or "auto"
+    ).strip().lower()
+    if spec_mode == "off":
+        return None
+
     from backend.manager_load import _help_supports  # lazy: module cycle
-    draft_fn = None
+    m_alias = _strip_alias(model)
+    m_cands = _ud_candidates(m_alias)
+    live_dflash_pmin = float(
+        _live_cfg("DFLASH_DRAFT_P_MIN", DFLASH_DRAFT_P_MIN, _INIT_DFLASH_DRAFT_P_MIN)
+    )
+
+    # ── 1. External DSpark / DFlash speculative drafters ────────────────────
+    draft_fn: str | None = None
+    draft_path: Path | None = None
     spec_type = DSPARK_SPEC_TYPE
     n_max = DSPARK_DRAFT_N_MAX
     n_min = DSPARK_DRAFT_N_MIN
@@ -308,96 +371,306 @@ async def _resolve_external_drafter(self, model: str, *, log_warnings: bool = Fa
             get_dflash_draft_p_min as _reg_df_pmin,
             get_dspark_draft_n_max as _reg_nmax,
         )
-        m_alias = _strip_alias(model)
-        draft_fn = _reg_dd2(m_alias)
-        if draft_fn:
-            n_max = int(_reg_nmax(m_alias) or DSPARK_DRAFT_N_MAX)
+        matched_dspark = next((c for c in m_cands if _reg_dd2(c)), None)
+        if matched_dspark:
+            draft_fn = _reg_dd2(matched_dspark)
+            n_max = int(_reg_nmax(matched_dspark) or DSPARK_DRAFT_N_MAX)
             env_off = os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
         else:
-            draft_fn = _reg_df2(m_alias)
-            if draft_fn:
+            matched_dflash = next((c for c in m_cands if _reg_df2(c)), None)
+            if matched_dflash:
+                draft_fn = _reg_df2(matched_dflash)
                 spec_type = DFLASH_SPEC_TYPE
-                n_max = int(_reg_df_nmax(m_alias) or DFLASH_DRAFT_N_MAX)
+                n_max = int(_reg_df_nmax(matched_dflash) or DFLASH_DRAFT_N_MAX)
                 n_min = int(DFLASH_DRAFT_N_MIN)
-                reg_pmin = _reg_df_pmin(m_alias)
-                p_min = float(reg_pmin if reg_pmin is not None else DFLASH_DRAFT_P_MIN)
+                reg_pmin = _reg_df_pmin(matched_dflash)
+                p_min = float(reg_pmin if reg_pmin is not None else live_dflash_pmin)
                 min_build = DFLASH_MIN_BUILD
                 label = "DFlash"
-                draft_alt_fns = _reg_df_alts(m_alias)
+                draft_alt_fns = _reg_df_alts(matched_dflash)
                 env_off = (
                     os.environ.get("HIVEMIND_DFLASH_SPEC", "1") in ("0", "false", "off")
                     or os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
                 )
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _ext_err:
+        logger.debug("[SPEC] external draft lookup skipped: %s", _ext_err)
         draft_fn = None
-    if env_off or not draft_fn:
+
+    def _auto_sibling_files() -> dict[str, str | None]:
+        """Resolve sibling drafter GGUFs respecting mocked resolve_model_path / MODELS_DIR."""
+        try:
+            gp = resolve_model_path(m_alias)
+            if not gp:
+                return {}
+            gp_path = Path(gp)
+            if not gp_path.is_file():
+                return {}
+            if Path(MODELS_DIR) != Path(_llama_cfg.MODELS_DIR):
+                try:
+                    gp_path.resolve().relative_to(Path(MODELS_DIR).resolve())
+                except ValueError:
+                    return {}
+            from backend.gguf_meta import detect_sibling_files as _detect_sibs
+            return _detect_sibs(gp_path) or {}
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _sib_err:
+            logger.debug("[SPEC] sibling auto-discovery skipped for %s: %s", m_alias, _sib_err)
+            return {}
+
+    _sibs_cache: dict[str, str | None] | None = None
+
+    def _get_sib(kind: str) -> Path | None:
+        nonlocal _sibs_cache
+        if _sibs_cache is None:
+            _sibs_cache = _auto_sibling_files()
+        raw = _sibs_cache.get(kind)
+        if raw:
+            p = Path(raw)
+            if p.is_file():
+                return p
         return None
-    draft_path = _find_external_drafter_path(draft_fn)
-    if draft_path is None:
-        for alt_fn in draft_alt_fns:
-            draft_path = _find_external_drafter_path(alt_fn)
-            if draft_path is not None:
+
+    # Sibling auto-discovery in the target GGUF's directory when no explicit
+    # external drafter filename is configured.
+    if not draft_fn:
+        sib_dspark = _get_sib("dspark")
+        if sib_dspark is not None:
+            draft_path = sib_dspark
+            draft_fn = sib_dspark.name
+            env_off = os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
+        else:
+            sib_dflash = _get_sib("dflash")
+            if sib_dflash is not None:
+                draft_path = sib_dflash
+                draft_fn = sib_dflash.name
+                spec_type = DFLASH_SPEC_TYPE
+                n_max = DFLASH_DRAFT_N_MAX
+                n_min = int(DFLASH_DRAFT_N_MIN)
+                p_min = live_dflash_pmin
+                min_build = DFLASH_MIN_BUILD
+                label = "DFlash"
+                env_off = (
+                    os.environ.get("HIVEMIND_DFLASH_SPEC", "1") in ("0", "false", "off")
+                    or os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off")
+                )
+
+    if draft_fn:
+        if env_off:
+            return None
+        if draft_path is None:
+            draft_path = _find_external_drafter_path(draft_fn)
+        if draft_path is None:
+            for alt_fn in draft_alt_fns:
+                draft_path = _find_external_drafter_path(alt_fn)
+                if draft_path is not None:
+                    break
+        if draft_path is None:
+            if log_warnings:
+                logger.warning(
+                    "%s drafter configured for '%s' (%s) but not found in %s "
+                    "— running without the drafter.",
+                    label, model, draft_fn, MODELS_DIR,
+                )
+            return None
+        build_num = getattr(self, "_binary_build_number", None) or 0
+        if spec_type == DFLASH_SPEC_TYPE:
+            draft_ok = await _help_supports(DFLASH_SPEC_TYPE)
+            if not draft_ok and build_num >= min_build:
+                # Fallback if --help output was unavailable/mocked on a matching build.
+                from backend.manager_load import _binary_help as _bin_help
+                draft_ok = not await _bin_help()
+        else:
+            draft_ok = getattr(self, "_dspark_flag_supported", None)
+            if draft_ok is None:
+                draft_ok = build_num >= min_build
+        if not draft_ok:
+            if log_warnings:
+                logger.warning(
+                    f"{label} speculative decoding not supported for '{model}' by "
+                    f"{LLAMA_BIN.name} (needs --spec-type {spec_type}, build "
+                    f"{min_build}+) — skipping the drafter."
+                )
+            return None
+        return _SpecConfig(
+            spec_type=spec_type,
+            draft_path=draft_path,
+            n_max=n_max,
+            n_min=n_min,
+            p_min=p_min,
+            min_build=min_build,
+            label=label,
+            is_mtp=False,
+        )
+
+    # ── 2. MTP (built-in draft-mtp layers or Gemma-4 / sibling MTP sidecar) ─
+    _mtp_from_registry = None
+    try:
+        from .llama_config import _try_registry_mtp as _reg_mtp
+        for _cand in m_cands:
+            _val = _reg_mtp(_cand)
+            if _val is not None:
+                _mtp_from_registry = _val
                 break
-    if draft_path is None:
-        if log_warnings:
-            logger.warning(
-                "%s drafter configured for '%s' (%s) but not found in %s "
-                "— running without the drafter.",
-                label, model, draft_fn, MODELS_DIR,
-            )
-        return None
-    build_num = getattr(self, "_binary_build_number", None) or 0
-    if spec_type == DFLASH_SPEC_TYPE:
-        draft_ok = await _help_supports(DFLASH_SPEC_TYPE)
-        if not draft_ok and build_num >= min_build:
-            # Fallback if --help output was unavailable/mocked on a matching build.
-            from backend.manager_load import _binary_help as _bin_help
-            draft_ok = not await _bin_help()
-    else:
-        draft_ok = getattr(self, "_dspark_flag_supported", None)
-        if draft_ok is None:
-            draft_ok = build_num >= min_build
-    if not draft_ok:
-        if log_warnings:
-            logger.warning(
-                f"{label} speculative decoding not supported for '{model}' by "
-                f"{LLAMA_BIN.name} (needs --spec-type {spec_type}, build "
-                f"{min_build}+) — skipping the drafter."
-            )
-        return None
-    return _ExternalDrafter(
-        spec_type=spec_type,
-        path=draft_path,
-        n_max=n_max,
-        n_min=n_min,
-        p_min=p_min,
-        min_build=min_build,
-        label=label,
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
+        logger.debug("[MTP] registry MTP probe skipped: %s", _e)
+    _is_mtp = (
+        bool(_mtp_from_registry)
+        if _mtp_from_registry is not None
+        else any(_cand in _MTP_MODELS for _cand in m_cands)
     )
+    _mtp_draft_fn: str | None = None
+    _mtp_draft_path: Path | None = None
+    try:
+        from .llama_config import _try_registry_mtp_draft as _reg_mtp_draft
+        for _cand in m_cands:
+            _dfn = _reg_mtp_draft(_cand)
+            if _dfn:
+                _mtp_draft_fn = _dfn
+                break
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
+        logger.debug("[MTP] external draft probe skipped: %s", _e)
+
+    if not _mtp_draft_fn and _mtp_from_registry is not False:
+        _sib_mtp = _get_sib("mtp")
+        if _sib_mtp is not None:
+            _mtp_draft_path = _sib_mtp
+            _is_mtp = True
+
+    # ENV-BYPASS FIX (audit 2026-10-24): unified spec resolver gates all
+    # MTP paths (name-list, registry, and sidecar) on HIVEMIND_MTP_SPEC.
+    if os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off") and _is_mtp:
+        if _mtp_draft_fn and _mtp_draft_path is None:
+            _mtp_draft_path = _find_external_drafter_path(_mtp_draft_fn)
+            if _mtp_draft_path is None:
+                if log_warnings:
+                    logger.warning(
+                        "MTP drafter sidecar configured for '%s' (%s) but not found in %s "
+                        "— running without speculative decoding.",
+                        model, _mtp_draft_fn, MODELS_DIR,
+                    )
+                return None
+        _draft_nmax = _live_cfg("MTP_DRAFT_N_MAX", MTP_DRAFT_N_MAX, _INIT_MTP_DRAFT_N_MAX)
+        _draft_pmin = _live_cfg("MTP_DRAFT_P_MIN", MTP_DRAFT_P_MIN, _INIT_MTP_DRAFT_P_MIN)
+        try:
+            from model_configs.models_registry import get_profile as _gp
+            _prof: dict = {}
+            for _cand in m_cands:
+                _cand_prof = _gp(_cand)
+                if _cand_prof:
+                    _prof = _cand_prof
+                    break
+            if _prof.get("mtp_draft_n_max") is not None:
+                _draft_nmax = int(_prof["mtp_draft_n_max"])
+            if _prof.get("mtp_draft_p_min") is not None:
+                _draft_pmin = float(_prof["mtp_draft_p_min"])
+        except (ImportError, ValueError, TypeError) as _prof_err:
+            logger.debug("MTP profile override skipped: %s", _prof_err)
+        _draft_nmax = max(1, min(4, int(_draft_nmax)))
+        _draft_pmin = max(0.0, min(0.95, float(_draft_pmin)))
+        return _SpecConfig(
+            spec_type=MTP_SPEC_TYPE,
+            draft_path=_mtp_draft_path,
+            n_max=_draft_nmax,
+            n_min=MTP_DRAFT_N_MIN,
+            p_min=_draft_pmin,
+            min_build=0,
+            label="MTP",
+            is_mtp=True,
+        )
+    return None
+
+
+async def _append_spec_flags(
+    self, cmd: list[str], model: str, spec: _SpecConfig | None,
+) -> None:
+    """Append unified speculative decoding CLI flags (MTP / DSpark / DFlash)."""
+    if spec is None:
+        return
+    from backend.manager_load import _help_supports  # lazy: module cycle
+    # Guard built-in MTP on --spec-draft-n-max on legacy builds (< b8278);
+    # external drafters and modern builds emit --spec-draft-n-max cleanly.
+    _nmax_supported = await _help_supports("--spec-draft-n-max")
+    _build_num = getattr(self, "_binary_build_number", None) or 0
+    if (
+        spec.is_mtp
+        and spec.draft_path is None
+        and not _nmax_supported
+        and 0 < _build_num < 8278
+    ):
+        logger.warning(
+            "spec-draft-n-max not supported by this binary - %s starts undrafted",
+            model,
+        )
+        return
+    cmd += [
+        "--spec-type", spec.spec_type,
+        "--spec-draft-n-max", str(spec.n_max),
+        "--spec-draft-n-min", str(spec.n_min),
+    ]
+    if spec.draft_path is not None:
+        cmd += ["--model-draft", str(spec.draft_path)]
+    _draft_ngl_ok = (
+        spec.draft_path is not None
+        and GPU_BACKEND != "cpu"
+        and await _help_supports("--spec-draft-ngl")
+    )
+    if _draft_ngl_ok:
+        cmd += ["--spec-draft-ngl", "999"]
+    _draft_pmin_ok = (
+        spec.p_min is not None
+        and await _help_supports("--spec-draft-p-min")
+    )
+    if _draft_pmin_ok and spec.p_min is not None:
+        cmd += ["--spec-draft-p-min", f"{spec.p_min:g}"]
+    if spec.is_mtp:
+        logger.info(
+            "MTP active: %s%s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
+            spec.spec_type,
+            f" -> drafter {spec.draft_path.name}" if spec.draft_path is not None else "",
+            spec.n_max,
+            spec.n_min,
+            f"{spec.p_min:g}" if spec.p_min is not None else "n/a",
+            "" if _draft_pmin_ok else " [flag unsupported - omitted]",
+        )
+    else:
+        logger.info(
+            "%s active: %s → drafter %s (n-max=%d, n-min=%d%s%s)",
+            spec.label,
+            model,
+            spec.draft_path.name if spec.draft_path is not None else "",
+            spec.n_max,
+            spec.n_min,
+            f", p-min={spec.p_min:g}" if (_draft_pmin_ok and spec.p_min is not None) else "",
+            ", ngl=999" if _draft_ngl_ok else "",
+        )
 
 
 def _external_draft_footprint_mib(cmd: list[str], model: str = "") -> float:
     """Estimated total VRAM footprint (MiB) of the external --model-draft.
 
-    Uses profile `draft_overhead_mib` when calibrated (e.g. MiniCPM DSpark Q6:
-    ~1600 MiB measured delta at 16k), otherwise falls back to file_mib + 550 MiB
-    (Nemotron DFlash BF16: ~694 MiB file -> ~1248 MiB live peak delta).
+    Uses profile `draft_overhead_mib` when calibrated (exact `-ud` profile checked
+    before `-ud`-stripped fallback), otherwise falls back to file_mib + 550 MiB
+    (e.g. Nemotron DFlash BF16 or Gemma-4 external MTP sidecar).
     """
     if "--model-draft" not in cmd:
         return 0.0
     if model:
         try:
             from model_configs.models_registry import get_draft_overhead_mib as _gdov
-            prof_mib = _gdov(_strip_alias(model))
-            if prof_mib is not None and prof_mib > 0.0:
-                return float(prof_mib)
-        except (ImportError, AttributeError, TypeError, ValueError):
-            pass
+            for _cand in _ud_candidates(_strip_alias(model)):
+                prof_mib = _gdov(_cand)
+                if prof_mib is not None and prof_mib > 0.0:
+                    return float(prof_mib)
+        except (ImportError, AttributeError, TypeError, ValueError) as _gdov_err:
+            logger.debug("[DRAFT] profile overhead lookup skipped: %s", _gdov_err)
     file_mib = 0.0
     try:
         idx = cmd.index("--model-draft")
         if idx + 1 < len(cmd):
             dp = Path(cmd[idx + 1])
+            if not dp.is_file():
+                resolved_dp = _find_external_drafter_path(cmd[idx + 1])
+                if resolved_dp is not None:
+                    dp = resolved_dp
             if dp.is_file():
                 file_mib = dp.stat().st_size / (1024 * 1024)
     except (ValueError, TypeError, OSError):
@@ -486,7 +759,7 @@ def _try_drop_external_drafter(self, slot, cmd: list[str], model: str,
     )
     if fit_red.ok:
         return fit, moe_cache_used, False
-    without_draft_extra = float(moe_cache_used) - float(draft_save_mib)
+    without_draft_extra = max(0.0, float(moe_cache_used) - float(draft_save_mib))
     fit_undrafted = self.can_fit(
         model, num_ctx,
         exclude_slot_id=slot.slot_id,
@@ -563,10 +836,11 @@ async def _phase_flags(self, model: str, gpu_layers_override) -> _FlagsPhase:
     except (ImportError, AttributeError, TypeError, ValueError):
         _fit_on = False
         _fit_target = 0
-    # External drafters (DFlash/DSpark): disable llama.cpp --fit (it does not
-    # account for the external drafter footprint and adds ~1.1s probe overhead)
-    # and pin GPU layers instead of auto-fitting layers against tight headroom.
-    _ext_drafter = await _resolve_external_drafter(self, model, log_warnings=False)
+    # External drafters (DFlash/DSpark/Gemma-4 MTP sidecar): disable llama.cpp --fit
+    # (it does not account for the external drafter footprint and adds ~1.1s probe
+    # overhead) and pin GPU layers instead of auto-fitting against tight headroom.
+    _spec_cfg = await _resolve_spec_config(self, model, log_warnings=False)
+    _ext_drafter = _spec_cfg is not None and _spec_cfg.draft_path is not None
     _fit_supported = bool(_fit_on and gpu_layers_override is None
                           and GPU_BACKEND != "cpu"
                           and not _ext_drafter
@@ -645,15 +919,16 @@ async def _phase_capabilities(self, cmd, _all_flags_uncached: bool) -> _CapsPhas
             type(self)._dspark_flag_supported = _dspark
 
     if GPU_BACKEND != "cpu" and type(self)._device_flag_supported:
+        _gpu_dev_id = _live_gpu_device()
         # CUDA → "CUDA<N>" (DEVICE-FORMAT-FIX 2026-08-27: llama.cpp
         if GPU_BACKEND == "cuda":
-            cmd += ["--device", f"CUDA{VULKAN_DEVICE}"]
+            cmd += ["--device", f"CUDA{_gpu_dev_id}"]
         elif GPU_BACKEND == "rocm":
             # HIP/ROCm names devices differently (ROCm0/HIP0 by build);
             # let llama.cpp pick the single visible device.
             pass
         else:
-            cmd += ["--device", f"VULKAN{VULKAN_DEVICE}"]
+            cmd += ["--device", f"VULKAN{_gpu_dev_id}"]
     else:
         logger.warning(
             f"--device not supported by {LLAMA_BIN.name} - "
@@ -773,7 +1048,8 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                      gpu_layers: object = None) -> _MoePhase:
     from backend.manager_load import _help_supports  # lazy: module cycle
     from . import llama_config as _llama_cfg
-    _moe_model_key = _strip_alias(model).removesuffix("-ud")
+    _moe_model_key = _strip_alias(model)
+    _moe_cands = _ud_candidates(_moe_model_key)
     # Per-Model-Override (dict {model_key: n_cpu_moe}) > Registry-Config > Tabellen-Default.
     _moe_count = 0
     # MOE-PIN (2026-10-14): profile "moe": false forces dense — no expert
@@ -781,8 +1057,12 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     _moe_pinned_off = False
     try:
         from model_configs.models_registry import get_moe_pin as _reg_moe_pin
-        if _reg_moe_pin(_moe_model_key) is False:
-            _moe_pinned_off = True
+        for _cand in _moe_cands:
+            _pin_val = _reg_moe_pin(_cand)
+            if _pin_val is not None:
+                if _pin_val is False:
+                    _moe_pinned_off = True
+                break
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
         _moe_pinned_off = False
     if _moe_pinned_off:
@@ -803,16 +1083,18 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             from . import llama_server_manager as _lsm_live
             _moe_map = getattr(_lsm_live, "MOE_CPU_EXPERTS", {})
         if isinstance(_moe_map, dict):
-            if _moe_model_key in _moe_map:
-                # Explicit 0 means "keep every expert on the GPU". It must not
-                # fall through to the profile/table default (that made an A100
-                # override of 0 silently keep -n-cpu-moe 35).
-                _moe_count = int(_moe_map.get(_moe_model_key) or 0)
-                _moe_src = "override"
-                _moe_explicit = True
-            else:
-                for _ok, _ov in _moe_map.items():
-                    if _moe_model_key.startswith(_ok) and int(_ov or 0) > 0:
+            for _cand in _moe_cands:
+                if _cand in _moe_map:
+                    # Explicit 0 means "keep every expert on the GPU". It must not
+                    # fall through to the profile/table default (that made an A100
+                    # override of 0 silently keep -n-cpu-moe 35).
+                    _moe_count = int(_moe_map.get(_cand) or 0)
+                    _moe_src = "override"
+                    _moe_explicit = True
+                    break
+            if not _moe_explicit:
+                for _ok, _ov in sorted(_moe_map.items(), key=lambda kv: len(kv[0]), reverse=True):
+                    if any(_cand.startswith(_ok) for _cand in _moe_cands) and int(_ov or 0) > 0:
                         _moe_count = int(_ov)
                         _moe_src = "override"
                         _moe_explicit = True
@@ -834,11 +1116,14 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
         except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _reg_err:
             logger.debug("[MOE] profile MoE-count probe skipped: %s", _reg_err)
     if _moe_count <= 0 and not _moe_explicit:
-        _moe_count = _MOE_EXPERT_COUNTS.get(_moe_model_key, 0)
+        for _cand in _moe_cands:
+            if _cand in _MOE_EXPERT_COUNTS:
+                _moe_count = _MOE_EXPERT_COUNTS[_cand]
+                break
         if _moe_count == 0 and _moe_model_key:
-            # Prefix-Match: GGUF auto-discovery suffixes
-            for _ek in _MOE_EXPERT_COUNTS:
-                if _moe_model_key.startswith(_ek):
+            # Prefix-Match (longest prefix first): GGUF auto-discovery suffixes
+            for _ek in sorted(_MOE_EXPERT_COUNTS, key=len, reverse=True):
+                if any(_cand.startswith(_ek) for _cand in _moe_cands):
                     _moe_count = _MOE_EXPERT_COUNTS[_ek]
                     break
     # Modellnamen ableiten (Xb-aYb → X, ab 30B). Kleine MoE bleiben komplett
@@ -882,10 +1167,11 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     # f16/empty global still means "no quantization flags" for
     # profile-less models).
     if _moe_count <= 0:
-        _kv_global_active = bool(KV_CACHE_TYPE) and KV_CACHE_TYPE.lower() not in ("f16", "")
+        _eff_kv = str(_live_cfg("KV_CACHE_TYPE", KV_CACHE_TYPE, _INIT_KV_CACHE_TYPE) or "")
+        _kv_global_active = bool(_eff_kv) and _eff_kv.lower() not in ("f16", "")
         _dense_kv = dense_kv_cache_type(
             _moe_model_key,
-            global_default=KV_CACHE_TYPE if _kv_global_active else "",
+            global_default=_eff_kv if _kv_global_active else "",
         )
         if _dense_kv:
             if type(self)._kv_flag_supported:
@@ -1045,137 +1331,58 @@ class _ModelFlagsPhase:
 async def _phase_model_flags(self, cmd, model: str, _model_base: str,
                              gguf_path, vision: bool) -> _ModelFlagsPhase:
     from backend.manager_load import (  # lazy: module cycle
-        _append_chat_template, _help_supports, _JINJA_BASES,
+        _append_chat_template, _JINJA_BASES,
         _omit_mmproj_for, _REASONING_ON_BASES,
     )
     from .llama_models import resolve_mmproj_path
-    # ── MTP (Multi-Token Prediction / Speculative Decoding) ────────────────
-    _mtp_model_key = _strip_alias(model)
-    _mtp_from_registry = None
-    try:
-        from .llama_config import _try_registry_mtp as _reg_mtp
-        _mtp_from_registry = _reg_mtp(_mtp_model_key)
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
-        logger.debug("[MTP] registry MTP probe skipped: %s", _e)
-    _is_mtp = bool(_mtp_from_registry) if _mtp_from_registry is not None else (_mtp_model_key in _MTP_MODELS)
-    # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the
-    # draft-mtp flags entirely (any model, MTP layers or not) —
-    # draft-mtp disables llama-server's prompt cache-reuse and has
-    # heavy prefill regressions on some backends. A/B via env without
-    # touching model configs.
-    # OFF-SWITCH INVERTED (1.3.9): the condition used to be the
-    # enable-list itself, so =0 appended --spec-type draft-mtp to
-    # EVERY model instead of switching it off.
-    _mtp_draft_fn = None
-    try:
-        from .llama_config import _try_registry_mtp_draft as _reg_mtp_draft
-        _mtp_draft_fn = _reg_mtp_draft(_mtp_model_key)
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
-        logger.debug("[MTP] external draft probe skipped: %s", _e)
-    if os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off") and _is_mtp:
-        _mtp_draft_path = None
-        if _mtp_draft_fn:
-            _mtp_draft_path = _find_external_drafter_path(_mtp_draft_fn)
-            if _mtp_draft_path is None:
-                logger.warning(
-                    "MTP drafter sidecar configured for '%s' (%s) but not found in %s "
-                    "— running without speculative decoding.",
-                    model, _mtp_draft_fn, MODELS_DIR,
-                )
-        if not _mtp_draft_fn or _mtp_draft_path is not None:
-            # profile overrides (mtp_draft_n_max / mtp_draft_p_min) win over
-            # the module defaults; the values are clamped to sane ranges so a
-            # typo cannot produce a 0-token draft or an 8-token greedy draft
-            # (the card's sweep shows n_max 8 / p_min 0 collapses to 0.57x).
-            _draft_nmax, _draft_pmin = MTP_DRAFT_N_MAX, MTP_DRAFT_P_MIN
-            try:
-                from model_configs.models_registry import get_profile as _gp
-                _prof = _gp(_mtp_model_key) or {}
-                if _prof.get("mtp_draft_n_max") is not None:
-                    _draft_nmax = int(_prof["mtp_draft_n_max"])
-                if _prof.get("mtp_draft_p_min") is not None:
-                    _draft_pmin = float(_prof["mtp_draft_p_min"])
-            except (ImportError, ValueError, TypeError) as _prof_err:
-                logger.debug("MTP profile override skipped: %s", _prof_err)
-            _draft_nmax = max(1, min(4, int(_draft_nmax)))
-            _draft_pmin = max(0.0, min(0.95, float(_draft_pmin)))
-            cmd += [
-                "--spec-type", MTP_SPEC_TYPE,
-                "--spec-draft-n-max", str(_draft_nmax),
-                "--spec-draft-n-min", str(MTP_DRAFT_N_MIN),
-            ]
-            if _mtp_draft_path is not None:
-                cmd += ["--model-draft", str(_mtp_draft_path)]
-                if GPU_BACKEND != "cpu" and await _help_supports("--spec-draft-ngl"):
-                    cmd += ["--spec-draft-ngl", "999"]
-            # --spec-draft-p-min exists from b12001 on; on older binaries the
-            # flag would abort the load, so gate it on the help text we read.
-            if await _help_supports("--spec-draft-p-min"):
-                cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
-            logger.info(
-                "MTP active: %s%s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
-                MTP_SPEC_TYPE,
-                f" -> drafter {_mtp_draft_path.name}" if _mtp_draft_path is not None else "",
-                _draft_nmax, MTP_DRAFT_N_MIN, f"{_draft_pmin:g}",
-                "" if await _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
-            )
-
-    # ── DSpark / DFlash external drafter (Speculative-Decoding Sidecar) ────
-    # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 (or HIVEMIND_DFLASH_SPEC=0
-    # for DFlash) disables the drafter without touching any profile.
-    _ext_draft = await _resolve_external_drafter(self, model, log_warnings=True)
-    if _ext_draft is not None:
-        cmd += [
-            "--spec-type", _ext_draft.spec_type,
-            "--model-draft", str(_ext_draft.path),
-            "--spec-draft-n-max", str(_ext_draft.n_max),
-            "--spec-draft-n-min", str(_ext_draft.n_min),
-        ]
-        _draft_pmin = _ext_draft.p_min
-        _draft_pmin_ok = (
-            _draft_pmin is not None
-            and await _help_supports("--spec-draft-p-min")
-        )
-        if _draft_pmin_ok and _draft_pmin is not None:
-            cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
-        _draft_ngl_ok = (
-            GPU_BACKEND != "cpu"
-            and await _help_supports("--spec-draft-ngl")
-        )
-        if _draft_ngl_ok:
-            cmd += ["--spec-draft-ngl", "999"]
-        logger.info(
-            "%s active: %s → drafter %s (n-max=%d, n-min=%d%s%s)",
-            _ext_draft.label, model, _ext_draft.path.name,
-            _ext_draft.n_max, _ext_draft.n_min,
-            f", p-min={_draft_pmin:g}" if (_draft_pmin_ok and _draft_pmin is not None) else "",
-            ", ngl=999" if _draft_ngl_ok else "",
-        )
+    # ── Speculative decoding (MTP / Gemma-4 sidecar / DSpark / DFlash) ────
+    _spec_cfg = await _resolve_spec_config(self, model, log_warnings=True)
+    await _append_spec_flags(self, cmd, model, _spec_cfg)
 
     # ── Jinja-Chat-Template ───────────────────────────────────────────────
     # (Bases: module-level _JINJA_BASES — registry "jinja" wins.)
 
-    # User-config (model_configs/models/*.json): jinja / reasoning / distilled / template.
+    # User/shipped registry config: jinja / reasoning / distilled / template / extra_args
+    # fetched via a single get_profile(model) call (falling back to individual
+    # getters only when monkeypatched in tests).
     _reg_jinja = None
     _reg_reasoning = None
     _reg_distilled = None
     _reg_template = None
-    _reg_is_mtp = None   # audit: pre-bind — the MTP block below calls it outside this import's try
     _reg_extra_args: list[str] = []
     try:
-        from model_configs.models_registry import (
-            is_jinja as _reg_is_jinja,
-            get_reasoning as _reg_get_reasoning,
-            is_distilled as _reg_is_distilled,
-            get_chat_template as _reg_get_template,
-            is_mtp as _reg_is_mtp,
-            get_extra_args as _reg_get_extra_args,
-        )
-        _reg_jinja = _reg_is_jinja(model)
-        _reg_reasoning = _reg_get_reasoning(model)
-        _reg_distilled = _reg_is_distilled(model)
-        _reg_template = _reg_get_template(model)
-        _reg_extra_args = _reg_get_extra_args(model)
+        import model_configs.models_registry as _mr
+        _prof = (_mr.get_profile(model) or {}) if hasattr(_mr, "get_profile") else {}
+        if getattr(_mr.is_jinja, "__module__", "") != "model_configs.models_registry":
+            _reg_jinja = _mr.is_jinja(model)
+        elif "jinja" in _prof and _prof["jinja"] is not None:
+            _reg_jinja = bool(_prof["jinja"])
+
+        if getattr(_mr.get_reasoning, "__module__", "") != "model_configs.models_registry":
+            _reg_reasoning = _mr.get_reasoning(model)
+        else:
+            _rv = str(_prof.get("reasoning") or "").lower()
+            _reg_reasoning = _rv if _rv in ("on", "off") else None
+
+        if getattr(_mr.is_distilled, "__module__", "") != "model_configs.models_registry":
+            _reg_distilled = _mr.is_distilled(model)
+        elif "distilled" in _prof and _prof["distilled"] is not None:
+            _reg_distilled = bool(_prof["distilled"])
+
+        if getattr(_mr.get_chat_template, "__module__", "") != "model_configs.models_registry":
+            _reg_template = _mr.get_chat_template(model)
+        else:
+            _tv = str(_prof.get("chat_template") or "").strip()
+            _reg_template = _tv or None
+
+        if getattr(_mr.get_extra_args, "__module__", "") != "model_configs.models_registry":
+            _reg_extra_args = _mr.get_extra_args(model)
+        else:
+            _ea_raw = _prof.get("extra_args")
+            if isinstance(_ea_raw, str):
+                _reg_extra_args = [tok for tok in _ea_raw.split() if tok]
+            elif isinstance(_ea_raw, list):
+                _reg_extra_args = [str(tok).strip() for tok in _ea_raw if str(tok).strip()]
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
         logger.debug("[MODEL-CONFIG] registry probe skipped: %s", _e)
     try:
@@ -1215,33 +1422,6 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     elif _gguf_meta.get("has_thinking"):
         cmd += ["--reasoning", "on"]
         logger.info(f"--reasoning on for dropped GGUF with think tokens: {model}")
-
-    # MTP SELF-SPECULATIVE DECODING (2026-10-08, user feedback: use mtp decoding with draft count 2):
-    # registry mtp:true models carry predictive layers - draft-mtp uses
-    # them as their own draft model. Verified on VULKAN: the server
-    # accepts the flags and generates.
-    try:
-        if (_reg_is_mtp is not None and _reg_is_mtp(model)
-                and "--spec-type" not in cmd
-                and not _mtp_draft_fn
-                # ENV-BYPASS FIX (audit 2026-10-24): the registry block
-                # re-enabled draft-mtp even with HIVEMIND_MTP_SPEC=0 -
-                # the off-switch only covered the name-list gate.
-                and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off")):
-            # FLAG-NAME FIX (2026-10-10, exit=1 evidence): this build wants
-            # --spec-draft-n-max; the shipped --spec-draft-max is an
-            # invalid argument and CRASHED EVERY mtp-model server start
-            # (coder-load 3/3 failed -> runtime_load_error, run dead).
-            # Guarded like the KV flags below: the flag must exist in the
-            # binary's --help, otherwise the server starts undrafted.
-            if await _help_supports("--spec-draft-n-max"):
-                cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
-                logger.info(f"--spec-type draft-mtp (n-max 2) enabled for {model} (registry mtp)")
-            else:
-                logger.warning("spec-draft-n-max not supported by this binary - %s starts undrafted", model)
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-            AttributeError, IndexError, subprocess.TimeoutExpired) as _e:
-        logger.debug("[MTP] spec flags not applicable: %s", _e)
 
     # ── mmproj (Vision-Projektor) ─────────────────────────────────────────
     # TEST SWITCH (2026-10-04): the negative test for the
@@ -1306,6 +1486,18 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     # CHAT-TEMPLATE-ONE (2026-10-30, audit S2): one helper, one flag —
     # registry template wins, fallback chain only for qwen*/hermes bases.
     _append_chat_template(cmd, _model_base, _reg_template)
+    _global_extra_raw = str(
+        _live_cfg("LLAMA_EXTRA_ARGS", LLAMA_EXTRA_ARGS, _INIT_LLAMA_EXTRA_ARGS) or ""
+    ).strip()
+    if _global_extra_raw:
+        try:
+            _global_extra_tokens = shlex.split(_global_extra_raw)
+        except ValueError as _sh_err:
+            logger.warning("Ignoring invalid global LLAMA_EXTRA_ARGS=%r: %s", _global_extra_raw, _sh_err)
+            _global_extra_tokens = []
+        if _global_extra_tokens:
+            cmd.extend(_global_extra_tokens)
+            logger.info("Extra args (global) for %s: %s", model, _global_extra_tokens)
     if _reg_extra_args:
         cmd.extend(_reg_extra_args)
         logger.info(f"Extra args (profile) for {model}: {_reg_extra_args}")
@@ -1477,7 +1669,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     # overflows VRAM. Record _draft_save_mib so tight VRAM can drop the drafter
     # before degrading ctx or failing.
     _draft_save_mib = _external_draft_footprint_mib(cmd, model)
-    if _draft_save_mib > 0.0 and _get_vram_ovr(_strip_alias(model)) is None:
+    _vram_ovr_val = next(
+        (_v for _c in _ud_candidates(_strip_alias(model)) if (_v := _get_vram_ovr(_c)) is not None),
+        None,
+    )
+    if _draft_save_mib > 0.0 and _vram_ovr_val is None:
         _moe_cache_used = float(_moe_cache_used) + _draft_save_mib
     # ── HARTER PRE-FLIGHT-VRAM-GATE ───────────────────────────────────────
     _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
@@ -1628,7 +1824,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             # If stepping all MoE experts couldn't fit with the sidecar drafter,
             # drop the drafter and retry MoE stepping on the target alone.
             cmd[:] = _strip_external_drafter_flags(cmd)
-            _moe_cache_used = float(_moe_cache_used) - float(_draft_save_mib)
+            _moe_cache_used = max(0.0, float(_moe_cache_used) - float(_draft_save_mib))
             _draft_save_mib = 0.0
             _new_lm = await _refresh_load_mode_on_draft_drop(cmd, model, load_mode_cfg)
             if _new_lm:
@@ -1652,7 +1848,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             + slot_mmproj_vram_mib(s.model, bool(getattr(s, "_vision", False)))
             for s in self._slots if s.is_running and s.model
         )
-        _ext_est = max(0, int(TOTAL_VRAM_MIB - _fit.free_mib - _current_own))
+        _ext_est = max(0, int(_effective_total_vram_mib() - _fit.free_mib - _current_own))
         # FIXED-DOMINANT (2026-09-06): the model's base load must fit at least
         # at minimal context WITH reduced margin, else every resolution is
         # pointless (old: 768 margin → hidden false blocks).
@@ -1680,6 +1876,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             _free_res = get_live_gpu_free_mib()
             if _free_res is None:
                 _free_res = _fit.free_mib
+            _eff_margin = (
+                int(VRAM_PRE_FLIGHT_MARGIN_MIB)
+                if VRAM_PRE_FLIGHT_MARGIN_MIB != _INIT_PREFLIGHT_MARGIN
+                else int(getattr(_llama_utils, "VRAM_PRE_FLIGHT_MARGIN_MIB", VRAM_PRE_FLIGHT_MARGIN_MIB))
+            )
             _res = resolve_ctx_fit(
                 num_ctx, _free_res,
                 lambda _c: max(
@@ -1690,6 +1891,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                         else vram_of_moe(_strip_alias(model), int(_c))
                     ) * 1024 + _ctx_extra_mib,
                 ),
+                margin_mib=_eff_margin,
                 allow_graceful=ctx_graceful,
             )
             if _res is not None:

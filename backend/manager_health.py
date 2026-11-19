@@ -132,11 +132,14 @@ class LlamaHealthMixin:
         return False
 
     async def unpin(self, model: str, keep_alive_seconds: float = 600.0):
-        async with self._lock:
-            slot = await self._find_loaded(model, lock_held=True)
-            if slot:
-                slot.pinned        = False
-                slot._idle_timeout = keep_alive_seconds
+        slot = await self._find_loaded(model)
+        if slot:
+            async with self._lock:
+                if _nm(slot.model) == _nm(model):
+                    slot.pinned        = False
+                    if hasattr(slot, "pinned_at"):
+                        slot.pinned_at = 0.0
+                    slot._idle_timeout = keep_alive_seconds
 
     def get_port_for(self, model: str) -> Optional[int]:
         slot = self._find_loaded_sync(model)
@@ -266,12 +269,16 @@ class LlamaHealthMixin:
                 s.process  = None
                 s.model    = None
                 s._loading = False
-                # EVENT-WAKE (audit 2026-11-03): clear() left an in-flight
-                # ensure_loaded waiting the full 240s and then reporting
-                # "did not start in time" instead of the real cause. Set it
-                # so the waiter wakes and sees the killed slot.
+                # EVENT-WAKE (audit 2026-11-03 + Wave2 C9): wake existing
+                # waiters on the old Event, then swap in a fresh unset Event so
+                # no future load can hit a stale set event.
                 s._ready_event.set()
+                s._ready_event = asyncio.Event()
                 s.pinned   = False
+                if hasattr(s, "pinned_at"):
+                    s.pinned_at = 0.0
+                if hasattr(s, "_entry_load_seq"):
+                    s._entry_load_seq = None
                 # A9d (audit 2026-11-03): a killed slot with in_flight > 0
                 # stayed non-evictable forever; the only producer has no
                 # finally, so the slot never came back.

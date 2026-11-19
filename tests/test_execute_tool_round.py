@@ -410,4 +410,49 @@ check("send_file is blocked outside Telegram runs",
       not any(e.get("type") == "send_file" for e in _no_sf_hooks.events)
       and not _no_sf_res.extra_user_msg)
 
+# ── 17. REPEAT-TIMEOUT GUARD & VERIFIED-EXEC TASK-COMPLETE (2026-11-19) ──
+# Re-running an identical run_bash command that already timed out with no
+# file edits since must be rejected instantly instead of burning another 90s.
+_to_calls = []
+def _counting_timeout(_name, args):
+    _to_calls.append(args)
+    return "[TOOL_ERROR:RUN_BASH_TIMEOUT] run_bash: run_bash timed out after 90s."
+_HANDLERS["run_bash"] = _counting_timeout
+_to_trs = _TRS(**{**_slot_defs, "tool_error_retries": {}, "call_sigs": []})
+run_round([tc("run_bash", {"cmd": "python main.py"})], trs=_to_trs)
+_to_r2, _, _to_m2, _, _, _ = run_round([tc("run_bash", {"cmd": "python  main.py"})], trs=_to_trs)
+check("repeat timed-out run_bash is rejected without executing again",
+      len(_to_calls) == 1
+      and any("Blocked duplicate run_bash call" in str(m.get("content", "")) for m in _to_m2),
+      f"calls={len(_to_calls)}")
+# After a file edit bumps verify_mutation_serial, the command may run once more
+_to_trs.verify_mutation_serial = 1
+run_round([tc("run_bash", {"cmd": "python main.py"})], trs=_to_trs)
+check("timed-out run_bash allowed again after file edit", len(_to_calls) == 2, f"calls={len(_to_calls)}")
+
+# task_complete with 0 mutations accepts passing run_python + later GUI timeout,
+# and recognizes [run_bash: exit 0] prefix for verified commands.
+_HANDLERS["task_complete"] = "[task_complete] Build: passing\nCompleted: smoke tested\nBlockers: none"
+_tc_trs1 = _TRS(**{**_slot_defs, "tool_error_retries": {}, "call_sigs": []})
+_tc_msgs1 = [
+    {"role": "tool", "name": "run_python", "tool_call_id": "rp1",
+     "content": "Pygame initialized successfully.\n[exit code: 0]"},
+    {"role": "tool", "name": "run_bash", "tool_call_id": "rb1",
+     "content": "[TOOL_ERROR:RUN_BASH_TIMEOUT] run_bash: run_bash timed out after 90s."},
+]
+_tc_r1, _, _, _, _, _ = run_round([tc("task_complete", {"summary": "done"})],
+                                  trs=_tc_trs1, dtool_msgs=_tc_msgs1)
+check("0-mutation task_complete accepted after passing smoke test + GUI timeout",
+      _tc_r1.task_complete_called is True)
+
+_tc_trs2 = _TRS(**{**_slot_defs, "tool_error_retries": {}, "call_sigs": []})
+_tc_msgs2 = [
+    {"role": "tool", "name": "run_bash", "tool_call_id": "rb2",
+     "content": "[run_bash: exit 0]\nAll 5 checks passed"},
+]
+_tc_r2, _, _, _, _, _ = run_round([tc("task_complete", {"summary": "done"})],
+                                  trs=_tc_trs2, dtool_msgs=_tc_msgs2)
+check("0-mutation task_complete recognizes [run_bash: exit 0] verification",
+      _tc_r2.task_complete_called is True)
+
 sys.exit(h.finish("execute_tool_round"))

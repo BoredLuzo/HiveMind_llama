@@ -33,12 +33,11 @@ check("1b code_duo starts agentic", d["duo_agentic_mode"] is True)
 check("1c the planner is on by default", d["duo_planner_enabled"] is True)
 check("1d the planner shares the coder context (no second load)",
       d["duo_planner_use_coder_ctx"] is True)
-check("1e the vision model default is the essential all-rounder",
-      d["vision_agent_model"] in ESSENTIAL_KEYS, f"({d['vision_agent_model']})")
+check("1e the vision model default stays empty (auto-resolved from installed models)",
+      d["vision_agent_model"] == "", f"({d['vision_agent_model']})")
 _ladder = d["subagent_lite_model_ladder"]
-check("1f the subagent ladder only names essential models",
-      bool(_ladder) and set(_ladder) <= set(ESSENTIAL_KEYS), f"({_ladder})")
-check("1g the ladder starts small", _ladder[0] == "lfm3:1.7b-qad")
+check("1f the subagent ladder default stays empty (auto-resolved from installed models)",
+      _ladder == [], f"({_ladder})")
 check("1h agent defaults stay empty (the installer wires them)",
       all(not (cfg.get("model") or "") for cfg in S.DEFAULT_AGENT_CFG.values()))
 check("1i research subagent is off by default", d["subagent_lite_enabled"] is False)
@@ -84,9 +83,15 @@ check("3f a real run writes the file",
       saved["agents"]["duo_coder"]["model"] == "qwen3.5:4b-mtp")
 check("3g the planner follows the coder",
       saved.get("duo_planner_model") == "qwen3.5:4b-mtp")
-check("3h the ladder is written", bool(saved.get("subagent_lite_model_ladder")))
-check("3i a second run changes nothing", AMD.apply(td, dry_run=False) == [])
-check("3j the report is non-empty", bool(real))
+check("3h the ladder is written from essentials",
+      bool(saved.get("subagent_lite_model_ladder"))
+      and set(saved["subagent_lite_model_ladder"]) <= set(ESSENTIAL_KEYS)
+      and saved["subagent_lite_model_ladder"][0] == "lfm3:1.7b-qad")
+check("3i the vision model is populated from essentials",
+      saved.get("vision_agent_model") in ESSENTIAL_KEYS,
+      f"({saved.get('vision_agent_model')})")
+check("3j a second run changes nothing", AMD.apply(td, dry_run=False) == [])
+check("3k the report is non-empty", bool(real))
 
 # ── 4. an empty install is a no-op, not a crash ────────────────────────────
 (Path(td) / "models.json").unlink()

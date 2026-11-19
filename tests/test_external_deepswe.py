@@ -43,7 +43,12 @@ check("rental bootstrap keeps large-GPU MoE experts on the GPU",
       '"moe_cpu_experts"' in rent
       and 'if budget_gb >= 35.0:' in rent
       and 'cpu_experts = 0' in rent
-      and 'math.ceil((20.2 - target_model_gb) / 0.44)' in rent)
+      and '_base_w = 17.0 if "mtp" in _mdl_l else 20.2' in rent
+      and '_per_exp = 0.36 if "mtp" in _mdl_l else 0.44' in rent
+      and 'math.ceil((_base_w - target_model_gb) / _per_exp)' in rent)
+check("rental bootstrap defaults to recommended qwen3.6:35b-a3b-mtp",
+      'HM_MODEL="qwen3.6:35b-a3b-mtp"' in rent
+      and '"qwen3.6:35b-a3b-mtp": cpu_experts' in rent)
 check("Colab notebook is A100/Modal/cloudflared based",
       len(nb.get("cells", [])) >= 8
       and any("A100" in "".join(c["source"]) for c in nb["cells"])

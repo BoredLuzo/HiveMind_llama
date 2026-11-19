@@ -817,6 +817,17 @@ class Gateway:
                          reply_to_message_id=p.message_id,
                          reply_markup=kb)
 
+    async def handle_approval_callback(self, p: gw_auth.ParsedUpdate) -> None:
+        """Handle 'appr:' and 'ask:' inline-keyboard taps via the bridge."""
+        if not p.callback_id:
+            log.info("[DROP] owner callback %s", p.update_id)
+            return
+        note = await self.bridge.approval_callback(p.callback_id, p.text)
+        try:
+            await self.api.answer_callback_query(p.callback_id, text=note)
+        except TelegramApiError as exc:
+            log.warning("[APPR] toast failed: %s", exc)
+
     async def handle_newchat_callback(self, p: gw_auth.ParsedUpdate) -> None:
         """Handle confirmation buttons for /new when default_workspace has files."""
         parts = str(p.text or "").split(":", 2)
@@ -837,29 +848,66 @@ class Gateway:
                     log.warning("[NEWCHAT] toast failed: %s", exc)
             return
         self._pending_newchat = None
-        if p.callback_id:
-            try:
-                toast = ("Starting new chat…" if action == "y"
-                         else "Cancelled")
-                await self.api.answer_callback_query(p.callback_id, text=toast)
-            except TelegramApiError as exc:
-                log.warning("[NEWCHAT] toast failed: %s", exc)
-        if p.message_id and hasattr(self.api, "edit_message_text"):
-            try:
-                status_msg = ("🗑 Deleting default_workspace & starting new chat…"
-                              if action == "y"
-                              else "❌ New chat cancelled (files kept).")
-                await self.edit_message(p.message_id, status_msg)
-            except (TelegramApiError, OSError) as exc:
-                log.debug("[NEWCHAT] card edit failed: %s", exc)
         if action == "n":
+            if p.callback_id:
+                try:
+                    await self.api.answer_callback_query(
+                        p.callback_id, text="Cancelled")
+                except TelegramApiError as exc:
+                    log.warning("[NEWCHAT] toast failed: %s", exc)
+            if p.message_id and hasattr(self.api, "edit_message_text"):
+                try:
+                    await self.edit_message(
+                        p.message_id, "❌ New chat cancelled (files kept).")
+                except (TelegramApiError, OSError) as exc:
+                    log.debug("[NEWCHAT] card edit failed: %s", exc)
             await self.reply(
                 p.chat_id,
                 "❌ New chat cancelled — current chat and files kept.",
                 reply_to_message_id=p.message_id)
             return
-        await self._owner_bridge_call(
-            p, self.bridge.new_chat(clear_placeholder=True))
+        # Check busy state BEFORE claiming deletion in the card edit so a
+        # delayed tap during an active run never displays a misleading status.
+        busy = ""
+        try:
+            busy = await self.bridge.new_chat_busy_note() or ""
+        except (HiveUnreachable, HTTPError, OSError) as exc:
+            busy = f"🔌 HiveMind unreachable: {exc}"
+        if busy:
+            if p.callback_id:
+                try:
+                    toast = ("Engine unreachable" if busy.startswith("🔌")
+                             else "Run active — cannot start /new yet.")
+                    await self.api.answer_callback_query(
+                        p.callback_id, text=toast)
+                except TelegramApiError as exc:
+                    log.warning("[NEWCHAT] toast failed: %s", exc)
+            if p.message_id and hasattr(self.api, "edit_message_text"):
+                try:
+                    await self.edit_message(p.message_id, busy)
+                except (TelegramApiError, OSError) as exc:
+                    log.debug("[NEWCHAT] card edit failed: %s", exc)
+            await self.reply(p.chat_id, busy, reply_to_message_id=p.message_id)
+            return
+        if p.callback_id:
+            try:
+                await self.api.answer_callback_query(
+                    p.callback_id, text="Starting new chat…")
+            except TelegramApiError as exc:
+                log.warning("[NEWCHAT] toast failed: %s", exc)
+        try:
+            note = await self.bridge.new_chat(clear_placeholder=True)
+        except (HiveUnreachable, HTTPError, OSError) as exc:
+            note = f"🔌 HiveMind unreachable: {exc}"
+        if p.message_id and hasattr(self.api, "edit_message_text"):
+            try:
+                status_msg = (
+                    note if note.startswith(("⏳", "🔌", "❌"))
+                    else "🗑 Deleting default_workspace & starting new chat…")
+                await self.edit_message(p.message_id, status_msg)
+            except (TelegramApiError, OSError) as exc:
+                log.debug("[NEWCHAT] card edit failed: %s", exc)
+        await self.reply(p.chat_id, note, reply_to_message_id=p.message_id)
 
     async def _voice_in_enabled(self) -> bool:
         """cfg.voice_in (gateway.toml) OR the engine's telegram_voice_in.
@@ -1312,6 +1360,28 @@ async def recover_orphan_run(gw: Gateway) -> None:
             log.error("[RECOVER] notice failed: %s", exc)
 
 
+async def _dispatch_owner_callback(gw: Gateway, p: gw_auth.ParsedUpdate) -> None:
+    """Route an owner callback_query by prefix (commands, newchat, approvals/asks)."""
+    data = str(p.text or "")
+    if data == "cmdcancel" or data.startswith("cmd:"):
+        # /help buttons: a tap runs the COMMAND, never a prompt
+        await gw.handle_command_callback(p)
+        return
+    if not p.callback_id:
+        log.info("[DROP] owner callback %s", p.update_id)
+        return
+    prefix_handlers = (
+        ("newchat:", gw.handle_newchat_callback),
+        ("appr:", gw.handle_approval_callback),
+        ("ask:", gw.handle_approval_callback),
+    )
+    for prefix, handler in prefix_handlers:
+        if data.startswith(prefix):
+            await handler(p)
+            return
+    log.info("[DROP] owner callback %s", p.update_id)
+
+
 async def process_update(gw: Gateway, raw: dict) -> None:
     p = gw_auth.parse_update(raw)
     if p is None:
@@ -1339,25 +1409,7 @@ async def process_update(gw: Gateway, raw: dict) -> None:
         if cmd:
             await gw.handle_owner_update(p)
         elif p.kind == "callback_query":
-            # 2026-10-05: tappable approval buttons (mirror cards) —
-            # callback_data 'appr:<rid>:<1|2|3>'. Taps count toward the
-            # rate limit (20/min is plenty); the toast answers via
-            # answerCallbackQuery.
-            if p.text.startswith("cmd:") or p.text == "cmdcancel":
-                # /help buttons: a tap runs the COMMAND, never a prompt
-                await gw.handle_command_callback(p)
-            elif p.text.startswith("newchat:") and p.callback_id:
-                await gw.handle_newchat_callback(p)
-            elif p.text.startswith("appr:") and p.callback_id:
-                note = await gw.bridge.approval_callback(p.callback_id,
-                                                         p.text)
-                try:
-                    await gw.api.answer_callback_query(p.callback_id,
-                                                       text=note)
-                except TelegramApiError as exc:
-                    log.warning("[APPR] toast failed: %s", exc)
-            else:
-                log.info("[DROP] owner callback %s", p.update_id)
+            await _dispatch_owner_callback(gw, p)
         elif p.kind == "edited_message":
             # audit G9: an edit of a recent text arrives as a NEW update
             # (fresh update_id — dedupe passes) with the ORIGINAL date, so

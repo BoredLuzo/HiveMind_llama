@@ -317,6 +317,7 @@ async def amain():
     patch.set(MH.subprocess, "run", _fake_run)
     mgr8 = FakeManager()
     tgt = _live_slot(0, "target")
+    _old_ready = tgt._ready_event
     mgr8._slots = [tgt]
     mgr8._pending_prefetch = [("target", 4096)]
     pid = tgt.process.pid
@@ -331,8 +332,9 @@ async def amain():
     check("kill_all: slot bookkeeping reset",
           tgt.model is None and tgt._loading is False and tgt.pinned is False
           and tgt.in_flight == 0 and tgt._orphan_port is None)
-    check("kill_all: ready event set so waiters wake",
-          tgt._ready_event.is_set())
+    check("kill_all: old ready event set so waiters wake, fresh unset Event installed",
+          _old_ready.is_set() and tgt._ready_event is not _old_ready
+          and not tgt._ready_event.is_set())
     check("kill_all: prefetch queue cleared", mgr8._pending_prefetch == [])
 
     # ── force_kill_all edge: explicit foreign sweep only on request ─────────

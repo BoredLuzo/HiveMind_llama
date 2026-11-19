@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from utils.bg_tasks import spawn  # noqa: E402
 import logging
 import time
@@ -274,8 +275,11 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         )
         async def _tool_pause_gate():
             _pg = _PauseGateResult()
-            async for _gev in _direct_manual_pause_gate(ctx, _pg, phase="direct_tools"):
-                yield _gev
+            async with contextlib.aclosing(
+                _direct_manual_pause_gate(ctx, _pg, phase="direct_tools")
+            ) as _pause_stream:
+                async for _gev in _pause_stream:
+                    yield _gev
             if not _pg.continue_run:
                 result.pause_aborted = True
 
@@ -317,8 +321,9 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             on_after_round=_repeat_guard(),
         )
         try:
-            async for _ev in _loop.run(msgs):
-                yield _ev
+            async with contextlib.aclosing(_loop.run(msgs)) as _loop_stream:
+                async for _ev in _loop_stream:
+                    yield _ev
         finally:
             try:
                 await _loop._client.aclose()
@@ -581,8 +586,9 @@ def _cleanup_direct_run(ctx) -> None:
 async def run_direct(ctx):
     """Direct-Mode handler for simple/trivial complexity."""
     try:
-        async for _ev in _run_direct_inner(ctx):
-            yield _ev
+        async with contextlib.aclosing(_run_direct_inner(ctx)) as _direct_stream:
+            async for _ev in _direct_stream:
+                yield _ev
     finally:
         _cleanup_direct_run(ctx)
 
@@ -750,6 +756,16 @@ async def _run_direct_inner(ctx):
                     "queue it with send_file. Do not paste the complete file content into "
                     "the chat. Only say it was sent after send_file returned [FILE_QUEUED]."
                 )
+            _direct_ws = str(getattr(ctx, "workspace", "") or "").strip()
+            _direct_first_turn = not bool(getattr(ctx, "pipeline_sess_msgs", None))
+            if _direct_ws and _direct_first_turn:
+                try:
+                    from hive_functions.project_rules import format_project_rules
+                    _direct_rules, _ = format_project_rules(_direct_ws, max_chars=4000)
+                    if _direct_rules:
+                        direct_input = _direct_rules + "\n\n" + direct_input
+                except (ImportError, OSError, ValueError, RuntimeError) as _dpr_err:
+                    _direct_log.debug("[PROJECT-RULES] Direct load failed: %s", _dpr_err)
         # DATE-FIX (2026-10-06): LAST position + explicit tomorrow anchor +
         # a direct anti-hallucination instruction - small models weight the
         # prompt tail most and this is exactly the failure that produced
@@ -801,10 +817,12 @@ async def _run_direct_inner(ctx):
             # LIVE-STREAM (2026-09-01): pass ToolLoop events through immediately —
             # previously _run_direct_tools collected all events and emitted them
             # only after the loop ended (UI showed nothing during the run).
-            async for _ev in _run_direct_tools(
-                    ctx, _direct_model, messages, _direct_tool_mode, _dt_result,
-                    vision=bool(_direct_images)):
-                yield await ctx.emit(_ev)
+            _dt_stream = _run_direct_tools(
+                ctx, _direct_model, messages, _direct_tool_mode, _dt_result,
+                vision=bool(_direct_images))
+            async with contextlib.aclosing(_dt_stream):
+                async for _ev in _dt_stream:
+                    yield await ctx.emit(_ev)
             _tool_content = _dt_result.content
             _tool_final_msgs = _dt_result.final_msgs
         elif _direct_ws_tool:
@@ -900,15 +918,21 @@ async def _run_direct_inner(ctx):
                 while True:
                     # A1 boundary: /pause before the next model round
                     _pg = _PauseGateResult()
-                    async for _gev in _direct_manual_pause_gate(ctx, _pg):
-                        yield _gev
+                    async with contextlib.aclosing(
+                        _direct_manual_pause_gate(ctx, _pg)
+                    ) as _pg_stream:
+                        async for _gev in _pg_stream:
+                            yield _gev
                     if not _pg.continue_run:
                         _pause_aborted = True
                         break
                     # A2 boundary: steers queued so far ride into this prompt
-                    async for _sev in _inject_direct_steers(ctx, _stream_msgs,
-                                                            vision_ok=_direct_vision):
-                        yield _sev
+                    _steer_stream = _inject_direct_steers(
+                        ctx, _stream_msgs, vision_ok=_direct_vision
+                    )
+                    async with contextlib.aclosing(_steer_stream):
+                        async for _sev in _steer_stream:
+                            yield _sev
                     _round_tok_start = len(parts)
                     if is_ctx_aborted(ctx):
                         break
@@ -916,32 +940,38 @@ async def _run_direct_inner(ctx):
                     _d_first_tok_t = None
                     if _direct_think:
                         # Thinking mode: stream content and reasoning separately.
-                        async for _cont, _thk in ctx.pipeline.ollama.chat_stream(
-                                _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
-                                ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
-                                no_cache=ctx.prepro_success,
-                                think=True,
-                                thinking_budget=_direct_budget or None,
-                                split_thinking=True,
-                                usage_out=_usage,
-                                sampler=_direct_smp):
-                            if _aborted(): break
-                            # A1 boundary: pause at a token chunk — the gate
-                            # waits here, the upstream generator suspends at
-                            # its yield and llama-server backpressures.
-                            _pg = _PauseGateResult()
-                            async for _gev in _direct_manual_pause_gate(ctx, _pg):
-                                yield _gev
-                            if not _pg.continue_run:
-                                _pause_aborted = True
-                                break
-                            if _d_first_tok_t is None and (_thk or _cont):
-                                _d_first_tok_t = time.monotonic()
-                            if _thk:
-                                yield await ctx.emit({"type": "thinking_token", "content": _thk})
-                            if _cont:
-                                parts.append(_cont)
-                                yield await ctx.emit({"type": "token", "content": _cont})
+                        _think_stream = ctx.pipeline.ollama.chat_stream(
+                            _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
+                            ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
+                            no_cache=ctx.prepro_success,
+                            think=True,
+                            thinking_budget=_direct_budget or None,
+                            split_thinking=True,
+                            usage_out=_usage,
+                            sampler=_direct_smp,
+                        )
+                        async with contextlib.aclosing(_think_stream):
+                            async for _cont, _thk in _think_stream:
+                                if _aborted(): break
+                                # A1 boundary: pause at a token chunk — the gate
+                                # waits here, the upstream generator suspends at
+                                # its yield and llama-server backpressures.
+                                _pg = _PauseGateResult()
+                                async with contextlib.aclosing(
+                                    _direct_manual_pause_gate(ctx, _pg)
+                                ) as _pg_stream:
+                                    async for _gev in _pg_stream:
+                                        yield _gev
+                                if not _pg.continue_run:
+                                    _pause_aborted = True
+                                    break
+                                if _d_first_tok_t is None and (_thk or _cont):
+                                    _d_first_tok_t = time.monotonic()
+                                if _thk:
+                                    yield await ctx.emit({"type": "thinking_token", "content": _thk})
+                                if _cont:
+                                    parts.append(_cont)
+                                    yield await ctx.emit({"type": "token", "content": _cont})
                     else:
                         # LEAK-FIX (2026-11-02): models whose chat template reasons
                         # BY DEFAULT (LFM3, and any "thinking" model loaded without
@@ -950,28 +980,34 @@ async def _run_direct_inner(ctx):
                         # says ...". Ask for the split even here and drop the
                         # reasoning: with the switch off it is not part of the
                         # answer.
-                        async for _tok, _thk_off in ctx.pipeline.ollama.chat_stream(
-                                _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
-                                ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
-                                no_cache=ctx.prepro_success,
-                                think=False,
-                                split_thinking=True,
-                                usage_out=_usage,
-                                sampler=_direct_smp):
-                            if _aborted(): break
-                            # A1 boundary: pause at a token chunk (see above).
-                            _pg = _PauseGateResult()
-                            async for _gev in _direct_manual_pause_gate(ctx, _pg):
-                                yield _gev
-                            if not _pg.continue_run:
-                                _pause_aborted = True
-                                break
-                            if not _tok:
-                                continue
-                            if _d_first_tok_t is None:
-                                _d_first_tok_t = time.monotonic()
-                            parts.append(_tok)
-                            yield await ctx.emit({"type": "token", "content": _tok})
+                        _plain_stream = ctx.pipeline.ollama.chat_stream(
+                            _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
+                            ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
+                            no_cache=ctx.prepro_success,
+                            think=False,
+                            split_thinking=True,
+                            usage_out=_usage,
+                            sampler=_direct_smp,
+                        )
+                        async with contextlib.aclosing(_plain_stream):
+                            async for _tok, _thk_off in _plain_stream:
+                                if _aborted(): break
+                                # A1 boundary: pause at a token chunk (see above).
+                                _pg = _PauseGateResult()
+                                async with contextlib.aclosing(
+                                    _direct_manual_pause_gate(ctx, _pg)
+                                ) as _pg_stream:
+                                    async for _gev in _pg_stream:
+                                        yield _gev
+                                if not _pg.continue_run:
+                                    _pause_aborted = True
+                                    break
+                                if not _tok:
+                                    continue
+                                if _d_first_tok_t is None:
+                                    _d_first_tok_t = time.monotonic()
+                                parts.append(_tok)
+                                yield await ctx.emit({"type": "token", "content": _tok})
                     if _pause_aborted or _aborted():
                         break
                     _d_round_gen_ms = max(0.0, (time.monotonic() - (_d_first_tok_t or _d_round_t0)) * 1000.0)

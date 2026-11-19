@@ -112,6 +112,7 @@ if "%MISS_COUNT%"=="0" (
     echo     speech to text, text to speech, routing decider,
     echo     browser tool, POSIX tools.
     echo.
+    call :print_llama_hint
     if /i not "%~1"=="--dry-run" goto browser_refresh_check
     goto :eof
 )
@@ -128,6 +129,7 @@ if defined MISS_DEC (
     echo   missing, run install.bat once to provision it.
 )
 echo.
+call :print_llama_hint
 if /i "%~1"=="--dry-run" (
     echo   [dry run] nothing installed, %MISS_COUNT% component^(s^) missing.
     echo.
@@ -232,4 +234,17 @@ echo.
 echo  Optional components handled.
 echo.
 endlocal
+goto :eof
+
+:print_llama_hint
+if not exist "llama" goto print_llama_missing
+"%PY%" -c "import pathlib, re, sys; bins=[p for p in pathlib.Path('llama').rglob('llama-server.exe') if not any(x.endswith(('.staging','.old')) for x in p.parts)]; sys.exit(1) if not bins else None; ms=[re.search(r'b(\d{4,})', str(p.parent)) for p in bins]; nums=[int(m.group(1)) for m in ms if m]; tag=f'b{max(nums)}' if nums else 'installed'; print(f'  [info] llama.cpp          - {tag} installed')" 2>nul
+if errorlevel 1 goto print_llama_missing
+echo          Tip: run update_llama.bat anytime to pull the latest llama.cpp build.
+echo.
+goto :eof
+:print_llama_missing
+echo   [info] llama.cpp          - no llama-server.exe detected in llama\
+echo          Tip: run update_llama.bat to download the latest llama.cpp build.
+echo.
 goto :eof

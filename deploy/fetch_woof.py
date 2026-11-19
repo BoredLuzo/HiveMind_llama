@@ -53,6 +53,8 @@ REQUIRED_FILES: tuple[str, ...] = (
     "woof_int8.npz",
 )
 MIN_WEIGHTS_BYTES = 30 * 1024 * 1024  # woof_int8.npz is ~40.6 MB
+_STATE_WRITE_INTERVAL_S = 2.0
+_STATE_WRITE_BYTES = 8 * 1024 * 1024
 
 
 def woof_root() -> Path:
@@ -150,6 +152,8 @@ def download(base: Path | None = None, *, force: bool = False) -> Path:
     target.mkdir(parents=True, exist_ok=True)
     _write_state(target, "running", 0.0, f"Downloading {REPO}...")
     n = len(REQUIRED_FILES)
+    last_state_t = time.monotonic()
+    bytes_since_state = 0
     try:
         for idx, rel in enumerate(REQUIRED_FILES):
             dst = target / rel
@@ -160,10 +164,20 @@ def download(base: Path | None = None, *, force: bool = False) -> Path:
             url = HF_RAW.format(path=rel)
             base_pct = (idx / n) * 100.0
             span_pct = (1.0 / n) * 100.0
+            prev_done = [0]
 
-            def _cb(done: int, total: int, _bp: float = base_pct, _sp: float = span_pct, _rel: str = rel) -> None:
-                frac = min(1.0, done / total) if total > 0 else 0.5
-                _write_state(target, "running", _bp + frac * _sp, f"Downloading {_rel}...")
+            def _cb(done: int, total: int, _bp: float = base_pct, _sp: float = span_pct,
+                    _rel: str = rel, _pd: list[int] = prev_done) -> None:
+                nonlocal last_state_t, bytes_since_state
+                delta = done - _pd[0] if done >= _pd[0] else done
+                _pd[0] = done
+                bytes_since_state += delta
+                now = time.monotonic()
+                if (now - last_state_t) >= _STATE_WRITE_INTERVAL_S or bytes_since_state >= _STATE_WRITE_BYTES:
+                    last_state_t = now
+                    bytes_since_state = 0
+                    frac = min(1.0, done / total) if total > 0 else 0.5
+                    _write_state(target, "running", _bp + frac * _sp, f"Downloading {_rel}...")
 
             _download_file(url, dst, progress=_cb)
         if not is_installed(target):

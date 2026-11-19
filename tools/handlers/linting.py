@@ -6,15 +6,31 @@ from pathlib import Path
 import asyncio
 import json
 import logging
-import os
 import shutil
-# X6 (audit r3): bash-less distros fall back to /bin/sh
-import shutil as _shutil_x6
-_bash_bin = _shutil_x6.which("bash") or "/bin/sh"
 import sys
 
+from infra.child_env import scrubbed_env
 
-from .exec_tools import _ps_quote_path
+_LINT_ARGVS: dict[str, tuple[str, ...]] = {
+    "python": ("python", "-m", "py_compile"),
+    "javascript": ("node", "--check"),
+    "java": ("javac",),
+    "cpp": ("g++", "-fsyntax-only"),
+}
+
+
+def _build_lint_argv(lang: str, p: Path) -> list[str] | None:
+    """Return an argv list for a built-in per-file linter, or None."""
+    base = _LINT_ARGVS.get(lang)
+    if not base:
+        return None
+    argv = list(base)
+    if lang == "python":
+        argv[0] = sys.executable or ("python" if sys.platform == "win32" else "python3")
+    else:
+        argv[0] = shutil.which(argv[0]) or argv[0]
+    argv.append(str(p))
+    return argv
 
 def _resolve_pyright_cmd() -> list[str] | None:
 
@@ -40,7 +56,7 @@ async def _pyright_lint_result(cmd_prefix: list[str], p: "Path", workspace: "Pat
         r = await asyncio.create_subprocess_exec(
             *cmd_prefix, "--outputjson", str(p),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=str(workspace))
+            cwd=str(workspace), env=scrubbed_env())
         out, err = await asyncio.wait_for(r.communicate(), 12)
     except asyncio.TimeoutError:
         try:
@@ -102,35 +118,17 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
                 "[AUTO-LINT] pyright not found — falling back to py_compile for %s", p.name)
         cfg      = LANGUAGE_RUNNERS.get(lang, {})
         lint_tpl = cfg.get("lint_cmd")
-        if not lint_tpl or "{file}" not in lint_tpl and "file" not in lint_tpl:
-            if lint_tpl and "{file}" not in lint_tpl:
-                return ""
-        if not lint_tpl:
+        if not lint_tpl or "{file}" not in lint_tpl:
             return ""
-        lint_cmd = lint_tpl.format(file=str(p))
-        # SHELL-INJECTION GUARD (S-SEC 2026-08-23): filenames are attacker-
-        # controllable via write_file ("safe'; Remove-Item …'.py"). Now on
-        if sys.platform == "win32":
-            lint_cmd = _ps_quote_path(lint_cmd, str(p))
-            if "$LASTEXITCODE" not in lint_cmd.split("exit ")[-1]:
-                lint_cmd = lint_cmd + "; exit $LASTEXITCODE"
-        else:
-            import shlex as _shlex_lint
-            _raw_file = str(p)
-            _quoted_file = _shlex_lint.quote(_raw_file)
-            lint_cmd = lint_cmd.replace(_raw_file, _quoted_file, 1)
+        argv = _build_lint_argv(lang, p)
+        if not argv:
+            return ""
+        r = None
         try:
-            if sys.platform == "win32":
-                r = await asyncio.create_subprocess_exec(
-                    "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", lint_cmd,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    cwd=str(workspace), env=os.environ)
-            else:
-                r = await asyncio.create_subprocess_shell(
-                    lint_cmd,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    # X6 (audit r3): bash-less distros
-                    executable=_bash_bin, cwd=str(workspace))
+            r = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                cwd=str(workspace), env=scrubbed_env())
             out, err = await asyncio.wait_for(r.communicate(), 8)
             stdout = out.decode(errors="replace").strip()
             stderr = err.decode(errors="replace").strip()
@@ -148,6 +146,11 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
                 msg = combined if combined else "(no output)"
             return f"\n[lint/{lang} ERROR — fix before continuing]:\n{msg}"
         except asyncio.TimeoutError:
+            if r is not None:
+                try:
+                    r.kill()
+                except OSError:
+                    pass
             return f"\n[lint/{lang} WARNING: lint timed out after 8s — syntax may have errors that were NOT detected.\nCheck manually or run build commands to verify.]"
         except Exception as _le:
             return f"\n[lint/{lang} WARNING: lint crashed ({type(_le).__name__}) — syntax may have unreported errors.\nVerify manually or run build commands.]"

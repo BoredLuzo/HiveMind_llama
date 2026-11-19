@@ -135,6 +135,18 @@ DEFAULT_SETTINGS = {
     # wrong for foreign models - turning this OFF makes the engine attempt
     # the load and halve ctx on real failures instead).
     "vram_preflight_gate":     True,
+    "llama_kv_cache_type":     "q4_0",  # Global KV cache quantization type ("q4_0", "q8_0", or "f16").
+    "llama_max_slots":         3,       # Max concurrent llama-server slots.
+    "llama_gpu_device":        0,       # GPU device index passed to llama-server (--device).
+    "llama_extra_args":        "",      # Extra CLI flags appended to llama-server launches.
+    "llama_update_channel":    "latest",  # llama.cpp binary update channel ("latest" or "pinned").
+    "spec_decode_mode":        "auto",  # Speculative decoding mode ("auto" or "off").
+    "mtp_draft_n_max":         2,       # Maximum speculative draft tokens per step for MTP models.
+    "mtp_draft_p_min":         0.0,     # Minimum draft token acceptance probability for MTP (0.0-0.95).
+    "dflash_draft_p_min":      0.4,     # Minimum draft token acceptance probability for DFlash.
+    "total_vram_mib_override": 0,       # Manual total GPU VRAM override in MiB (0 = auto-detect).
+    "vram_preflight_margin_mib": 768,   # Safety headroom in MiB reserved by the VRAM pre-flight check.
+    "default_unprofiled_sampling": {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1.05, "presence_penalty": 0.0},  # Default sampling parameters for unprofiled GGUF models.
 
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════
@@ -241,6 +253,7 @@ DEFAULT_SETTINGS = {
     # per-round prefill/decode than the occasional cache miss - and the
     # owner's live test read the full mode as "fast + actually empties".
     "duo_partial_compression":   False,
+    "duo_compress_mode":         "auto",  # Context compression strategy ("auto", "mask_only", "partial", or "full").
     "duo_compress_auto_floor":   0.70,
     # MASK-FIRST (2026-10-14, audit phase 4): deterministic observation
     # masking (stale tool outputs -> recall markers) runs before the LLM
@@ -581,7 +594,7 @@ DEFAULT_SETTINGS = {
     # K) VISION
     # ════════════════════════════════════════════════════════════════════════
     "vision_agent_enabled":    False,
-    "vision_agent_model":      "gemma-4:e4b-it-qat",
+    "vision_agent_model":      "",  # Vision agent model ("" = auto-pick smallest capable installed model).
     "vision_agent_mode":       "sequential",
     # MMPROJ ON TEXT-ONLY LOADS (default False = skip): the vision projector
     # (--mmproj, ~0.8-1.3 GB VRAM) is attached only when the request actually
@@ -628,8 +641,7 @@ DEFAULT_SETTINGS = {
     # SUBAGENT-LITE (2026-08-24, option A from the feasibility report): serial,
     # default off so fresh installs do not spawn extra delegate loads unless enabled.
     "subagent_lite_enabled":   False,
-    "subagent_lite_model_ladder": ["lfm3:1.7b-qad", "minicpm5:2b-sharp",
-                                   "qwen3.5:4b-mtp"],
+    "subagent_lite_model_ladder": [],  # Ordered model ladder for subagent-lite ([] = auto-pick).
     "subagent_lite_ctx_default": 8192,
     "subagent_lite_min_free_ram_gb": 5.0,
     "subagent_lite_max_tools": 12,
@@ -814,4 +826,111 @@ DEFAULT_SETTINGS = {
         "models": {},
     },
 }
+
+
+# Pure internal bookkeeping / machine-only keys excluded from /settings/schema
+# (kept in sync with deploy/settings_ui_exempt.txt).
+SETTINGS_INTERNAL_KEYS = frozenset({
+    "agents_user_model_choice",
+    "agents_user_sampling_choice",
+    "ask_user_throttle_pause_message",
+    "automap_excluded",
+    "automations_enabled",
+    "duo_caps",
+    "duo_runtime_profile",
+    "duo_worker_slots",
+    "models_dir",
+    "plan_tracker_classifier",
+    "prefetch_agent_avgs",
+    "safe_profile_matrix_file",
+    "safe_profile_policy",
+    "server_port",
+})
+
+# Keys excluded from GET /settings/schema (internal bookkeeping + secrets/UI state).
+SETTINGS_SCHEMA_EXCLUDED_KEYS = SETTINGS_INTERNAL_KEYS | frozenset({
+    "git_token",
+    "active_preset",
+    "_thinking_before_chunking",
+})
+
+# Compact UI schema metadata overrides for Advanced/Engine settings and toggles.
+# Keys not listed here infer type/default/description/group cleanly from DEFAULT_SETTINGS.
+SETTINGS_UI_META = {
+    "llama_kv_cache_type": {"group": "engine", "apply_mode": "next_load", "choices": ["q4_0", "q8_0", "f16"]},
+    "llama_max_slots": {"group": "engine", "apply_mode": "restart", "min": 1, "max": 8, "step": 1},
+    "llama_gpu_device": {"group": "engine", "apply_mode": "next_load", "min": 0, "max": 16, "step": 1},
+    "llama_extra_args": {"group": "engine", "apply_mode": "next_load"},
+    "llama_update_channel": {"group": "engine", "apply_mode": "restart", "choices": ["latest", "pinned"]},
+    "gpu_backend": {"group": "engine", "apply_mode": "restart", "choices": ["", "vulkan", "cuda", "rocm", "cpu"]},
+    "llama_mlock": {"group": "engine", "apply_mode": "next_load"},
+    "llama_mlock_skip_large_moe": {"group": "engine", "apply_mode": "next_load"},
+    "llama_gpu_layers_auto": {"group": "engine", "apply_mode": "next_load"},
+    "llama_fit": {"group": "engine", "apply_mode": "next_load"},
+    "llama_fit_target_mib": {"group": "engine", "apply_mode": "next_load", "min": 0, "max": 8192, "step": 64},
+    "llama_vk_disable_host_visible_vidmem": {"group": "engine", "apply_mode": "next_load"},
+    "llama_cache_reuse": {"group": "engine", "apply_mode": "next_load", "min": 0, "max": 4096, "step": 64},
+    "llama_cache_ram_mib": {"group": "engine", "apply_mode": "next_load", "min": 0, "max": 32768, "step": 256},
+    "llama_ctx_checkpoints": {"group": "engine", "apply_mode": "next_load", "min": 0, "max": 64, "step": 1},
+    "llama_ubatch_size": {"group": "engine", "apply_mode": "next_load", "min": 64, "max": 4096, "step": 32},
+    "duo_ubatch": {"group": "engine", "apply_mode": "next_load", "min": 64, "max": 4096, "step": 32},
+    "duo_ubatch_moe": {"group": "engine", "apply_mode": "next_load", "min": -1, "max": 4096, "step": 32},
+    "moe_cache_mib": {"group": "engine", "apply_mode": "next_load", "min": 0, "max": 16384, "step": 128},
+    "spec_decode_mode": {"group": "spec_decode", "apply_mode": "next_load", "choices": ["auto", "off"]},
+    "mtp_draft_n_max": {"group": "spec_decode", "apply_mode": "next_load", "min": 1, "max": 4, "step": 1},
+    "mtp_draft_p_min": {"group": "spec_decode", "apply_mode": "next_load", "min": 0.0, "max": 0.95, "step": 0.05},
+    "dflash_draft_p_min": {"group": "spec_decode", "apply_mode": "next_load", "min": 0.0, "max": 0.95, "step": 0.05},
+    "total_vram_mib_override": {"group": "vram", "apply_mode": "live", "min": 0, "max": 262144, "step": 256},
+    "vram_preflight_margin_mib": {"group": "vram", "apply_mode": "live", "min": 0, "max": 8192, "step": 64},
+    "vram_budget_gb": {"group": "vram", "apply_mode": "live", "min": 1.0, "max": 256.0, "step": 0.5},
+    "vram_preflight_gate": {"group": "vram", "apply_mode": "live"},
+    "vram_refresh_interval_s": {"group": "vram", "apply_mode": "live", "min": 1, "max": 300, "step": 1},
+    "max_concurrent_models": {"group": "vram", "apply_mode": "live", "min": 1, "max": 8, "step": 1},
+    "max_model_size_gb": {"group": "vram", "apply_mode": "live", "min": 0.5, "max": 256.0, "step": 0.5},
+    "allow_cpu_offload": {"group": "vram", "apply_mode": "live"},
+    "warn_on_cpu_offload": {"group": "vram", "apply_mode": "live"},
+    "prefer_smaller_models": {"group": "vram", "apply_mode": "live"},
+    "duo_compress_mode": {"group": "compression", "apply_mode": "live", "choices": ["auto", "mask_only", "partial", "full"]},
+    "duo_compress_auto_floor": {"group": "compression", "apply_mode": "live", "min": 0.1, "max": 0.95, "step": 0.05},
+    "duo_compress_threshold": {"group": "compression", "apply_mode": "live", "min": 0, "max": 262144, "step": 512},
+    "duo_compress_overflow_reserve": {"group": "compression", "apply_mode": "live", "min": 0, "max": 16384, "step": 256},
+    "duo_mask_before_compress": {"group": "compression", "apply_mode": "live"},
+    "duo_partial_compression": {"group": "compression", "apply_mode": "live"},
+    "duo_compress_local_only": {"group": "compression", "apply_mode": "live"},
+    "default_unprofiled_sampling": {"group": "sampling", "apply_mode": "live"},
+    "duo_tool_sandbox": {"group": "sandbox", "apply_mode": "live"},
+    "duo_tool_sandbox_max_mem_mb": {"group": "sandbox", "apply_mode": "live", "min": 0, "max": 65536, "step": 256},
+    "duo_tool_sandbox_max_procs": {"group": "sandbox", "apply_mode": "live", "min": 0, "max": 1024, "step": 8},
+    "duo_tool_sandbox_max_cpu_s": {"group": "sandbox", "apply_mode": "live", "min": 0, "max": 3600, "step": 10},
+    "run_bash_shell": {"group": "sandbox", "apply_mode": "live", "choices": ["auto", "bash", "powershell"]},
+    "read_guard_enabled": {"group": "sandbox", "apply_mode": "live"},
+    "duo_deep_retrieval": {"group": "retrieval", "apply_mode": "live"},
+    "duo_deep_retrieval_max_files": {"group": "retrieval", "apply_mode": "live", "min": 1, "max": 32, "step": 1},
+    "duo_deep_retrieval_max_chars": {"group": "retrieval", "apply_mode": "live", "min": 500, "max": 20000, "step": 250},
+    "duo_index_max_files": {"group": "retrieval", "apply_mode": "live", "min": 100, "max": 20000, "step": 100},
+    "duo_index_max_depth": {"group": "retrieval", "apply_mode": "live", "min": 1, "max": 16, "step": 1},
+    "duo_context_budget_chars": {"group": "retrieval", "apply_mode": "live", "min": 2000, "max": 32000, "step": 500},
+    "duo_auto_test_on_edit": {"group": "testing", "apply_mode": "live"},
+    "duo_auto_test_max_per_run": {"group": "testing", "apply_mode": "live", "min": 1, "max": 20, "step": 1},
+    "duo_auto_test_timeout": {"group": "testing", "apply_mode": "live", "min": 10, "max": 180, "step": 5},
+    "duo_selective_tests": {"group": "testing", "apply_mode": "live"},
+    "duo_tool_thinking_budget_cap": {"group": "agentic", "apply_mode": "live", "min": 0, "max": 32768, "step": 128},
+    "duo_coder_tool_tier": {"group": "agentic", "apply_mode": "live", "choices": ["core", "full"]},
+    "duo_coder_after_run": {"group": "agentic", "apply_mode": "live", "choices": ["keep", "evict"]},
+    "direct_tools_tier": {"group": "agentic", "apply_mode": "live", "choices": ["off", "readonly", "research", "python", "mcp", "full"]},
+    "mode": {"group": "general", "apply_mode": "live", "choices": ["auto", "chat", "pipeline", "code_duo"]},
+    "vision_mmproj_always": {"group": "vision", "apply_mode": "next_load"},
+    "vision_agent_mode": {"group": "vision", "apply_mode": "live", "choices": ["sequential", "parallel"]},
+    "routing_decider": {"group": "routing", "apply_mode": "live", "choices": ["off", "shadow", "on"]},
+    "routing_judge": {"group": "routing", "apply_mode": "live", "choices": ["off", "shadow", "on"]},
+    "routing_planner": {"group": "routing", "apply_mode": "live", "choices": ["auto", "heuristic", "decider", "judge", "always", "never"]},
+    "tts_backend": {"group": "voice", "apply_mode": "live", "choices": ["pocket", "woof"]},
+    "telegram_result_mode": {"group": "telegram", "apply_mode": "live", "choices": ["both", "text", "voice"]},
+    "telegram_approval_mode": {"group": "telegram", "apply_mode": "live", "choices": ["deny", "ask", "off"]},
+    "git_tools_enabled": {"group": "git", "apply_mode": "live", "choices": ["auto", "true", "false"]},
+    "debug_api_enabled": {"group": "debug", "apply_mode": "restart"},
+    "debug_dump_request": {"group": "debug", "apply_mode": "live"},
+    "mem_watch_enabled": {"group": "debug", "apply_mode": "live"},
+}
+
 

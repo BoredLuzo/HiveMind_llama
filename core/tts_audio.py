@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import wave
 
 import numpy as np
@@ -29,9 +30,136 @@ FRAME = 1024          # WSOLA frame, ~42 ms at 24 kHz
 TOLERANCE = 160       # +/- alignment search window in samples
 MIN_SPEED = 0.8
 MAX_SPEED = 1.5
-#: Hard cap so one request cannot synthesise a whole book (Telegram allows
-#: longer, but a 600-char cap keeps latency and memory predictable).
+#: Hard per-chunk cap so one engine call stays fast and bounded in memory.
 MAX_CHARS = 600
+#: Multi-chunk total cap for long answers (e.g. Telegram voice notes) so full
+#: replies are spoken without mid-sentence cutoff while staying under timeouts.
+MAX_TOTAL_CHARS = 3600
+
+_FENCE_RE = re.compile(r"```[\s\S]*?```")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:https?://|www\.)[^)]+\)")
+_BARE_URL_RE = re.compile(r"https?://\S+|www\.\S+")
+_HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+_HRULE_RE = re.compile(r"(?m)^\s*[-*_]{3,}\s*$")
+_TABLE_SEP_RE = re.compile(r"(?m)^\s*\|?[\s:]*-{2,}[\s:]*(?:\|[\s:]*-{2,}[\s:]*)+\|?\s*$")
+_BULLET_RE = re.compile(r"(?m)^\s*(?:[-*•]+|\d+[.)])\s+")
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+_EMPH_RE = re.compile(r"(\*\*|__|\*|~~)")
+
+
+def clean_for_speech(text: str) -> str:
+    """Strip markdown syntax, code fences, tables, and raw URLs so TTS sounds natural."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    s = _FENCE_RE.sub(" ", raw)
+    s = _MD_LINK_RE.sub(r"\1", s)
+    s = _BARE_URL_RE.sub("", s)
+    s = _HRULE_RE.sub(" ", s)
+    s = _TABLE_SEP_RE.sub(" ", s)
+    # Turn headings into full sentences so TTS pauses after titles.
+    s = _HEADING_RE.sub(lambda m: m.group(1).rstrip(".!?:") + ".", s)
+    s = _BULLET_RE.sub("", s)
+    s = _INLINE_CODE_RE.sub(r"\1", s)
+    s = _EMPH_RE.sub("", s)
+    # Join multiple paragraphs cleanly with terminal punctuation so TTS pauses.
+    raw_lines = []
+    for ln in s.splitlines():
+        if "|" in ln and ln.count("|") >= 2:
+            cells = [c.strip() for c in ln.strip().strip("|").split("|") if c.strip()]
+            ln = ", ".join(cells)
+        ln = re.sub(r"\s+", " ", ln).strip()
+        if ln:
+            raw_lines.append(ln)
+    paras = raw_lines
+    if len(paras) > 1:
+        paras = [ln if ln[-1] in ".!?;:," else (ln + ".") for ln in paras]
+    cleaned = " ".join(paras).strip()
+    return cleaned or raw
+
+
+def _cap_at_sentence(text: str, limit: int) -> str:
+    """Trim *text* to <= *limit* chars, preferring a complete sentence boundary."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    best = -1
+    for sep in (". ", "! ", "? ", ".\n", "!\n", "?\n"):
+        idx = head.rfind(sep)
+        if idx > best:
+            best = idx
+    if best >= limit // 3:
+        return head[:best + 1].strip()
+    cut = head.rsplit(" ", 1)[0].strip()
+    return (cut or head.strip())
+
+
+def split_speech_chunks(
+    text: str,
+    *,
+    chunk_chars: int = MAX_CHARS,
+    max_total_chars: int = MAX_TOTAL_CHARS,
+) -> list[str]:
+    """Split *text* into sentence-aligned chunks <= *chunk_chars* up to *max_total_chars*."""
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return []
+    if max_total_chars > 0 and len(s) > max_total_chars:
+        s = _cap_at_sentence(s, max_total_chars)
+    if len(s) <= chunk_chars:
+        return [s]
+    sentences = [p.strip() for p in re.split(r"(?<=[.!?])\s+", s) if p.strip()]
+    chunks: list[str] = []
+    cur = ""
+    for sent in sentences:
+        if len(sent) > chunk_chars:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            rem = sent
+            while len(rem) > chunk_chars:
+                part = rem[:chunk_chars]
+                sp = part.rfind(" ")
+                cut = sp if sp >= chunk_chars // 3 else chunk_chars
+                chunks.append(rem[:cut].strip())
+                rem = rem[cut:].strip()
+            if rem:
+                cur = rem
+            continue
+        if cur and len(cur) + 1 + len(sent) > chunk_chars:
+            chunks.append(cur)
+            cur = sent
+        else:
+            cur = f"{cur} {sent}".strip() if cur else sent
+    if cur:
+        chunks.append(cur)
+    return [c for c in chunks if c]
+
+
+def concat_wavs(wav_list: list[bytes], pause_s: float = 0.16) -> bytes:
+    """Join multiple 16-bit mono WAV clips with a short silence gap between them."""
+    if not wav_list:
+        raise ValueError("concat_wavs requires at least one WAV clip")
+    if len(wav_list) == 1:
+        return wav_list[0]
+    parts: list[np.ndarray] = []
+    sr_out = 24000
+    for idx, wb in enumerate(wav_list):
+        arr, sr = wav_to_samples(wb)
+        if idx == 0:
+            sr_out = sr
+        elif sr != sr_out and arr.size > 1:
+            # Linear resample only if a chunk unexpectedly differs in sample rate.
+            new_len = max(1, int(round(arr.size * (sr_out / float(sr)))))
+            arr = np.interp(
+                np.linspace(0, arr.size - 1, new_len),
+                np.arange(arr.size),
+                arr,
+            )
+        if idx > 0 and pause_s > 0:
+            parts.append(np.zeros(int(round(sr_out * pause_s)), dtype="float64"))
+        parts.append(arr)
+    return samples_to_wav(np.concatenate(parts), sr_out)
 
 
 #: Target peak after normalisation. Pocket TTS returns speech at about -15.5

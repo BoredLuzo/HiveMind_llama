@@ -375,7 +375,7 @@ echo   Target: %~dp0llama\
 echo.
 choice /c YN /n /m "Download llama.cpp backend now? [Y/N] "
 if errorlevel 2 goto llama_check
-"%PY%" deploy\fetch_llamacpp.py --backend %BACKEND%
+"%PY%" deploy\fetch_llamacpp.py --backend %BACKEND% --upgrade
 REM PAREN-IF-FIX (2026-09-01): the old `if errorlevel 1 ( ... )` block put the
 REM bare %~dp0llama path INSIDE a parenthesized block. With an install folder
 REM like "...\HiveMind_v1.0.3 (4)\" the ')' from the path closed the block early

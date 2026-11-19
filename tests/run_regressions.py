@@ -447,6 +447,17 @@ SUITES = [
     ("audit_1_6_3_fixes",          "tests/test_audit_1_6_3_fixes.py",          30),
     ("direct_ui_and_thinkblock",   "tests/test_direct_ui_and_thinkblock.py",   30),
     ("placeholder_workspace",      "tests/test_placeholder_workspace.py",      30),
+    ("audit_wave1_security",       "tests/test_audit_wave1_security.py",       45),
+    ("audit_wave1_gateway",        "tests/test_audit_wave1_gateway.py",        45),
+    ("audit_wave1_perf",           "tests/test_audit_wave1_perf.py",           30),
+    ("audit_wave2_locks_sandbox",  "tests/test_audit_wave2_locks_sandbox.py",  45),
+    ("audit_wave2_slot_locks",     "tests/test_audit_wave2_slot_locks.py",     45),
+    ("audit_wave2_vram_spec",      "tests/test_audit_wave2_vram_spec.py",      45),
+    ("audit_wave2_backend_duo",    "tests/test_audit_wave2_backend_duo.py",    45),
+    ("dropin_model_registry",      "tests/test_dropin_model_registry.py",      45),
+    ("settings_ui_schema",         "tests/test_settings_ui_schema.py",         45),
+    ("ui_advanced_and_profiles",   "tests/test_ui_advanced_and_profiles.py",   45),
+    ("project_rules_and_venv_guard", "tests/test_project_rules_and_venv_guard.py", 30),
 
 ]
 

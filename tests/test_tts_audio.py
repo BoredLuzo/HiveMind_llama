@@ -120,4 +120,33 @@ try:
 except ImportError:
     print("  SKIP opus (soundfile not installed)")
 
+# ── markdown cleaning + multi-chunk splitting (2026-11-19) ────────────────
+_md = "### Top Picks\n- **Alpha** is great: https://example.com/x\n```py\nprint(1)\n```\nSee [docs](https://a.b) now."
+_clean = tts_audio.clean_for_speech(_md)
+check("clean_for_speech strips markdown, URLs, and code fences",
+      "**" not in _clean and "###" not in _clean and "https://" not in _clean
+      and "print(1)" not in _clean and "Alpha" in _clean and "docs" in _clean,
+      f" ({_clean!r})")
+check("clean_for_speech leaves plain single-line text untouched",
+      tts_audio.clean_for_speech("cached answer") == "cached answer")
+
+_long_story = " ".join(f"Sentence number {i} finishes cleanly with a period." for i in range(40))
+_chunks = tts_audio.split_speech_chunks(_long_story)
+check("split_speech_chunks splits long text into multiple <=600-char chunks",
+      len(_chunks) >= 3 and all(len(c) <= tts_audio.MAX_CHARS for c in _chunks),
+      f" (chunks={len(_chunks)})")
+check("split_speech_chunks keeps full text up to MAX_TOTAL_CHARS and ends on sentence",
+      sum(len(c) for c in _chunks) > 1200 and _chunks[-1].endswith("."),
+      f" (total={sum(len(c) for c in _chunks)}, tail={_chunks[-1][-30:]!r})")
+
+_huge = " ".join(f"Long sentence {i} has complete grammar." for i in range(200))
+_huge_chunks = tts_audio.split_speech_chunks(_huge, max_total_chars=1000)
+check("over-budget text trims at sentence boundary (never mid-word)",
+      sum(len(c) for c in _huge_chunks) <= 1000 and _huge_chunks[-1].endswith("."))
+
+_joined = tts_audio.concat_wavs([synth_wav(0.5), synth_wav(0.5)], pause_s=0.1)
+check("concat_wavs combines clips with pause",
+      tts_audio.looks_like_wav(_joined) and abs(tts_audio.duration_seconds(_joined) - 1.1) < 0.05,
+      f" ({tts_audio.duration_seconds(_joined)}s)")
+
 sys.exit(h.finish("tts_audio"))

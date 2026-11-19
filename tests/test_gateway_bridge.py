@@ -888,13 +888,13 @@ async def t_ux_round():
     check("F4: card sent with 3-button keyboard",
           bool(ms_cb.markups) and
           len(ms_cb.markups[-1]["inline_keyboard"][0]) == 3)
-    toast = await br_cb.approval_callback("cbid", "appr:ui-cb:2")
+    toast = await br_cb.approval_callback("cbid", "appr:ui-cb:2:d-cb")
     check("F4: '2' (always, chat) rides decision path",
           hive_cb.decided == [("ui-cb", "2", "d-cb", "run_bash")])
     check("F4: '2' toast", "always" in toast)
     check("F4: latch cleared after callback",
           br_cb._mirror()["approval_sig"] is None)
-    toast2 = await br_cb.approval_callback("cbid", "appr:ui-cb:1")
+    toast2 = await br_cb.approval_callback("cbid", "appr:ui-cb:1:d-cb")
     check("F4: stale rid refused", "gone" in toast2
           and hive_cb.decided == [("ui-cb", "2", "d-cb", "run_bash")])
 async def t_audit_fixes():
@@ -1772,17 +1772,17 @@ async def t_tg_audit():
     _kb = ms4.markups[-1] or {}
     _btns = [b for row in (_kb.get("inline_keyboard") or []) for b in row]
     check("ASKBTN: yes/no keyboard on destructive ask card",
-          any(b.get("callback_data") == "ask:ask-1:yes" for b in _btns)
-          and any(b.get("callback_data") == "ask:ask-1:no" for b in _btns))
+          any(b.get("callback_data") == "ask:ask-1:yes:d7" for b in _btns)
+          and any(b.get("callback_data") == "ask:ask-1:no:d7" for b in _btns))
     _rows = (_kb.get("inline_keyboard") or [])
     check("ASKBTN: second row has wait-later",
-          any(b.get("callback_data") == "ask:ask-1:later"
+          any(b.get("callback_data") == "ask:ask-1:later:d7"
               for b in (_rows[1] if len(_rows) > 1 else [])))
-    toast = await br4.approval_callback("cb2", "ask:ask-1:later")
+    toast = await br4.approval_callback("cb2", "ask:ask-1:later:d7")
     check("ASKBTN: later consumes nothing",
           hive4.decided == [] and "later" in toast
           and br4._mirror().get("approval_sig") is not None)
-    toast = await br4.approval_callback("cb1", "ask:ask-1:yes")
+    toast = await br4.approval_callback("cb1", "ask:ask-1:yes:d7")
     check("ASKBTN: yes button decides via decide path",
           hive4.decided == [("ask-1", "yes", "d7", "run_bash")]
           and "yes" in toast)

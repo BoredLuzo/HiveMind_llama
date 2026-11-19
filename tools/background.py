@@ -2,6 +2,7 @@
 
 
 import logging
+from pathlib import Path
 import subprocess
 import threading
 import time
@@ -64,7 +65,7 @@ def _reader(handle: str, proc: subprocess.Popen):
         pass
 
 
-def start_background(cmd: str) -> dict:
+def start_background(cmd: str, cwd: str | Path | None = None) -> dict:
     cmd = (cmd or "").strip()
     if not cmd:
         return {"ok": False, "error": "start_background requires a non-empty 'cmd'."}
@@ -94,18 +95,20 @@ def start_background(cmd: str) -> dict:
         from tools.handlers.exec_tools import _BASH_BIN as _bg_bash
         _shell_kwargs = {"executable": _bg_bash} if _os_bg.name != "nt" else {}
         from infra.child_env import tool_env as _tool_env
-        proc = subprocess.Popen(
-            cmd,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=_tool_env(),
+        _popen_kw = {
+            "shell": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "env": _tool_env(),
             **_spawn_kwargs(),
             **_shell_kwargs,
-        )
+        }
+        if cwd is not None:
+            _popen_kw["cwd"] = str(cwd)
+        proc = subprocess.Popen(cmd, **_popen_kw)
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
 

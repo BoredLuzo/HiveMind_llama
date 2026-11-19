@@ -1,5 +1,7 @@
 """Soul API-Router."""
 import logging
+import re
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -8,7 +10,7 @@ from fastapi.responses import JSONResponse
 from hive_functions.soul_engine import (
     load_soul, save_soul, reset_soul, get_soul_summary,
     maybe_evolve_soul, resolve_reflection_model, _skills_dir,
-    MIN_RUNS_FOR_EVOLUTION, EVOLUTION_INTERVAL_RUNS,
+    MIN_RUNS_FOR_EVOLUTION,
 )
 from hive_functions.prompts import HIVEMIND_SOUL
 from settings import load_settings
@@ -26,7 +28,7 @@ _BASE_FILE = Path(__file__).parent.parent / "server.py"
 
 
 def _parse_md_field(text: str, field: str, strip: str = "") -> str:
-    m = __import__("re").search(rf"\*\*{__import__('re').escape(field)}:\*\*\s*([^\s*][^\n*]*)", text)
+    m = re.search(rf"\*\*{re.escape(field)}:\*\*[ \t]*([^\s*\n][^\n*]*)", text)
     val = (m.group(1) if m else "").strip()
     if strip:
         val = val.rstrip(strip).strip()
@@ -86,37 +88,85 @@ async def get_soul_status():
 async def get_soul_current():
     soul = load_soul(_BASE_FILE)
     settings = load_settings()
-    use_learned = settings.get("learning_preset_mode", False)
-    text = soul.get("selbstverstaendnis", HIVEMIND_SOUL) if use_learned else HIVEMIND_SOUL
-    return {"text": text, "source": "learned" if use_learned else "original"}
+    use_learned = bool(settings.get("learning_preset_mode", False))
+    learned_text = (soul.get("selbstverstaendnis") or "").strip() if use_learned else ""
+    if use_learned and learned_text:
+        return {"text": soul["selbstverstaendnis"], "source": "learned"}
+    return {"text": HIVEMIND_SOUL, "source": "original"}
 
 
 @router.get("/learned")
 async def get_soul_learned_text():
     soul = load_soul(_BASE_FILE)
+    text = soul.get("selbstverstaendnis", "")
     return {
-        "selbstverstaendnis": soul.get("selbstverstaendnis", ""),
+        "text": text,
+        "selbstverstaendnis": text,
         "version": soul.get("version", 1),
         "evolution_count": soul.get("evolution_count", 0),
         "last_evolved": soul.get("last_evolved", ""),
+        "last_reason": soul.get("last_reason", ""),
     }
 
 
+@router.post("/learned")
+async def save_soul_learned(req: Request):
+    try:
+        body = await req.json()
+    except (ValueError, RuntimeError):
+        return JSONResponse({"ok": False, "error": "Invalid JSON body."}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "Expected JSON object."}, status_code=400)
+    raw_text = body.get("text")
+    if raw_text is None:
+        raw_text = body.get("selbstverstaendnis")
+    text = str(raw_text or "").strip()
+    if len(text) < 50:
+        return JSONResponse(
+            {"ok": False, "error": "Soul text too short (min. 50 characters)."},
+            status_code=400,
+        )
+    reason = str(body.get("reason") or "").strip() or "Manually edited"
+
+    soul = load_soul(_BASE_FILE)
+    prev_text = soul.get("selbstverstaendnis", "")
+    if prev_text:
+        log = list(soul.get("evolution_log") or [])
+        log.append({
+            "timestamp": soul.get("last_evolved") or time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "version": soul.get("version", 1),
+            "reason": f"Replaced ({reason})",
+            "text": prev_text[:500],
+        })
+        soul["evolution_log"] = log[-20:]
+
+    soul["selbstverstaendnis"] = text
+    soul["version"] = int(soul.get("version", 1) or 1) + 1
+    soul["evolution_count"] = int(soul.get("evolution_count", 0) or 0) + 1
+    soul["last_evolved"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    soul["last_reason"] = reason
+    save_soul(_BASE_FILE, soul)
+    return {"ok": True, "status": get_soul_summary(_BASE_FILE)}
+
+
 @router.delete("/learned")
-async def reset_soul_learned(req: Request):
+async def reset_soul_learned(req: Request = None):
     soul = load_soul(_BASE_FILE)
     current_text = soul.get("selbstverstaendnis", "")
+    log = list(soul.get("evolution_log") or [])
     if current_text:
-        log = soul.get("evolution_log", [])
         log.append({
-            "timestamp": soul.get("last_evolved", "manual-reset"),
+            "timestamp": soul.get("last_evolved") or time.strftime("%Y-%m-%dT%H:%M:%S"),
             "version": soul.get("version", 1),
             "reason": "Manually reset via UI",
             "text": current_text[:500],
         })
-        soul["evolution_log"] = log[-20:]
-        save_soul(_BASE_FILE, soul)
+        log = log[-20:]
     reset_soul(_BASE_FILE)
+    if log:
+        fresh = load_soul(_BASE_FILE)
+        fresh["evolution_log"] = log
+        save_soul(_BASE_FILE, fresh)
     return {"ok": True, "soul": get_soul_summary(_BASE_FILE)}
 
 
@@ -124,7 +174,9 @@ async def reset_soul_learned(req: Request):
 async def trigger_soul_evolution_ep(req: Request):
     try:
         body = await req.json()
-    except Exception:
+    except (ValueError, RuntimeError):
+        body = {}
+    if not isinstance(body, dict):
         body = {}
     force = bool(body.get("force", False))
     settings = load_settings()
@@ -139,16 +191,25 @@ async def trigger_soul_evolution_ep(req: Request):
             status_code=400,
         )
 
-    effective_runs = max(run_count, MIN_RUNS_FOR_EVOLUTION * 10) if force else max(run_count, MIN_RUNS_FOR_EVOLUTION)
+    ollama_client = getattr(_state.pipeline, "ollama", None) if _state.pipeline else None
+    if ollama_client is None:
+        return JSONResponse(
+            {"ok": False, "error": "Pipeline/Ollama client not initialized."},
+            status_code=503,
+        )
 
     if force:
         soul = load_soul(_BASE_FILE)
-        soul["run_count"] = max(effective_runs, MIN_RUNS_FOR_EVOLUTION + EVOLUTION_INTERVAL_RUNS)
-        save_soul(_BASE_FILE, soul)
+        last_run = int(soul.get("run_count", 0) or 0)
+        # Ensure effective_runs strictly exceeds soul.run_count so maybe_evolve_soul
+        # does not skip evolution via its `last_run >= total_runs` guard.
+        effective_runs = max(run_count, last_run + 1, MIN_RUNS_FOR_EVOLUTION)
+    else:
+        effective_runs = max(run_count, MIN_RUNS_FOR_EVOLUTION)
 
     new_soul = await maybe_evolve_soul(
         base_path=_BASE_FILE,
-        ollama_client=_state.pipeline.ollama,
+        ollama_client=ollama_client,
         model=reflection_model,
         learning_log_reader=read_learning_log,
         registry_all_fn=_state.registry_all,

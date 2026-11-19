@@ -11,7 +11,7 @@ import subprocess
 from collections import namedtuple
 from pathlib import Path
 
-from .llama_config import CONTEXT_SIZE_DEFAULT
+from .llama_config import CONTEXT_SIZE_DEFAULT, MAX_SLOTS  # noqa: F401
 from .llama_models import list_available_models, resolve_model_path, _strip_alias
 
 logger = logging.getLogger("llama_manager")
@@ -27,37 +27,43 @@ _WIN_CNF = getattr(subprocess, "CREATE_NO_WINDOW", 0) if platform.system() == "W
 VRAM_BUDGET_GB: float = 7.5  # Standardbudget: real nutzbar
 LLAMA_STARTUP_READY_TIMEOUT_SECONDS: float = 240.0
 
-_OLLAMA_ONLY_BASES: set[str] = {
-    "glm-ocr",
-    "ministral-3",
-}
+_OLLAMA_ONLY_BASES: set[str] = set()
+_MMPROJ_REQUIRED_BASES: set[str] = set()
+_VISION_CAPABLE_BASES: set[str] = set()
 
-_MMPROJ_REQUIRED_BASES: set[str] = {
-    "granite3.2-vision",
-    "granite3-vision",
-    "llava",
-    "moondream",
-    "minicpm-v",
-    # minicpmv4_7 re-enabled (2026-10-28): the projector needs build >= 11574
-    # (b11456 failed with "unknown projector type"); the shipped binary is
-    # b11889. BINARY_MIN_BUILD in llama_config gates the model itself.
-    "minicpm-v-4-7",
-    "minicpm-v-4.7",
-    "bunny",
-    "obsidian",
-    "qwen3-vl",
-}
 
-_VISION_CAPABLE_BASES: set[str] = {
-    "qwen3.5",  # Unsloth UD-GGUFs + mmproj-Qwen3.5-{2B/4B/9B}-F16.gguf
-    "qwen3.6",
-    "hermes3.6",
-    "hermes",
-    "minicpm-v-4-7",
-    "minicpm-v-4.7",
-    "gemma-4",  # gemma-3 arch: embedded vision tower, served with mmproj (2026-10-01)
-    "lfm3-omni",  # text+vision projector (mmproj-LFM3-Omni-2B); audio needs the MTMD path
-}
+def reload_compat_views() -> None:
+    """Populate base-model capability sets dynamically from arch_compat.json + registry."""
+    try:
+        from model_configs.models_registry import (
+            iter_all_profiles as _iter_profiles,
+            load_arch_compat as _load_compat,
+        )
+        compat = _load_compat()
+        profiles = _iter_profiles()
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        logger.debug("llama_manager_utils compat reload skipped: %s", _e)
+        return
+
+    _OLLAMA_ONLY_BASES.clear()
+    _OLLAMA_ONLY_BASES.update(
+        str(x).lower() for x in (compat.get("ollama_only_bases") or []) if x
+    )
+    _MMPROJ_REQUIRED_BASES.clear()
+    _MMPROJ_REQUIRED_BASES.update(
+        str(x).lower() for x in (compat.get("mmproj_required_bases") or []) if x
+    )
+    vis_bases = {
+        str(x).lower() for x in (compat.get("vision_capable_bases") or []) if x
+    }
+    for key, prof in profiles.items():
+        if prof.get("mmproj_filename") or ((prof.get("capabilities") or {}).get("vision") is True):
+            vis_bases.add(str(key).split(":")[0].lower())
+    _VISION_CAPABLE_BASES.clear()
+    _VISION_CAPABLE_BASES.update(vis_bases)
+
+
+reload_compat_views()
 
 
 def needs_vision_reload(slot_vision: bool, want_vision: bool) -> bool:
@@ -141,8 +147,8 @@ CTX_DOWN_LADDER: tuple[int, ...] = (16384, 12288, 8192)
 
 def resolve_ctx_fit(requested_ctx: int, free_mib: float | None,
                     needs_at, *,
-                    margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
-                    reduced_margin_mib: int = VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                    margin_mib: int | None = None,
+                    reduced_margin_mib: int | None = None,
                     min_ctx: int = CTX_DOWN_MIN,
                     ladder: tuple[int, ...] = CTX_DOWN_LADDER,
                     allow_graceful: bool = False) -> tuple[int, int] | None:
@@ -164,6 +170,12 @@ def resolve_ctx_fit(requested_ctx: int, free_mib: float | None,
     ctx rung: either full context (full/reduced margin) or None.
     """
     requested_ctx = max(1, int(requested_ctx))
+    eff_margin = int(VRAM_PRE_FLIGHT_MARGIN_MIB) if margin_mib is None else int(margin_mib)
+    eff_reduced = (
+        int(VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB)
+        if reduced_margin_mib is None
+        else int(reduced_margin_mib)
+    )
 
     def _fits(_ctx: int, _margin: int) -> bool:
         if free_mib is None:
@@ -174,40 +186,64 @@ def resolve_ctx_fit(requested_ctx: int, free_mib: float | None,
             return False
         return (_need + float(_margin)) <= float(free_mib)
 
-    if _fits(requested_ctx, margin_mib):
-        return (requested_ctx, margin_mib)
-    if _fits(requested_ctx, reduced_margin_mib):
-        return (requested_ctx, reduced_margin_mib)
+    if _fits(requested_ctx, eff_margin):
+        return (requested_ctx, eff_margin)
+    if _fits(requested_ctx, eff_reduced):
+        return (requested_ctx, eff_reduced)
     if not allow_graceful:
         return None
     for _cand in ladder:
         if _cand >= requested_ctx:
             continue
-        if _fits(_cand, margin_mib):
-            return (_cand, margin_mib)
-        if _fits(_cand, reduced_margin_mib):
-            return (_cand, reduced_margin_mib)
+        if _fits(_cand, eff_margin):
+            return (_cand, eff_margin)
+        if _fits(_cand, eff_reduced):
+            return (_cand, eff_reduced)
     # Small requests (<= min_ctx) may also fall back to 4096.
     if requested_ctx <= min_ctx:
-        for _margin in (margin_mib, reduced_margin_mib):
+        for _margin in (eff_margin, eff_reduced):
             if _fits(4096, _margin):
                 return (4096, _margin)
     return None
 
 async def _kill_slot_async(slot) -> None:
-    """Slot.kill() off-loop ausfuehren.
+    """Execute slot.kill() off the event loop.
 
-    slot.kill() laesst blockierendes taskkill/netstat/tasklist laufen (bis zu
-    ~10 s). Aufrufe aus async-Methoden muessen diesen Block abkuerzen, sonst
-    friert der komplette Event-Loop (alle parallelen Chats) waehrend jeder
-    Eviction/Load/Ensure-Load ein.
+    slot.kill() may run blocking taskkill/netstat/tasklist calls (up to ~10 s).
+    Async callers use this helper so the event loop stays responsive for other
+    sessions; on cancellation it waits briefly for the dispatched thread cleanup
+    so a peer cannot reclaim the slot while kill() is still resetting it.
     """
     if slot is None:
         return
-    try:
-        await asyncio.to_thread(slot.kill)
-    except Exception as _ke:
-        logger.warning("_kill_slot_async failed: %s", type(_ke).__name__)
+    kill_task = asyncio.create_task(asyncio.to_thread(slot.kill))
+    cancelled: asyncio.CancelledError | None = None
+    logged = False
+    while not kill_task.done():
+        try:
+            await asyncio.shield(kill_task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+            try:
+                await asyncio.wait_for(asyncio.shield(kill_task), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            break
+        except Exception as _ke:
+            logged = True
+            logger.warning("_kill_slot_async failed: %s", type(_ke).__name__)
+            break
+    if not kill_task.done():
+        def _consume_exc(task: asyncio.Task) -> None:
+            if not task.cancelled():
+                task.exception()
+        kill_task.add_done_callback(_consume_exc)
+    elif not logged and not kill_task.cancelled():
+        exc = kill_task.exception()
+        if exc is not None:
+            logger.warning("_kill_slot_async failed: %s", type(exc).__name__)
+    if cancelled is not None:
+        raise cancelled
 
 def _parse_proc_meminfo(text: str) -> float:
     """MemAvailable in GB aus /proc/meminfo-Inhalt; -1.0 wenn nicht lesbar."""
@@ -277,28 +313,22 @@ def _mmproj_always_enabled() -> bool:
 
 
 def _needs_mmproj(model: str, vision: bool = False) -> bool:
+    want_attach = bool(vision) or _mmproj_always_enabled()
+    try:
+        from model_configs.models_registry import get_profile as _gp
+        _prof = _gp(model) or {}
+        if _prof.get("mmproj_filename") or ((_prof.get("capabilities") or {}).get("vision") is True):
+            return want_attach
+        if (_prof.get("capabilities") or {}).get("vision") is False and not _prof.get("mmproj_filename"):
+            return False
+    except (ImportError, AttributeError, TypeError, ValueError) as _e:
+        logger.debug("_needs_mmproj registry check failed for %s: %s", model, _e)
+
     base = model.split(":")[0].lower()
     if base in _MMPROJ_REQUIRED_BASES or base in _VISION_CAPABLE_BASES:
-        # TEXT-ONLY MMPROJ SKIP (35B lever 6, 2026-11-12): the projector
-        # costs ~0.8-1.3 GB VRAM and a pure text/code run never encodes an
-        # image with it. Without `vision` the projector stays off; the first
-        # image request pays the one-time upgrade reload
-        # (needs_vision_reload -> ensure_loaded(vision=True) /
-        # upgrade_port_to_vision). vision_mmproj_always=true restores the
-        # always-attach behavior across both projector families.
-        return bool(vision) or _mmproj_always_enabled()
-    # REGISTRY-PROJECTOR (2026-11-01): a model the registry declares a
-    # projector for is vision-capable even when its base is not in the list
-    # above (user-registered models). Without this an image run attached to a
-    # text-only load and llama-server answered "image input is not supported".
-    if vision:
-        try:
-            from model_configs.models_registry import get_profile as _gp
-            _prof = _gp(model) or {}
-            if _prof.get("mmproj_filename") or ((_prof.get("capabilities") or {}).get("vision") is True):
-                return True
-        except (ImportError, AttributeError, TypeError, ValueError) as _e:
-            logger.debug("_needs_mmproj registry check failed for %s: %s", model, _e)
+        return want_attach
+
+    if want_attach:
         try:
             from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta
             if _read_gguf_meta(model).get("has_vision"):

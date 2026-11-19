@@ -2,12 +2,13 @@
 """Unified tool-loop base class for all agent modes."""
 from __future__ import annotations
 from utils.messages import normalize_system_messages
+import contextlib
 import json
 import json as _json_tc
 import logging
 import re as _re_tc
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable, Awaitable
+from typing import AsyncGenerator, AsyncIterator, Callable, Awaitable
 
 import httpx
 
@@ -295,7 +296,7 @@ class ToolLoop:
         on_after_round: OnAfterRound | None = None,
         on_compress: OnCompress | None = None,
         abort_check: Callable[[], bool] | None = None,
-        pause_gate: Callable[[], AsyncIterator[dict]] | None = None,
+        pause_gate: Callable[[], AsyncGenerator[dict, None]] | None = None,
         custom_executor: Callable[[str, dict], Awaitable[str]] | None = None,
         emit_status=None,
     ):
@@ -342,8 +343,9 @@ class ToolLoop:
         _exhausted = False
         for _round in range(self.cfg.max_rounds):
             if self._pause_gate is not None:
-                async for _pev in self._pause_gate():
-                    yield _pev
+                async with contextlib.aclosing(self._pause_gate()) as _pause_stream:
+                    async for _pev in _pause_stream:
+                        yield _pev
             if self._abort_check and self._abort_check():
                 state.stop_reason = "aborted"
                 break
@@ -470,11 +472,14 @@ class ToolLoop:
             _msg = _content_text = None
             _tool_calls = []
             if self.cfg.stream:
-                async for _ev in self._post_stream_with_retry(_payload):
-                    if isinstance(_ev, tuple):
-                        _msg, _content_text, _tool_calls = _ev
-                    else:
-                        yield _ev
+                async with contextlib.aclosing(
+                    self._post_stream_with_retry(_payload)
+                ) as _post_stream:
+                    async for _ev in _post_stream:
+                        if isinstance(_ev, tuple):
+                            _msg, _content_text, _tool_calls = _ev
+                        else:
+                            yield _ev
             else:
                 _msg, _content_text, _tool_calls, _events = await self._post_with_retry(_payload)
                 for _ev in _events:
@@ -745,7 +750,7 @@ class ToolLoop:
         from core.llm_transport import iter_tool_loop_post
 
         events: list[dict] = []
-        async for ev in iter_tool_loop_post(
+        _post_iter = iter_tool_loop_post(
             self,
             payload,
             stream=False,
@@ -755,18 +760,20 @@ class ToolLoop:
             inject_feedback_fn=_inject_retry_feedback,
             parse_sse_delta_fn=_parse_sse_delta,
             use_gbnf_grammar=_USE_GBNF_GRAMMAR,
-        ):
-            if isinstance(ev, tuple):
-                msg, content_text, tool_calls = ev
-                return msg, content_text, tool_calls, events
-            events.append(ev)
+        )
+        async with contextlib.aclosing(_post_iter):
+            async for ev in _post_iter:
+                if isinstance(ev, tuple):
+                    msg, content_text, tool_calls = ev
+                    return msg, content_text, tool_calls, events
+                events.append(ev)
         raise RuntimeError(f"Tool-POST: all {self.cfg.max_post_attempts} attempts failed")
 
     async def _post_stream_with_retry(self, payload: dict):
         """POST with retry for streaming — yields live token events, ends with (msg, content, tcs) tuple."""
         from core.llm_transport import iter_tool_loop_post
 
-        async for ev in iter_tool_loop_post(
+        _post_iter = iter_tool_loop_post(
             self,
             payload,
             stream=True,
@@ -776,8 +783,10 @@ class ToolLoop:
             inject_feedback_fn=_inject_retry_feedback,
             parse_sse_delta_fn=_parse_sse_delta,
             use_gbnf_grammar=_USE_GBNF_GRAMMAR,
-        ):
-            yield ev
+        )
+        async with contextlib.aclosing(_post_iter):
+            async for ev in _post_iter:
+                yield ev
 
     def _add_usage(self, usage, timings=None, gen_ms: float = 0.0) -> None:
         """Sum one response's usage block into the per-run counters."""

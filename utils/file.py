@@ -99,7 +99,15 @@ def _is_protected_path(p: Path) -> bool:
             return True
         if len(_rel.parts) == 1 and _rel.parts[0].lower() in _PROTECTED_ROOT_FILES:
             return True
-        if _resolved.suffix.lower() in _PROTECTED_SUFFIXES:
+        _in_default_ws = False
+        if _rel.parts and _rel.parts[0].lower() == "default_workspace":
+            _default_ws = (_HIVEMIND_ROOT / "default_workspace").resolve()
+            try:
+                _dw_rel = _resolved.relative_to(_default_ws)
+                _in_default_ws = bool(_dw_rel.parts)
+            except ValueError:
+                _in_default_ws = False
+        if not _in_default_ws and _resolved.suffix.lower() in _PROTECTED_SUFFIXES:
             return True
     except ValueError:
         pass

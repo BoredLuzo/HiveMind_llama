@@ -51,7 +51,7 @@ from core.duo_helpers import DEFAULT_VRAM_BUDGET_GB
 
 # ─── Shadow-Def Replacements: imports from extracted modules ───
 from vision.preprocess import init_vision_preprocess
-from vision.preprocess import _load_vision_model_cfg
+from vision.preprocess import _vision_cfg
 from core.duo_config import DuoConfig
 
 # ─── Shadow-Def Imports from tools modules ───
@@ -89,7 +89,7 @@ from core.version import HIVEMIND_VERSION
 # version from THIS file (Select-String, first match) before applying a zip.
 # The literal below is text only — core/version.py stays the executable
 # source. Keep it in sync; test_split_audit_fixes (h2) pins the match.
-# HIVEMIND_VERSION = "1.6.3"
+# HIVEMIND_VERSION = "1.6.4"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -282,22 +282,31 @@ _state._SESSIONS_DIR = _SESSIONS_DIR
 init_pause_state(_SESSIONS_DIR)
 _logger.info("[VRAM-BUDGET] Startup: settings['vram_budget_gb'] = %s (type=%s)",
              settings.get("vram_budget_gb"), type(settings.get("vram_budget_gb")).__name__)
-def _sync_backend_runtime_config() -> None:
-    """Sync settings -> backend runtime globals (llama_server_manager/llama_config)."""
+def _sync_backend_runtime_config(cfg: dict | None = None) -> None:
+    """Sync settings -> backend runtime globals across llama backend modules."""
     try:
         from backend.runtime_sync import sync_loader_settings as _sync_ls
         from backend.runtime_flags import apply_runtime_flags as _apply_rf
         import backend.llama_config as _lc_init
-        import backend.llama_server_manager as _lsm_init
-        import backend.manager_load as _ml_init
 
-        _boot_settings = dict(settings)
+        _src_settings = cfg if isinstance(cfg, dict) else settings
+        _boot_settings = dict(_src_settings)
         if _boot_settings.get("vram_budget_gb") is None:
             _boot_settings["vram_budget_gb"] = DEFAULT_VRAM_BUDGET_GB
+        _boot_settings.setdefault("vram_preflight_gate", True)
+        # Support legacy unprefixed alias keys only when canonical keys are absent.
+        for _legacy_k, _canon_k in (
+            ("kv_cache_type", "llama_kv_cache_type"),
+            ("max_slots", "llama_max_slots"),
+            ("gpu_device", "llama_gpu_device"),
+            ("vram_pre_flight_margin_mib", "vram_preflight_margin_mib"),
+        ):
+            if _canon_k not in _boot_settings and _boot_settings.get(_legacy_k) is not None:
+                _boot_settings[_canon_k] = _boot_settings[_legacy_k]
         _sync_ls(_boot_settings)
         _apply_rf(_boot_settings)
 
-        _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
+        _gb = str(_src_settings.get("gpu_backend", "") or "").strip().lower()
         # ENV-WINS (2026-09-19): HIVEMIND_GPU_BACKEND overrides settings.json.
         if str(os.environ.get("HIVEMIND_GPU_BACKEND", "") or "").strip():
             if _gb:
@@ -308,18 +317,8 @@ def _sync_backend_runtime_config() -> None:
             _gb = ""
         if _gb in ("vulkan", "cuda", "rocm", "cpu"):
             _lc_init.sync_runtime_backend(_gb)
-
-        _pf_val = bool(settings.get("vram_preflight_gate", True))
-        _lc_init.VRAM_PREFLIGHT_GATE = _pf_val
-        _lsm_init.VRAM_PREFLIGHT_GATE = _pf_val
-        _ml_init.VRAM_PREFLIGHT_GATE = _pf_val
-        try:
-            import backend.llama_start_phases as _lsp_pf
-            _lsp_pf.VRAM_PREFLIGHT_GATE = _pf_val
-        except (ImportError, AttributeError):
-            pass
-    except Exception:
-        pass
+    except (ImportError, AttributeError, ValueError, TypeError, OSError) as _sync_err:
+        _logger.debug("Backend runtime sync skipped: %s", _sync_err)
 
 
 _sync_backend_runtime_config()
@@ -390,6 +389,30 @@ if _WEBSEARCH_AVAILABLE:
         language = settings.get("searxng_language"),
     )
 
+def _auto_resolve_empty_model_defaults(cfg: dict) -> None:
+    """Resolve empty vision_agent_model and subagent_lite_model_ladder from installed GGUFs."""
+    if not isinstance(cfg, dict):
+        return
+    try:
+        from routing.model_automap import (
+            pick_installed_small_tool_models,
+            pick_installed_vision_model,
+        )
+        if not str(cfg.get("vision_agent_model") or "").strip():
+            vis_model = pick_installed_vision_model()
+            if vis_model:
+                cfg["vision_agent_model"] = vis_model
+                _logger.info("Auto-resolved empty vision_agent_model -> %s", vis_model)
+        if not cfg.get("subagent_lite_model_ladder"):
+            ladder = pick_installed_small_tool_models()
+            if ladder:
+                cfg["subagent_lite_model_ladder"] = ladder
+                _logger.info("Auto-resolved empty subagent_lite_model_ladder -> %s", ladder)
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _auto_err:
+        _logger.debug("Empty model default auto-resolve skipped: %s", _auto_err)
+
+
+_auto_resolve_empty_model_defaults(settings)
 apply_settings_to_pipeline(settings)
 
 # (Ollama size_vram includes KV cache + activations ─ too high)
@@ -399,23 +422,15 @@ try:
         raise ValueError("VRAM_LOOKUP_GB is empty")
 except (ImportError, ValueError) as e:
     import logging as _vram_log
-    _vram_log.warning(f"VRAM table import/load failed ({type(e).__name__}), using safe defaults")
-    _VRAM_LOOKUP_GB: dict[str, float] = {
-        # qwen3.5 ─ echte Messungen (Vulkan, 99 GPU-Layers)
-        "qwen3.5:0.8b": 0.6, "qwen3.5:2b": 1.5, "qwen3.5:4b": 2.8,
-        "qwen3.5:4b-mtp": 3.0, "qwen3.5:4b-d": 3.2, "qwen3.5:9b": 5.5,
-        "qwen3.5:9b-ud": 5.8,
-        # Granite / Gemma
-        "granite-4.1:3b": 2.1, "granite4:1b": 1.0,
-        "gemma-4:e4b-it-obliterated": 3.0, "google-gemma-3:4b-it": 2.8,
-        # OmniCoder / Ministral
-        "omnicoder:9b": 5.5,
-        "ministral:3b-instruct-2410": 2.0, "ministral:8b-instruct-2410": 4.8,
-        "mistral:7b": 5.0, "llama3.1:8b": 5.5, "llama3:8b": 5.5,
-        "phi3:3.8b": 2.8, "gemma3:4b": 3.0,
-        "llava:7b": 5.0, "falcon3:7b": 5.0,
-        "ternary-bonsai:8b": 4.8, "qwen-qwen3:14b-iq4-nl": 7.5,
-    }
+    _vram_log.warning(f"VRAM table import/load failed ({type(e).__name__}), deriving from installed GGUFs")
+    _VRAM_LOOKUP_GB: dict[str, float] = {}
+    try:
+        from backend.llama_models import list_available_models as _list_avail_vram
+        from routing.model_automap import _estimate_vram_gb_for_model as _est_vram_gb
+        for _im in _list_avail_vram() or []:
+            _VRAM_LOOKUP_GB[_im] = float(_est_vram_gb(_im))
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _vf_err:
+        _vram_log.debug("Dynamic GGUF VRAM fallback skipped: %s", _vf_err)
 
 # CTX-RESOLVER-ONE (2026-10-28, audit): this used to be a second full
 # resolver (own ctx_overrides reader + hive table lookup) next to
@@ -654,8 +669,9 @@ async def _startup():
                 save_settings(_s)
                 if isinstance(_s.get("agents"), dict):
                     settings["agents"] = _s["agents"]
-                    apply_settings_to_pipeline(settings)
                 logger.warning("[AGENT-MODEL-SANITIZE] settings.json updated")
+            _auto_resolve_empty_model_defaults(settings)
+            apply_settings_to_pipeline(settings)
         except (ImportError, OSError, ValueError) as _san_exc:
             logger.warning("[AGENT-MODEL-SANITIZE] skipped: %s", _san_exc)
 
@@ -818,28 +834,16 @@ async def _startup():
         except Exception as _wu_err:
             logger.warning("Planner warmup failed (non-critical): %s", _wu_err)
 
-_SIMPLE_DIRECT_MODELS = {
-    "general":      "gemma3:4b",
-    "creative":     "gemma3:4b",
-    "factual":      "qwen3.5:2b",     # qwen3.5:2b: strukturiertes Wissen, neuere Gen als gemma3
-    "reasoning":    "gemma3:4b",
-    "code":         "qwen3.5:2b",     # qwen3.5:2b: stronger than qwen2.5:3b, vision + tool calls
-    "math":         "qwen3.5:2b",
-    "tool_use":     "qwen3.5:2b",     # TC-nativ
-    "vision":       "granite3.2-vision:2b",  # Kleinste Vision
-    "multilingual": "ministral-3:3b", # Ministral: specialized in multilingual
-}
-_COMPLEX_DIRECT_MODELS = {
-    "general":      "qwen3.5:9b-ud",
-    "creative":     "gemma3:4b",
-    "factual":      "qwen3.5:4b",     # qwen3.5:4b: Faktenwissen
-    "reasoning":    "qwen3.5:9b-ud", # qwen3.5: Thinking-Modus
-    "code":         "qwen3.5:4b",     # qwen3.5:4b: Code-Benchmark, SOLO ~5.9GB
-    "math":         "qwen3.5:9b-ud",
-    "tool_use":     "qwen3.5:4b",     # TC-nativ
-    "vision":       "granite3.2-vision:2b",
-    "multilingual": "ministral-3:8b", # solo-only, 6GB
-}
+try:
+    from routing.model_picker import (
+        _SIMPLE_DIRECT_MODELS as _PICKER_SIMPLE_DIRECT,
+        _COMPLEX_DIRECT_MODELS as _PICKER_COMPLEX_DIRECT,
+    )
+    _SIMPLE_DIRECT_MODELS: dict[str, str] = dict(_PICKER_SIMPLE_DIRECT)
+    _COMPLEX_DIRECT_MODELS: dict[str, str] = dict(_PICKER_COMPLEX_DIRECT)
+except (ImportError, AttributeError):
+    _SIMPLE_DIRECT_MODELS = {}
+    _COMPLEX_DIRECT_MODELS = {}
 
 
 # ─── Code Duo ────────────────────────────────────────────────────────────────────
@@ -933,7 +937,6 @@ _bg_insight_sem = asyncio.Semaphore(1)
 
 # -- Vision Model Config ---------------------------------------
 
-_vision_cfg: dict = _load_vision_model_cfg()
 _state._vision_cfg = _vision_cfg
 
 # ─── KV-Cache-Poisoning-Erkennung ───────────────────────────────────────────────
@@ -2318,19 +2321,24 @@ async def documents_extract(request: Request):
 
 @app.post("/gateway/heartbeat", include_in_schema=False)
 async def gateway_heartbeat(req: Request):
+    from infra import gateway_supervisor as _sup
+    if not _sup.is_loopback_request(req):
+        return JSONResponse({"ok": False, "error": "loopback client required"},
+                            status_code=403)
     try:
         body = await req.json()
     except (ValueError, TypeError):
         body = {}
     if not isinstance(body, dict):
         body = {}
-    try:
-        _pid = int(body.get("pid") or 0)
-    except (TypeError, ValueError):
-        _pid = 0
-    from infra import gateway_supervisor as _sup
-    _sup.note_heartbeat(_pid,
-                        body.get("data") if isinstance(body.get("data"), dict) else {})
+    _pid = _sup.parse_positive_int(body.get("pid"))
+    if _pid <= 0:
+        return JSONResponse({"ok": False, "error": "invalid pid"}, status_code=400)
+    _raw_data = body.get("data")
+    _data = _raw_data if isinstance(_raw_data, dict) else {}
+    if _sup.parse_birth(_data.get("birth")) is None:
+        return JSONResponse({"ok": False, "error": "invalid birth"}, status_code=400)
+    _sup.note_heartbeat(_pid, _data)
     return {"ok": True}
 
 
@@ -2344,9 +2352,12 @@ _gateway_start_lock: asyncio.Lock | None = None
 
 
 @app.post("/gateway/start", include_in_schema=False)
-async def gateway_start():
+async def gateway_start(req: Request):
     global _gateway_start_lock
     from infra import gateway_supervisor as _sup
+    if not _sup.is_loopback_request(req):
+        return JSONResponse({"ok": False, "error": "loopback client required"},
+                            status_code=403)
     # RE-AUDIT R2 (2026-10-06): the liveness check runs a PowerShell child
     # (~0.3-0.6 s). Serialized + re-checked under the lock, or a UI
     # double-click spawns TWO gateways (Telegram getUpdates conflict).
@@ -2360,18 +2371,23 @@ async def gateway_start():
         # a dead/recycled pid clears the stale status and starts.
         _st = _sup.status()
         if _st.get("running"):
-            _pid = int(_st.get("pid") or 0)
-            _birth = int(_st.get("birth") or 0)
+            _pid = _sup.parse_positive_int(_st.get("pid"))
+            _birth = _sup.parse_birth(_st.get("birth"))
             _alive = False
-            if _pid > 0 and os.name != "nt":
+            if _pid > 0 and _birth is not None and os.name != "nt":
                 # X4 (audit r2): posix liveness via /proc (no PowerShell).
                 import subprocess as _sp_l
-                _chk = _sp_l.run(["sh", "-c",
-                                  f"test -d /proc/{_pid} && "
-                                  f"grep -q python /proc/{_pid}/comm && echo py || echo no"],
-                                 capture_output=True, text=True)
-                _alive = _chk.stdout.strip() == "py"
-            elif _pid > 0:
+                try:
+                    _chk = await asyncio.to_thread(
+                        _sp_l.run,
+                        ["sh", "-c",
+                         f"test -d /proc/{_pid} && "
+                         f"grep -q python /proc/{_pid}/comm && echo py || echo no"],
+                        capture_output=True, text=True, timeout=20)
+                    _alive = _chk.stdout.strip() == "py"
+                except _sp_l.TimeoutExpired:
+                    _alive = False
+            elif _pid > 0 and _birth is not None:
                 _ps = (
                     "$p = Get-Process -Id " + str(_pid) + " -ErrorAction SilentlyContinue; "
                     "if (-not $p) { 'no' }"
@@ -2387,11 +2403,14 @@ async def gateway_start():
                 # TIMEOUT (audit 2026-10-30): this probe ran unbounded - a
                 # hung PowerShell (profile load, AV scan) blocked the settings
                 # endpoint forever. 20 s matches the other PowerShell probe.
-                _chk = await asyncio.to_thread(
-                    _sp_start.run,
-                    ["powershell", "-NoProfile", "-Command", _ps],
-                    capture_output=True, text=True, timeout=20)
-                _alive = _chk.stdout.strip() == "py"
+                try:
+                    _chk = await asyncio.to_thread(
+                        _sp_start.run,
+                        ["powershell", "-NoProfile", "-Command", _ps],
+                        capture_output=True, text=True, timeout=20)
+                    _alive = _chk.stdout.strip() == "py"
+                except _sp_start.TimeoutExpired:
+                    _alive = False
             if _alive:
                 return JSONResponse({"ok": False,
                                      "error": "gateway already running"},
@@ -2420,15 +2439,23 @@ async def gateway_start():
 
 
 @app.post("/gateway/stop", include_in_schema=False)
-async def gateway_stop():
+async def gateway_stop(req: Request):
     import subprocess
     from infra import gateway_supervisor as _sup
+    if not _sup.is_loopback_request(req):
+        return JSONResponse({"ok": False, "error": "loopback client required"},
+                            status_code=403)
     st = _sup.status()
-    pid = int(st.get("pid") or 0)
-    birth = st.get("birth")  # merged top-level from the heartbeat data
+    pid = _sup.parse_positive_int(st.get("pid"))
+    birth = _sup.parse_birth(st.get("birth"))
     if not st.get("running") or pid <= 0:
         return JSONResponse({"ok": False, "error": "gateway not running"},
                             status_code=409)
+    if birth is None:
+        _sup.clear()
+        return JSONResponse(
+            {"ok": False, "error": "invalid heartbeat birth - status reset"},
+            status_code=400)
     # recycled-pid guard (deep audit 2026-10-05): the heartbeat is <=15 s
     # old, but the pid could have been reused by ANY process in that
     # window. Verify process name AND the process birth (FILETIME from
@@ -2452,7 +2479,7 @@ async def gateway_stop():
             return JSONResponse(
                 {"ok": False, "error": "pid was recycled by another process - refusing, status reset"},
                 status_code=409)
-        if birth and abs(int(birth) - _birth_ticks) > 5:
+        if birth and abs(birth - _birth_ticks) > 5:
             _sup.clear()
             return JSONResponse(
                 {"ok": False, "error": "pid was recycled by another process - refusing, status reset"},
@@ -2469,9 +2496,9 @@ async def gateway_stop():
         "$p = Get-Process -Id " + str(pid) + " -ErrorAction SilentlyContinue; "
         "if (-not $p) { 'no' }"
         " elseif ($p.ProcessName -notmatch 'python') { 'no' }"
-        " elseif (" + str(int(birth) if birth else 0) + " -eq 0) { 'py' }"
+        " elseif (" + str(birth) + " -eq 0) { 'py' }"
         " else {"
-        "  $birth = [DateTimeOffset]::FromFileTime(" + str(int(birth) if birth else 0) + "); "
+        "  $birth = [DateTimeOffset]::FromFileTime(" + str(birth) + "); "
         "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $birth.UtcDateTime).TotalSeconds) -gt 1.0)"
         "    { 'recycled' } else { 'py' }"
         " }"

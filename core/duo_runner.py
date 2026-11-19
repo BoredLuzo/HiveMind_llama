@@ -94,7 +94,39 @@ _CRITIC_VERIFY_TOOLS = _get_inline_tools(include_websearch=False, mode="critic_v
 from core.model_sampling import get_sampling_profile, resolve_presence_penalty
 
 from core.agentic_duo_state import DuoRoundState
-from core.tool_executor import execute_tool_round, ToolExecHooks, ToolRoundState
+from core.tool_executor import (
+    execute_tool_round,
+    ToolExecHooks,
+    ToolRoundState,
+    WRITE_TOOLS,
+    WRITE_STATUSES,
+    _looks_like_stub,
+)
+
+
+def _resolve_contained_written_path(raw_path: str, workspace: str | Path) -> Path | None:
+    """Resolve a parsed written/patched path and enforce strict workspace containment."""
+    if not raw_path or not workspace:
+        return None
+    _raw = str(raw_path).strip()
+    if not _raw:
+        return None
+    try:
+        _ws_root = Path(workspace).resolve()
+        _cand = Path(_raw)
+        if not _cand.is_absolute():
+            _cand = _ws_root / _cand
+        _resolved = _cand.resolve()
+        _resolved.relative_to(_ws_root)
+        if _resolved == _ws_root:
+            return None
+        return _resolved
+    except (OSError, ValueError, RuntimeError) as _err:
+        logger.warning(
+            "[DUO] Rejected non-contained written path %r (workspace=%s): %s",
+            _raw, workspace, _err,
+        )
+        return None
 
 # ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff for wedging edits ─────
 from core.wedge_handoff import (
@@ -323,7 +355,7 @@ async def _duo_planner_phase(
     coder_mdl, critic_mdl, exec_mdl, _ws_str, _explore_ctx, _xtools_ws,
     _coder_ctx, _contracts_raw, _matched_skills, _planner_step_cap,
     _project_state, _duo_runtime_profile, _duo_deadline_at, _duo_run_timeout_s,
-    _fup_task_ctx,
+    _fup_task_ctx, _project_rules_block: str = "",
 ):
     # CODE-MOTION (duo-runner-split): planner phase moved VERBATIM from
     # run_code_duo's planner if-block; only the unpack/pack wrapper around
@@ -746,6 +778,9 @@ async def _duo_planner_phase(
             _proj_ctx = build_project_context(_project_state)
             if _proj_ctx:
                 _planner_ctx = _proj_ctx + "\n\n---\n\n" + (_planner_ctx or "")
+
+        if _project_rules_block:
+            _planner_ctx = _project_rules_block + "\n\n---\n\n" + (_planner_ctx or "")
 
         if _matched_skills:
             try:
@@ -2408,6 +2443,27 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 "content": f"🧭 Loaded {min(len(_symbol_lines), _symbol_hint_top_k)} symbol reference hint(s).",
             })
 
+    _project_rules_block = ""
+    _project_rules_planner = ""
+    _is_first_chat_turn = (
+        not bool(getattr(ctx, "pipeline_sess_msgs", None))
+        and not bool(state.get("_follow_up_active"))
+        and not bool(_resume_data)
+    )
+    if _ws_str and _is_first_chat_turn:
+        try:
+            from hive_functions.project_rules import format_project_rules
+            _project_rules_block, _rules_names = format_project_rules(_ws_str, max_chars=6000)
+            if _project_rules_block:
+                _coder_dyn_hints = "\n\n" + _project_rules_block + "\n" + _coder_dyn_hints
+                _project_rules_planner, _ = format_project_rules(_ws_str, max_chars=3000)
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": f"📋 Loaded project rules: {', '.join(_rules_names)}",
+                })
+        except (ImportError, OSError, ValueError, RuntimeError) as _pr_err:
+            logger.debug("[PROJECT-RULES] Load failed: %s", _pr_err)
+
     _matched_skills: list = []
     try:
         from hive_functions.skills import load_skills, match_skills, format_skill_coder, workspace_file_paths
@@ -2534,6 +2590,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _project_state=_project_state, _duo_runtime_profile=_duo_runtime_profile,
                     _duo_deadline_at=_duo_deadline_at, _duo_run_timeout_s=_duo_run_timeout_s,
                     _fup_task_ctx=_fup_task_ctx,
+                    _project_rules_block=_project_rules_planner,
                 ):
                     yield _ev
             finally:
@@ -4022,6 +4079,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # continue points — sync them on every non-return exit.
                         _dport = _wait_ps.dport
                         _cached_coder_port = _wait_ps.cached_port
+                        if _dport is not None:
+                            _duo_state.current_port = _dport
+                        _duo_state.cached_port = _cached_coder_port
                         _result = _wait_ps.result
                         _dr_msg = _wait_ps.dr_msg
                         _dr_thinking_parts = _wait_ps.dr_thinking_parts
@@ -4276,16 +4336,26 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # safety net: adopt file_changes per round —
                         # abort paths would otherwise lose all writes (observed live 13:25).
                         _recent_focus_paths = _exec_result.recent_focus_paths_updated
+                        _active_ws_cont = _eff_run_ws(getattr(ctx, "workspace", ""), _ws_str) or _ws_str
                         for _wfm in re.findall(r"\[(?:Datei geschrieben|Written|Appended|(?:edit_file|write_file): (?:created|rewrote) ')([^\s'\(\]]+)", "".join(_parts)):
                             _wp = _wfm.strip()
-                            if _wp and _wp not in _written_files: _written_files.append(_wp)
+                            if _wp and _wp not in _written_files and _resolve_contained_written_path(_wp, _active_ws_cont) is not None:
+                                _written_files.append(_wp)
                         for _wfm2 in re.findall(r"\[patch_file: ([^\s]+) patched", "".join(_parts)):
                             _wp2 = _wfm2.strip()
-                            if _wp2 and _wp2 not in _written_files: _written_files.append(_wp2)
-                        # P1-FIX (2026-08-10): ops "write" (write_file) and "append"
+                            if _wp2 and _wp2 not in _written_files and _resolve_contained_written_path(_wp2, _active_ws_cont) is not None:
+                                _written_files.append(_wp2)
+                        # P1-FIX (2026-08-10): ops "write" (write_file) and "append" (plus "patched")
                         for _wfm3, _vd3 in _file_changes.items():
-                            if _vd3.get("op") in ("created", "rewrote", "edited", "write", "append") and _wfm3 not in _written_files:
-                                _written_files.append(_wfm3)
+                            if _vd3.get("op") in WRITE_STATUSES and _wfm3 not in _written_files:
+                                if _resolve_contained_written_path(_wfm3, _active_ws_cont) is not None:
+                                    _written_files.append(_wfm3)
+                        if any(
+                            ((_tc.get("function") or {}).get("name") in WRITE_TOOLS
+                             and _looks_like_stub(str((_tc.get("function") or {}).get("arguments") or "")))
+                            for _tc in (_dr_tcs or [])
+                        ):
+                            logger.warning("[STUB-ECHO] Detected compaction stub echoed in duo coder round")
                         _total_edit_lines += _sum_edit_lines(_file_changes)
                         # Track written files
                         # Plan tracker references
@@ -4527,15 +4597,21 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         await asyncio.sleep(3.0)
                         try:
                             from backend.llama_server_manager import manager as _lsm_retry
+                            # Invalidate stale cached port before evict/reload so the retry
+                            # never falls back to a dead port.
+                            _cached_coder_port = None
+                            _cached_coder_port_ctx = None
+                            _duo_state.cached_port = None
+                            _duo_state.current_port = None
                             await _lsm_retry.evict(exec_mdl)
-                            await _lsm_retry.ensure_loaded(
+                            _dport = await _lsm_retry.ensure_loaded(
                                 exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
                                 n_parallel=1, ctx_graceful=False, pin=True,
                                 vision=bool(_dtool_opts.get("vision", False)))
-                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(
-                                exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
-                                n_parallel=1, ctx_graceful=False, pin=True,
-                                vision=bool(_dtool_opts.get("vision", False)))
+                            _cached_coder_port = _dport
+                            _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
+                            _duo_state.cached_port = _dport
+                            _duo_state.current_port = _dport
                             ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
                             continue
                         except Exception as _retry_err:
@@ -4569,7 +4645,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 if _file_changes:
                     _created = sum(1 for v in _file_changes.values() if v.get("op") == "created")
                     _rewrote = sum(1 for v in _file_changes.values() if v.get("op") == "rewrote")
-                    _edited = sum(1 for v in _file_changes.values() if v.get("op") == "edited")
+                    _edited = sum(1 for v in _file_changes.values() if v.get("op") in ("edited", "patched"))
                     _appended = sum(1 for v in _file_changes.values() if v.get("op") == "append")
                     _total_added = sum(v.get("lines_added", 0) for v in _file_changes.values())
                     _total_removed = sum(v.get("lines_removed", 0) for v in _file_changes.values())
@@ -4636,17 +4712,21 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 _written_now_edit = re.findall(r"\[(?:edit_file|write_file): (?:created '|rewrote '|')([^']+)'", _parts_raw)
                 _all_written_now = _written_now_write + _written_now_patch + _written_now_edit
                 if _all_written_now:
+                    _active_ws_critic = _eff_run_ws(getattr(ctx, "workspace", ""), _ws_str) or _ws_str
                     _file_parts_critic = []
                     for _wp in _all_written_now[-3:]:
                         _wp = _wp.strip()
                         if not _wp:
                             continue
+                        _contained_wp = _resolve_contained_written_path(_wp, _active_ws_critic)
+                        if _contained_wp is None:
+                            continue
                         try:
                             # SIZE-CAP (2026-11-07 audit): the critic only
                             # consumes the first 2000 chars; read_text() pulled
                             # whole generated files every write round.
-                            with Path(_wp).open("r", encoding="utf-8",
-                                                errors="replace") as _fh:
+                            with _contained_wp.open("r", encoding="utf-8",
+                                                    errors="replace") as _fh:
                                 _fc = _fh.read(2000)
                             if _fc:
                                 _file_parts_critic.append(f"# {_wp}\n{_fc}")
@@ -4665,23 +4745,27 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     if _file_parts_critic:
                         coder_out = "\n\n".join(_file_parts_critic)
                     elif _written_now_write:
-                        try:
-                            _file_content = Path(_written_now_write[-1].strip()).read_text(encoding="utf-8", errors="replace")
-                            if _file_content:
-                                coder_out = _file_content
-                        except Exception as _err:
-                            if isinstance(_err, (
-                                GeneratorExit,
-                                asyncio.CancelledError,
-                                KeyboardInterrupt,
-                                SystemExit,
-                            )):
-                                raise
-                            logger.debug(
-                                "[DUO] Suppressed error at critic file-read fallback: %s",
-                                _err, exc_info=True
-                            )
-                            pass
+                        _contained_fb = _resolve_contained_written_path(
+                            _written_now_write[-1].strip(), _active_ws_critic
+                        )
+                        if _contained_fb is not None:
+                            try:
+                                _file_content = _contained_fb.read_text(encoding="utf-8", errors="replace")
+                                if _file_content:
+                                    coder_out = _file_content
+                            except Exception as _err:
+                                if isinstance(_err, (
+                                    GeneratorExit,
+                                    asyncio.CancelledError,
+                                    KeyboardInterrupt,
+                                    SystemExit,
+                                )):
+                                    raise
+                                logger.debug(
+                                    "[DUO] Suppressed error at critic file-read fallback: %s",
+                                    _err, exc_info=True
+                                )
+                                pass
             yield await ctx.emit({"type": "duo_coder_done", "elapsed": round(time.time() - _t, 1)})
             if _file_changes or _written_files:
                 try:
@@ -5045,12 +5129,109 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _duo_disconnect_park(ctx, _park_ps)
         raise
 
+    else:
+        # ── P3: Final Test after all chunks ──────────────────────────
+        async for _ev in _duo_final_test(ctx, state, _cs, _n_items, _eff_run_ws=_eff_run_ws):
+            yield _ev
+
+        # SPLIT 2.2 (2026-11-05): session epilogue (loop auto-summary, chat
+        # context, read stats, run counter, soul trigger, ratings, file
+        # summary, pipeline synthesis) moved to core/duo_epilogue; it persists
+        # the assistant turn itself.
+        _epi_ps = _DuoSessionEpilogueState(
+            coder_out=coder_out,
+            _cs=_cs,
+            _written_files=_written_files,
+            _duo_hard_stop=_duo_hard_stop,
+            _duo_timed_out=_duo_timed_out,
+            _loop_detected=_loop_detected,
+            _lifetime_tool_rounds=_lifetime_tool_rounds,
+            _explore_only_rounds=_explore_only_rounds,
+            _est_tokens=_est_tokens,
+            _parts=_parts,
+            carry={
+                "_plan_result": _plan_result,
+                "_inloop_plan_text": _inloop_plan_text,
+                "_touched_paths": _touched_paths,
+                "_total_tool_errors_ref": _total_tool_errors_ref,
+                "_last_run_bash_failure": _last_run_bash_failure,
+                "_drop_names": _drop_names,
+                "_dr_dropped_tool_retries": _dr_dropped_tool_retries,
+                "coder_mdl": coder_mdl,
+                "final_verdict": final_verdict,
+                "run_peer_ratings": run_peer_ratings,
+            },
+        )
+        async for _ev in _duo_session_epilogue(ctx, _epi_ps):
+            yield _ev
+        # SPLIT 2.1 (2026-11-05): the closing sequence (stop-reason ladder,
+        # final auto-commit/push, checkpoint consolidation, resume safety net,
+        # project save, run audit, send-file delivery, done, cleanup) moved
+        # verbatim to core/duo_finalize._duo_run_finalize. `carry` threads the
+        # runner-local bindings the tail also consumes; all fields sync back.
+        _fin_ps = _DuoRunFinalizeState(
+            _duo_hard_stop=_duo_hard_stop,
+            _graceful_stopped=_graceful_stopped,
+            _duo_timed_out=_duo_timed_out,
+            _loop_detected=_loop_detected,
+            _wedge_escalated=_wedge_escalated,
+            _model_load_failed=_model_load_failed,
+            _ws_str=_ws_str,
+            _explore_ctx=_explore_ctx,
+            _pending_send_files=_pending_send_files,
+            _written_files=_written_files,
+            _done_tasks=_done_tasks,
+            _cs=_cs,
+            _project_state=_project_state,
+            _project_state_run_counted=_project_state_run_counted,
+            _explore_only_rounds=_explore_only_rounds,
+            _lifetime_tool_rounds=_lifetime_tool_rounds,
+            _di=_di,
+            _n_items=_n_items,
+            _loop_items=_loop_items,
+            carry={
+                "exec_mdl": exec_mdl,
+                "final_verdict": final_verdict,
+                "critic_issues": critic_issues,
+                "_recent_focus_paths": _recent_focus_paths,
+                "_drop_names": _drop_names,
+                "_dr_dropped_tool_retries": _dr_dropped_tool_retries,
+                "_worker_slots": _worker_slots,
+                "this_file": ctx.this_file,
+                "_warm_workers_fn": _warm_workers_fn,
+                "_keepalive_vision_fn": _keepalive_vision_fn,
+            },
+        )
+        try:
+            async for _ev in _duo_run_finalize(ctx, _fin_ps):
+                yield _ev
+        finally:
+            _duo_hard_stop = _fin_ps._duo_hard_stop
+            _graceful_stopped = _fin_ps._graceful_stopped
+            _duo_timed_out = _fin_ps._duo_timed_out
+            _loop_detected = _fin_ps._loop_detected
+            _wedge_escalated = _fin_ps._wedge_escalated
+            _model_load_failed = _fin_ps._model_load_failed
+            _ws_str = _fin_ps._ws_str
+            _explore_ctx = _fin_ps._explore_ctx
+            _pending_send_files = _fin_ps._pending_send_files
+            _written_files = _fin_ps._written_files
+            _done_tasks = _fin_ps._done_tasks
+            _cs = _fin_ps._cs
+            _project_state = _fin_ps._project_state
+            _project_state_run_counted = _fin_ps._project_state_run_counted
+            _explore_only_rounds = _fin_ps._explore_only_rounds
+            _lifetime_tool_rounds = _fin_ps._lifetime_tool_rounds
+            _di = _fin_ps._di
+            _n_items = _fin_ps._n_items
+            _loop_items = _fin_ps._loop_items
+            ctx.unregister_abort(ctx.run_id)
+            ctx.unregister_step_skip(ctx.run_id)
+            _cleanup_pause_state(ctx.run_id)
+
     finally:
-        # CODE-MOTION (duo-runner-split): the cleanup body lives in
-        # _duo_final_cleanup now; the state object carries every runner
-        # local it reads. _planner_model is the only one bound inside the
-        # mega-try, so it is ladder-collected exactly like the park fields
-        # (the commit-2270557 NameError-ladder bug class).
+        # CODE-MOTION (duo-runner-split): cleanup runs LAST (after final_test ->
+        # session_epilogue -> run_finalize, and always on error/cancellation/early return).
         _cleanup_ps = _DuoFinalCleanupState(
             exec_mdl=exec_mdl,
             _run_id_global=_run_id_global,
@@ -5062,102 +5243,3 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         except (NameError, UnboundLocalError): pass
         await _duo_final_cleanup(ctx, _cleanup_ps)
         _project_state_run_counted = _cleanup_ps._project_state_run_counted
-
-    # ── P3: Final Test after all chunks ──────────────────────────
-    async for _ev in _duo_final_test(ctx, state, _cs, _n_items, _eff_run_ws=_eff_run_ws):
-        yield _ev
-
-    # SPLIT 2.2 (2026-11-05): session epilogue (loop auto-summary, chat
-    # context, read stats, run counter, soul trigger, ratings, file
-    # summary, pipeline synthesis) moved to core/duo_epilogue; it persists
-    # the assistant turn itself.
-    _epi_ps = _DuoSessionEpilogueState(
-        coder_out=coder_out,
-        _cs=_cs,
-        _written_files=_written_files,
-        _duo_hard_stop=_duo_hard_stop,
-        _duo_timed_out=_duo_timed_out,
-        _loop_detected=_loop_detected,
-        _lifetime_tool_rounds=_lifetime_tool_rounds,
-        _explore_only_rounds=_explore_only_rounds,
-        _est_tokens=_est_tokens,
-        _parts=_parts,
-        carry={
-            "_plan_result": _plan_result,
-            "_inloop_plan_text": _inloop_plan_text,
-            "_touched_paths": _touched_paths,
-            "_total_tool_errors_ref": _total_tool_errors_ref,
-            "_last_run_bash_failure": _last_run_bash_failure,
-            "_drop_names": _drop_names,
-            "_dr_dropped_tool_retries": _dr_dropped_tool_retries,
-            "coder_mdl": coder_mdl,
-            "final_verdict": final_verdict,
-            "run_peer_ratings": run_peer_ratings,
-        },
-    )
-    async for _ev in _duo_session_epilogue(ctx, _epi_ps):
-        yield _ev
-    # SPLIT 2.1 (2026-11-05): the closing sequence (stop-reason ladder,
-    # final auto-commit/push, checkpoint consolidation, resume safety net,
-    # project save, run audit, send-file delivery, done, cleanup) moved
-    # verbatim to core/duo_finalize._duo_run_finalize. `carry` threads the
-    # runner-local bindings the tail also consumes; all fields sync back.
-    _fin_ps = _DuoRunFinalizeState(
-        _duo_hard_stop=_duo_hard_stop,
-        _graceful_stopped=_graceful_stopped,
-        _duo_timed_out=_duo_timed_out,
-        _loop_detected=_loop_detected,
-        _wedge_escalated=_wedge_escalated,
-        _model_load_failed=_model_load_failed,
-        _ws_str=_ws_str,
-        _explore_ctx=_explore_ctx,
-        _pending_send_files=_pending_send_files,
-        _written_files=_written_files,
-        _done_tasks=_done_tasks,
-        _cs=_cs,
-        _project_state=_project_state,
-        _project_state_run_counted=_project_state_run_counted,
-        _explore_only_rounds=_explore_only_rounds,
-        _lifetime_tool_rounds=_lifetime_tool_rounds,
-        _di=_di,
-        _n_items=_n_items,
-        _loop_items=_loop_items,
-        carry={
-            "exec_mdl": exec_mdl,
-            "final_verdict": final_verdict,
-            "critic_issues": critic_issues,
-            "_recent_focus_paths": _recent_focus_paths,
-            "_drop_names": _drop_names,
-            "_dr_dropped_tool_retries": _dr_dropped_tool_retries,
-            "_worker_slots": _worker_slots,
-            "this_file": ctx.this_file,
-            "_warm_workers_fn": _warm_workers_fn,
-            "_keepalive_vision_fn": _keepalive_vision_fn,
-        },
-    )
-    try:
-        async for _ev in _duo_run_finalize(ctx, _fin_ps):
-            yield _ev
-    finally:
-        _duo_hard_stop = _fin_ps._duo_hard_stop
-        _graceful_stopped = _fin_ps._graceful_stopped
-        _duo_timed_out = _fin_ps._duo_timed_out
-        _loop_detected = _fin_ps._loop_detected
-        _wedge_escalated = _fin_ps._wedge_escalated
-        _model_load_failed = _fin_ps._model_load_failed
-        _ws_str = _fin_ps._ws_str
-        _explore_ctx = _fin_ps._explore_ctx
-        _pending_send_files = _fin_ps._pending_send_files
-        _written_files = _fin_ps._written_files
-        _done_tasks = _fin_ps._done_tasks
-        _cs = _fin_ps._cs
-        _project_state = _fin_ps._project_state
-        _project_state_run_counted = _fin_ps._project_state_run_counted
-        _explore_only_rounds = _fin_ps._explore_only_rounds
-        _lifetime_tool_rounds = _fin_ps._lifetime_tool_rounds
-        _di = _fin_ps._di
-        _n_items = _fin_ps._n_items
-        _loop_items = _fin_ps._loop_items
-        ctx.unregister_abort(ctx.run_id)
-        ctx.unregister_step_skip(ctx.run_id)
-        _cleanup_pause_state(ctx.run_id)

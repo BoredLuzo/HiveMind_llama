@@ -67,7 +67,10 @@ async def _chat_route_decision(ps):
     _complexity_source = ps._complexity_source
     _effective_task_type = ps._effective_task_type
     _judge_toolsize = ps._judge_toolsize
-    _judge_verdict = ps._judge_verdict
+    _judge_verdict = {}
+    ps._judge_verdict = {}
+    if getattr(_state, "pipeline", None) is not None and hasattr(_state.pipeline, "_last_judge_verdict"):
+        _state.pipeline._last_judge_verdict = {}
     _pipeline_sess_msgs = ps._pipeline_sess_msgs
     _route_as_tool = ps._route_as_tool
     complexity = ps.complexity

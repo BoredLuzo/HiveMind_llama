@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import httpx
-import json
 import logging
 import time
 import uuid
@@ -346,108 +346,110 @@ class LlamaClient:
         # bestehende Pfade (direct, duo) unveraendert bleiben.
         if usage_out is not None:
             payload["stream_options"] = {"include_usage": True}
+        from core.llm_transport import _SlotStreamError, _stream_slot_once
+        stream_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=5.0)
         max_attempts = 45
         _yielded_any = False
         for attempt in range(max_attempts):
+            err_info: _SlotStreamError | None = None
             try:
-                async with _port_lock(port), self._client.stream(
-                    "POST",
-                    f"http://127.0.0.1:{port}/v1/chat/completions",
-                    json=payload,
-                    timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=5.0),
-                ) as r:
-                    if r.status_code >= 400:
-                        body = await r.aread()
-                        self._log.error(
-                            "req=%s llama-server %s fuer '%s' | payload-keys: %s | msg-roles: %s | body: %s",
+                async with contextlib.aclosing(
+                    _stream_slot_once(
+                        port,
+                        self._client,
+                        f"http://127.0.0.1:{port}/v1/chat/completions",
+                        payload,
+                        stream_timeout,
+                        port_lock_fn=_port_lock,
+                    )
+                ) as slot_stream:
+                    async for item in slot_stream:
+                        if isinstance(item, _SlotStreamError):
+                            err_info = item
+                            break
+                        chunk = item
+                        if usage_out is not None:
+                            _u = chunk.get("usage")
+                            if isinstance(_u, dict) and _u:
+                                usage_out.update(_u)
+                            _t = chunk.get("timings")
+                            if isinstance(_t, dict) and _t:
+                                usage_out["timings"] = _t
+                        delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
+                        _content = delta.get("content", "")
+                        # AGENT-THINKING: collect reasoning fields separately
+                        _thinking = ""
+                        for _k in ("thinking", "reasoning_content", "reasoning"):
+                            _thinking = delta.get(_k, "") or ""
+                            if _thinking:
+                                break
+                        if split_thinking:
+                            if think is False:
+                                _thinking = ""
+                            if (_content and _content != "\0") or (_thinking and _thinking != "\0"):
+                                _yielded_any = True
+                                yield _content, _thinking
+                        else:
+                            if think is False:
+                                token = _content
+                            else:
+                                token = _content or _thinking
+                            if token and token != "\0":
+                                _yielded_any = True
+                                yield token
+                if err_info is not None:
+                    r = err_info.response
+                    body = err_info.body_bytes
+                    self._log.error(
+                        "req=%s llama-server %s fuer '%s' | payload-keys: %s | msg-roles: %s | body: %s",
+                        req_id,
+                        r.status_code,
+                        model,
+                        list(payload.keys()),
+                        [m.get("role") for m in payload.get("messages", [])],
+                        body.decode(errors="replace")[:400],
+                    )
+                    if r.status_code == 404 and attempt < max_attempts - 1:
+                        backoff = _retry_backoff(attempt)
+                        self._log.warning(
+                            "req=%s stream 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                            req_id,
+                            model,
+                            attempt + 1,
+                            max_attempts,
+                            port,
+                            backoff,
+                        )
+                        port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
+                        await asyncio.sleep(backoff)
+                        continue
+                    if _should_retry_http_status(
+                            r.status_code,
+                            body.decode(errors="replace")[:2000],
+                            attempt, max_attempts):
+                        backoff = _retry_backoff(attempt, r.status_code)
+                        self._log.warning(
+                            "req=%s stream transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
                             req_id,
                             r.status_code,
                             model,
-                            list(payload.keys()),
-                            [m.get("role") for m in payload.get("messages", [])],
-                            body.decode(errors="replace")[:400],
+                            attempt + 1,
+                            max_attempts,
+                            port,
+                            backoff,
                         )
-                        if r.status_code == 404 and attempt < max_attempts - 1:
-                            backoff = _retry_backoff(attempt)
-                            self._log.warning(
-                                "req=%s stream 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                                req_id,
-                                model,
-                                attempt + 1,
-                                max_attempts,
-                                port,
-                                backoff,
-                            )
-                            port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
-                            await asyncio.sleep(backoff)
-                            continue
-                        if _should_retry_http_status(
-                                r.status_code,
-                                body.decode(errors="replace")[:2000],
-                                attempt, max_attempts):
-                            backoff = _retry_backoff(attempt, r.status_code)
-                            self._log.warning(
-                                "req=%s stream transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                                req_id,
-                                r.status_code,
-                                model,
-                                attempt + 1,
-                                max_attempts,
-                                port,
-                                backoff,
-                            )
-                            await asyncio.sleep(backoff)
-                            continue
+                        await asyncio.sleep(backoff)
+                        continue
                     r.raise_for_status()
-                    async for line in r.aiter_lines():
-                        line = line.strip()
-                        if not line or line == "data: [DONE]":
-                            continue
-                        if line.startswith("data: "):
-                            line = line[6:]
-                        try:
-                            chunk = json.loads(line)
-                            if usage_out is not None:
-                                _u = chunk.get("usage")
-                                if isinstance(_u, dict) and _u:
-                                    usage_out.update(_u)
-                                _t = chunk.get("timings")
-                                if isinstance(_t, dict) and _t:
-                                    usage_out["timings"] = _t
-                            delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
-                            _content = delta.get("content", "")
-                            # AGENT-THINKING: Reasoning-Felder getrennt erfassen
-                            _thinking = ""
-                            for _k in ("thinking", "reasoning_content", "reasoning"):
-                                _thinking = delta.get(_k, "") or ""
-                                if _thinking:
-                                    break
-                            if split_thinking:
-                                if think is False:
-                                    _thinking = ""
-                                if (_content and _content != "\0") or (_thinking and _thinking != "\0"):
-                                    _yielded_any = True
-                                    yield _content, _thinking
-                            else:
-                                # streamen. reasoning_content (englische Chain-of-Thought)
-                                if think is False:
-                                    token = _content
-                                else:
-                                    token = _content or _thinking
-                                if token and token != "\0":
-                                    _yielded_any = True
-                                    yield token
-                        except json.JSONDecodeError:
-                            continue
-                    self._log.debug(
-                        "req=%s stream success model=%s port=%s elapsed=%.2fs attempts=%d",
-                        req_id,
-                        model,
-                        port,
-                        time.perf_counter() - t0,
-                        attempt + 1,
-                    )
-                    return
+                self._log.debug(
+                    "req=%s stream success model=%s port=%s elapsed=%.2fs attempts=%d",
+                    req_id,
+                    model,
+                    port,
+                    time.perf_counter() - t0,
+                    attempt + 1,
+                )
+                return
             except _TRANSIENT_HTTP_EXCEPTIONS as e:
                 if _yielded_any:
                     raise LlamaError(

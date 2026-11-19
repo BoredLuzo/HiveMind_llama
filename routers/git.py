@@ -176,8 +176,12 @@ async def save_git_config_ep(request: Request):
         data = await request.json()
     except Exception:
         return {"valid": False, "reason": "Invalid JSON"}
+    if not isinstance(data, dict):
+        return {"valid": False, "reason": "Invalid JSON"}
     for k in _GIT_CONFIG_KEYS:
         if k in data:
+            if k == "git_token" and data[k] in ("****", "***"):
+                continue
             settings[k] = data[k]
     await asyncio.to_thread(save_settings, settings)
     valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _resolve_ws(await _ws_from_body(request)))

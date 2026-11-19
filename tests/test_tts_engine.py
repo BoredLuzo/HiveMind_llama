@@ -120,9 +120,12 @@ check("an explicit voice wins", StubTTSCard.seen_voices[-1] == "bill_boerst"
       and res2["voice"] == "bill_boerst")
 
 # ── (d) caps / errors ──────────────────────────────────────────────────────
-long_text = "word " * 400
+long_text = " ".join(f"Sentence {i} ends properly." for i in range(40))
+_calls_before_long = len(StubTTSCard.seen_voices)
 res3 = tts_engine.synthesize(long_text, SET)
-check("long text is capped without failing", res3["wav"][:4] == b"RIFF")
+check("long text is synthesized across multiple chunks without failing",
+      res3["wav"][:4] == b"RIFF" and len(StubTTSCard.seen_voices) - _calls_before_long >= 2,
+      f" (chunks={len(StubTTSCard.seen_voices) - _calls_before_long})")
 try:
     tts_engine.synthesize("   ", SET)
     check("empty text -> TTS_EMPTY", False)

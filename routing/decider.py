@@ -58,6 +58,20 @@ PLANNER_LABELS: dict[str, str] = {
     "from_scratch": "something new is built from nothing: a project, a game, a tool",
 }
 
+# Encoder labels that warrant planning ("yes" kept for legacy/mock encoders;
+# "one_small_edit" and "no" resolve to False).
+PLANNER_POSITIVE_LABELS: frozenset[str] = frozenset({
+    "several_files", "unclear_cause", "from_scratch", "yes",
+})
+
+
+def _encoder_planner_flag(details: dict | None, route: str | None = None) -> bool:
+    """Resolve encoder planner dict to a boolean, gating off non-agentic routes."""
+    if route is not None and route != "agentic":
+        return False
+    label = str(((details or {}).get("planner") or {}).get("label") or "").strip().lower()
+    return label in PLANNER_POSITIVE_LABELS
+
 _MODES = ("off", "shadow", "on")
 _PLANNER_SOURCES = ("auto", "heuristic", "decider", "judge", "always", "never")
 
@@ -568,7 +582,7 @@ def _encoder_decision_sync(encoder, text: str, want_planner: bool) -> "Decision 
         return None
     return Decision(
         route=route,
-        planner=bool((details.get("planner") or {}).get("label") == "yes"),
+        planner=_encoder_planner_flag(details, route),
         source="decider", confidence=conf,
         latency_ms=float(details.get("inference_ms") or (time.perf_counter() - t0) * 1000.0),
         details=details,
@@ -649,7 +663,7 @@ async def decide_async(settings: dict, text: str, *, forced_complexity: str | No
                     asyncio.to_thread(_run_encoder), timeout=60.0)
                 enc_dec = Decision(
                     route=route,
-                    planner=bool((details.get("planner") or {}).get("label") == "yes"),
+                    planner=_encoder_planner_flag(details, route),
                     source="decider", confidence=conf,
                     # ehrliche Latenz: die reine Inferenz, nicht der Kaltstart
                     latency_ms=float(details.get("inference_ms")

@@ -3,12 +3,14 @@ import asyncio
 import copy
 import logging
 import math
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from backend.runtime_flags import RUNTIME_FLAG_KEYS as _RUNTIME_FLAG_KEYS
+from settings_defaults import SETTINGS_SCHEMA_EXCLUDED_KEYS, SETTINGS_UI_META
 from settings import (
     save_settings,
     load_presets, save_presets,
@@ -17,6 +19,8 @@ from settings import (
     PRESET_PROMPT_ROLES,
     DEFAULT_AGENT_CFG, DEFAULT_SETTINGS,
     _now_iso,
+    _validate_preset_name,
+    _validate_agent_key,
 )
 from hive_functions.prompts import PROMPTS
 from vram.loader import _bk_load
@@ -34,22 +38,13 @@ logger = logging.getLogger("hivemind.server")
 router = APIRouter(prefix="", tags=["Config"])
 
 
-def _sync_vram_preflight_gate(val: bool) -> None:
+def _sync_runtime_flags(context_label: str) -> None:
+    """Broadcast runtime flags from `settings` into backend/core module globals."""
     try:
-        import backend.llama_config as _lc_pf
-        import backend.manager_load as _ml_pf
-        import backend.llama_server_manager as _lsm_pf
+        from backend.runtime_flags import apply_runtime_flags as _apply_flags
+        _apply_flags(settings)
     except ImportError as exc:
-        logger.warning("vram_preflight_gate sync skipped: %s", exc)
-        return
-    _lc_pf.VRAM_PREFLIGHT_GATE = val
-    _ml_pf.VRAM_PREFLIGHT_GATE = val
-    _lsm_pf.VRAM_PREFLIGHT_GATE = val
-    try:
-        import backend.llama_start_phases as _lsp_pf
-        _lsp_pf.VRAM_PREFLIGHT_GATE = val
-    except (ImportError, AttributeError):
-        pass
+        logger.warning("[%s] runtime flag sync skipped: %s", context_label, exc)
 
 
 def _populate_default_agents(sa: dict) -> None:
@@ -293,11 +288,7 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
     # does; imports isolated so a missing module logs instead of failing
     # the apply (no-new-silent-excepts guard).
     if _applied_keys & _RUNTIME_FLAG_KEYS:
-        try:
-            from backend.runtime_flags import apply_runtime_flags as _apply_flags
-            _apply_flags(settings)
-        except ImportError as exc:
-            logger.warning("[PRESET] llama flag sync skipped: %s", exc)
+        _sync_runtime_flags("PRESET")
         # PRESET-MODEL-CHECK (2026-10-28, preset audit): missing models used
     # to fail silently at the first run, and registry_sync wrote them
     # into the target's registry.json without a word. Check every model
@@ -323,15 +314,6 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             logger.warning("[PRESET] %s", _w)
     except ImportError:
         logger.warning("[PRESET] model check skipped (llama_models unavailable)")
-    # PRESET-LOAD-SYNC (2026-10-28, preset audit): a preset load used to skip
-    # a live-sync that POST /settings performs, so a loaded value only took
-    # effect after an engine restart: vram_preflight_gate kept the old
-    # backend flag (the triple-sync below is the same one post_settings
-    # does). Deliberately NOT synced here: _refresh_safe_profile_policy() —
-    # it would reset agent budgets to profile defaults and defeat the merge
-    # protection pinned by tests/test_preset_agent_merge.py.
-    if "vram_preflight_gate" in settings:
-        _sync_vram_preflight_gate(bool(settings.get("vram_preflight_gate", True)))
     # PRESET-STALE-TAB (2026-10-28): bump the settings revision like
     # post_settings does, or a second tab holding an older snapshot could
     # overwrite freshly loaded preset values through POST /settings.
@@ -387,6 +369,82 @@ def preset_autoload_stale(applied_at, saved_at) -> bool:
                 > datetime.fromisoformat(str(applied_at)))
     except (TypeError, ValueError):
         return str(saved_at) > str(applied_at)
+
+
+_MASKED_SECRET_VALUES = frozenset({"***", "****"})
+_MCP_ARG_SECRET_FLAGS = ("--api-key", "--token", "--password", "--secret")
+_MCP_ARG_SECRET_PREFIXES = ("--api-key=", "--token=", "--password=", "--secret=")
+
+
+def _restore_mcp_args(incoming_args: list, prev_args: list) -> list:
+    """Restore masked secret arguments ('***'/'****') from prev_args."""
+    out = []
+    prev_strs = [str(a) for a in prev_args] if isinstance(prev_args, list) else []
+    for idx, raw_arg in enumerate(incoming_args):
+        s = str(raw_arg)
+        low = s.lower()
+        prev_tok_low = str(incoming_args[idx - 1]).lower() if idx > 0 else ""
+        if s in _MASKED_SECRET_VALUES and prev_tok_low in _MCP_ARG_SECRET_FLAGS:
+            restored = None
+            if (idx > 0 and idx < len(prev_strs)
+                    and prev_strs[idx - 1].lower() == prev_tok_low
+                    and prev_strs[idx] not in _MASKED_SECRET_VALUES):
+                restored = prev_strs[idx]
+            else:
+                for j in range(len(prev_strs) - 1):
+                    if (prev_strs[j].lower() == prev_tok_low
+                            and prev_strs[j + 1] not in _MASKED_SECRET_VALUES):
+                        restored = prev_strs[j + 1]
+                        break
+            out.append(restored if restored is not None else raw_arg)
+            continue
+        matched_prefix = next((p for p in _MCP_ARG_SECRET_PREFIXES if low.startswith(p)), None)
+        if matched_prefix:
+            rhs = s.split("=", 1)[1]
+            if rhs in _MASKED_SECRET_VALUES:
+                restored = None
+                if (idx < len(prev_strs)
+                        and prev_strs[idx].lower().startswith(matched_prefix)
+                        and prev_strs[idx].split("=", 1)[1] not in _MASKED_SECRET_VALUES):
+                    restored = prev_strs[idx]
+                else:
+                    for cand in prev_strs:
+                        if (cand.lower().startswith(matched_prefix)
+                                and cand.split("=", 1)[1] not in _MASKED_SECRET_VALUES):
+                            restored = cand
+                            break
+                out.append(restored if restored is not None else raw_arg)
+                continue
+        out.append(raw_arg)
+    return out
+
+
+def _restore_redacted_mcp_servers(incoming, existing) -> list:
+    """Restore masked ('***'/'****') MCP headers/env/args from existing config."""
+    if not isinstance(incoming, list):
+        return incoming
+    by_name: dict[str, dict] = {}
+    if isinstance(existing, list):
+        for sv in existing:
+            if isinstance(sv, dict) and sv.get("name"):
+                by_name[str(sv["name"])] = sv
+    out = []
+    for sv in incoming:
+        if not isinstance(sv, dict):
+            out.append(sv)
+            continue
+        c = copy.deepcopy(sv)
+        prev = by_name.get(str(c.get("name") or ""))
+        if isinstance(prev, dict):
+            for k in ("headers", "env"):
+                if isinstance(c.get(k), dict) and isinstance(prev.get(k), dict):
+                    for ik, iv in list(c[k].items()):
+                        if iv in _MASKED_SECRET_VALUES and ik in prev[k]:
+                            c[k][ik] = copy.deepcopy(prev[k][ik])
+            if isinstance(c.get("args"), list) and isinstance(prev.get("args"), list):
+                c["args"] = _restore_mcp_args(c["args"], prev["args"])
+        out.append(c)
+    return out
 
 
 def _redact_mcp_servers(servers) -> list:
@@ -515,6 +573,170 @@ async def get_settings():
     except Exception:
         pass
     return s
+
+
+_NULLABLE_TYPE_OVERRIDES: dict[str, str] = {
+    "duo_planner_model": "str",
+    "duo_image_mode": "str",
+    "duo_planner_ctx_cap": "int",
+    "duo_planner_ctx_target": "int",
+    "duo_coder_ctx_agentic": "int",
+    "duo_coder_ctx_normal": "int",
+    "duo_critic_ctx": "int",
+}
+
+_SCHEMA_GROUP_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("llama_", "moe_", "gpu_"), "engine"),
+    (("spec_decode_", "mtp_", "dflash_"), "spec_decode"),
+    (("vram_", "total_vram_", "allow_cpu_offload", "warn_on_cpu_offload",
+      "max_concurrent_models", "max_model_size_gb", "prefer_smaller_models",
+      "pin_direct_after_response", "judge_keepalive_enabled",
+      "default_keep_alive", "smart_preload_keep_alive"), "vram"),
+    (("duo_compress_", "duo_partial_compression", "duo_mask_before_compress",
+      "duo_max_compressions", "session_compress_", "session_history_"), "compression"),
+    (("default_unprofiled_sampling",), "sampling"),
+    (("duo_tool_sandbox", "read_guard_enabled", "duo_write_guard_enabled",
+      "run_bash_shell", "constraint_mode"), "sandbox"),
+    (("duo_deep_retrieval", "duo_index_", "duo_tree_scout", "duo_static_map",
+      "duo_pin_static_map", "duo_context_budget_chars", "duo_repo_memory",
+      "duo_symbol_ref", "duo_pre_explore", "duo_parallel_preexplore",
+      "duo_partition_max_files", "duo_pass_explore_files",
+      "duo_coder_explore_chars", "exploration_agent"), "retrieval"),
+    (("duo_test_", "duo_auto_test_", "duo_selective_tests", "duo_error_rollup"), "testing"),
+    (("duo_planner_", "disable_thinking_in_planner", "duo_thinking_per_chunk",
+      "duo_evict_planner_on_coder"), "planner"),
+    (("vision_", "pipeline_vision_", "image_", "duo_image_", "duo_coder_images_off"), "vision"),
+    (("stt_", "tts_"), "voice"),
+    (("telegram_",), "telegram"),
+    (("git_", "duo_git_"), "git"),
+    (("lsp_",), "lsp"),
+    (("mcp_",), "mcp"),
+    (("searxng_", "pipeline_websearch_", "duo_websearch_", "websearch_",
+      "duo_install_max_calls"), "websearch"),
+    (("subagent_lite_",), "subagent"),
+    (("routing_", "intent_agent"), "routing"),
+    (("soul_", "learning_"), "soul"),
+    (("smart_preload_", "startup_preload_", "judge_prefetch_", "preload_", "prefetch_"), "preload"),
+    (("ask_user_",), "ask_user"),
+    (("debug_", "mem_watch_enabled"), "debug"),
+    (("duo_", "direct_tools_", "until_finished"), "agentic"),
+)
+
+_RESTART_SCHEMA_KEYS = frozenset({
+    "gpu_backend", "llama_max_slots", "llama_update_channel", "debug_api_enabled",
+})
+_NEXT_LOAD_SCHEMA_KEYS = frozenset({
+    "vision_mmproj_always", "duo_coder_always_vision",
+})
+
+
+def _infer_setting_type(key: str, default_val: object) -> tuple[str, bool]:
+    if default_val is None:
+        return _NULLABLE_TYPE_OVERRIDES.get(key, "null"), True
+    if isinstance(default_val, bool):
+        return "bool", False
+    if isinstance(default_val, int):
+        return "int", False
+    if isinstance(default_val, float):
+        return "float", False
+    if isinstance(default_val, str):
+        return "str", False
+    if isinstance(default_val, list):
+        return "list", False
+    if isinstance(default_val, dict):
+        return "object", False
+    return type(default_val).__name__, False
+
+
+def _infer_setting_group(key: str) -> str:
+    for prefixes, group in _SCHEMA_GROUP_RULES:
+        if any(key == p or key.startswith(p) for p in prefixes):
+            return group
+    return "general"
+
+
+def _infer_apply_mode(key: str, group: str) -> str:
+    if key in _RESTART_SCHEMA_KEYS:
+        return "restart"
+    if group == "engine" or key.startswith(("llama_", "moe_")) or key in _NEXT_LOAD_SCHEMA_KEYS:
+        return "next_load"
+    return "live"
+
+
+def _load_schema_descriptions() -> dict[str, str]:
+    try:
+        from deploy.gen_settings_docs import _clean_note, _comments
+        return {k: _clean_note(v) for k, v in _comments().items() if v}
+    except (ImportError, OSError):
+        # Release archives omit deploy/gen_settings_docs.py; parse inline comments directly.
+        defaults_path = Path(__file__).resolve().parent.parent / "settings_defaults.py"
+        if not defaults_path.is_file():
+            return {}
+        out: dict[str, str] = {}
+        in_defaults = False
+        for line in defaults_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("DEFAULT_SETTINGS = {"):
+                in_defaults = True
+                continue
+            if in_defaults and line.startswith("}"):
+                break
+            if not in_defaults:
+                continue
+            m = re.match(r'\s*"([a-z0-9_]+)":\s*[^#]*,\s*(?:#\s*(.*))?$', line)
+            if m and m.group(2):
+                out[m.group(1)] = m.group(2).strip()
+        return out
+
+
+def build_settings_schema() -> dict:
+    """Build structured schema metadata for every user-configurable DEFAULT_SETTINGS key."""
+    descriptions = _load_schema_descriptions()
+    entries: list[dict] = []
+    seen_groups: list[str] = []
+    seen_group_set: set[str] = set()
+
+    for key in sorted(DEFAULT_SETTINGS):
+        if key in SETTINGS_SCHEMA_EXCLUDED_KEYS:
+            continue
+        default_val = DEFAULT_SETTINGS[key]
+        cur_val = settings.get(key, default_val)
+        if key == "mcp_servers":
+            cur_val = _redact_mcp_servers(cur_val)
+        kind, nullable = _infer_setting_type(key, default_val)
+        meta = SETTINGS_UI_META.get(key, {})
+        group = str(meta.get("group") or _infer_setting_group(key))
+        apply_mode = str(meta.get("apply_mode") or _infer_apply_mode(key, group))
+        if group not in seen_group_set:
+            seen_group_set.add(group)
+            seen_groups.append(group)
+        entries.append({
+            "key": key,
+            "type": kind,
+            "nullable": nullable,
+            "default": copy.deepcopy(default_val),
+            "value": copy.deepcopy(cur_val),
+            "description": descriptions.get(key, ""),
+            "group": group,
+            "apply_mode": apply_mode,
+            "choices": list(meta["choices"]) if "choices" in meta else None,
+            "min": meta.get("min"),
+            "max": meta.get("max"),
+            "step": meta.get("step"),
+        })
+
+    return {
+        "ok": True,
+        "count": len(entries),
+        "groups": sorted(seen_groups),
+        "entries": entries,
+        "settings_rev": int(_settings_rev),
+    }
+
+
+@router.get("/settings/schema")
+async def get_settings_schema():
+    """Return structured schema entries for all user-configurable settings."""
+    return build_settings_schema()
 
 
 def _recommended_card_temperature(model: str, role_cfg: dict) -> float | None:
@@ -720,9 +942,13 @@ async def post_settings(req: Request):
     # H-audit: GET masks the token as '****' - a stale-tab snapshot POSTs
     # it back and settings.update() would silently DESTROY the credential
     # while has_credentials() keeps reporting True.
-    if isinstance(data, dict) and data.get("git_token") in ("****", ""):
+    if isinstance(data, dict) and data.get("git_token") in ("****", "***", ""):
         # mask echo or empty field: never destroy the stored credential
         data.pop("git_token", None)
+    if isinstance(data, dict) and isinstance(data.get("mcp_servers"), list):
+        data["mcp_servers"] = _restore_redacted_mcp_servers(
+            data["mcp_servers"], settings.get("mcp_servers")
+        )
     data = _strip_get_only_settings(data)
     if "direct" in _model_changed_roles and "direct_model" not in data:
         settings.pop("direct_model", None)
@@ -733,20 +959,10 @@ async def post_settings(req: Request):
         if "duo_critic_ctx" in data:
             _ctx_ov_roles.pop("duo_critic", None)
     settings.update(data)
-    # UI-SAVE-FLAG-SYNC (2026-10-31, audit F6): a ubatch/cache/checkpoint
-    # change through POST /settings used to wait for a restart while the same
-    # change via a preset applied immediately.
+    # UI-SAVE-FLAG-SYNC: sync all runtime flags (ubatch, cache, checkpoints,
+    # vram_preflight_gate, KV cache, spec decode, sampling, compression) live.
     if _RUNTIME_FLAG_KEYS & set(data):
-        try:
-            from backend.runtime_flags import apply_runtime_flags as _apply_flags
-            _apply_flags(settings)
-        except ImportError as exc:
-            logger.warning("[settings] llama flag sync skipped: %s", exc)
-    # VRAM-PREFLIGHT-GATE (2026-10-11): live-sync the toggle into the
-    # backend modules (same triple-sync as the startup path) so the
-    # switch takes effect without a restart.
-    if "vram_preflight_gate" in data:
-        _sync_vram_preflight_gate(bool(data.get("vram_preflight_gate", True)))
+        _sync_runtime_flags("settings")
     _xa = settings.get("exploration_agent")
     if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
         _xa["model"] = DEFAULT_SETTINGS["exploration_agent"]["model"]
@@ -1211,6 +1427,10 @@ async def get_presets():
 
 @router.post("/presets/{name}")
 async def save_preset_ep(name: str, req: Request):
+    try:
+        _validate_preset_name(name)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     presets = load_presets()
     try:
         _body = await req.json()
@@ -1224,16 +1444,23 @@ async def save_preset_ep(name: str, req: Request):
         # None, so every re-save of an existing preset overwrote its saved
         # custom prompts with the built-in base prompts. Re-saving a preset
         # must copy FROM itself; only a NEW preset starts from the base.
-        copy_prompts_to_preset(
-            src_preset=name, dst_preset=name,
-            agent_keys=list(_state.pipeline.agents.keys()), base_prompts=PROMPTS
-        )
+        try:
+            copy_prompts_to_preset(
+                src_preset=name, dst_preset=name,
+                agent_keys=list(_state.pipeline.agents.keys()), base_prompts=PROMPTS
+            )
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     save_presets(presets)
     return {"ok": True, "name": name}
 
 
 @router.post("/presets/{name}/load")
 async def load_preset_ep(name: str):
+    try:
+        _validate_preset_name(name)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     _warns: list = []
     if not await _apply_preset_internal(name, warnings=_warns):
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -1264,10 +1491,17 @@ async def load_preset_ep(name: str):
 
 @router.delete("/presets/{name}")
 async def del_preset(name: str):
+    try:
+        _validate_preset_name(name)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     presets = load_presets()
     if name in presets:
         del presets[name]
-        delete_custom_prompts_for_preset(name)
+        try:
+            delete_custom_prompts_for_preset(name)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         save_presets(presets)
         # PRESET-HOUSEKEEPING (2026-09-30): deleting the ACTIVE preset must
         # clear active_preset (and persist), otherwise the UI shows it as
@@ -1316,7 +1550,10 @@ async def get_prompt_roles():
 
 @router.get("/presets/{name}/prompts/{agent}")
 async def get_prompt(name: str, agent: str):
-    custom = get_custom_prompt(name, agent)
+    try:
+        custom = get_custom_prompt(name, agent)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     # STRICT-FALLBACK (2026-11-01): only fall back to the role's own base
     # prompt. `PROMPTS.get(agent, PROMPTS["direct"])` made an unknown key
     # look like a real, editable prompt that was really the Direct prompt.
@@ -1331,8 +1568,21 @@ async def get_prompt(name: str, agent: str):
 
 @router.post("/presets/{name}/prompts/{agent}")
 async def set_prompt(name: str, agent: str, req: Request):
-    d = await req.json()
-    save_custom_prompt(name, agent, d.get("content", ""))
+    try:
+        _validate_preset_name(name)
+        _validate_agent_key(agent)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    try:
+        d = await req.json()
+    except (ValueError, TypeError):
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    if not isinstance(d, dict):
+        return JSONResponse({"ok": False, "error": "JSON object required"}, status_code=400)
+    try:
+        save_custom_prompt(name, agent, str(d.get("content", "") or ""))
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     return {"ok": True}
 
 

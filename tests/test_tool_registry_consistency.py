@@ -105,8 +105,12 @@ check("the guard only fires on non-empty unparsable input",
 # execute the other field.
 check("run_bash aliases agree", 'args.get("cmd", "") or args.get("command", "")' in src)
 check("run_python aliases agree", 'args.get("code", "") or args.get("source", "")' in src)
+from tools.runner import _norm_write_path  # noqa: E402
 check("write tools are path-only in the gate",
-      'os.path.normpath(str((args or {}).get("path", "")))' in src)
+      "def _norm_write_path" in src
+      and "os.path.normpath" in src
+      and _norm_write_path({"path": "a/b.py", "content": "1"}, "write_file")
+      == _norm_write_path({"path": "a/b.py", "content": "2"}, "write_file"))
 check("start_background joins the same gate",
       'name in ("run_bash", "start_background")' in src)
 

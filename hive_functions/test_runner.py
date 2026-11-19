@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 import os
+import shutil
+import sys
 from pathlib import Path
 import asyncio
 import logging
@@ -22,7 +24,6 @@ except ImportError:
         from language_config import detect_project_languages, LANGUAGE_RUNNERS
     except ImportError:
         # Fallback: add hive_functions dir to sys.path and retry
-        import sys, os
         _hf_dir = os.path.dirname(os.path.abspath(__file__))
         if _hf_dir not in sys.path:
             sys.path.insert(0, _hf_dir)
@@ -142,19 +143,80 @@ NO_TESTS_RE = re.compile(
 _MAX_SCOPED_PATHS = 8
 
 
-def _quote_path(p: str, workspace: str) -> str:
-    """Workspace-relative, forward-slash, cmd.exe-safe (double quotes when
-    needed — single quotes are not quoting on Windows shells). Rejects any
-    path that resolves outside the workspace."""
+def _resolve_scoped_target(p: str, workspace: str) -> str:
+    """Resolve *p* inside *workspace*, preserving pytest `file.py::node_id` suffixes."""
+    raw = str(p or "").strip()
+    if not raw or "\x00" in raw or "\r" in raw or "\n" in raw:
+        raise ValueError(f"Invalid test target '{p}'")
+    file_part, sep, node_id = raw.partition("::")
+    if sep and (not file_part.strip() or not node_id.strip()):
+        raise ValueError(f"Invalid pytest node target '{p}'")
     ws_root = Path(workspace).resolve()
-    cand = (ws_root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
+    fp = file_part.strip()
+    cand = (ws_root / fp).resolve() if not os.path.isabs(fp) else Path(fp).resolve()
     try:
         rel = cand.relative_to(ws_root).as_posix()
     except ValueError as exc:
         raise ValueError(f"Test target '{p}' resolves outside workspace '{ws_root}'") from exc
     if not rel:
         rel = "."
+    return f"{rel}::{node_id.strip()}" if sep else rel
+
+
+def _quote_path(p: str, workspace: str) -> str:
+    """Workspace-relative, forward-slash, cmd.exe-safe (double quotes when
+    needed — single quotes are not quoting on Windows shells). Rejects any
+    path that resolves outside the workspace."""
+    rel = _resolve_scoped_target(p, workspace)
     return f'"{rel}"' if re.search(r"[\s&^%!()]", rel) else rel
+
+
+def _build_builtin_test_argv(
+    lang: str,
+    cmd_tpl: str,
+    targets: Optional[list[str]],
+    workspace: str,
+) -> Optional[list[str]]:
+    """Build an explicit argv list for known built-in test runners.
+
+    Returns None for custom or shell-chained commands so they keep using
+    create_subprocess_shell without breaking existing behavior.
+    """
+    norm = re.sub(r"\s+2>&1\s*$", "", str(cmd_tpl or "").strip())
+    if lang == "python" and norm in (
+        "python -m pytest -x -q",
+        "python3 -m pytest -x -q",
+        "python -m pytest -x -q {paths}",
+        "python3 -m pytest -x -q {paths}",
+    ):
+        from infra.child_env import workspace_venv_python as _ws_venv_py
+        ws_py_path = _ws_venv_py(workspace)
+        py_exe = (
+            str(ws_py_path)
+            if ws_py_path is not None
+            else (sys.executable or ("python" if sys.platform == "win32" else "python3"))
+        )
+        argv = [py_exe, "-m", "pytest", "-x", "-q"]
+        if targets and "{paths}" in norm:
+            argv.extend(_resolve_scoped_target(t, workspace) for t in targets)
+        return argv
+    if lang in ("javascript", "typescript", "astro") and norm in (
+        "npm test",
+        "npm test -- {paths}",
+    ):
+        npm_bin = shutil.which("npm") or "npm"
+        if targets and "{paths}" in norm:
+            return [npm_bin, "test", "--", *(_resolve_scoped_target(t, workspace) for t in targets)]
+        return [npm_bin, "test"]
+    if lang == "rust" and norm == "cargo test":
+        return [shutil.which("cargo") or "cargo", "test"]
+    if lang == "go" and norm == "go test ./...":
+        return [shutil.which("go") or "go", "test", "./..."]
+    if lang == "java" and norm == "mvn test -q":
+        return [shutil.which("mvn") or "mvn", "test", "-q"]
+    if lang == "csharp" and norm == "dotnet test":
+        return [shutil.which("dotnet") or "dotnet", "test"]
+    return None
 
 
 async def run_tests(
@@ -204,23 +266,34 @@ async def run_tests(
         from infra.child_env import tool_env as _tool_env
 
         def _workspace_test_env(ws: str) -> dict[str, str]:
-            env = _tool_env()
+            env = _tool_env(workspace=ws)
             pp_parts = [p for p in (os.path.join(ws, "src"), ws, env.get("PYTHONPATH", "")) if p]
             # Prepend workspace roots so in-repo imports win over site-packages.
             env["PYTHONPATH"] = os.pathsep.join(pp_parts)
             return env
 
-        async def _spawn_decode(run_cmd: str) -> tuple[str, int]:
-            """Run *run_cmd*, return (output, exit code). Raises TimeoutError
+        async def _spawn_decode(run_cmd: str, run_argv: Optional[list[str]] = None) -> tuple[str, int]:
+            """Run *run_argv* via exec (built-in runners) or *run_cmd* via shell
+            (custom commands), return (output, exit code). Raises TimeoutError
             after tree-killing the process group (shared kill path)."""
-            proc = await asyncio.create_subprocess_shell(
-                run_cmd,
-                cwd=workspace,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=_workspace_test_env(workspace),
-                **_spawn_kwargs(),
-            )
+            if run_argv is not None:
+                proc = await asyncio.create_subprocess_exec(
+                    *run_argv,
+                    cwd=workspace,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=_workspace_test_env(workspace),
+                    **_spawn_kwargs(),
+                )
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    run_cmd,
+                    cwd=workspace,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=_workspace_test_env(workspace),
+                    **_spawn_kwargs(),
+                )
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -233,12 +306,16 @@ async def run_tests(
             return stdout.decode("utf-8", errors="replace"), proc.returncode
 
         _full_cmd = cmd
+        _full_argv = _build_builtin_test_argv(lang, _full_cmd, None, workspace)
+        _run_argv = _full_argv
         if scoped_template and paths:
+            _scoped_slice = paths[:_MAX_SCOPED_PATHS]
             cmd = scoped_template.format(
-                paths=" ".join(_quote_path(p, workspace) for p in paths[:_MAX_SCOPED_PATHS]))
+                paths=" ".join(_quote_path(p, workspace) for p in _scoped_slice))
+            _run_argv = _build_builtin_test_argv(lang, scoped_template, _scoped_slice, workspace)
             _logger.info("[TESTMAP] scoped run: %s", cmd)
         try:
-            raw, returncode = await _spawn_decode(cmd)
+            raw, returncode = await _spawn_decode(cmd, _run_argv)
         except asyncio.TimeoutError:
             return TestResult(
                 success=False, language=lang, command=cmd,
@@ -260,8 +337,9 @@ async def run_tests(
         if scoped_template and paths and not success and NO_TESTS_RE.search(raw):
             _logger.info("[TESTMAP] scoped run matched nothing — falling back to full suite")
             cmd = _full_cmd
+            _run_argv = _full_argv
             try:
-                raw, returncode = await _spawn_decode(cmd)
+                raw, returncode = await _spawn_decode(cmd, _run_argv)
             except asyncio.TimeoutError:
                 return TestResult(
                     success=False, language=lang, command=cmd,
@@ -298,22 +376,11 @@ async def run_tests(
                         _hist = _cc
                 _cls = classify_test_failure(raw, lang, _hist)
                 if _cls.get("type") == "flaky" and _cls.get("suggested_action") == "rerun":
-                    proc2 = await asyncio.create_subprocess_shell(
-                        cmd,
-                        cwd=workspace,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                        env=_workspace_test_env(workspace),
-                        **_spawn_kwargs(),
-                    )
                     try:
-                        stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=timeout)
+                        raw2, rc2 = await _spawn_decode(cmd, _run_argv)
                     except asyncio.TimeoutError:
-                        # shared tree-kill + reap (2026-09-19 semantics)
-                        await _kill_reap(proc2, taskkill_timeout=10)
-                        stdout2 = b"TIMEOUT"
-                    raw2 = stdout2.decode("utf-8", errors="replace")
-                    success2 = proc2.returncode == 0
+                        raw2, rc2 = "TIMEOUT", -1
+                    success2 = rc2 == 0
                     failure2, errors2 = _parse_failures(raw2, lang)
                     if success2 and failure2 > 0:
                         success2 = False
@@ -376,6 +443,13 @@ def _build_inject_message(
 
     if success:
         return f"[TEST-RESULT] ✅ All tests passed ({lang}). Command: {cmd}"
+
+    if failure_count == 0 and NO_TESTS_RE.search(raw or ""):
+        tail = (raw or "")[-400:].strip()
+        return (
+            f"[TEST-RESULT] ⚠️ No tests found ({lang}). Command: {cmd}"
+            + (f"\n{tail}" if tail else "")
+        )
 
     header = f"[TEST-RESULT] ❌ {failure_count} test failure(s) ({lang})\nCommand: {cmd}\n"
 

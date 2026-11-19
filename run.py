@@ -305,7 +305,8 @@ if __name__ == "__main__":
     # API to the network. Flip the security middleware on and warn loudly -
     # remote clients must send HIVEMIND_INTERNAL_TOKEN
     # (x-hivemind-internal-token header), loopback stays unaffected.
-    if bind_host not in ("127.0.0.1", "::1", "localhost"):
+    if bind_host.lower() not in ("127.0.0.1", "::1", "localhost"):
+        os.environ["HIVEMIND_EXTERNAL_BIND"] = "1"
         try:
             from infra import security as _bind_sec
             _bind_sec.EXTERNAL_BIND["on"] = True
@@ -314,6 +315,8 @@ if __name__ == "__main__":
         print("[WARN] HIVEMIND_HOST binds a NON-loopback interface (" + bind_host + ").")
         print("       Remote clients must send HIVEMIND_INTERNAL_TOKEN as the")
         print("       'x-hivemind-internal-token' header - local UI unaffected.")
+    else:
+        os.environ["HIVEMIND_EXTERNAL_BIND"] = "0"
     # Port-Aufloesung: HIVEMIND_PORT env > settings.json "server_port" > 8001.
     _env_port = os.environ.get("HIVEMIND_PORT", "").strip()
     base_port = int(_env_port) if _env_port.isdigit() else 0

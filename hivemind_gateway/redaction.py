@@ -21,6 +21,7 @@ import re
 # further colon-separated segment of the same bot URL.
 _BOT_TOKEN_URL = re.compile(
     r"bot(\d+):([A-Za-z0-9_-]{20,}(?::[A-Za-z0-9_-]+)*)")
+_EXC_FORMATTER = logging.Formatter()
 
 
 def scrub_text(text: str, secrets: list[str] | tuple[str, ...]) -> str:
@@ -55,6 +56,16 @@ class TokenRedactionFilter(logging.Filter):
             text = repr(record.msg)
         record.msg = scrub_text(text, self._secrets)
         record.args = None
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = _EXC_FORMATTER.formatException(
+                    record.exc_info)
+            record.exc_info = None
+        if record.exc_text:
+            record.exc_text = scrub_text(record.exc_text, self._secrets)
+        if record.stack_info:
+            record.stack_info = scrub_text(
+                str(record.stack_info), self._secrets)
         return True
 
 

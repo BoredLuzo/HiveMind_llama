@@ -1,3 +1,84 @@
+## [1.6.4] - 2026-11-19
+
+Two-layer drop-in model registry & Model Profiles UI, `HIVEMIND.md` workspace
+project rules, strict workspace `.venv` isolation, multi-chunk Markdown-cleaned
+TTS, `run_bash`/LSP/security hardening (Waves 1–3), and Colab A100/L4 benchmark
+updates for `qwen3.6:35b-a3b-mtp`.
+
+### Added
+- **Two-layer drop-in model registry & Model Profiles UI (`model_configs/arch_compat.json`, `model_configs/models_registry.py`, `routers/models.py`, `static/app.js`):**
+  - Layered shipped profiles (`model_configs/models/`) beneath atomic user
+    override profiles (`user_models/`) with sparse modal saves (only edited
+    fields persisted) and one-click revert to shipped defaults.
+  - Automatic drop-in GGUF discovery (`backend/llama_models.py`,
+    `backend/gguf_meta.py`) with sibling sidecar detection (`mmproj`, `mtp`,
+    `dflash`, `dspark`), `has_tool_call` chat-template inspection, dynamic
+    architecture compatibility views from `arch_compat.json`, and
+    `mtime`-stamped GGUF index refreshes (eliminating redundant 30s rebuilds
+    and log spam when `models/` is unchanged).
+- **13 exposed engine/runtime settings & `/settings/schema` (`settings.py`, `settings_defaults.py`, `routers/config.py`, `backend/runtime_flags.py`, `docs/settings.md`):**
+  - Surfaced engine controls (`llama_extra_args`, `gpu_device`,
+    `total_vram_mib_override`, `vram_pre_flight_margin_mib`, `spec_decode_mode`,
+    `llama_update_channel`, etc.) in the Settings schema and Advanced UI, and
+    wired `llama_update_channel` (`pinned` / `latest`) into
+    `deploy/fetch_llamacpp.py` and `update_llama.bat`.
+- **`HIVEMIND.md` workspace project rules (`hive_functions/project_rules.py`, `core/duo_runner.py`, `core/direct_runner.py`):**
+  - Automatically injects workspace-root instructions (`HIVEMIND.md` >
+    `.hivemind/HIVEMIND.md` > `AGENTS.md` > `CLAUDE.md` fallback) on the first
+    turn of a chat only when present in the active workspace root, with
+    symlink-escape guards, UTF-8 BOM stripping, case-insensitive fallback, and
+    KV-cache-safe prompt placement.
+- **Strict workspace `.venv` enforcement & 3-tier Python resolution (`infra/child_env.py`, `tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`, `infra/lsp_client.py`):**
+  - Unified `workspace_venv_python()` and `resolve_workspace_python()` across
+    tool execution, test runner, and LSP (workspace `.venv` > real system Python
+    skipping WindowsApps stubs and HiveMind's own `.venv` > engine venv
+    fallback).
+  - Blocked unscoped `pip install` in `run_bash` when no workspace `.venv`
+    exists (`PIP_NO_WORKSPACE_VENV`) so workspace dependencies never pollute
+    HiveMind's engine environment.
+- **Multi-chunk Markdown-cleaned TTS (`core/tts_audio.py`, `core/tts_engine.py`):**
+  - Added `clean_for_speech()` (strips Markdown formatting, fenced code blocks,
+    URLs, and tables), `split_speech_chunks()` (sentence-boundary chunking up to
+    `3600` chars in `<= 600`-char segments), and `concat_wavs()` (160ms pause
+    joining), fixing mid-sentence Telegram voice truncation and long Web UI
+    speech playback.
+
+### Fixed & Improved
+- **`run_bash`, `run_tests` & `task_complete` reliability (`tools/handlers/exec_tools.py`, `hive_functions/test_runner.py`, `core/tool_executor.py`):**
+  - Switched subprocess output collection to 16 KiB chunked streaming
+    (`_stream_proc`) with `stdin=DEVNULL` (preventing >64 KiB `LimitOverrunError`
+    on verbose builds), added Windows `pip`/`pip3`/`python3` shims, fixed
+    PowerShell `&&` chaining when `$LASTEXITCODE` is `$null` and `_cd_strip`
+    subdirectory handling, added instant repeat-timeout rejection
+    (`RUN_BASH_TIMEOUT_CMD:`), aligned `RUN_BASH_NONZERO` 3400-char tails on
+    line boundaries, and accepted `[run_bash: exit 0]` plus zero-mutation
+    smoke-test runs in the `task_complete` verification gate.
+- **13-server live LSP audit & fixes (`infra/lsp_client.py`, `infra/lsp_registry.py`, `tools/handlers/lsp.py`, `tools/runner.py`):**
+  - Fixed workspace-root initialization, executable resolution, diagnostics
+    collection, and timeout handling verified across 13 language servers.
+- **Web UI speech & tool-card polish (`static/app.js`, `index.html`):**
+  - Fixed stuck speaker (`🔊`) button state while `.abody.live` is active or
+    after `tool_call` collapses pre-call reasoning into `.pre-call-reasoning`,
+    cleared stuck `.playing` state on stop/error, fixed multi-line `run_python`
+    `<summary>` rendering, and fixed `task_complete` badge regex matching.
+- **Security, concurrency, typing & updater hardening (Waves 1–3):**
+  - Hardened Telegram gateway bridge/redaction/config, sandbox/taint/security
+    validators, slot/VRAM/health locking, and LLM transport pooling across
+    `hivemind_gateway/`, `infra/security.py`, `tools/sandbox.py`,
+    `tools/taint.py`, `backend/llama_slots.py`, `backend/manager_health.py`,
+    `backend/manager_load.py`, and `core/llm_transport.py`.
+  - Resolved 19 Pyright errors back to baseline (`total errors: 1 (baseline 1)`),
+    and scoped `deploy/updater.py` `running_install_processes()` strictly to the
+    target installation path instead of matching any `llama-server.exe`
+    system-wide.
+- **Colab A100/L4 external benchmark pipeline (`bench/external/rent_bootstrap.sh`, `bench/external/hivemind_bench_colab_autopilot.ipynb`):**
+  - Switched default 35B model from legacy `qwen3.6:35b-a3b-ud` to recommended
+    `qwen3.6:35b-a3b-mtp` (`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`, `UD-IQ4_XS`) with
+    calibrated `17.0 GB` L4 MoE VRAM sizing.
+  - Installed DeepSWE test dependencies into both `.venv` and Colab system
+    `python3` for fair comparison across HiveMind, Aider, Hermes, and Pi while
+    preserving HiveMind's strict workspace `.venv` isolation.
+
 ## [1.6.3] - 2026-11-18
 
 Performance tuning, external Gemma-4 MTP wiring, condensed performance-class

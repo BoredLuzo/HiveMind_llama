@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import datetime as _dt
 import json
 import logging
 import time
@@ -75,6 +76,60 @@ _MODE_DESCRIPTIONS = {
 
 def _now() -> float:
     return time.monotonic()
+
+
+def _to_epoch(stamp) -> float | None:
+    """Parse an epoch number or naive/aware ISO timestamp into a UTC epoch float."""
+    if stamp is None or isinstance(stamp, bool):
+        return None
+    if isinstance(stamp, (int, float)):
+        val = float(stamp)
+        return val if val > 0 else None
+    raw = str(stamp).strip()
+    if not raw:
+        return None
+    if raw.endswith(("Z", "z")):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = _dt.datetime.fromisoformat(raw)
+    except ValueError:
+        try:
+            val = float(raw)
+            return val if val > 0 else None
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.timestamp()
+
+
+def _fit_card_did_token(prefix: str, rid: str, choices: tuple[str, ...],
+                        decision_id: str) -> str:
+    """Fit decision_id into Telegram's 64-byte callback_data cap across choices."""
+    did = str(decision_id or "")
+    if not did:
+        return ""
+    max_choice = max(len(c.encode("utf-8")) for c in choices)
+    head_bytes = len(f"{prefix}:{rid}:".encode("utf-8")) + max_choice + 1
+    budget = 64 - head_bytes
+    if budget <= 0:
+        return ""
+    did_bytes = did.encode("utf-8")
+    if len(did_bytes) <= budget:
+        return did
+    return did_bytes[:budget].decode("utf-8", errors="ignore")
+
+
+def _card_cb_data(prefix: str, rid: str, choice: str, did_tok: str = "") -> str:
+    """Build callback_data with optional decision_id token."""
+    return f"{prefix}:{rid}:{choice}:{did_tok}" if did_tok else f"{prefix}:{rid}:{choice}"
+
+
+def _card_did_matches(expected_did: str, card_did: str) -> bool:
+    """Fail-closed check: require exact card_did when expected_did is non-empty."""
+    if expected_did:
+        return bool(card_did) and card_did == expected_did
+    return not card_did
 
 
 class RunBridge:
@@ -151,8 +206,11 @@ class RunBridge:
             chats = await self.hive.get_chats()
         except (HiveUnreachable, OSError, ValueError):
             return ""
-        import datetime as _dt
-        now = _dt.datetime.now()
+        now_ts = time.time()
+        tg = self._tg_chat() or {}
+        tg_ts = _to_epoch(tg.get("new_chat_ts"))
+        if tg_ts is None:
+            tg_ts = _to_epoch(tg.get("created_at"))
         best: tuple[float, str] = (0.0, "")
         for ch in chats or []:
             if not isinstance(ch, dict):
@@ -163,16 +221,16 @@ class RunBridge:
                 continue
             if int(ch.get("msg_count") or 0) < 1:
                 continue
-            stamp = str(ch.get("updated_at") or ch.get("created_at") or "")
-            try:
-                when = _dt.datetime.fromisoformat(stamp)
-            except (TypeError, ValueError):
+            when_ts = _to_epoch(ch.get("updated_at") or ch.get("created_at"))
+            if when_ts is None:
                 continue
-            age = (now - when).total_seconds()
+            age = now_ts - when_ts
             if age < 0 or age > self.FOLLOW_UI_MAX_AGE_S:
                 continue
-            if when.timestamp() > best[0]:
-                best = (when.timestamp(), cid)
+            if when_ts > best[0]:
+                best = (when_ts, cid)
+        if best[1] and tg_ts is not None and tg_ts >= best[0]:
+            return ""
         return best[1]
 
     async def _ensure_chat(self) -> dict:
@@ -564,7 +622,9 @@ class RunBridge:
         self.state.data.setdefault("open_approvals", {})[rid] = {
             "decision_id": decision_id, "tool": tool, "kind": kind}
         self.state.save()
+        did_tok = _fit_card_did_token("appr", rid, ("1", "2", "3"), decision_id)
         self._open_own_approval = {"rid": rid, "decision_id": decision_id,
+                                   "card_did": did_tok,
                                    "tool": tool, "sig": _sig,
                                    "base_sig": _base_sig, "kind": kind}
         if kind == "ask":
@@ -586,11 +646,11 @@ class RunBridge:
             "3 (deny).",
             reply_markup={"inline_keyboard": [[
                 {"text": "✅ Once",
-                 "callback_data": f"appr:{rid}:1:{decision_id}"},
+                 "callback_data": _card_cb_data("appr", rid, "1", did_tok)},
                 {"text": "📁 Always (chat)",
-                 "callback_data": f"appr:{rid}:2:{decision_id}"},
+                 "callback_data": _card_cb_data("appr", rid, "2", did_tok)},
                 {"text": "⛔ Deny",
-                 "callback_data": f"appr:{rid}:3:{decision_id}"},
+                 "callback_data": _card_cb_data("appr", rid, "3", did_tok)},
             ]]})
 
     async def _poll_own_approval(self, run_id: str, stop_ev: asyncio.Event,
@@ -936,7 +996,11 @@ class RunBridge:
                     run_id = str(ev.get("run_id") or "")
                     if self._stop_requested:
                         continue
-                    if run_id and _appr_mode == "deny":
+                    if (
+                        run_id
+                        and _appr_mode == "deny"
+                        and str(ev.get("kind") or "approval") != "ask"
+                    ):
                         resp = await self.hive.decide_approval(
                             run_id, "3",
                             decision_id=str(ev.get("decision_id") or ""),
@@ -1381,13 +1445,17 @@ class RunBridge:
             return f"❌ /stop failed ({exc}) - run {rid} may still " \
                    "be running, please check the PC!"
 
+    async def new_chat_busy_note(self) -> str | None:
+        """Return a busy message if an own or UI/engine run is active, else None."""
+        if self._run_lock.locked() or self.state.data.get("active_run"):
+            return self._busy_note()
+        return await self._journal_busy()
+
     async def prepare_new_chat(self) -> dict:
         """Check whether /new should ask before clearing default_workspace files."""
-        if self.state.data.get("active_run"):
-            return {"status": "busy", "text": self._busy_note()}
-        journal_note = await self._journal_busy()
-        if journal_note:
-            return {"status": "busy", "text": journal_note}
+        busy = await self.new_chat_busy_note()
+        if busy:
+            return {"status": "busy", "text": busy}
         fn = getattr(self.hive, "placeholder_status", None)
         ph: dict = {}
         if fn is not None:
@@ -1405,22 +1473,33 @@ class RunBridge:
         return {"status": "done", "text": text}
 
     async def new_chat(self, *, clear_placeholder: bool = True) -> str:
-        if self.state.data.get("active_run"):
-            return self._busy_note()
+        busy = await self.new_chat_busy_note()
+        if busy:
+            return busy
         cleared = 0
         if clear_placeholder:
             clear_fn = getattr(self.hive, "clear_placeholder", None)
             if clear_fn is not None:
-                res = await clear_fn()
+                try:
+                    res = await clear_fn()
+                except HTTPError as exc:
+                    if getattr(getattr(exc, "response", None), "status_code", None) == 409:
+                        return ("⏳ An active HiveMind run is in progress — "
+                                "cannot clear default_workspace.")
+                    raise
                 if isinstance(res, dict):
                     cleared = int(res.get("cleared") or 0)
-        import datetime as _dt
+        now_ts = time.time()
         title = "[TG] Telegram " + _dt.datetime.now().astimezone() \
             .strftime("%Y-%m-%d %H:%M")
         created = await self.hive.create_chat(title)
-        mapping = {"hive_chat_id": str(created["id"]),
-                   "created_at": created.get("chat", {}).get("created_at", "")}
+        mapping = {
+            "hive_chat_id": str(created["id"]),
+            "created_at": created.get("chat", {}).get("created_at", ""),
+            "new_chat_ts": now_ts,
+        }
         self.state.data["tg_chat"] = mapping
+        self.state.data.pop("followed_chat", None)
         self.state.save()
         extra = (f"\n🧹 Cleared {cleared} file(s) from default_workspace."
                  if cleared > 0 else "")
@@ -1849,6 +1928,7 @@ class RunBridge:
                                   "status_msg_id": None,
                                   "last_status": "", "approval_sig": None,
                                   "approval_decision_id": "",
+                                  "approval_card_did": "",
                                   "approval_tool": "",
                                   "other_run_noted": "", "last_phase": "",
                                   "tool_relay_seen": {},
@@ -1861,7 +1941,8 @@ class RunBridge:
         card metadata too (G2: decision_id/tool of the relayed card)."""
         m.update({"run_id": None, "after": 0, "status_msg_id": None,
                   "last_status": "", "approval_sig": None,
-                  "approval_decision_id": "", "approval_tool": "",
+                  "approval_decision_id": "", "approval_card_did": "",
+                  "approval_tool": "",
                   "other_run_noted": "", "last_phase": "",
                                   "tool_relay_seen": {}, "answer_parts": [],
                   "ctx_marks": set(), "ctx_compression_noted": False,
@@ -1987,6 +2068,7 @@ class RunBridge:
             m.update({"run_id": rid, "after": int(j.get("n") or 0),
                       "status_msg_id": None, "last_status": "",
                       "approval_sig": None, "approval_decision_id": "",
+                      "approval_card_did": "",
                       "approval_tool": "", "other_run_noted": "",
                       "last_phase": "", "answer_parts": [],
                       "ctx_marks": set(), "ctx_compression_noted": False,
@@ -2326,6 +2408,7 @@ class RunBridge:
                 # decision echoes decision_id + tool and the engine can
                 # drop duplicates / tool mismatches.
                 m["approval_decision_id"] = str(body.get("decision_id") or "")
+                m["approval_card_did"] = ""
                 m["approval_tool"] = str(body.get("tool") or "")
                 m["approval_kind"] = str(body.get("kind") or "approval")
                 # deep audit N2: the pending preview is truncated to 300
@@ -2349,6 +2432,10 @@ class RunBridge:
                     _ask_low = preview.lower()
                     if "yes" in _ask_low and "no" in _ask_low and (
                             "confirm" in _ask_low or "reply with" in _ask_low):
+                        did_tok = _fit_card_did_token(
+                            "ask", rid, ("yes", "no", "later"),
+                            m["approval_decision_id"])
+                        m["approval_card_did"] = did_tok
                         await self.ms.send_message(
                             f"❓ The agent asks (run {rid})\n\n"
                             f"{preview}\n\n"
@@ -2358,11 +2445,11 @@ class RunBridge:
                             "approval gate.)",
                             reply_markup={"inline_keyboard": [
                                 [{"text": "✅ Yes",
-                                  "callback_data": f"ask:{rid}:yes"},
+                                  "callback_data": _card_cb_data("ask", rid, "yes", did_tok)},
                                  {"text": "⛔ No",
-                                  "callback_data": f"ask:{rid}:no"}],
+                                  "callback_data": _card_cb_data("ask", rid, "no", did_tok)}],
                                 [{"text": "⏳ Later",
-                                  "callback_data": f"ask:{rid}:later"}]]})
+                                  "callback_data": _card_cb_data("ask", rid, "later", did_tok)}]]})
                     else:
                         await self.ms.send_message(
                             f"❓ The agent asks (run {rid})\n\n"
@@ -2372,6 +2459,10 @@ class RunBridge:
                             "(This is the agent's own question - NOT the "
                             "approval gate.)")
                 else:
+                    did_tok = _fit_card_did_token(
+                        "appr", rid, ("1", "2", "3"),
+                        m["approval_decision_id"])
+                    m["approval_card_did"] = did_tok
                     await self.ms.send_message(
                         f"🛡 Approval needed (UI run {rid})\n\n"
                         f"tool: {body.get('tool')}\n\n"
@@ -2381,11 +2472,11 @@ class RunBridge:
                         reply_markup={
                             "inline_keyboard": [[
                                 {"text": "✅ Once",
-                                 "callback_data": f"appr:{rid}:1"},
+                                 "callback_data": _card_cb_data("appr", rid, "1", did_tok)},
                                 {"text": "📁 Always (chat)",
-                                 "callback_data": f"appr:{rid}:2"},
+                                 "callback_data": _card_cb_data("appr", rid, "2", did_tok)},
                                 {"text": "⛔ Deny",
-                                 "callback_data": f"appr:{rid}:3"},
+                                 "callback_data": _card_cb_data("appr", rid, "3", did_tok)},
                             ]]})
         elif m["approval_sig"] and not body.get("active"):
             # R5 (owner): show WHAT happened, not just that the card
@@ -2409,6 +2500,8 @@ class RunBridge:
                 await self.ms.send_message(
                     "ℹ️ Card closed (answered in the UI, or timed out).")
             m["approval_sig"] = None
+            m["approval_decision_id"] = ""
+            m["approval_card_did"] = ""
 
     async def _mirror_fazit(self, rid: str, answer: str, reason: str) -> None:
         """FAZIT RELAY (2026-10-06): deliver what the run PRODUCED, not
@@ -2537,17 +2630,26 @@ class RunBridge:
             # duplicates. Free text stays possible alongside the buttons.
             # 'later' (owner, 2nd round) does NOT consume the card: the
             # run keeps waiting and the free-text answer stays open.
+            if answer not in ("yes", "no", "later") \
+                    and not answer.startswith(("y", "n", "l")):
+                return "unknown button"
+            if rid != m.get("run_id") or not m.get("approval_sig"):
+                return "card already gone"
+            expected_did = str(
+                m.get("approval_card_did") or m.get("approval_decision_id") or "")
+            if not _card_did_matches(expected_did, card_did):
+                return "ℹ️ card outdated - nothing changed"
             if answer.startswith("l"):
                 return "⏳ later - the run waits; answer with text anytime"
             ask_ans = "yes" if answer.startswith("y") else "no"
-            if rid != m.get("run_id") or not m.get("approval_sig"):
-                return "card already gone"
             resp = await self.hive.decide_approval(
                 rid, ask_ans,
                 decision_id=m.get("approval_decision_id") or "",
                 tool=m.get("approval_tool") or "")
             code = getattr(resp, "status_code", 500)
             m["approval_sig"] = None
+            m["approval_decision_id"] = ""
+            m["approval_card_did"] = ""
             if code >= 300:
                 return f"not accepted (HTTP {code})"
             try:
@@ -2587,7 +2689,9 @@ class RunBridge:
 
         own = self._open_own_approval or {}
         if rid == own.get("rid"):
-            if card_did and card_did != (own.get("decision_id") or ""):
+            expected_own_did = str(
+                own.get("card_did") or own.get("decision_id") or "")
+            if not _card_did_matches(expected_own_did, card_did):
                 return "ℹ️ card outdated - nothing changed"
             resp = await self.hive.decide_approval(
                 rid, answer,
@@ -2602,12 +2706,18 @@ class RunBridge:
             return _fmt_routed(resp, dup_msg="already answered - nothing changed")
         if rid != m.get("run_id") or not m.get("approval_sig"):
             return "card already gone"
+        expected_did = str(
+            m.get("approval_card_did") or m.get("approval_decision_id") or "")
+        if not _card_did_matches(expected_did, card_did):
+            return "ℹ️ card outdated - nothing changed"
         resp = await self.hive.decide_approval(
             rid, answer,
             decision_id=m.get("approval_decision_id") or "",
             tool=m.get("approval_tool") or "")
         code = getattr(resp, "status_code", 500)
         m["approval_sig"] = None
+        m["approval_decision_id"] = ""
+        m["approval_card_did"] = ""
         if code >= 300:
             return f"not accepted (HTTP {code})"
         return _fmt_routed(resp, dup_msg="already answered (UI) - nothing changed")

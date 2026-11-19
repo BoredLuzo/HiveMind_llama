@@ -67,9 +67,13 @@ if defined HM_NVIDIA (
     if errorlevel 2 set "BACKEND=vulkan"
 ) else if /i "%BACKEND%"=="cpu" (
     choice /c PVC /m "Keep [P]ure CPU / [V]ulkan / [C]uda backend?"
-    set "BACKEND=cpu"
-    if errorlevel 3 set "BACKEND=cuda"
-    if errorlevel 2 set "BACKEND=vulkan"
+    if errorlevel 3 (
+        set "BACKEND=cuda"
+    ) else if errorlevel 2 (
+        set "BACKEND=vulkan"
+    ) else (
+        set "BACKEND=cpu"
+    )
 ) else (
     echo  No NVIDIA GPU detected - Vulkan recommended for AMD/Intel.
     choice /c VC /m "Update [V]ulkan (recommended) / [C]uda backend?"

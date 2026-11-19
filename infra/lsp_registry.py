@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -173,8 +174,10 @@ def windows_extra_bin_dirs() -> list[str]:
     if sys.platform != "win32":
         return []
     home = Path.home()
+    repo_root = Path(__file__).resolve().parent.parent
     candidates = [
         Path(sys.executable).parent,
+        repo_root / "lsp" / "lua" / "bin",
         Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / "npm",
         Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs",
         Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local")) / "Microsoft" / "WinGet" / "Links",
@@ -211,27 +214,39 @@ def _find_exe(name: str) -> str | None:
     return None
 
 
+_CMD_META = set('&|<>^%!"();,=~')
+
+
+def _quote_cmd_token(token: str) -> str:
+    """Quote a single Windows cmd.exe token safely for .cmd/.bat invocation.
+
+    Rejects NUL and newline characters (which split cmd lines even inside
+    quotes), quotes empty strings / whitespace / cmd metacharacters & batch
+    delimiters, doubles embedded double quotes, and doubles backslashes before
+    embedded quotes or at the end of a quoted token so CRT CommandLineToArgvW
+    never sees an escaped closing quote.
+    """
+    if any(c in "\x00\n\r" for c in token):
+        raise ValueError("LSP command token contains NUL or newline characters")
+    if token != "" and not any(c in _CMD_META or c.isspace() for c in token):
+        return token
+    escaped = re.sub(r'(\\*)"', r'\1\1""', token)
+    escaped = re.sub(r'(\\+)$', r'\1\1', escaped)
+    return '"' + escaped + '"'
+
+
 def _wrap_windows_shell(argv: list[str]) -> list[str]:
     """Windows cannot exec .cmd/.bat directly - and npm-installed language
     servers are almost always .cmd shims. Wrap them in `cmd /d /c` with
     metacharacter-safe quoting, mirroring infra/mcp_client.ServerSpec.argv
     (2026-10-31)."""
-    if sys.platform != "win32":
+    if sys.platform != "win32" or not argv:
         return argv
     exe = argv[0]
     if not exe.lower().endswith((".cmd", ".bat")):
         return argv
-    _META = set('&|<>^%!"()')
-    _exe_q = exe
-    if any(c in _META or c.isspace() for c in exe):
-        _exe_q = '"' + exe.replace('"', '""') + '"'
-    args = []
-    for arg in argv[1:]:
-        if any(c in _META or c.isspace() for c in arg):
-            # cmd.exe strips quote pairs and does not know the backslash
-            # escape - double the quotes (see mcp_client audit C13)
-            arg = '"' + arg.replace('"', '""') + '"'
-        args.append(arg)
+    _exe_q = _quote_cmd_token(exe)
+    args = [_quote_cmd_token(arg) for arg in argv[1:]]
     return ["cmd", "/d", "/c", _exe_q, *args]
 
 

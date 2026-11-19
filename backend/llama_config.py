@@ -8,6 +8,7 @@ import os
 import platform
 import re
 from pathlib import Path
+from typing import Any
 
 _logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -160,13 +161,23 @@ MAX_SLOTS = 3
 
 GPU_LAYERS = 99
 
-# llama-server Flag: --device VULKAN<N>
+# llama-server Flag: --device VULKAN<N> / CUDA<N>
 VULKAN_DEVICE = 0
+GPU_DEVICE = 0
 
 
 # ── KV-Cache Quantisierung ────────────────────────────────────────────────────
 
 KV_CACHE_TYPE = "q4_0"
+
+# Extra CLI flags appended globally when starting llama-server (space-separated string).
+LLAMA_EXTRA_ARGS = ""
+
+# Speculative decoding mode: "auto" (profile/sibling drafters active) | "off".
+SPEC_DECODE_MODE = "auto"
+
+# Optional VRAM cap override in MiB (<= 0 uses hardware detection / budget).
+TOTAL_VRAM_MIB_OVERRIDE = 0
 
 # 0 = aus, 256 = llama.cpp-Empfehlung. Senkt Re-Prefill-Kosten massiv bei hohen ctx.
 CACHE_REUSE = 256
@@ -323,7 +334,7 @@ def is_moe_model(model_key: str) -> bool:
     if not _key:
         return False
     _norm = _re_moe.sub(r"(?:#\d+|:latest)+$", "", _key)
-    for _cand in (_key, _norm):
+    for _cand in _ud_candidates(_key):
         # MOE-PIN (2026-10-14): an explicit profile answer ("moe": true/false in
         # model_configs/models/*.json) beats every name heuristic — the 30B+
         # autodetect is a guess, the model config is the user's call.
@@ -334,7 +345,8 @@ def is_moe_model(model_key: str) -> bool:
                 return _pin
         except Exception:
             pass
-    if _key in _MOE_EXPERT_COUNTS or _norm in _MOE_EXPERT_COUNTS:
+    _ud_stripped = _strip_ud_suffix(_norm)
+    if _key in _MOE_EXPERT_COUNTS or _norm in _MOE_EXPERT_COUNTS or _ud_stripped in _MOE_EXPERT_COUNTS:
         return True
     if "moe" in _norm:
         return True
@@ -349,68 +361,100 @@ def is_moe_model(model_key: str) -> bool:
     return False
 
 
-def _try_registry_moe(model_key: str) -> int:
-    """Per-Model-Registry (model_configs/models/*.json) → n_cpu_moe."""
-    try:
-        from model_configs.models_registry import get_moe_cpu_experts as _reg_moe
-        return int(_reg_moe(model_key) or 0)
-    except Exception:
-        return 0
+def _ud_candidates(model_key: str) -> tuple[str, ...]:
+    """Return exact alias-stripped key first, then -ud-stripped fallback if different."""
+    raw = re.sub(r"#\d+$", "", str(model_key or "").strip())
+    raw = re.sub(r"(?i):latest$", "", raw)
+    stripped = _strip_ud_suffix(raw)
+    return (raw, stripped) if stripped != raw else (raw,)
 
 
-def _try_registry_gpu_layers(model_key: str) -> int | None:
-    """Per-Model-Registry (model_configs/models/*.json) → --n-gpu-layers."""
-    try:
-        from model_configs.models_registry import get_gpu_layers as _reg_gl
-        return _reg_gl(model_key)
-    except Exception:
-        return None
-
-
-def _try_registry_mtp(model_key: str) -> bool | None:
-    """Per-Model-Registry (model_configs/models/*.json) → MTP/Speculative-Decoding."""
-    try:
-        from model_configs.models_registry import is_mtp as _reg_mtp
-        return _reg_mtp(model_key)
-    except Exception:
-        return None
-
-
-def _try_registry_draft_attr(model_key: str, getter_name: str) -> str | None:
+def _try_registry_field(
+    model_key: str,
+    getter_name: str,
+    *,
+    predicate=None,
+    transform=None,
+    default=None,
+) -> Any:
+    """Look up a field across `_ud_candidates(model_key)` in `models_registry`."""
     try:
         import model_configs.models_registry as _mr
         getter = getattr(_mr, getter_name, None)
-        v = getter(model_key) if callable(getter) else None
-        if v:
-            return str(v).strip()
+        if not callable(getter):
+            return default
+        for _cand in _ud_candidates(model_key):
+            val = getter(_cand)
+            matched = predicate(val) if predicate is not None else (val is not None)
+            if matched:
+                return transform(val) if transform is not None else val
     except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError) as _e:
-        _logger.debug("[DRAFT] %s lookup skipped for %s: %s", getter_name, model_key, _e)
-    return None
+        _logger.debug("[REGISTRY] %s lookup skipped for %s: %s", getter_name, model_key, _e)
+    return default
+
+
+def _try_registry_moe(model_key: str) -> int:
+    """Per-model registry -> n_cpu_moe."""
+    return _try_registry_field(
+        model_key, "get_moe_cpu_experts", transform=lambda v: int(v or 0), default=0
+    )
+
+
+def _try_registry_gpu_layers(model_key: str) -> int | None:
+    """Per-model registry -> --n-gpu-layers."""
+    return _try_registry_field(model_key, "get_gpu_layers")
+
+
+def _try_registry_mtp(model_key: str) -> bool | None:
+    """Per-model registry -> MTP/Speculative-Decoding."""
+    return _try_registry_field(model_key, "is_mtp")
+
+
+def _try_registry_draft_attr(model_key: str, getter_name: str) -> str | None:
+    return _try_registry_field(
+        model_key, getter_name, predicate=bool, transform=lambda v: str(v).strip(), default=None
+    )
 
 
 def _try_registry_dspark_draft(model_key: str) -> str | None:
-    """Per-Model-Registry (model_configs/models/*.json) → DSpark drafter GGUF filename."""
-    return _try_registry_draft_attr(model_key, "get_dspark_draft")
+    """Per-model registry -> DSpark drafter GGUF filename."""
+    return _try_registry_field(
+        model_key, "get_dspark_draft", predicate=bool, transform=lambda v: str(v).strip(), default=None
+    )
 
 
 def _try_registry_dflash_draft(model_key: str) -> str | None:
-    """Per-Model-Registry (model_configs/models/*.json) → DFlash drafter GGUF filename."""
-    return _try_registry_draft_attr(model_key, "get_dflash_draft")
+    """Per-model registry -> DFlash drafter GGUF filename."""
+    return _try_registry_field(
+        model_key, "get_dflash_draft", predicate=bool, transform=lambda v: str(v).strip(), default=None
+    )
 
 
 def _try_registry_mtp_draft(model_key: str) -> str | None:
-    """Per-Model-Registry (model_configs/models/*.json) → external MTP sidecar filename."""
-    return _try_registry_draft_attr(model_key, "get_mtp_draft")
+    """Per-model registry -> external MTP sidecar filename."""
+    return _try_registry_field(
+        model_key, "get_mtp_draft", predicate=bool, transform=lambda v: str(v).strip(), default=None
+    )
+
+
+def _try_registry_flash_attn_off(model_key: str) -> bool:
+    """True when the model profile explicitly sets flash_attn=false (requires f16 KV)."""
+    return bool(_try_registry_field(
+        model_key, "get_flash_attn", transform=lambda v: v is False, default=False
+    ))
 
 
 def detect_moe_count(model_key: str) -> int:
     import re as _re_moe2
     _key = _re_moe2.sub(r"#\d+$", "", str(model_key or "").strip().lower()).removesuffix(":latest")
+    _key_no_ud = _strip_ud_suffix(_key)
     _tbl = _MOE_EXPERT_COUNTS.get(_key)
+    if not _tbl and _key_no_ud != _key:
+        _tbl = _MOE_EXPERT_COUNTS.get(_key_no_ud)
     if not _tbl:
         # Variant suffixes from GGUF filenames (e.g. lfm2.5:24b-a2b-qad) match
-        # their calibrated catalog prefix row in _MOE_EXPERT_COUNTS.
-        for _tk, _tv in _MOE_EXPERT_COUNTS.items():
+        # their calibrated catalog prefix row in _MOE_EXPERT_COUNTS (longest prefix first).
+        for _tk, _tv in sorted(_MOE_EXPERT_COUNTS.items(), key=lambda kv: -len(kv[0])):
             if _key.startswith(f"{_tk}-"):
                 _tbl = _tv
                 break
@@ -421,50 +465,23 @@ def detect_moe_count(model_key: str) -> int:
         total_b = int(m.group(1))
         if total_b >= _MOE_AUTODETECT_MIN_TOTAL_B:
             return total_b
+    try:
+        from backend.gguf_meta import read_gguf_metadata as _gguf_meta
+        meta = _gguf_meta(model_key)
+        if meta.get("is_moe") and float(meta.get("file_size_gb") or 0) >= 12.0:
+            blocks = int(meta.get("block_count") or 0)
+            if blocks > 0:
+                return blocks
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        _logger.debug("[MOE] detect_moe_count gguf_meta skipped for %s: %s", model_key, _e)
     return 0
 
 MLOCK_MODEL = True
 
-_MOE_EXPERT_COUNTS = {
-    "qwen3.6:35b-a3b": 35,
-    "qwen3.6:35b-a3b-ud": 35,
-    "qwen3.6:35b-a3b-mtp": 35,
-    "qwen3.6:35b-a3b-uncensored": 35,
-    "cyber-tiel-coder:35b-a3b": 35,
-    "cyber-tiel-coder:35b-a3b-mtp-ud": 35,
-}
-
-# MiniCPM-V-4.7 35B-A3B (2026-10-13): same MoE offload as hermes3.6/qwen3.6
-# (n-cpu-moe 35, GPU-Offload 99, KV q4_0) — same 35B-A3B architecture class.
-_MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b"] = 35
-
-# LFM2.5-24B-A2B (2026-10-13): 24B total / 2.45B active MoE (64 experts,
-# top-4). Measured 2026-10-14 (-lv 5 fit projection): 24 is the MAXIMUM that
-# fits — 23 missed the 1024-MiB-free target by 58 MiB, 20 projected over
-# budget. The generic autodetect only fires at >=30B total, so this needs
-# the entry.
-_MOE_EXPERT_COUNTS["lfm2.5:24b-a2b"] = 24
-
-# Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE, 30 blocks, 128 experts top-8, ~12.55 GiB):
-# measured on b12001/Vulkan: ncmoe=20 spilled 2.66 GiB shared (29.9/8.3 t/s); ncmoe=26
-# hits 113/13.1 t/s at full 131k ctx with q4_0 KV.
-_MOE_EXPERT_COUNTS["air:26b-a4b"] = 26
-
-# Mellum2.1-12B-A2.5B-Thinking (28 blocks, 64 experts top-8, ~11.0 GiB Q6_K_L):
-# below the >=30B autodetect floor; N=3 b12001 sweep: ncmoe=18 beats 8 & 20
-# reproducibly (19.9 vs 8.2/18.7 t/s, 123.4 t/s prefill, ~4.74 GB base).
-_MOE_EXPERT_COUNTS["mellum2.1:12b-a2.5b"] = 18
-_MOE_EXPERT_COUNTS["mellum2.1:12b-a2.5b-thinking"] = 18
-
 _HERMES_V7_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact"
-
-_MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
-
-# Hermes3.6 Genesis V10 MTP APEX (2026-08-25): identische Launchsettings wie
-# V7 (n-cpu-moe 35, GPU-Offload 99, KV q4_0) — parallel zu V7 nutzbar.
 _HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
-_MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
+_MOE_EXPERT_COUNTS: dict[str, int] = {}
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
@@ -480,33 +497,30 @@ def _strip_ud_suffix(model_key: str) -> str:
     return k[:-3] if k.lower().endswith("-ud") else k
 
 
-def _try_registry_flash_attn_off(model_key: str) -> bool:
-    """True when the model profile explicitly sets flash_attn=false (requires f16 KV)."""
-    try:
-        from model_configs.models_registry import get_flash_attn as _gfa
-        return _gfa(model_key) is False
-    except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
-        return False
-
-
 def moe_kv_cache_types(model_key: str) -> str:
     """MoE KV quantization for --cache-type-k/-cache-type-v.
 
-    Resolution: manual dict (raw or -ud-stripped key) > model profile
-    ("kv_cache_type") > q4_0 default. When flash_attn=false, f16 KV is forced
-    because llama-server rejects quantized V-cache with --flash-attn off.
+    Resolution: flash_attn=false guard ("f16") > manual dict (raw or -ud-stripped key)
+    > model profile ("kv_cache_type") > global KV_CACHE_TYPE default.
     """
-    k = _strip_ud_suffix(model_key)
-    if _try_registry_flash_attn_off(k):
+    if _try_registry_flash_attn_off(model_key):
         return "f16"
-    v = _MOE_KV_CACHE_TYPES.get(k)
+    cands = _ud_candidates(model_key)
+    v = None
+    for _cand in cands:
+        v = _MOE_KV_CACHE_TYPES.get(_cand) or _MOE_KV_CACHE_TYPES.get(_cand.lower())
+        if v:
+            break
     if not v:
         try:
             from model_configs.models_registry import get_profile as _gp
-            v = (_gp(k) or {}).get("kv_cache_type")
-        except Exception:
-            v = None
-    return str(v or "q4_0").strip().lower()
+            for _cand in cands:
+                v = (_gp(_cand) or {}).get("kv_cache_type")
+                if v:
+                    break
+        except (ImportError, OSError, AttributeError, TypeError, ValueError) as _e:
+            _logger.debug("[KV] moe profile kv lookup skipped for %s: %s", model_key, _e)
+    return str(v or KV_CACHE_TYPE or "q4_0").strip().lower()
 
 
 def dense_kv_cache_type(model_key: str, global_default: str = "") -> str:
@@ -515,20 +529,30 @@ def dense_kv_cache_type(model_key: str, global_default: str = "") -> str:
     Resolution: flash_attn=false guard ("f16") > model profile ("kv_cache_type") >
     static family table (full key, then base before the colon) > global_default.
     """
-    k = _strip_ud_suffix(model_key)
-    if _try_registry_flash_attn_off(k):
+    if _try_registry_flash_attn_off(model_key):
         return "f16"
-    low = k.lower()
+    cands = _ud_candidates(model_key)
     v = None
     try:
         from model_configs.models_registry import get_profile as _gp
-        v = (_gp(k) or {}).get("kv_cache_type")
+        for _cand in cands:
+            v = (_gp(_cand) or {}).get("kv_cache_type")
+            if v:
+                break
     except (ImportError, AttributeError, TypeError, ValueError):
         # registry unavailable/malformed -> the family table and the global
         # default still resolve (same fallback contract as moe_kv_cache_types)
         v = None
     if not v:
-        v = _DENSE_KV_CACHE_TYPES.get(low) or _DENSE_KV_CACHE_TYPES.get(low.split(":")[0])
+        for _cand in cands:
+            v = _DENSE_KV_CACHE_TYPES.get(_cand.lower())
+            if v:
+                break
+    if not v:
+        for _cand in cands:
+            v = _DENSE_KV_CACHE_TYPES.get(_cand.lower().split(":")[0])
+            if v:
+                break
     return str(v or global_default or "").strip().lower()
 
 
@@ -553,73 +577,39 @@ def resolve_gpu_layers(model: str, override: int | None, table: dict,
     """
     if override is not None:
         return int(override)
-    if str(model) in table:
-        return int(table[model])
+    raw = str(model)
+    if raw in table:
+        return int(table[raw])
+    for _cand in _ud_candidates(raw):
+        if _cand in table:
+            return int(table[_cand])
+        if _cand.lower() in table:
+            return int(table[_cand.lower()])
     if auto:
         return None
     return int(GPU_LAYERS)
 
-# Dense per-model KV-cache override (2026-09-26): MiniCPM5's 42 full-attention
-# layers hold a full-length cache and the Sharp-MiniCPM5 card's memory table
-# assumes -ctk/-ctv q8_0 — the global q4_0 default is too aggressive for this
-# family. Matched on full key first, then on the base before the colon.
-_DENSE_KV_CACHE_TYPES: dict[str, str] = {
-    "minicpm5": "q8_0",
-    "k2-horizon:3.7b": "q8_0",
-}
+# Dense per-model KV-cache override populated from arch_compat.json.
+_DENSE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
 # ── MTP (Multi-Token Prediction / Speculative Decoding) ─────────────────────
-# DRAFT-N-MAX 2 (2026-09-15): draft-mtp with n-max 3 has a documented
-# determinism/quality bug for the Qwen3.x MTP family (llama.cpp issue #23302,
-# Qwen3.6-27B dense: output diverges from non-speculative greedy at n-max 3;
-# 35B-A3B uses the same MTP implementation).
-# NOT BIT-LOSSLESS AT 2 EITHER (measured 2026-10-25, b11802/Vulkan/q4_0, live
-# box): greedy (temp 0, fixed seed) mtp=on n=2 diverged from mtp=off on 3/3
-# prompts (near-tie token flips, coherent paraphrases - no visible corruption),
-# while mtp=off was byte-identical across two engine restarts (3/3). The spec
-# path changes the target-logit computation enough to flip near-ties: the
-# "speculative decoding is lossless" guarantee does NOT hold here.
-# Decision (2026-10-27, revised): mtp is ON for the coder profiles, n-max 2.
-# The reason is a measured speed win that dwarfs the old prefill worry:
-# +55 % decode for -1.6 % prefill (hermes 35B) and +54 % decode for -6.9 %
-# prefill (qwen3.5:4b-mtp), same flags, 256-token answers, b11889, live box.
-# The 2026-10-24 "off" decision rested on two legs; the prefill leg does not
-# reproduce with llama_mlock=false (mmap prefill is fast), the determinism leg
-# stands: greedy output is NOT bit-identical with mtp (0/3 at n-max 2 on
-# b11802 AND b11889, near-tie token flips). So the trade is explicit:
-# roughly half again the decode speed against bit-exact reproducibility when
-# temperature is 0. Anyone who needs byte-identical runs sets
-# HIVEMIND_MTP_SPEC=0. Never ship n-max 3+ (documented corruption, issue
-# #23302). Re-check anchors: scripts/HiveMind_dev/mtp_quality.py +
-# mtp_control.py, or /completion with ignore_eos.
-# SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the spec-decode
-# flags entirely — draft-mtp also disables llama-server's prompt cache-reuse
-# and has reported heavy prefill regressions on some backends (Vulkan/Metal,
-# 35B-A3B). A/B via env before pinning per-model config.
+# Trade-off: MTP provides ~+55% decode speed, but greedy output is NOT
+# bit-identical with MTP enabled (near-tie token flips); set HIVEMIND_MTP_SPEC=0
+# for deterministic byte-identical runs (or use n_max <= 2; >=3 can diverge).
 MTP_SPEC_TYPE = "draft-mtp"
 
 MTP_DRAFT_N_MAX = int(os.environ.get("HIVEMIND_MTP_DRAFT_N_MAX", "2") or 2)
 
 MTP_DRAFT_N_MIN = 1
 
-# DRAFT-P-MIN (2026-10-30): llama.cpp gates speculative drafts on a minimum
-# probability. The CyberTiel model card's sweep (its own box, UD-Q4_K_XL)
-# shows the setting matters more than the draft length:
-#   n_max 1 / p_min 0.0 -> 94.3 tok/s (1.21x, 82 % accepted)
-#   n_max 3 / p_min 0.0 -> 91.4 (1.17x)
-#   n_max 8 / p_min 0.0 -> 44.9 (0.57x)      <- long greedy drafts lose badly
-#   n_max 1 / p_min 0.5 -> 91.0 (1.16x, 88 % accepted)  <- robust
-#   n_max 8 / p_min 0.5 -> 78.1 (1.00x)
 # Default 0.0 with n_max 2 (the live value); a profile may override both via
 # "mtp_draft_n_max" / "mtp_draft_p_min". Only passed when the binary's help
 # lists --spec-draft-p-min (b12001 does, b11889 does not).
 MTP_DRAFT_P_MIN = float(os.environ.get("HIVEMIND_MTP_DRAFT_P_MIN", "0.0") or 0.0)
 
 
-# ── DSpark external-drafter (Speculative-Decoding Sidecar) ────────────────────
-# LFM2.5-DSpark: standalone draft GGUF paired with the target model. Enabled per
-# model via model_configs/models/*.json → "dspark_draft_filename".
+# ── DSpark / DFlash external-drafters (Speculative-Decoding Sidecars) ────────
 DSPARK_SPEC_TYPE = "draft-dspark"
 DSPARK_DRAFT_N_MAX = 10
 DSPARK_DRAFT_N_MIN = 0
@@ -628,25 +618,11 @@ DSPARK_MIN_BUILD = 10173   # llama.cpp mainline #25173 (--spec-type …draft-dsp
 DFLASH_SPEC_TYPE = "draft-dflash"
 DFLASH_DRAFT_N_MAX = 7
 DFLASH_DRAFT_N_MIN = 0
-# Empirically tuned on Nemotron-3.5-Bolt-E4B + DFlash (RX 6600 Vulkan b12001):
-# p_min=0.0 wastes target batch verification on low-conf open prose (40.7 vs
-# 44.3 t/s undrafted); 0.3-0.5 lifts prose to 48-56 t/s while keeping low-temp
-# code at 63-75.5 t/s. Overridable per profile ("dflash_draft_p_min") or env.
 DFLASH_DRAFT_P_MIN = float(os.environ.get("HIVEMIND_DFLASH_DRAFT_P_MIN", "0.4") or 0.4)
 DFLASH_MIN_BUILD = 12001   # llama.cpp mainline (--spec-type …draft-dflash)
 
-#   _MTP_MODELS = {"qwen3.6:35b-a3b-mtp"}
-_MTP_MODELS: set[str] = {
-    "qwen3.5:4b-mtp", "qwen3.6:35b-a3b-mtp", _HERMES_V7_MTP, _HERMES_V10_MTP,
-}
-
-
-_GPU_LAYERS_TABLE: dict[str, int] = {
-    "lfm2.5:8b-a1b": 24,   # full GPU offload (1B active MoE, ~5GB VRAM)
-    "lfm2.5:2.6b": 99,     # dense 2.6B — passt komplett auf GPU (~2GB VRAM)
-    "lfm2.5:2.6b-instruct": 99,
-    "lfm3:1.7b-qad": 99,   # dense 1.7B Q4_0 (~1GB) — fits the GPU entirely
-}
+_MTP_MODELS: set[str] = set()
+_GPU_LAYERS_TABLE: dict[str, int] = {}
 
 
 # ── Default Context Size ──────────────────────────────────────────────────────
@@ -659,28 +635,82 @@ CONTEXT_SIZE_DEFAULT = 4096
 DEFAULT_IDLE_TIMEOUT_SECONDS = 600   # 10 Minuten
 
 
-BINARY_MIN_BUILD: dict[str, int] = {
-    # b8340 → b8460: thinking_budget per-Request, AMD Vulkan Performance-Verbesserungen.
-    "gemma3":    8278,   # gemma3.attention.layer_norm_rms_epsilon — b8250 zu alt
-    "gemma2":    8250,
-    "gemma-4":   8278,   # gemma-4-E4B-it Fine-Tunes (basieren auf gemma2/gemma3 Arch) — b8278+
-    "qwen3.5":   8300,
-    "qwen3-vl":  8278,   # GGUF-Architektur "qwen3vl" — rope.dimension_sections
-    "qwen3vl":   8278,   # interner Architektur-Name im GGUF
-    "qwen35":    8300,
-    "qwen3":     8260,
-    "lfm2.5":    9518,
-    "lfm3":      12001,  # arch "lfm3" needs PR #31252 (b11889: unknown model architecture)
-    "lfm3-omni": 12001,  # same arch, different tag
-    "ling-3.0-tiny": 10488,
-    # minicpmv4_7 VISION projector needs b11574+ (b11456 failed the mmproj
-    # load with "unknown projector type" and ran TEXT fine — verified
-    # 2026-10-14). Restored 2026-10-28 on b11889: the model is vision-capable
-    # again (mmproj_filename + vision in the model profile, both base sets in
-    # llama_manager_utils).
-    "minicpm-v-4-7": 11574,
-}
+BINARY_MIN_BUILD: dict[str, int] = {}
 
 # ── Windows-Vulkan mlock/mmap-Regression (b10300+) ───────────────────────────
 #   --mlock (or --load-mode mlock) → GGML_ASSERT(addr) failed in
 NO_MMAP_MIN_BUILD = 10300
+
+
+def reload_compat_views() -> None:
+    """Populate compatibility dicts/sets dynamically from arch_compat.json + registry."""
+    try:
+        from model_configs.models_registry import (
+            iter_all_profiles as _iter_profiles,
+            load_arch_compat as _load_compat,
+        )
+        compat = _load_compat()
+        profiles = _iter_profiles()
+    except (ImportError, OSError, ValueError, TypeError) as _e:
+        _logger.debug("[COMPAT] llama_config compat reload skipped: %s", _e)
+        return
+
+    dense_kv = {
+        str(k).lower(): str(v).strip().lower()
+        for k, v in (compat.get("dense_kv_cache_types") or {}).items()
+        if v
+    }
+    _DENSE_KV_CACHE_TYPES.clear()
+    _DENSE_KV_CACHE_TYPES.update(dense_kv)
+
+    moe_counts: dict[str, int] = {
+        str(k).lower(): int(v)
+        for k, v in (compat.get("moe_expert_counts") or {}).items()
+        if v is not None
+    }
+    gpu_layers: dict[str, int] = {
+        str(k).lower(): int(v)
+        for k, v in (compat.get("gpu_layers_table") or {}).items()
+        if v is not None
+    }
+    mtp_models: set[str] = {
+        str(m).lower() for m in (compat.get("mtp_models") or []) if m
+    }
+    min_builds: dict[str, int] = {
+        str(k).lower(): int(v)
+        for k, v in (compat.get("binary_min_build") or {}).items()
+        if v is not None
+    }
+
+    for key, prof in profiles.items():
+        lk = str(key).lower()
+        try:
+            moe_val = int(prof.get("moe_cpu_experts") or 0)
+            if moe_val > 0:
+                moe_counts[lk] = moe_val
+        except (TypeError, ValueError):
+            pass
+        if prof.get("gpu_layers") is not None:
+            try:
+                gpu_layers[lk] = int(prof["gpu_layers"])
+            except (TypeError, ValueError):
+                pass
+        if prof.get("mtp") is True:
+            mtp_models.add(lk)
+        if prof.get("binary_min_build") is not None:
+            try:
+                min_builds[lk] = int(prof["binary_min_build"])
+            except (TypeError, ValueError):
+                pass
+
+    _MOE_EXPERT_COUNTS.clear()
+    _MOE_EXPERT_COUNTS.update(moe_counts)
+    _GPU_LAYERS_TABLE.clear()
+    _GPU_LAYERS_TABLE.update(gpu_layers)
+    _MTP_MODELS.clear()
+    _MTP_MODELS.update(mtp_models)
+    BINARY_MIN_BUILD.clear()
+    BINARY_MIN_BUILD.update(min_builds)
+
+
+reload_compat_views()

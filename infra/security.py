@@ -84,10 +84,21 @@ async def _csrf_origin_guard(request: Request, call_next):
 import hmac as _hmac
 import os as _os
 
-# Set by run.py once the resolved bind host is known.
-EXTERNAL_BIND = {"on": False}
-
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _env_external_bind() -> bool:
+    """Determine initial external-bind posture from environment variables."""
+    val = _os.environ.get("HIVEMIND_EXTERNAL_BIND")
+    if val is not None and val.strip() != "":
+        return val.strip().lower() in {"1", "true", "yes", "on"}
+    host = (_os.environ.get("HIVEMIND_HOST") or "").strip().lower()
+    return bool(host) and host not in _LOOPBACK_HOSTS
+
+
+# Set by run.py once the resolved bind host is known; initialized from env so
+# reload child processes inherit the guard automatically.
+EXTERNAL_BIND = {"on": _env_external_bind()}
 
 
 def _is_loopback_client(client_host: str) -> bool:

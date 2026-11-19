@@ -260,10 +260,20 @@ def _cap_tool_result(result: str, max_chars: int | None = None,
 # compacted to a small, meaningful stub right after success — the
 # context stays small and the llama.cpp prefix cache is NOT invalidated.
 _WRITE_ARG_COMPACT_MIN = 12000
-_WRITE_ARG_COMPACT_NAMES = {
+# Shared write-tool / write-status inventories (reused by core/duo_runner.py).
+WRITE_TOOLS: frozenset[str] = frozenset({
     "write_file", "write_file_append", "edit_file",
-    "patch_file", "replace_lines",
-}
+    "patch_file", "replace_lines", "apply_patch",
+})
+_NON_APPEND_WRITE_TOOLS: frozenset[str] = WRITE_TOOLS - {"write_file_append"}
+_EDIT_TOOLS: frozenset[str] = frozenset({
+    "edit_file", "patch_file", "replace_lines", "apply_patch",
+})
+WRITE_STATUSES: frozenset[str] = frozenset({
+    "created", "rewrote", "edited", "patched", "write", "append",
+})
+
+_WRITE_ARG_COMPACT_NAMES = set(WRITE_TOOLS - {"apply_patch"})
 
 # STUB-ECHO-GUARD (2026-09-09): the ARG-COMPACT stub below is compacted into
 # the conversation history after a successful large write. Small models
@@ -271,6 +281,22 @@ _WRITE_ARG_COMPACT_NAMES = {
 # it back into the file (observed live with spark-x2.5:4b). Any write/edit
 # whose arguments contain this marker is rejected before execution.
 _WRITE_STUB_MARK = "content not in context anymore"
+_STUB_EXTRA_MARKS: tuple[str, ...] = (
+    "[applied write:",
+    "[applied edit:",
+    "this content never reached the file",
+    "attempt failed/cut at the output limit",
+)
+
+
+def _looks_like_stub(_raw_s: str) -> bool:
+    """Return True if serialized write/edit arguments echo an internal compaction stub."""
+    if not _raw_s:
+        return False
+    _low = _raw_s.lower()
+    if _WRITE_STUB_MARK in _low or _APPLIED_DIFF_MARK in _raw_s.lower():
+        return True
+    return any(_m in _low for _m in _STUB_EXTRA_MARKS)
 
 
 def _args_str_len(raw_args) -> int:
@@ -357,10 +383,7 @@ _STALE_COMPACT_TRIGGER_CHARS = 12000
 _STALE_COMPACT_KEEP_ASSISTANTS = 2
 _STALE_COMPACT_MAX_CALLS = 12
 
-_STALE_COMPACT_TRIGGER_NAMES = {
-    "edit_file", "write_file", "patch_file", "write_file_append",
-    "replace_lines", "apply_patch",
-}
+_STALE_COMPACT_TRIGGER_NAMES = set(WRITE_TOOLS)
 
 
 def _edit_stub_text(dname: str, args: dict) -> str | None:
@@ -459,14 +482,14 @@ def _compact_stale_edit_payloads(
             if not isinstance(fn, dict):
                 continue
             name = str(fn.get("name", "") or "")
-            if name not in _WRITE_ARG_COMPACT_NAMES and name != "apply_patch":
+            if name not in WRITE_TOOLS:
                 continue
             raw = fn.get("arguments", {})
             raw_s = raw if isinstance(raw, str) else json.dumps(
                 raw or {}, ensure_ascii=False)
             if len(raw_s) < _STALE_COMPACT_MIN_CHARS:
                 continue
-            if _APPLIED_DIFF_MARK in raw_s or _WRITE_STUB_MARK in raw_s.lower():
+            if _looks_like_stub(raw_s):
                 continue  # already compacted
             args = raw if isinstance(raw, dict) else None
             if args is None:
@@ -634,9 +657,7 @@ async def execute_tool_round(
 
         _focus_path = _track_focus_path(_dargs, _dname, trs.tool_ctx_lru, trs.recent_focus_paths, _MAX_FOCUS_PATHS)
 
-        if _dname in _WRITE_ARG_COMPACT_NAMES and (
-                _WRITE_STUB_MARK in _raw_s.lower()
-                or _APPLIED_DIFF_MARK in _raw_s.lower()):
+        if _dname in WRITE_TOOLS and _looks_like_stub(_raw_s):
             _logger.warning("[STUB-ECHO] %s blocked: compaction stub found in write args (path=%s)",
                             _dname, str((_dargs or {}).get("path", "?")) or "?")
             dtool_msgs.append({
@@ -651,7 +672,7 @@ async def execute_tool_round(
             })
             continue
 
-        if not _dargs and _dname in ("patch_file", "edit_file", "write_file", "write_file_append", "read_file"):
+        if not _dargs and _dname in (WRITE_TOOLS | {"read_file"}):
             dtool_msgs.append({
                 "role": "tool",
                 "content": _tool_error_response(
@@ -692,17 +713,40 @@ async def execute_tool_round(
                     _static_only_tests = not _needs_tests_te(_rt_paths)
                 except (ImportError, AttributeError, TypeError):
                     _static_only_tests = False
+            _norm_bash_cmd = ""
+            _dup_timeout_hit = False
+            if _dname == "run_bash":
+                _norm_bash_cmd = " ".join(str((_dargs or {}).get("cmd") or "").split())
+                if _norm_bash_cmd:
+                    _to_key = f"RUN_BASH_TIMEOUT_CMD:{_norm_bash_cmd}"
+                    if trs.tool_error_retries.get(_to_key) == int(result.verify_mutation_serial):
+                        _dup_timeout_hit = True
             if _static_only_tests:
                 _logger.info(
                     "[AUTO-TEST] run_tests skipped: only static assets changed")
                 _dresult = ("[TEST-RESULT] ⏭ No testable code changed "
                             "(static assets only) - test run skipped. Do not "
                             "call run_tests again in this run.")
+            elif _dup_timeout_hit:
+                _logger.warning(
+                    "[RUN-BASH-TIMEOUT-GUARD] instant reject of repeat timed-out cmd: %s",
+                    _norm_bash_cmd[:120])
+                _dresult = _tool_error_response(
+                    "RUN_BASH_TIMEOUT",
+                    f"Blocked duplicate run_bash call: `{_norm_bash_cmd[:160]}` already timed out "
+                    "and no files have changed since. Do NOT re-run a blocking GUI/game main loop "
+                    "or server in run_bash — use start_background for servers, run a non-blocking "
+                    "smoke test via run_python, or finish with task_complete.",
+                    tool="run_bash", mode=tool_mode)
             else:
                 _dresult = await _execute_one_tool(
                     _dname, _dargs, _dargs_with_model, _i, _pre_results,
                     trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws,
                     include_git=include_git)
+                if (_dname == "run_bash" and _norm_bash_cmd
+                        and _tool_error_has_code(_dresult, "RUN_BASH_TIMEOUT", "run_bash")):
+                    trs.tool_error_retries[f"RUN_BASH_TIMEOUT_CMD:{_norm_bash_cmd}"] = int(
+                        result.verify_mutation_serial)
         # SEND-FILE (2026-11-04): validate now, deliver LATER. The model's
         # path is queued on the run result; the runner emits the actual
         # send_file event only after the final verification has passed, as
@@ -898,8 +942,7 @@ async def execute_tool_round(
                             if _te_m.get("role") != "tool":
                                 continue
                             _te_n = _te_m.get("name", "")
-                            if _te_n in ("write_file", "edit_file",
-                                         "patch_file", "replace_lines", "apply_patch"):
+                            if _te_n in _NON_APPEND_WRITE_TOOLS:
                                 _te_write_idx = _te_i
                             elif _te_n == "write_file_append":
                                 _te_append_idx = _te_i
@@ -921,7 +964,7 @@ async def execute_tool_round(
                             continue
                         _at_name = _at_m.get("name", "")
                         _at_content = str(_at_m.get("content") or "")
-                        if _at_name in ("write_file", "edit_file", "patch_file", "write_file_append", "replace_lines", "apply_patch"):
+                        if _at_name in WRITE_TOOLS:
                             _last_write_idx_at = _at_idx
                         elif _at_name == "run_tests" and not _at_content.startswith("[AUTO-TEST]"):
                             _last_test_idx_at = _at_idx
@@ -1024,6 +1067,8 @@ async def execute_tool_round(
                 _last_bash_idx   = -1
                 _last_bash_failed = False
                 _last_bash_verified = False
+                _last_bash_timed_out = False
+                _any_verified_exec = False
                 _last_append_idx = -1
                 _last_tool_name = ""
                 for _idx, _m in enumerate(dtool_msgs):
@@ -1031,8 +1076,9 @@ async def execute_tool_round(
                         continue
                     _tname = _m.get("name", "")
                     _last_tool_name = _tname
-                    if _tname in ("write_file", "edit_file", "patch_file", "write_file_append", "replace_lines", "apply_patch"):
+                    if _tname in WRITE_TOOLS:
                         _last_edit_idx = _idx
+                        _any_verified_exec = False
                     if _tname == "write_file_append":
                         _last_append_idx = _idx
                     elif _tname == "run_bash":
@@ -1043,25 +1089,35 @@ async def execute_tool_round(
                         # LAST [exit code: N] match so an earlier echoed
                         # "[exit code: 0]" cannot mask a real non-zero exit.
                         _ec_matches = re.findall(r'\[exit code:\s*(\d+)\]', _content)
-                        if _ec_matches and int(_ec_matches[-1]) != 0:
+                        _is_timeout = _tool_error_has_code(_content, "RUN_BASH_TIMEOUT", "run_bash")
+                        if (_ec_matches and int(_ec_matches[-1]) != 0) or _tool_call_failed(_content, "run_bash"):
                             _last_bash_failed = True
                             _last_bash_verified = False
+                            _last_bash_timed_out = _is_timeout
                         else:
                             _last_bash_failed = False
+                            _last_bash_timed_out = False
                             # ANTI-SPOOF-2 (audit 2026-10-24): "passed/success"
                             # keywords are model-echoable. Verification counts
-                            # ONLY with the server's genuine trailing
-                            # [exit code: 0] marker (the LAST one must be 0).
+                            # ONLY with the server's genuine exit-0 marker
+                            # ([run_bash: exit 0] prefix or trailing [exit code: 0]).
+                            _bash_ok_marker = (
+                                (_ec_matches and int(_ec_matches[-1]) == 0)
+                                or _content.lstrip().startswith("[run_bash: exit 0")
+                            )
                             _last_bash_verified = bool(
-                                _ec_matches and int(_ec_matches[-1]) == 0
+                                _bash_ok_marker
                                 and re.search(
                                     r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
                                     r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
                                     _content,
                                 ))
+                            if _last_bash_verified:
+                                _any_verified_exec = True
                     elif _tname == "run_python":
                         _content = str(_m.get("content") or "")
                         _last_bash_idx = _idx
+                        _last_bash_timed_out = False
                         _ec_matches = re.findall(r'\[exit code:\s*(\d+)\]', _content)
                         if _ec_matches and int(_ec_matches[-1]) != 0:
                             _last_bash_failed = True
@@ -1078,9 +1134,12 @@ async def execute_tool_round(
                                     r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
                                     _content,
                                 ))
+                            if _last_bash_verified:
+                                _any_verified_exec = True
                     elif _tname == "run_tests":
                         _content = str(_m.get("content") or "")
                         _last_bash_idx = _idx
+                        _last_bash_timed_out = False
                         # A static-only skip ("⏭") is not a failed test run;
                         # treating it as red produced a false VERIFY FAILED
                         # nudge and a run_tests/task_complete loop.
@@ -1089,6 +1148,8 @@ async def execute_tool_round(
                             and "[TEST-RESULT] ⚠️" not in _content
                             and "⏭" not in _content)
                         _last_bash_verified = not _last_bash_failed
+                        if _last_bash_verified:
+                            _any_verified_exec = True
 
                 def _chunk_incomplete_p():
 
@@ -1107,7 +1168,8 @@ async def execute_tool_round(
 
                 if not _mutations_made:
                     # Signal wie "passed"/"success"/"TEST-RESULT"). Triviale exit-0-Kommandos
-                    if _last_bash_idx != -1 and not _last_bash_failed and _last_bash_verified:
+                    if ((_last_bash_idx != -1 and not _last_bash_failed and _last_bash_verified)
+                            or (_any_verified_exec and _last_bash_timed_out)):
                         result.task_complete_called = True
                     else:
                         _gate = _task_complete_ladder(
@@ -1237,7 +1299,7 @@ async def execute_tool_round(
                     if _rbn in trs.reads_seen:
                         _perf["reread_count"] += 1
                     trs.reads_seen[_rbn] = True
-            elif (_dname in ("edit_file", "patch_file", "replace_lines", "apply_patch")
+            elif (_dname in _EDIT_TOOLS
                     and not _tool_call_failed(_dresult, _dname)
                     and len(trs.freshness_warned) < 4):
                 _fresh_paths = (
@@ -1285,7 +1347,7 @@ async def execute_tool_round(
         # it immediately so the model neither wastes context nor trusts outdated
         # content for follow-up edits.
         if (
-            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines", "apply_patch")
+            _dname in WRITE_TOOLS
             and _focus_path
             and not _tool_call_failed(_dresult, _dname)
         ):
@@ -1359,7 +1421,7 @@ async def execute_tool_round(
         # compression nearly ineffective (a few 22k write attempts shaved the
         # context by only ~10k). Stub them with an explicit FAILED marker.
         elif (
-            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines", "apply_patch")
+            _dname in WRITE_TOOLS
             and _focus_path
             and len(_raw_s) >= _WRITE_ARG_COMPACT_MIN
         ):

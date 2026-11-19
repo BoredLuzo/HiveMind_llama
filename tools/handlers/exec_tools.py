@@ -129,10 +129,31 @@ import tempfile
 from . import _shared
 
 
-def _tool_env_with_python() -> dict:
-    """Child env for tool runs with the engine venv first on PATH."""
+_PIP_INSTALL_SEG_RE = re.compile(
+    r"^\s*(?:\w+=\S+\s+)*(?:pip3?(?:\.exe)?|(?:python3?|py)(?:\.exe)?\s+-m\s+pip|uv(?:\.exe)?\s+pip)\s+install\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_VENV_FLAG_RE = re.compile(
+    r"(?:--python\s+['\"]?(?:\.?[/\\])?(?:\.venv|venv)\b|--target\s+|-t\s+)",
+    re.IGNORECASE,
+)
+
+
+def _is_unscoped_pip_install(cmd: str, workspace: Path | None) -> bool:
+    """Return True if *cmd* runs pip install without a workspace .venv present."""
+    from infra.child_env import workspace_venv_python
+    if workspace_venv_python(workspace) is not None:
+        return False
+    for seg in re.split(r"&&|\|\||[;\n|]", str(cmd or "")):
+        if _PIP_INSTALL_SEG_RE.match(seg) and not _EXPLICIT_VENV_FLAG_RE.search(seg):
+            return True
+    return False
+
+
+def _tool_env_with_python(workspace: Path | None = None) -> dict:
+    """Child env for tool runs: workspace .venv -> real system Python -> engine venv fallback."""
     from infra.child_env import tool_env as _tool_env
-    return _tool_env()
+    return _tool_env(workspace=workspace)
 
 _DANGEROUS_PATTERNS = [
     "rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /*", "rm -rf ~/*",
@@ -234,24 +255,17 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
                     return f.name
 
             fname = await asyncio.to_thread(_write_temp_python)
-        # Prefer a workspace venv (same one install_package uses), otherwise
-        # the engine venv. A bare "python" does not exist on uv-managed
-        # installs (only python3.14.exe on PATH).
-        _ws_py = None
-        for _cand in (Path(workspace) / ".venv" / "Scripts" / "python.exe",
-                      Path(workspace) / ".venv" / "bin" / "python",
-                      Path(workspace) / "venv" / "Scripts" / "python.exe",
-                      Path(workspace) / "venv" / "bin" / "python"):
-            if _cand.is_file():
-                _ws_py = _cand
-                break
-        _py_cmd = str(_ws_py) if _ws_py is not None else (
+        # 3-tier resolution (same as run_bash and Python LSP):
+        # workspace .venv -> real system Python -> engine venv fallback.
+        from infra.child_env import resolve_workspace_python as _resolve_ws_py
+        _resolved_py = _resolve_ws_py(workspace)
+        _py_cmd = str(_resolved_py) if _resolved_py is not None else (
             sys.executable or ("python" if sys.platform == "win32" else "python3"))
         # UTF-8 child IO (2026-09-18): without this, child Python on Windows
         # pipes stdout through cp1252 and ANY non-ASCII print (✓/✗, umlauts)
         # raises UnicodeEncodeError inside the snippet — the code crashed on
         # a cosmetic character, not on its logic.
-        _env = _tool_env_with_python()
+        _env = _tool_env_with_python(workspace)
         _ws_path = Path(workspace)
         _py_parts = [str(_ws_path)]
         if (_ws_path / "src").is_dir():
@@ -263,6 +277,7 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         if bench_cmd:
             r = await asyncio.create_subprocess_exec(
                 *bench_cmd,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace),
@@ -272,6 +287,7 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
             r = await asyncio.create_subprocess_exec(
                 _py_cmd,
                 fname,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace),
@@ -279,20 +295,23 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
                 **_spawn_kwargs())
         _job = _ToolJob.confine(r)
         try:
-            out, err = await asyncio.wait_for(r.communicate(), 60 if bench_cmd else 10)
-        except asyncio.TimeoutError:
-            if _job is not None:
-                _job.terminate()
-                _job.close()
-            _kill_tree(r)
             try:
-                r.kill()
-            except Exception:
-                pass
-            return _tool_error_response(
-                "RUN_PYTHON_TIMEOUT",
-                "Python execution timed out.",
-                tool="run_python" )
+                out, err = await asyncio.wait_for(r.communicate(), 60 if bench_cmd else 10)
+            except asyncio.TimeoutError:
+                if _job is not None:
+                    _job.terminate()
+                _kill_tree(r)
+                try:
+                    r.kill()
+                except Exception:
+                    pass
+                return _tool_error_response(
+                    "RUN_PYTHON_TIMEOUT",
+                    "Python execution timed out.",
+                    tool="run_python" )
+        finally:
+            if _job is not None:
+                _job.close()
 
         stdout = out.decode(errors="replace").replace("\r\n", "\n").replace("\r", "").strip()
         stderr = err.decode(errors="replace").replace("\r\n", "\n").replace("\r", "").strip()
@@ -336,7 +355,13 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
 
 
 async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: str | None) -> str:
-    cmd = args.get("cmd", "")
+    cmd = str((args or {}).get("cmd", "") or "")
+    if not cmd.strip():
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            "run_bash requires a non-empty 'cmd' string.",
+            tool="run_bash",
+        )
     _bl_hit = _bash_blocklisted(cmd)
     if _bl_hit is not None:
         return _tool_error_response(
@@ -370,8 +395,6 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 n = len(_created)
                 return f"[exit 0 - created {n} director{'y' if n == 1 else 'ies'}: {', '.join(_created)}]"
 
-            # P1-FIX (2026-08-10): Semikolon-verkettete Kommandos (z.B.
-            _HAS_SEMICOLON = ";" in cmd
             # SHELL-CHAIN-GUARD (2026-10-26, live): the shims below split their
             # arguments on whitespace and act on EVERY token. A chained command
             # like `touch a.py && echo done` therefore created files named
@@ -383,16 +406,6 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             # and became a file name.
             _SHELL_OPS = ("&", "|", ";", ">", "<", "`", "$(", "\n", "\r", "^")
             _HAS_SHELL_CHAIN = any(op in cmd for op in _SHELL_OPS)
-            _cd_mkdir = _re_win.match(
-                r'cd\s+("([^"]+)"|(\S+))\s+&&\s+mkdir\s+-p\s+(.*)',
-                cmd.strip(), _re_win.DOTALL
-            )
-            if _cd_mkdir and not _HAS_SHELL_CHAIN:
-                _base = _WPath(_cd_mkdir.group(2) or _cd_mkdir.group(3))
-                _dirs_raw = _cd_mkdir.group(4).strip()
-                _dir_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _dirs_raw)
-                _dirs = [_base / (a or b) for a, b in _dir_parts]
-                return _do_mkdir(_dirs)
 
             _mkdir_p_match = _re_win.match(r'mkdir\s+-p\s+(.*)', cmd.strip(), _re_win.DOTALL)
             if _mkdir_p_match and not _HAS_SHELL_CHAIN:
@@ -439,7 +452,7 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     return "[touch error]: " + "; ".join(_touch_errs)
                 return f"[exit 0 - touched {len(_touch_done)} file(s)]"
 
-            _rm_match = _re_win.match(r'rm\s+(?:-[rRfF]+\s+)?(.*)', cmd.strip())
+            _rm_match = _re_win.match(r'rm\s+(?:-[rRfFiIv]+\s+)*(.*)', cmd.strip())
             if _rm_match and cmd.strip().startswith("rm ") and _HAS_SHELL_CHAIN:
                 return ("[TOOL_ERROR: SHELL_CHAIN_UNSUPPORTED]\n"
                         "run_bash does not chain commands on Windows (found a "
@@ -447,22 +460,52 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             if _rm_match and cmd.strip().startswith("rm "):
                 _rm_raw = _rm_match.group(1).strip()
                 _rm_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _rm_raw)
-                _rm_targets = [a or b for a, b in _rm_parts]
+                _rm_targets = [a or b for a, b in _rm_parts if (a or b) != "--"]
+                if not _rm_targets:
+                    return "[rm error]: no target path specified"
+                try:
+                    _ws_res = Path(workspace).resolve()
+                except OSError:
+                    _ws_res = Path(workspace)
+                _lock_res = None
+                if _workspace_lock is not None:
+                    try:
+                        _lock_res = Path(_workspace_lock).resolve()
+                    except OSError:
+                        _lock_res = Path(_workspace_lock)
                 _rm_done, _rm_errs = [], []
                 for _rt in _rm_targets:
+                    if not _rt.strip():
+                        _rm_errs.append(f"{_rt!r}: refusing empty path")
+                        continue
                     _rp = _WPath(_rt)
                     if not _rp.is_absolute():
-                        _rp = (workspace / _rt).resolve()
+                        _rp = workspace / _rp
+                    try:
+                        _rp_res = _rp.resolve()
+                    except OSError:
+                        _rp_res = _rp
+                    # Guard against deleting the workspace root (e.g. `rm -r .` or resolved == root)
+                    if (
+                        _rp_res == _ws_res
+                        or (_lock_res is not None and _rp_res == _lock_res)
+                        or _ws_res.is_relative_to(_rp_res)
+                        or (_lock_res is not None and _lock_res.is_relative_to(_rp_res))
+                    ):
+                        _rm_errs.append(f"{_rt}: refusing to delete workspace root (RUN_BASH_BLOCKED)")
+                        continue
                     # Validate path is within workspace
-                    _checked = _inline_check_workspace(_rp, _workspace_lock, "run_bash")
+                    _checked = _inline_check_workspace(_rp_res, _workspace_lock, "run_bash")
                     if _checked is not None:
                         _rm_errs.append(f"{_rt}: {_checked}")
                         continue
                     try:
-                        if _rp.is_dir():
-                            shutil.rmtree(_rp, ignore_errors=True)
-                        elif _rp.exists():
+                        if _rp.is_symlink():
                             _rp.unlink()
+                        elif _rp_res.is_dir():
+                            shutil.rmtree(_rp_res, ignore_errors=True)
+                        elif _rp_res.exists():
+                            _rp_res.unlink()
                         _rm_done.append(_rt)
                     except Exception as _rme:
                         _rm_errs.append(f"{_rt}: {_rme}")
@@ -514,15 +557,13 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     _pc = workspace / _pc
                 try:
                     _cd_resolved = _pc.resolve()
-                except Exception:
+                except OSError:
                     _cd_resolved = _pc
                 try:
                     _ws_resolved = workspace.resolve()
-                except Exception:
+                except OSError:
                     _ws_resolved = workspace
-                _ws_prefix = str(_ws_resolved).rstrip("\\/") + "\\"
-                if (str(_cd_resolved).rstrip("\\/").lower() == str(_ws_resolved).rstrip("\\/").lower()
-                        or str(_cd_resolved).lower().startswith(_ws_prefix.lower())):
+                if str(_cd_resolved).rstrip("\\/").lower() == str(_ws_resolved).rstrip("\\/").lower():
                     _cmd_translated = _cd_rest
 
             if " && " in _cmd_translated:
@@ -530,7 +571,10 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 _ps_seq = []
                 for _ap in _and_parts[:-1]:
                     _ps_seq.append(_ap.strip())
-                    _ps_seq.append("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
+                    _ps_seq.append(
+                        "if (-not $? -or ($LASTEXITCODE -and $LASTEXITCODE -ne 0)) "
+                        "{ exit $(if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }) }"
+                    )
                 _ps_seq.append(_and_parts[-1].strip())
                 _cmd_translated = "; ".join(_ps_seq)
 
@@ -576,9 +620,26 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
 
         _ka_task = asyncio.create_task(_keep_alive()) if _is_build else None
         try:
+            _needs_pip_shim = (
+                sys.platform == "win32"
+                and bool(re.search(r"(?:^|[\s;&|(])pip3?\b", cmd))
+            )
+            _needs_py3_shim = (
+                sys.platform == "win32"
+                and bool(re.search(r"(?:^|[\s;&|(])python3\b", cmd))
+            )
+            _ps_shims = (
+                ("function pip { python -m pip @args }; function pip3 { python -m pip @args }; " if _needs_pip_shim else "")
+                + ("function python3 { python @args }; " if _needs_py3_shim else "")
+            )
+            _bash_shims = (
+                ('pip() { python -m pip "$@"; }; pip3() { python -m pip "$@"; }; ' if _needs_pip_shim else "")
+                + ('python3() { python "$@"; }; ' if _needs_py3_shim else "")
+            )
             # OEM-Codepage (z.B. cp850) — bytes.decode() (UTF-8) produzierte
             _ps_cmd = (
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + _cmd_translated
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+                + _ps_shims + _cmd_translated
                 if sys.platform == "win32" else _cmd_translated
             )
             _win_bash_exe = ""
@@ -588,7 +649,10 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 # AUDIT FIX (1.3.3): the model's command runs in bash
                 # verbatim - the powershell translation layer above is
                 # skipped (POSIX syntax works natively there).
-                _stream_cmd = [_win_bash_exe, "-c", cmd]
+                # VENV-SHIMS (2026-11-19): uv venvs ship python.exe without
+                # pip.exe or python3.exe; bare `pip`/`python3` fell through PATH
+                # to global/broken Python installations.
+                _stream_cmd = [_win_bash_exe, "-c", _bash_shims + cmd]
             else:
                 _stream_cmd = (
                     ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ps_cmd]
@@ -607,9 +671,19 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             if _bench_cmd:
                 _stream_cmd = _bench_cmd
                 _bash_timeout = max(_bash_timeout, 1800)
+            elif _is_unscoped_pip_install(cmd, workspace):
+                return _tool_error_response(
+                    "PIP_NO_WORKSPACE_VENV",
+                    "pip install refused: no .venv found in the workspace. Installing into "
+                    "the global system Python or HiveMind server venv is not allowed. "
+                    "Create a project venv first: 'python -m venv .venv' (or 'uv venv --seed'), "
+                    "then re-run 'pip install ...' — run_bash will automatically use .venv.",
+                    tool="run_bash",
+                    details={"cmd": str(cmd)[:400]},
+                )
             stdout_raw, stderr_raw, returncode, timed_out = await _stream_proc(
                 _stream_cmd, _bash_timeout, str(workspace),
-                _tool_env_with_python(),
+                _tool_env_with_python(workspace),
             )
         finally:
             if _ka_task:
@@ -626,8 +700,9 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 "Do NOT retry it with run_bash — use the start_background tool instead, "
                 "then check with get_background_output and stop with stop_background."
                 if _longrun else
-                "\n\nIf this is a long-running process (dev server, watcher), use the "
-                "start_background tool instead — run_bash is for commands that finish."
+                "\n\nIf this is a long-running process (dev server, watcher, or interactive GUI/game main loop), "
+                "do NOT re-run it directly in run_bash — use start_background for servers, or verify "
+                "GUI/game modules with a non-blocking smoke test / headless script instead."
             )
             return _tool_error_response(
                 "RUN_BASH_TIMEOUT",
@@ -684,7 +759,14 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             )
 
         if returncode != 0:
-            _result_tail = result[-4000:] if result else "(no output)"
+            if not result:
+                _result_tail = "(no output)"
+            elif len(result) > 3400:
+                _raw_tail = result[-3400:]
+                _nl = _raw_tail.find("\n")
+                _result_tail = ("...\n" + _raw_tail[_nl + 1:]) if 0 <= _nl < 200 else ("..." + _raw_tail)
+            else:
+                _result_tail = result
             _err = _tool_error_response(
                 "RUN_BASH_NONZERO",
                 f"run_bash exited with code {returncode} (shell: {_shell_name}).\n{_result_tail}",
@@ -904,9 +986,13 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
         _rollup_note_clean()
         return f"[TEST-RESULT] ✅ All tests passed ({_tr.language}). Command: {_tr.command}"
     if _tr.failure_count == 0:
+        _tail = (_tr.raw_output or "").strip()[-400:]
+        if not _tail and _tr.inject_msg and "0 test failure(s)" not in _tr.inject_msg:
+            _tail = _tr.inject_msg[:400]
         return (
             f"[TEST-RESULT] ⚠️ No tests found or no test command available "
-            f"({_tr.language}). Command: {_tr.command}\n{(_tr.inject_msg or '')[:400]}"
+            f"({_tr.language}). Command: {_tr.command}"
+            + (f"\n{_tail}" if _tail else "")
         )
     return _rollup_test_failure(_tr, _tr.inject_msg or "[TEST-RESULT] No result from test runner.")
 
@@ -1020,7 +1106,8 @@ async def _inline_tool_start_background(args: dict, _workspace: Path, _workspace
             "Background processes cannot bypass the destructive-command blocklist.",
             tool="start_background", details={"cmd": cmd[:400]})
     try:
-        res = await asyncio.to_thread(start_background, cmd)
+        _bg_cwd = str(_workspace) if _workspace else None
+        res = await asyncio.to_thread(start_background, cmd, cwd=_bg_cwd)
     except Exception as e:
         return _tool_error_response("BACKGROUND_START_FAILED", f"{type(e).__name__}: {str(e)[:160]}", tool="start_background")
     if not res.get("ok"):
@@ -1066,6 +1153,7 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
     from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
@@ -1074,12 +1162,52 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
     )
     _job = _ToolJob.confine(proc)
     LINE_CAP = line_cap
+    MAX_LINE_BYTES = 65536
     stdout_buf: deque = deque(maxlen=LINE_CAP)
     stderr_buf: deque = deque(maxlen=LINE_CAP)
 
     async def drain(stream, buf: deque):
-        async for line in stream:
-            buf.append(line.decode(errors="replace").rstrip("\r\n"))
+        if stream is None:
+            return
+        pending = bytearray()
+        truncated = False
+        while True:
+            chunk = await stream.read(16384)
+            if not chunk:
+                break
+            start = 0
+            while True:
+                nl = chunk.find(b"\n", start)
+                if nl == -1:
+                    tail = chunk[start:]
+                    if not truncated:
+                        room = MAX_LINE_BYTES - len(pending)
+                        if len(tail) > room:
+                            pending.extend(tail[:room])
+                            truncated = True
+                        else:
+                            pending.extend(tail)
+                    break
+                seg = chunk[start:nl]
+                if not truncated:
+                    room = MAX_LINE_BYTES - len(pending)
+                    if len(seg) > room:
+                        pending.extend(seg[:room])
+                        truncated = True
+                    else:
+                        pending.extend(seg)
+                line_txt = pending.decode(errors="replace").rstrip("\r")
+                if truncated:
+                    line_txt += " ...[line truncated]"
+                buf.append(line_txt)
+                pending.clear()
+                truncated = False
+                start = nl + 1
+        if pending:
+            line_txt = pending.decode(errors="replace").rstrip("\r")
+            if truncated:
+                line_txt += " ...[line truncated]"
+            buf.append(line_txt)
 
     try:
         try:

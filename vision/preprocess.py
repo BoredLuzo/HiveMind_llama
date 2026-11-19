@@ -9,6 +9,7 @@ THIS_FILE = Path(__file__)
 VISION_MODEL_FILE = THIS_FILE.parent.parent / "vision_model.json"
 import httpx
 
+from core import state as _state
 from core.duo_helpers import RE_THINK_CLEANUP as _re_think_cleanup
 
 logger = logging.getLogger("hivemind.vision")
@@ -47,7 +48,9 @@ def _save_vision_model_cfg(cfg: dict):
     VISION_MODEL_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-_vision_cfg: dict = _load_vision_model_cfg()
+_vision_cfg: dict = _state._vision_cfg
+if not _vision_cfg:
+    _vision_cfg.update(_load_vision_model_cfg())
 
 # KV-cache poisoning detection
 _VISION_POISON_MARKERS: tuple[str, ...] = (
@@ -171,7 +174,6 @@ def _filter_vision_images(images: list) -> tuple[list, str | None]:
 
 
 async def _preprocess_images_to_text(images: list, user_query: str) -> str | None:
-    global _vision_cfg
     if not _vision_cfg.get("enabled") or not _vision_cfg.get("model"):
         logger.debug("[Vision-Prepro] Abbruch: enabled=%s model=%r", _vision_cfg.get("enabled"), _vision_cfg.get("model"))
         return None

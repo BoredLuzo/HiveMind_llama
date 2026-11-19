@@ -7,9 +7,13 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import ipaddress as _ipa
 import logging
+import os
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 logger = logging.getLogger("hivemind.browser")
 
@@ -59,9 +63,35 @@ _BROWSER_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hivemi
 _AFFINITY_MARKERS = ("Cannot switch to a different thread",)
 
 
+_CGNAT_NETWORK = _ipa.ip_network("100.64.0.0/10")
+
+
+def _check_blocked_ip(ipo, parts, *, resolved: bool = False) -> str | None:
+    """Shared IP block check for both IP literals and DNS-resolved addresses."""
+    if isinstance(ipo, _ipa.IPv6Address) and ipo.ipv4_mapped:
+        ipo = ipo.ipv4_mapped
+    if ipo.version == 4 and ipo in _CGNAT_NETWORK:
+        return "CGNAT range is not navigable"
+    if ipo.is_unspecified or ipo.is_link_local or ipo.is_reserved or ipo.is_multicast:
+        return ("metadata/link-local/reserved/multicast IPs are not "
+                "navigable — use web_fetch targets instead")
+    # LOOPBACK-GUARD (2026-09-13): loopback/private ranges were reachable
+    # (llama-server :8101, SearXNG :8888, the HiveMind UI). The ONLY
+    # permitted loopback origin is the tool's own workspace file server.
+    if ipo.is_loopback or ipo.is_private:
+        _fs_port = _file_server.server_address[1] if _file_server is not None else None
+        _uport = parts.port or (443 if parts.scheme == "https" else 80)
+        if not (_fs_port is not None and parts.scheme == "http" and ipo.version == 4
+                and ipo == _ipa.ip_address("127.0.0.1") and _uport == _fs_port):
+            if resolved:
+                return ("hostname resolves to loopback/private - not "
+                        "navigable (only the tool's own file server)")
+            return ("loopback/private IPs are not navigable (only the tool's "
+                    "own file server origin)")
+    return None
+
+
 def _guard_browser_url(url: str) -> str | None:
-
-
     _low = (url or "").strip().lower()
     for _bad in ("file://", "javascript:", "data:", "blob:", "vbscript:"):
         if _low.startswith(_bad):
@@ -69,77 +99,129 @@ def _guard_browser_url(url: str) -> str | None:
     if "://" in _low and not _low.startswith(("http://", "https://")):
         return "unsupported scheme — http/https only"
     from urllib.parse import urlparse as _up
-    import ipaddress as _ipa
     try:
-        _host = (_up(url).hostname or "").lower()
-    except Exception:
-        _host = ""
+        _parts = _up(url)
+        _host = (_parts.hostname or "").lower()
+    except ValueError:
+        return "invalid URL — no hostname"
     if not _host:
         return "invalid URL — no hostname"
-    _parts = _up(url)
+    _host_clean = _host.split("%", 1)[0]
     try:
-        _ipo = _ipa.ip_address(_host)
-        if isinstance(_ipo, _ipa.IPv6Address) and _ipo.ipv4_mapped:
-            _ipo = _ipo.ipv4_mapped
-        _cgn = _ipa.ip_network("100.64.0.0/10")
-        if _ipo.version == 4 and _ipo in _cgn:
-            return "CGNAT range is not navigable"
-        if (_ipo.is_link_local or _ipo.is_reserved or _ipo.is_multicast):
-            return ("metadata/link-local/reserved/multicast IPs are not "
-                    "navigable — use web_fetch targets instead")
-        # LOOPBACK-GUARD (2026-09-13): loopback/private ranges were reachable
-        # (llama-server :8101, SearXNG :8888, the HiveMind UI). The ONLY
-        # permitted loopback origin is the tool's own workspace file server.
-        if (_ipo.is_loopback or _ipo.is_private):
-            _fs_port = _file_server.server_address[1] if _file_server is not None else None
-            _uport = _parts.port or (443 if _parts.scheme == "https" else 80)
-            if not (_fs_port is not None and _ipo.version == 4
-                    and _ipo == _ipa.ip_address("127.0.0.1") and _uport == _fs_port):
-                return ("loopback/private IPs are not navigable (only the tool's "
-                        "own file server origin)")
+        _ipo = _ipa.ip_address(_host_clean)
     except ValueError:
-        # T3 (audit r2): a DNS hostname was judged by NAME only -
-        # rebinding domains (TTL-0) and 127-0-0-1.nip.io-style wildcards
-        # connected Chromium to loopback/LAN. Resolve and apply the SAME
-        # address rules per resolved IP.
+        # T3 (audit r2): resolve hostnames and apply the exact same IP rules
+        # per resolved address to block DNS rebinding / nip.io-style tricks.
         import socket as _sock
         try:
             _infos = _sock.getaddrinfo(_host, None)
         except (OSError, UnicodeError):
             return "hostname does not resolve — refusing"
+        if not _infos:
+            return "hostname does not resolve — refusing"
         for _ai in _infos:
+            _addr_raw = str(_ai[4][0]).split("%", 1)[0]
             try:
-                _rip = _ipa.ip_address(_ai[4][0])
+                _rip = _ipa.ip_address(_addr_raw)
             except ValueError:
-                continue
-            if isinstance(_rip, _ipa.IPv6Address) and _rip.ipv4_mapped:
-                _rip = _rip.ipv4_mapped
-            if _rip.version == 4 and _rip in _ipa.ip_network("100.64.0.0/10"):
-                return "CGNAT range is not navigable"
-            if (_rip.is_link_local or _rip.is_reserved or _rip.is_multicast):
-                return "metadata/link-local/reserved IPs are not navigable"
-            if (_rip.is_loopback or _rip.is_private):
-                _fs_port = _file_server.server_address[1] if _file_server is not None else None
-                _uport = _parts.port or (443 if _parts.scheme == "https" else 80)
-                if not (_fs_port is not None and _rip.version == 4
-                        and _rip == _ipa.ip_address("127.0.0.1") and _uport == _fs_port):
-                    return ("hostname resolves to loopback/private - not "
-                            "navigable (only the tool's own file server)")
-    # DNS-LOOPBACK (2026-09-13): "localhost" & friends resolve to loopback —
-    # block the obvious names (IP-literal + resolution hardening is the
-    # request-level route guard's job, which re-runs this for every request).
+                return "hostname resolved to unparseable address — refusing"
+            if _err := _check_blocked_ip(_rip, _parts, resolved=True):
+                return _err
+    else:
+        if _err := _check_blocked_ip(_ipo, _parts, resolved=False):
+            return _err
+    # DNS-LOOPBACK (2026-09-13): explicit loopback names.
     if _host.lower().strip(".") in ("localhost", "127.0.0.1", "::1", "ip6-localhost"):
         _fs_port = _file_server.server_address[1] if _file_server is not None else None
         _uport = _parts.port or (443 if _parts.scheme == "https" else 80)
-        if not (_fs_port is not None and _uport == _fs_port
-                and _parts.scheme in ("http", "https")):
+        if not (_fs_port is not None and _parts.scheme == "http" and _uport == _fs_port):
             return ("localhost is not navigable (only the tool's own file server origin)")
+    return None
+
+
+def _browser_path_violation(raw_path: Path, root_raw: Path, root_resolved: Path) -> str | None:
+    """Return a rejection reason when *raw_path* escapes *root_resolved*,
+    traverses a symlink or Windows junction inside the workspace, targets an
+    NTFS ADS, or matches the secret-path denylist."""
+    from utils.file import _is_junction, is_secret_path
+
+    def _has_bad_segment(rel_parts: tuple[str, ...]) -> bool:
+        for part in rel_parts:
+            if ":" in part:
+                return True
+            if sys.platform == "win32" and part != part.rstrip(". "):
+                return True
+        return False
+
+    try:
+        if raw_path.is_symlink() or _is_junction(raw_path):
+            return "symlinks and junctions are not allowed"
+    except OSError:
+        return "cannot inspect path"
+
+    rel_walk = None
+    walk_base = None
+    for cand_root in (root_raw, root_resolved):
+        try:
+            rel_walk = raw_path.relative_to(cand_root)
+            walk_base = cand_root
+            break
+        except ValueError:
+            continue
+    if rel_walk is not None and walk_base is not None:
+        if _has_bad_segment(rel_walk.parts):
+            return "invalid path segment"
+        cur = walk_base
+        for part in rel_walk.parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink() or _is_junction(cur):
+                    return "symlinks and junctions are not allowed"
+            except OSError:
+                return "cannot inspect path"
+
+    try:
+        resolved = raw_path.resolve()
+    except (OSError, RuntimeError):
+        return "cannot resolve path"
+    if not resolved.is_relative_to(root_resolved):
+        return "outside the workspace"
+    rel_res = resolved.relative_to(root_resolved)
+    if _has_bad_segment(rel_res.parts):
+        return "invalid path segment"
+    if is_secret_path(raw_path, root_raw) or is_secret_path(resolved, root_resolved):
+        return "target is a protected secret file (SECRET_PATH_DENIED)"
     return None
 
 
 class _QuietFileHandler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         logger.debug("[browser-fileserver] " + fmt, *args)
+
+    def list_directory(self, path):
+        self.send_error(403, "Directory listing is disabled")
+        return None
+
+    def send_head(self):
+        root_raw = Path(self.directory)
+        try:
+            root_resolved = root_raw.resolve()
+        except OSError:
+            self.send_error(403, "Forbidden")
+            return None
+        fs_path = Path(self.translate_path(self.path))
+        if _browser_path_violation(fs_path, root_raw, root_resolved) is not None:
+            self.send_error(403, "Forbidden")
+            return None
+        if fs_path.is_dir():
+            for index_name in self.index_pages:
+                idx_path = fs_path / index_name
+                if os.path.isfile(idx_path):
+                    if _browser_path_violation(idx_path, root_raw, root_resolved) is not None:
+                        self.send_error(403, "Forbidden")
+                        return None
+                    break
+        return super().send_head()
 
 
 _file_server = None
@@ -150,7 +232,6 @@ def _plan_file_navigation(url: str, workspace) -> tuple[str, str]:
     """Map a workspace file:// URL onto the loopback file server.
     Returns (http_url, "") or ("", rejection reason)."""
     from urllib.parse import unquote as _unq, urlparse as _up
-    import pathlib as _pl
     try:
         _parts = _up(url)
     except ValueError:
@@ -158,27 +239,31 @@ def _plan_file_navigation(url: str, workspace) -> tuple[str, str]:
     if _parts.netloc not in ("", "localhost"):
         return "", "file:// network hosts are not supported — use a path inside the workspace"
     _raw = _unq(_parts.path or "")
-    if not _raw:
+    if not _raw or "\x00" in _raw:
         return "", "file:// URL has no path"
-    _path = _pl.Path(_raw)
+    _orig_path = Path(_raw)
     if len(_raw) >= 3 and _raw[0] == "/" and _raw[2] == ":":
-        _path = _pl.Path(_raw[1:])          # "/C:/ws/x" -> "C:/ws/x"
-    try:
-        _path = _path.resolve()
-        _ws = _pl.Path(str(workspace or "")).resolve() if workspace else None
-    except OSError:
-        return "", "cannot resolve the file:// path"
-    if not _ws:
+        _orig_path = Path(_raw[1:])          # "/C:/ws/x" -> "C:/ws/x"
+    if not workspace:
         return "", ("no workspace set — file:// needs a workspace (files are "
                     "auto-served) or serve the folder yourself via run_bash "
                     "(python -m http.server <port> --directory <folder>) and "
                     "open http://localhost:<port>/")
-    if not _path.is_relative_to(_ws):
-        return "", ("file:// path is outside the workspace — move the file into "
-                    "the workspace (it is then auto-served over loopback HTTP, "
-                    "ES modules and fetch work) or serve the folder yourself via "
-                    "run_bash (python -m http.server <port> --directory <folder>) "
-                    "and open http://localhost:<port>/")
+    _ws_raw = Path(str(workspace))
+    try:
+        _ws = _ws_raw.resolve()
+        _path = _orig_path.resolve()
+    except OSError:
+        return "", "cannot resolve the file:// path"
+    _violation = _browser_path_violation(_orig_path, _ws_raw, _ws)
+    if _violation is not None:
+        if _violation == "outside the workspace":
+            return "", ("file:// path is outside the workspace — move the file into "
+                        "the workspace (it is then auto-served over loopback HTTP, "
+                        "ES modules and fetch work) or serve the folder yourself via "
+                        "run_bash (python -m http.server <port> --directory <folder>) "
+                        "and open http://localhost:<port>/")
+        return "", _violation
     if not _path.exists():
         return "", f"file not found: {_path}"
     _port = _ensure_file_server(str(_ws))
@@ -262,6 +347,19 @@ def _retire_stalled_executor() -> None:
     _reset_state()
 
 
+def _apply_route_guard(route) -> None:
+    """Enforce URL/SSRF guard on every intercepted browser request, failing closed."""
+    try:
+        blocked = _guard_browser_url(route.request.url)
+    except (ValueError, OSError, TypeError, AttributeError, RuntimeError) as _guard_err:
+        logger.warning("[browser] route guard failed closed: %s", _guard_err)
+        blocked = "route guard error"
+    if blocked:
+        route.abort()
+    else:
+        route.continue_()
+
+
 def _ensure_page():
     global _playwright, _browser, _page, _console_msgs, _pageerrors
     if _page is not None:
@@ -304,16 +402,7 @@ def _ensure_page():
         _page.on("console", lambda m: _console_msgs.append(f"[{m.type}] {m.text}"))
         _page.on("pageerror", lambda e: _pageerrors.append(str(e)))
 
-        def _route_guard(route):
-            if _guard_browser_url(route.request.url):
-                route.abort()
-            else:
-                route.continue_()
-
-        try:
-            _page.route("**/*", _route_guard)
-        except Exception as _route_err:
-            logger.debug("[browser] route guard hook failed: %s", _route_err)
+        _page.route("**/*", _apply_route_guard)
         _page_ok = True
     finally:
         if not _page_ok:

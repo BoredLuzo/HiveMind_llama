@@ -73,7 +73,10 @@ def enabled() -> bool:
 def _int_setting(key: str, default: int) -> int:
     try:
         from settings import load_settings
-        return int(load_settings().get(key, default) or default)
+        val = load_settings().get(key, default)
+        if val is None or val == "":
+            return default
+        return int(val)
     except Exception:
         return default
 
@@ -218,6 +221,8 @@ def _k32():
     k = _win_dll("kernel32", use_last_error=True)
     k.CreateJobObjectW.restype = _wt.HANDLE
     k.CreateJobObjectW.argtypes = [_wt.LPCVOID, _wt.LPCWSTR]
+    k.SetInformationJobObject.restype = _wt.BOOL
+    k.SetInformationJobObject.argtypes = [_wt.HANDLE, _wt.INT, _wt.LPVOID, _wt.DWORD]
     k.AssignProcessToJobObject.restype = _wt.BOOL
     k.AssignProcessToJobObject.argtypes = [_wt.HANDLE, _wt.HANDLE]
     k.TerminateJobObject.restype = _wt.BOOL

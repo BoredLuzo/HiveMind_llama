@@ -313,4 +313,22 @@ check("tts enable still warms up the voice",
 check("removed updateComposerToolStatus is not referenced anywhere",
       "updateComposerToolStatus" not in html and "updateComposerToolStatus" not in app)
 
+# ── STUCK SPEAKER BUTTON GUARD (2026-11-19) ──────────────────────────────
+# Pre-call text before a tool_call used to trigger _speakSyncSoon() -> show
+# .msg-speak, then tool_call collapsed the text into .pre-call-reasoning
+# without re-syncing, leaving the speaker button stuck visible under tool
+# chips with zero text to speak.
+_sync_fn = app.split("function _syncSpeakButtons")[1].split("\nfunction ")[0]
+check("speaker button stays hidden while bubble is still .live",
+      "classList.contains('live')" in _sync_fn and "!isLive && _answerLenOnly(body) > 8" in _sync_fn)
+check("steer-note chrome is stripped from speakable text",
+      "'.steer-note'" in _chrome)
+check("doneAgent syncs speaker button after removing .live",
+      "_syncSpeakButtons(S.curAgent.body.closest('.ablock'))" in app)
+check("tool_call re-syncs speaker button after collapsing pre-call reasoning",
+      "_syncSpeakButtons(_tcBody.closest('.ablock'))" in app)
+_stop_fn = app.split("function _voiceStopAudio")[1].split("\nfunction ")[0]
+check("_voiceStopAudio clears stuck .playing class on speaker buttons",
+      ".msg-speak.playing" in _stop_fn)
+
 sys.exit(h.finish("voice_card"))

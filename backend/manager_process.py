@@ -10,6 +10,7 @@ from .llama_manager_utils import (
     _tcp_alive, _kill_port_sync, _nm,
 )
 import asyncio
+import contextlib
 import httpx
 import time
 import logging
@@ -111,105 +112,156 @@ class LlamaProcessMixin:
             return True   # snapshot-dead process no longer dead
         return False
 
-    async def _find_loaded(self, model: str, *,
-                           lock_held: bool = False) -> Optional[ModelSlot]:
+    def _lock_ctx(self, *, lock_held: bool):
+        """Return self._lock unless already held by caller or absent on test doubles."""
+        if lock_held:
+            return contextlib.nullcontext()
+        lock = getattr(self, "_lock", None)
+        return lock if lock is not None else contextlib.nullcontext()
 
+    @contextlib.asynccontextmanager
+    async def _unlocked_if_held(self, *, lock_held: bool):
+        """Temporarily release self._lock when lock_held=True and re-acquire in finally."""
+        lock = getattr(self, "_lock", None) if lock_held else None
+        if lock is not None:
+            lock.release()
+        try:
+            yield
+        finally:
+            if lock is not None:
+                pending_cancel: asyncio.CancelledError | None = None
+                while True:
+                    try:
+                        await lock.acquire()
+                        break
+                    except asyncio.CancelledError as exc:
+                        pending_cancel = exc
+                if pending_cancel is not None:
+                    raise pending_cancel
 
+    def _find_probe_candidate(
+        self,
+        model: str,
+        checked_orphan: set[int],
+        checked_rehab: set[int],
+    ) -> tuple[str, object]:
+        """Select the next matching slot or probe candidate under the manager lock."""
         for slot in self._slots:
             if _nm(slot.model) != _nm(model):
                 continue
             if slot._loading:
                 # LOAD-DIED-GUARD (2026-08-31): If the load process has already
                 # died, _loading stays True and _ready_event is never
-                # set → ensure_loaded would wait 240s on a dead event.
-                # Reset the slot and keep searching (caller reloads).
+                # set -> ensure_loaded would wait 240s on a dead event.
                 if slot.process is not None and slot.process.poll() is not None:
-                    logger.warning(
-                        "ensure_loaded: load process for %s died (slot %s) - resetting slot.",
-                        model, slot.slot_id,
+                    return (
+                        "dead_loading",
+                        (slot, slot.process, getattr(slot, "_lifecycle_gen", None)),
                     )
-                    await _kill_slot_async(slot)
-                    continue
-                return slot
+                return ("found", slot)
             if slot.is_running:
                 if slot._orphan_port is None:
-                    return slot
-                # Orphan-Slot: re-verify via TCP+API. LOCK-GUARD (audit
-                # 2026-11-03): unlocked callers crashed on release() of an
-                # unheld lock when the matched slot carried an orphan marker.
-                # F5-RACE (deep audit 2026-11-07): probe a snapshot, never the
-                # live slot — the slot can be claimed/reset while the lock is
-                # released; re-validated before any mutation below.
-                _snap = _probe_snapshot(slot)
-                # LOCK-OWNERSHIP (deep audit 2026-11-08): only release when
-                # the CALLER actually holds the manager lock. `locked()` is
-                # true for any holder, so the old probe could drop another
-                # coroutine's critical section.
-                _held = lock_held
-                if _held:
-                    self._lock.release()
-                try:
-                    api_ok = await self._verify_port_api(_snap[0])
-                finally:
-                    if _held:
-                        await self._lock.acquire()
-                if self._probe_snapshot_changed(slot, model, _snap):
-                    # Slot claimed/changed during the probe window — leave it
-                    # untouched and continue the normal lookup path.
-                    return self._rescan_active_slot(model)
-                if api_ok:
-                    if not slot._ready_event.is_set():
-                        slot._ready_event.set()
-                    return slot
-                logger.warning(
-                    f"Orphan slot stale: {model} on port {slot.port} no longer usable - discarding slot"
-                )
-                slot.model = None
-                slot._orphan_port = None
-                slot._loading = False
-                slot._ready_event.clear()
+                    return ("found", slot)
+                if id(slot) not in checked_orphan:
+                    return ("orphan", (slot, _probe_snapshot(slot)))
         for slot in self._slots:
-            if _nm(slot.model) == _nm(model) and not slot.is_running and not slot._loading:
-                # LOCK-GUARD (audit 2026-11-03): see the orphan branch above.
-                # F5-RACE (deep audit 2026-11-07): snapshot before the unlocked
-                # probe; a free slot claimed during the probe (loader starts,
-                # binds later) must not be "stale-discarded" below.
-                _snap = _probe_snapshot(slot)
-                # LOCK-OWNERSHIP (deep audit 2026-11-08): only release when
-                # the CALLER actually holds the manager lock. `locked()` is
-                # true for any holder, so the old probe could drop another
-                # coroutine's critical section.
-                _held = lock_held
-                if _held:
-                    self._lock.release()
-                try:
-                    api_ok = await self._verify_port_api(_snap[0])
-                finally:
-                    if _held:
-                        await self._lock.acquire()
-                if self._probe_snapshot_changed(slot, model, _snap):
-                    # Slot claimed/changed during the probe window — leave it
-                    # untouched and continue the normal lookup path.
-                    return self._rescan_active_slot(model)
-                if api_ok:
-                    # ORPHAN-REGISTRY (deep audit 2026-11-08): mark the adopted
-                    # server so is_running/idle/LRU can manage it and the next
-                    # lookup does not probe again.
-                    slot._orphan_port = slot.port
-                    if not slot._ready_event.is_set():
-                        slot._ready_event.set()
-                    self._metric_inc("orphan_rehabilitations")
-                    logger.info(f"Orphan slot rehabilitated: {model} on port {slot.port}")
-                    return slot
-                else:
-                    logger.warning(
-                        f"Port {slot.port} answers no llama API - "
-                        f"discarding stale slot for {model}"
-                    )
-                    slot.model = None
-                    slot._orphan_port = None
-                    slot._ready_event.clear()
-        return None
+            if (
+                _nm(slot.model) == _nm(model)
+                and not slot.is_running
+                and not slot._loading
+                and id(slot) not in checked_rehab
+            ):
+                return ("rehab", (slot, _probe_snapshot(slot)))
+        return ("none", None)
+
+    def _apply_probe_result(
+        self,
+        kind: str,
+        slot: ModelSlot,
+        model: str,
+        snap: tuple,
+        api_ok: bool,
+    ) -> tuple[bool, Optional[ModelSlot]]:
+        """Validate snapshot under lock and apply orphan/rehab probe result."""
+        if self._probe_snapshot_changed(slot, model, snap):
+            # Slot claimed/changed during the probe window — leave it
+            # untouched and continue the normal lookup path.
+            return (True, self._rescan_active_slot(model))
+        if kind == "orphan":
+            if api_ok:
+                if not slot._ready_event.is_set():
+                    slot._ready_event.set()
+                return (True, slot)
+            logger.warning(
+                f"Orphan slot stale: {model} on port {slot.port} no longer usable - discarding slot"
+            )
+            slot.model = None
+            slot._orphan_port = None
+            slot._loading = False
+            slot._ready_event.clear()
+            return (False, None)
+        if api_ok:
+            # ORPHAN-REGISTRY (deep audit 2026-11-08): mark the adopted
+            # server so is_running/idle/LRU can manage it and the next
+            # lookup does not probe again.
+            slot._orphan_port = slot.port
+            if not slot._ready_event.is_set():
+                slot._ready_event.set()
+            self._metric_inc("orphan_rehabilitations")
+            logger.info(f"Orphan slot rehabilitated: {model} on port {slot.port}")
+            return (True, slot)
+        logger.warning(
+            f"Port {slot.port} answers no llama API - "
+            f"discarding stale slot for {model}"
+        )
+        slot.model = None
+        slot._orphan_port = None
+        slot._ready_event.clear()
+        return (False, None)
+
+    async def _find_loaded(self, model: str, *,
+                           lock_held: bool = False) -> Optional[ModelSlot]:
+        checked_orphan: set[int] = set()
+        checked_rehab: set[int] = set()
+        checked_dead: set[int] = set()
+        while True:
+            async with self._lock_ctx(lock_held=lock_held):
+                action, payload = self._find_probe_candidate(
+                    model, checked_orphan, checked_rehab
+                )
+                if action == "dead_loading":
+                    slot, _dead_proc, _dead_gen = payload
+                    if id(slot) in checked_dead:
+                        return None
+                    checked_dead.add(id(slot))
+            if action == "found":
+                return payload
+            if action == "none":
+                return None
+            if action == "dead_loading":
+                slot, dead_proc, dead_gen = payload
+                logger.warning(
+                    "ensure_loaded: load process for %s died (slot %s) - resetting slot.",
+                    model, slot.slot_id,
+                )
+                if (
+                    slot.process is dead_proc
+                    and getattr(slot, "_lifecycle_gen", None) == dead_gen
+                ):
+                    async with self._unlocked_if_held(lock_held=lock_held):
+                        await _kill_slot_async(slot)
+                continue
+            slot, snap = payload
+            if action == "orphan":
+                checked_orphan.add(id(slot))
+            else:
+                checked_rehab.add(id(slot))
+            async with self._unlocked_if_held(lock_held=lock_held):
+                api_ok = await self._verify_port_api(snap[0])
+            async with self._lock_ctx(lock_held=lock_held):
+                done, res = self._apply_probe_result(action, slot, model, snap, api_ok)
+            if done:
+                return res
 
     async def _find_free_slot(self) -> Optional[ModelSlot]:
         for slot in self._slots:

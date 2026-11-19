@@ -120,6 +120,41 @@ def read_workspace_settings(workspace: Path) -> dict:
         return {}
 
 
+def _resolve_workspace_python(workspace: Path) -> str:
+    """Preferred Python executable for Python LSPs: workspace .venv > system Python > engine venv."""
+    from infra.child_env import resolve_workspace_python
+    py = resolve_workspace_python(workspace)
+    return str(py) if py is not None else str(sys.executable or "")
+
+
+def _default_server_settings(language_id: str, workspace: Path) -> dict:
+    """Safe built-in LSP configuration defaults needed for accurate diagnostics.
+
+    - python (pyright): point python.pythonPath at workspace/.venv or active
+      sys.executable so packages installed via run_bash/install_package resolve.
+    - css (vscode-css-language-server): enable validation (server disables
+      diagnostics when workspace/configuration returns null for 'css').
+    Explicit .vscode/settings.json values merge on top when opt-in forwarding is on.
+    """
+    lang = str(language_id or "").strip().lower()
+    if lang == "python":
+        py = _resolve_workspace_python(workspace)
+        return {"python": {"pythonPath": py}} if py else {}
+    if lang == "css":
+        return {"css": {"validate": True}, "scss": {"validate": True}, "less": {"validate": True}}
+    return {}
+
+
+def _deep_merge_cfg(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge_cfg(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def _lookup_section(settings: dict, section) -> object:
     """Resolve a dotted workspace/configuration section ("a.b" -> a.b)."""
     if not isinstance(settings, dict):
@@ -177,6 +212,7 @@ CLIENT_CAPABILITIES: dict = {
         "workspaceFolders": True,
         "symbol": {"dynamicRegistration": False},
         "didChangeConfiguration": {"dynamicRegistration": False},
+        "didChangeWatchedFiles": {"dynamicRegistration": True},
     },
     "general": {"positionEncodings": ["utf-16"]},
 }
@@ -330,6 +366,7 @@ class _LspConnection:
         # per-client lifecycle lock: one request at a time, start/close
         # excluded by the manager's lifecycle lock
         self._lock = asyncio.Lock()
+        self._stdin_lock = asyncio.Lock()
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._answer_tasks: set[asyncio.Task] = set()
@@ -354,6 +391,7 @@ class _LspConnection:
         self._doc_text: dict[str, str] = {}
         self.init_params: dict = {}
         self.server_capabilities: dict = {}
+        self._pull_unsupported: bool = False
         # .vscode/settings.json content, set by the manager before start()
         self.config_settings: dict = {}
         self.dead = False
@@ -368,22 +406,35 @@ class _LspConnection:
         _argv = list(self.argv)
         if (sys.platform == "win32" and _argv
                 and str(_argv[0]).lower().endswith((".cmd", ".bat"))):
-            _argv = [os.environ.get("COMSPEC", "cmd.exe"), "/c", *_argv]
+            _argv = registry._wrap_windows_shell(_argv)
         try:
-            self._proc = await asyncio.create_subprocess_exec(
-                *_argv,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(self.workspace) if self.workspace.is_dir() else None,
-                env=_lsp_child_env(),
-                # POSIX: own process group so the whole tree can be signalled.
-                # Windows: no console window (the engine often runs under
-                # pythonw); the tree kill itself happens in _kill().
-                start_new_session=(sys.platform != "win32"),
-                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                               if sys.platform == "win32" else 0),
-            )
+            if sys.platform == "win32" and registry._is_cmd_wrapped(_argv):
+                if any(c in "\x00\n\r" for tok in _argv[3:] for c in str(tok)):
+                    raise ValueError("LSP command token contains NUL or newline characters")
+                self._proc = await asyncio.create_subprocess_shell(
+                    " ".join(_argv[3:]),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(self.workspace) if self.workspace.is_dir() else None,
+                    env=_lsp_child_env(),
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                self._proc = await asyncio.create_subprocess_exec(
+                    *_argv,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(self.workspace) if self.workspace.is_dir() else None,
+                    env=_lsp_child_env(),
+                    # POSIX: own process group so the whole tree can be signalled.
+                    # Windows: no console window (the engine often runs under
+                    # pythonw); the tree kill itself happens in _kill().
+                    start_new_session=(sys.platform != "win32"),
+                    creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                   if sys.platform == "win32" else 0),
+                )
         except (OSError, ValueError) as exc:
             raise LspError(f"could not start {self.language_id} server "
                            f"({' '.join(self.argv)}): {exc}") from exc
@@ -445,18 +496,19 @@ class _LspConnection:
 
     # -- json-rpc over stdio -------------------------------------------
     async def _send(self, payload: dict) -> None:
-        proc = self._proc
-        if proc is None or proc.stdin is None or proc.returncode is not None:
-            raise LspError(f"{self.language_id} server is not running")
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        try:
-            # one frame = header block + JSON body, LSP Content-Length style
-            proc.stdin.write(f"Content-Length: {len(data)}\r\n\r\n"
-                             .encode("ascii") + data)
-            await proc.stdin.drain()
-        except (OSError, ValueError) as exc:
-            raise LspError(f"write to {self.language_id} server failed: "
-                           f"{exc}") from exc
+        frame = f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") + data
+        async with self._stdin_lock:
+            proc = self._proc
+            if proc is None or proc.stdin is None or proc.returncode is not None:
+                raise LspError(f"{self.language_id} server is not running")
+            try:
+                # one frame = header block + JSON body, LSP Content-Length style
+                proc.stdin.write(frame)
+                await proc.stdin.drain()
+            except (OSError, ValueError) as exc:
+                raise LspError(f"write to {self.language_id} server failed: "
+                               f"{exc}") from exc
 
     async def notify(self, method: str, params: dict | None = None) -> None:
         payload: dict = {"jsonrpc": "2.0", "method": method}
@@ -534,9 +586,9 @@ class _LspConnection:
             self._die(f"{self.language_id} server sent a frame without "
                       f"Content-Length")
             return None
-        if length > MAX_MESSAGE_BYTES:
-            self._die(f"{self.language_id} server sent a frame over "
-                      f"{MAX_MESSAGE_BYTES // (1024 * 1024)} MiB")
+        if length < 0 or length > MAX_MESSAGE_BYTES:
+            self._die(f"{self.language_id} server sent an invalid frame length "
+                      f"({length} bytes)")
             return None
         try:
             body = await proc.stdout.readexactly(length)
@@ -788,9 +840,15 @@ class _LspConnection:
                     if got is None or expected is None or got >= expected:
                         break
                 await asyncio.sleep(DIAG_POLL_S)
-        if allow_pull and self.supports_pull_diagnostics():
+        if allow_pull and not self._pull_unsupported and self.supports_pull_diagnostics():
             try:
                 pulled = await self.pull_diagnostics(uri)
+            except LspServerError as exc:
+                if exc.code == -32601:
+                    self._pull_unsupported = True
+                logger.debug("[LSP:%s] pull diagnostics failed: %s",
+                             self.language_id, exc)
+                pulled = None
             except (LspError, OSError, asyncio.TimeoutError) as exc:
                 logger.debug("[LSP:%s] pull diagnostics failed: %s",
                              self.language_id, exc)
@@ -819,16 +877,19 @@ class _LspConnection:
         proc = self._proc
         if proc is not None and proc.returncode is None and not self.dead:
             await self._goodbye()
-        if self._reader_task is not None:
-            self._reader_task.cancel()
-            self._reader_task = None
-        for task in list(self._answer_tasks):
-            task.cancel()
+        self.dead = True
+        cur = asyncio.current_task()
+        tasks_to_wait: list[asyncio.Task] = []
+        for task in (self._reader_task, self._stderr_task, *list(self._answer_tasks)):
+            if task is not None and task is not cur and not task.done():
+                task.cancel()
+                tasks_to_wait.append(task)
+        self._reader_task = None
+        self._stderr_task = None
         self._answer_tasks.clear()
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
-            self._stderr_task = None
         await self._kill()
+        if tasks_to_wait:
+            await asyncio.gather(*tasks_to_wait, return_exceptions=True)
 
     async def _goodbye(self) -> None:
         """LSP-polite goodbye, best effort: the kill path owns the failure
@@ -875,25 +936,37 @@ class _LspConnection:
                     proc.terminate()
                 except (ProcessLookupError, OSError):
                     pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_S)
-                return
-            except (asyncio.TimeoutError, ProcessLookupError, OSError):
-                pass
-            try:
-                proc.kill()
-            except (ProcessLookupError, OSError):
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_HARD_S)
-            except (asyncio.TimeoutError, ProcessLookupError, OSError):
-                pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_S)
+                    return
+                except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                    pass
+                try:
+                    proc.kill()
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_HARD_S)
+                except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                    pass
+            else:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=KILL_WAIT_S)
+                except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                    pass
         finally:
             # PROACTOR-CLOSE (2026-11-18): close subprocess pipe transports
             # before asyncio.run() tears down the loop so Windows Proactor GC
             # does not later call fileno() on an already-closed pipe.
             tr = getattr(proc, "_transport", None)
             if tr is not None:
+                for fd in (0, 1, 2):
+                    try:
+                        ptr = tr.get_pipe_transport(fd) if hasattr(tr, "get_pipe_transport") else None
+                        if ptr is not None:
+                            ptr.close()
+                    except (OSError, RuntimeError, ValueError):
+                        pass
                 try:
                     tr.close()
                 except (OSError, RuntimeError, ValueError):
@@ -1007,8 +1080,10 @@ class LspManager:
                                f"'{language_id}' (tried: {names})")
             conn = _LspConnection(language_id, argv, self.workspace,
                                   self._timeout_s)
+            conn.config_settings = _default_server_settings(language_id, self.workspace)
             if self._allow_ws_settings:
-                conn.config_settings = read_workspace_settings(self.workspace)
+                conn.config_settings = _deep_merge_cfg(
+                    conn.config_settings, read_workspace_settings(self.workspace))
             try:
                 await conn.start()
             except LspError as exc:
@@ -1080,6 +1155,7 @@ class LspManager:
                 if not conn.dead:
                     logger.info("[LSP] idle reaper: closed %s (idle %.0fs)",
                                 lang, now - last)
+                if getattr(conn, "_proc", None) is not None or not conn.dead:
                     self._spawn(conn.close())
         if not self._conns and self._reaper_task is not None:
             self._reaper_task.cancel()
@@ -1108,12 +1184,14 @@ class LspManager:
         conn = self._conns.get(str(language_id).strip().lower())
         return conn is not None and not conn.dead
 
-    def broadcast_watched_change(self, paths) -> int:
+    def broadcast_watched_change(self, paths, *, created: bool = False) -> int:
         """workspace/didChangeWatchedFiles for files HiveMind itself wrote.
 
-        Keeps workspace-wide indexes (gopls, rust-analyzer) current without a
-        real file watcher; external edits are still picked up lazily on the
-        next tool call (full-text sync). Returns conns notified."""
+        Keeps workspace-wide indexes (pyright, gopls, rust-analyzer) current
+        without a real file watcher; pass created=True for newly created files
+        so servers that cache directory listings (pyright) invalidate them.
+        Returns conns notified."""
+        change_type = 1 if created else 2
         changes = []
         for raw in (paths or []):
             try:
@@ -1122,7 +1200,7 @@ class LspManager:
                 # not leak as a watched-change URI to the server.
                 p.relative_to(self.workspace)
                 changes.append({"uri": canonical_uri(path_to_uri(p)),
-                                "type": 2})   # Changed
+                                "type": change_type})
             except (OSError, ValueError):
                 continue
         if not changes:
@@ -1137,6 +1215,29 @@ class LspManager:
                 continue
             self._spawn(conn.notify(
                 "workspace/didChangeWatchedFiles", {"changes": changes}))
+            sent += 1
+        return sent
+
+    def refresh_config(self, languages: tuple[str, ...] | None = None) -> int:
+        """Re-apply built-in + workspace config and notify running servers.
+
+        Used after package installs / venv creation so servers like Pyright
+        re-scan site-packages without a full restart."""
+        wanted = {str(x).strip().lower() for x in languages} if languages else None
+        sent = 0
+        for lang, conn in list(self._conns.items()):
+            if conn.dead or (wanted is not None and lang not in wanted):
+                continue
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                continue
+            cfg = _default_server_settings(lang, self.workspace)
+            if self._allow_ws_settings:
+                cfg = _deep_merge_cfg(cfg, read_workspace_settings(self.workspace))
+            conn.config_settings = cfg
+            self._spawn(conn.notify("workspace/didChangeConfiguration",
+                                    {"settings": dict(cfg)}))
             sent += 1
         return sent
 
@@ -1322,15 +1423,22 @@ class LspManager:
     # -- shutdown ------------------------------------------------------
     async def close_all(self) -> None:
         """Shut every running language server down (engine exit, tests)."""
-        if self._reaper_task is not None:
-            self._reaper_task.cancel()
-            self._reaper_task = None
+        reaper = self._reaper_task
+        self._reaper_task = None
+        if reaper is not None and not reaper.done():
+            reaper.cancel()
         async with self._lifecycle:
             conns = list(self._conns.values())
             self._conns = {}
+            self._last_used.clear()
         for conn in conns:
             try:
                 await conn.close()
             except (OSError, LspError) as exc:
                 logger.info("[LSP] closing %s failed: %s",
                             conn.language_id, exc)
+        pending_bg = [t for t in list(self._bg_tasks) if not t.done()]
+        if reaper is not None and not reaper.done():
+            pending_bg.append(reaper)
+        if pending_bg:
+            await asyncio.gather(*pending_bg, return_exceptions=True)

@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from settings import DEFAULT_SETTINGS              # noqa: E402
+from settings_defaults import SETTINGS_INTERNAL_KEYS  # noqa: E402
 from deploy.settings_ui_scan import (              # noqa: E402
     exempt_keys, in_ui, orphans,
 )
@@ -49,8 +50,11 @@ check("1c no key is both exposed and exempt",
       not (exposed & exempt), f"({len(exposed & exempt)} overlaps)")
 check("2a the UI scan actually finds settings", len(exposed) > 100,
       f"({len(exposed)} exposed)")
-check("2b the exemption file is small enough to review", len(exempt) < 130,
-      f"({len(exempt)} exempt)")
+check("2b the exemption file is strictly minimal (<15 pure internal keys)",
+      len(exempt) < 15, f"({len(exempt)} exempt)")
+check("2c exempt file matches SETTINGS_INTERNAL_KEYS",
+      exempt == set(SETTINGS_INTERNAL_KEYS),
+      f"(diff={sorted(exempt ^ set(SETTINGS_INTERNAL_KEYS))})")
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

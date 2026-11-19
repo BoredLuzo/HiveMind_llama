@@ -44,7 +44,7 @@ _load_cache_data: dict | None = None
 _last_sync_stat: tuple | None = None
 
 
-def load_settings() -> dict:
+def load_settings(*, strict: bool = False) -> dict:
     """Cached based on mtime.
 
     Avoids per-call disk read + JSON parse + ~60-line migration
@@ -52,6 +52,10 @@ def load_settings() -> dict:
     and is executed there). Each reader gets a flat copy so that
     mutations of the returned dict do not corrupt the cache. save_settings()
     changes the file
+
+    When strict=True, bypasses the in-memory cache and propagates disk/parse
+    failures (after brief retries on transient OSError/PermissionError) instead
+    of falling back to DEFAULT_SETTINGS.
     """
     global _load_cache_key, _load_cache_data, _last_sync_stat
     _key = None
@@ -61,113 +65,133 @@ def load_settings() -> dict:
     except Exception:
         _key = None
     _last_sync_stat = _key
-    if _key is not None and _key == _load_cache_key and _load_cache_data is not None:
+    if not strict and _key is not None and _key == _load_cache_key and _load_cache_data is not None:
         return copy.deepcopy(_load_cache_data)
-    data = _load_settings_from_disk()
+    data = _load_settings_from_disk(strict=strict)
     if _key is not None:
         _load_cache_key = _key
         _load_cache_data = copy.deepcopy(data)
+    elif strict:
+        _load_cache_key = None
+        _load_cache_data = None
     return data
 
 
-def _load_settings_from_disk() -> dict:
+def _load_settings_from_disk(*, strict: bool = False) -> dict:
     if SETTINGS_FILE.exists():
-        try:
-            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            if "image_forces_pipeline" in data and "image_desc_full_pipeline" not in data:
-                data["image_desc_full_pipeline"] = data.pop("image_forces_pipeline")
-            data.pop("duo_important_task_default", None)
-            for _dead_key in ("duo_agentic_post_review_enabled",
-                              "duo_agentic_post_review_max_tokens",
-                              "duo_agentic_post_review_context_injection"):
-                data.pop(_dead_key, None)
-            # MIGRATION (presets re-enabled 2026-09-02): `active_preset` persists
-            # so the UI can highlight the loaded preset; the removed runtime
-            # override keys (duo presets/runtime-profile) stay stripped.
-            for _dead_preset_key in ("duo_use_presets",
-                                     "duo_use_preset_models",
-                                     "duo_runtime_profile_lock_override"):
-                data.pop(_dead_preset_key, None)
-            # MIGRATION (0.99.2): duo_planner_content_tokens -> duo_planner_max_tokens.
-            _old_cap = data.get("duo_planner_content_tokens")
-            if "duo_planner_max_tokens" not in data:
-                if _old_cap is not None:
-                    try:
-                        _old_cap_i = int(_old_cap)
-                    except (TypeError, ValueError):
-                        _old_cap_i = 0
-                    data["duo_planner_max_tokens"] = _old_cap_i if _old_cap_i > 0 else DEFAULT_SETTINGS["duo_planner_max_tokens"]
-                else:
-                    data["duo_planner_max_tokens"] = DEFAULT_SETTINGS["duo_planner_max_tokens"]
-            data.pop("duo_planner_content_tokens", None)
-            _xa = data.get("exploration_agent")
-            if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
-                _xa["model"] = DEFAULT_SETTINGS["exploration_agent"]["model"]
-            # if data.get("disable_thinking_in_planner") is True:
-            #     data["disable_thinking_in_planner"] = False
-            _tbc = data.get("_thinking_before_chunking")
-            if isinstance(_tbc, bool) and data.get("duo_chunking"):
-                data["duo_agentic_thinking"] = _tbc
-            if data.get("duo_parallel_preexplore") == "auto":
-                data["duo_parallel_preexplore"] = True
-            # MIGRATION (1.6.2): drop legacy pinned "bing,duckduckgo" + "all" defaults
-            # so upgraded installs use healthy SearXNG engines instead of Bing-only spam.
-            if str(data.get("searxng_engines") or "").strip().lower() in ("bing,duckduckgo", "bing, duckduckgo"):
-                data["searxng_engines"] = DEFAULT_SETTINGS["searxng_engines"]
-                if str(data.get("searxng_language") or "").strip().lower() == "all":
-                    data["searxng_language"] = DEFAULT_SETTINGS["searxng_language"]
-            for _ws_key in ("searxng_engines", "searxng_language"):
-                _ws_val = data.get(_ws_key)
-                if _ws_val is not None and not str(_ws_val).strip():
-                    data[_ws_key] = ""
-            data.pop("pre_explore_parallel", None)
-            # STALE-KEYS (2026-10-31, audit): keys from older UI/preset
-            # exports with no production reader. OUT of DEFAULT_SETTINGS and
-            # dropped on load so they cannot round-trip forever.
-            for _stale_key in (
-                    "automap_code_duo_enabled", "automap_duo_pre_explore",
-                    "automap_duo_parallel_preexplore",
-                    "automap_pipeline_websearch_enabled",
-                    "duo_distilled_executor", "startup_preload_analyst",
-                    "startup_preload_coder", "startup_preload_judge_in_agentic",
-                    "searxng_enabled", "tool_profile", "budget_schema_budget",
-                    "budget_tool_result_cap", "judge_bias",
-                    "duo_candidate_models",
-                    "git_branch"):
-                data.pop(_stale_key, None)
-    # MIGRATION: duo_test_feedback → new split toggles (chunk/final)
-            _legacy_tf = data.get("duo_test_feedback") if "duo_test_feedback" in data else None
-            if "duo_test_feedback_chunk" not in data and _legacy_tf is not None:
-                data["duo_test_feedback_chunk"] = bool(_legacy_tf)
-            if "duo_test_feedback_final" not in data and _legacy_tf is not None:
-                data["duo_test_feedback_final"] = bool(_legacy_tf)
-            # duo_planner_model persists across restarts. (The forced None here
-            # wiped a user/preset-selected planner model on every reload —
-            # live: preset "1" Loaded hermes as planner model, after a restart
-            # the planner silently fell back to the coder model.)
-            if "duo_planner_model" not in data:
-                data["duo_planner_model"] = None
-            # MIGRATION: moe_cpu_experts int (globaler Override) -> dict (per-Model)
-            if not isinstance(data.get("moe_cpu_experts"), dict):
-                data["moe_cpu_experts"] = {}
-            for k, v in DEFAULT_SETTINGS.items():
-                if k not in data:
-                    data[k] = copy.deepcopy(v)
-    # Fix: merge individual agent keys from DEFAULT_AGENT_CFG.
-            _sa = data.setdefault("agents", {})
-            for _ak, _av in DEFAULT_AGENT_CFG.items():
-                if _ak not in _sa:
-                    _sa[_ak] = copy.deepcopy(_av)
-            for _ak, _av in DEFAULT_AGENT_CFG.items():
-                if _ak in _sa and isinstance(_sa[_ak], dict):
-                    _sa[_ak].setdefault("model", _av.get("model", ""))
-                    _sa[_ak].setdefault("temperature", _av.get("temperature", 0.3))
-                    _sa[_ak].setdefault("max_tokens", _av.get("max_tokens", 400))
-                    _sa[_ak].setdefault("thinking", _av.get("thinking", False))
-                    _sa[_ak].setdefault("thinking_budget", _av.get("thinking_budget", 0))
-            return data
-        except Exception:
-            pass
+        _max_attempts = 4 if strict else 1
+        for _attempt in range(_max_attempts):
+            try:
+                data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError(
+                        f"settings.json must contain a JSON object, got {type(data).__name__}"
+                    )
+                if "image_forces_pipeline" in data and "image_desc_full_pipeline" not in data:
+                    data["image_desc_full_pipeline"] = data.pop("image_forces_pipeline")
+                data.pop("duo_important_task_default", None)
+                for _dead_key in ("duo_agentic_post_review_enabled",
+                                  "duo_agentic_post_review_max_tokens",
+                                  "duo_agentic_post_review_context_injection"):
+                    data.pop(_dead_key, None)
+                # MIGRATION (presets re-enabled 2026-09-02): `active_preset` persists
+                # so the UI can highlight the loaded preset; the removed runtime
+                # override keys (duo presets/runtime-profile) stay stripped.
+                for _dead_preset_key in ("duo_use_presets",
+                                         "duo_use_preset_models",
+                                         "duo_runtime_profile_lock_override"):
+                    data.pop(_dead_preset_key, None)
+                # MIGRATION (0.99.2): duo_planner_content_tokens -> duo_planner_max_tokens.
+                _old_cap = data.get("duo_planner_content_tokens")
+                if "duo_planner_max_tokens" not in data:
+                    if _old_cap is not None:
+                        try:
+                            _old_cap_i = int(_old_cap)
+                        except (TypeError, ValueError):
+                            _old_cap_i = 0
+                        data["duo_planner_max_tokens"] = _old_cap_i if _old_cap_i > 0 else DEFAULT_SETTINGS["duo_planner_max_tokens"]
+                    else:
+                        data["duo_planner_max_tokens"] = DEFAULT_SETTINGS["duo_planner_max_tokens"]
+                data.pop("duo_planner_content_tokens", None)
+                _xa = data.get("exploration_agent")
+                if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
+                    _xa["model"] = DEFAULT_SETTINGS["exploration_agent"]["model"]
+                # if data.get("disable_thinking_in_planner") is True:
+                #     data["disable_thinking_in_planner"] = False
+                _tbc = data.get("_thinking_before_chunking")
+                if isinstance(_tbc, bool) and data.get("duo_chunking"):
+                    data["duo_agentic_thinking"] = _tbc
+                if data.get("duo_parallel_preexplore") == "auto":
+                    data["duo_parallel_preexplore"] = True
+                # MIGRATION (1.6.2): drop legacy pinned "bing,duckduckgo" + "all" defaults
+                # so upgraded installs use healthy SearXNG engines instead of Bing-only spam.
+                if str(data.get("searxng_engines") or "").strip().lower() in ("bing,duckduckgo", "bing, duckduckgo"):
+                    data["searxng_engines"] = DEFAULT_SETTINGS["searxng_engines"]
+                    if str(data.get("searxng_language") or "").strip().lower() == "all":
+                        data["searxng_language"] = DEFAULT_SETTINGS["searxng_language"]
+                for _ws_key in ("searxng_engines", "searxng_language"):
+                    _ws_val = data.get(_ws_key)
+                    if _ws_val is not None and not str(_ws_val).strip():
+                        data[_ws_key] = ""
+                data.pop("pre_explore_parallel", None)
+                # STALE-KEYS (2026-10-31, audit): keys from older UI/preset
+                # exports with no production reader. OUT of DEFAULT_SETTINGS and
+                # dropped on load so they cannot round-trip forever.
+                for _stale_key in (
+                        "automap_code_duo_enabled", "automap_duo_pre_explore",
+                        "automap_duo_parallel_preexplore",
+                        "automap_pipeline_websearch_enabled",
+                        "duo_distilled_executor", "startup_preload_analyst",
+                        "startup_preload_coder", "startup_preload_judge_in_agentic",
+                        "searxng_enabled", "tool_profile", "budget_schema_budget",
+                        "budget_tool_result_cap", "judge_bias",
+                        "duo_candidate_models",
+                        "git_branch"):
+                    data.pop(_stale_key, None)
+                # MIGRATION: duo_test_feedback → new split toggles (chunk/final)
+                _legacy_tf = data.get("duo_test_feedback") if "duo_test_feedback" in data else None
+                if "duo_test_feedback_chunk" not in data and _legacy_tf is not None:
+                    data["duo_test_feedback_chunk"] = bool(_legacy_tf)
+                if "duo_test_feedback_final" not in data and _legacy_tf is not None:
+                    data["duo_test_feedback_final"] = bool(_legacy_tf)
+                # duo_planner_model persists across restarts. (The forced None here
+                # wiped a user/preset-selected planner model on every reload —
+                # live: preset "1" Loaded hermes as planner model, after a restart
+                # the planner silently fell back to the coder model.)
+                if "duo_planner_model" not in data:
+                    data["duo_planner_model"] = None
+                # MIGRATION: moe_cpu_experts int (globaler Override) -> dict (per-Model)
+                if not isinstance(data.get("moe_cpu_experts"), dict):
+                    data["moe_cpu_experts"] = {}
+                for k, v in DEFAULT_SETTINGS.items():
+                    if k not in data:
+                        data[k] = copy.deepcopy(v)
+                # Fix: merge individual agent keys from DEFAULT_AGENT_CFG.
+                _sa = data.setdefault("agents", {})
+                for _ak, _av in DEFAULT_AGENT_CFG.items():
+                    if _ak not in _sa:
+                        _sa[_ak] = copy.deepcopy(_av)
+                for _ak, _av in DEFAULT_AGENT_CFG.items():
+                    if _ak in _sa and isinstance(_sa[_ak], dict):
+                        _sa[_ak].setdefault("model", _av.get("model", ""))
+                        _sa[_ak].setdefault("temperature", _av.get("temperature", 0.3))
+                        _sa[_ak].setdefault("max_tokens", _av.get("max_tokens", 400))
+                        _sa[_ak].setdefault("thinking", _av.get("thinking", False))
+                        _sa[_ak].setdefault("thinking_budget", _av.get("thinking_budget", 0))
+                return data
+            except (PermissionError, OSError) as _io_err:
+                if strict and _attempt + 1 < _max_attempts:
+                    time.sleep(0.02 * (_attempt + 1))
+                    continue
+                if strict:
+                    raise
+                _logger.warning("[settings] failed to read settings.json: %s", _io_err)
+                break
+            except Exception as _parse_err:
+                if strict:
+                    raise
+                _logger.warning("[settings] failed to parse settings.json: %s", _parse_err)
+                break
     return copy.deepcopy(DEFAULT_SETTINGS)
 
 _settings_write_lock = threading.RLock()
@@ -211,7 +235,7 @@ def save_settings(settings: dict, *, saved_at: str | None = None):
 
 def _write_settings_unlocked(settings: dict, *, saved_at: str | None = None) -> None:
     """One atomic write. Callers hold _settings_write_lock."""
-    global _last_sync_stat
+    global _last_sync_stat, _load_cache_key, _load_cache_data
     settings["settings_saved_at"] = saved_at or _now_iso()
     _data = json.dumps(settings, ensure_ascii=False, indent=2)
     # PID in the name: two processes can carry the same thread id, and two
@@ -232,6 +256,8 @@ def _write_settings_unlocked(settings: dict, *, saved_at: str | None = None) -> 
                     _logger.warning("[settings] fsync failed (%s) - continuing",
                                     _fs_err)
             _tmp.replace(SETTINGS_FILE)      # atomar, OS-Garantie
+            _load_cache_key = None
+            _load_cache_data = None
             break
         except PermissionError:
             if _attempt:
@@ -262,7 +288,7 @@ def mutate_settings(fn):
     Returns the dict that was written.
     """
     with _settings_write_lock:
-        current = load_settings()
+        current = load_settings(strict=True)
         result = fn(current)
         data = result if isinstance(result, dict) else current
         _write_settings_unlocked(data)
@@ -360,33 +386,87 @@ _PROMPT_READ_ALIASES = {
 }
 
 
+_UNSAFE_PRESET_CHARS = frozenset('/\\\x00*?[]<>:"|')
+_ALL_PROMPT_ROLE_KEYS = frozenset(
+    {r["key"] for r in PRESET_PROMPT_ROLES}
+    | set(DEFAULT_AGENT_CFG.keys())
+    | set(_PROMPT_READ_ALIASES.keys())
+    | {alias for aliases in _PROMPT_READ_ALIASES.values() for alias in aliases}
+    | {"vision", "vision_agent", "duo_critic"}
+)
+
+
+def _validate_preset_name(preset_name: str) -> str:
+    """Validate preset name as a single safe filename segment without traversal or glob chars."""
+    if not isinstance(preset_name, str):
+        raise ValueError("Preset name must be a string")
+    if not preset_name or not preset_name.strip():
+        raise ValueError("Preset name must not be empty")
+    if len(preset_name) > 128:
+        raise ValueError("Preset name is too long")
+    if preset_name in (".", "..") or ".." in preset_name:
+        raise ValueError("Preset name must not contain '..'")
+    if any(ch in _UNSAFE_PRESET_CHARS or ord(ch) < 32 for ch in preset_name):
+        raise ValueError("Preset name contains unsafe characters")
+    if not preset_name.rstrip(". "):
+        raise ValueError("Preset name is invalid")
+    if Path(preset_name).name != preset_name:
+        raise ValueError("Preset name must be a single filename segment")
+    return preset_name
+
+
+def _validate_agent_key(agent_key: str) -> str:
+    """Validate prompt agent key against known prompt roles and pipeline agents."""
+    if not isinstance(agent_key, str) or agent_key not in _ALL_PROMPT_ROLE_KEYS:
+        raise ValueError(f"Unknown or invalid prompt agent key: {agent_key!r}")
+    return agent_key
+
+
+def _prompt_file_path(preset_name: str, agent_key: str) -> Path:
+    """Resolve and verify containment of a custom prompt file in CUSTOM_PROMPTS_DIR."""
+    pname = _validate_preset_name(preset_name)
+    akey = _validate_agent_key(agent_key)
+    prompts_dir = CUSTOM_PROMPTS_DIR.resolve()
+    path = (prompts_dir / f"{pname}_{akey}.txt").resolve()
+    if path.parent != prompts_dir:
+        raise ValueError("Prompt path escapes custom_prompts directory")
+    return path
+
+
 def get_custom_prompt(preset_name: str, agent_key: str) -> str | None:
-    path = CUSTOM_PROMPTS_DIR / f"{preset_name}_{agent_key}.txt"
+    path = _prompt_file_path(preset_name, agent_key)
     if path.exists():
         return path.read_text(encoding="utf-8").strip()
     for _legacy in _PROMPT_READ_ALIASES.get(agent_key, ()):
-        _lp = CUSTOM_PROMPTS_DIR / f"{preset_name}_{_legacy}.txt"
+        _lp = _prompt_file_path(preset_name, _legacy)
         if _lp.exists():
             return _lp.read_text(encoding="utf-8").strip()
     return None
 
 
 def save_custom_prompt(preset_name: str, agent_key: str, content: str):
+    path = _prompt_file_path(preset_name, agent_key)
     CUSTOM_PROMPTS_DIR.mkdir(exist_ok=True)
-    path = CUSTOM_PROMPTS_DIR / f"{preset_name}_{agent_key}.txt"
     path.write_text(content, encoding="utf-8")
 
 
 def delete_custom_prompts_for_preset(preset_name: str):
+    _validate_preset_name(preset_name)
     if not CUSTOM_PROMPTS_DIR.exists():
         return
-    for f in CUSTOM_PROMPTS_DIR.glob(f"{preset_name}_*.txt"):
-        f.unlink()
+    for _ak in _ALL_PROMPT_ROLE_KEYS:
+        path = _prompt_file_path(preset_name, _ak)
+        if path.exists():
+            path.unlink()
 
 
 def copy_prompts_to_preset(src_preset: str | None, dst_preset: str,
                             agent_keys: list[str], base_prompts: dict):
+    _validate_preset_name(dst_preset)
+    if src_preset:
+        _validate_preset_name(src_preset)
     for key in agent_keys:
+        _validate_agent_key(key)
         src_content = get_custom_prompt(src_preset, key) if src_preset else None
         content = src_content or base_prompts.get(key, "")
         if content:

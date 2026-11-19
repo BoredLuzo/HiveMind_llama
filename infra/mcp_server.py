@@ -19,13 +19,16 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import url2pathname
 
 # ── Sys.path-Bootstrap (MCP-Audit 2.2, gefixt 2026-08-24) ──────────────────────
 _ROOT = str(Path(__file__).resolve().parent.parent)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+from infra.child_env import scrubbed_env as _scrubbed_env
+from utils.file import _is_junction
 
 import httpx
 from hive_functions.hivemind_feature.ast_tools import (
@@ -223,18 +226,26 @@ ROUTER_MODEL: str | None = None
 
 
 def _default_workspace() -> Path:
-
-
-    env = os.environ.get("HIVEMIND_WORKSPACE", "")
-    if env:
-        return Path(env)
+    env = os.environ.get("HIVEMIND_WORKSPACE", "").strip()
+    if env and "\x00" not in env:
+        try:
+            cand = Path(env).expanduser().resolve()
+            if not (cand.exists() and not cand.is_dir()):
+                return cand
+        except OSError:
+            pass
     here = Path(__file__).parent.resolve()
-    if (here / "server.py").exists():
-        return here
-    root = here.parent
-    if root.exists():
-        return root
-    return here
+    app_root = here if (here / "server.py").exists() else here.parent
+    try:
+        from utils.workspace_resolve import get_placeholder_workspace
+        return get_placeholder_workspace(create=True)
+    except (ImportError, OSError):
+        fallback = (app_root / "default_workspace").resolve()
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return fallback
 
 
 WORKSPACE = _default_workspace()
@@ -344,14 +355,32 @@ class ToolPathError(ValueError):
         self.path = path
 
 
-def _resolve_path(path: str) -> Path:
-    """Pfad innerhalb des Workspace aufloesen - sonst ToolPathError.
+def _has_link_inside(raw_path: Path, root_raw: Path, root_resolved: Path) -> bool:
+    """Return True if *raw_path* or any component inside workspace is a symlink/junction."""
+    try:
+        if raw_path.is_symlink() or _is_junction(raw_path):
+            return True
+    except OSError:
+        return True
+    for cand_root in (root_raw, root_resolved):
+        try:
+            rel = raw_path.relative_to(cand_root)
+        except ValueError:
+            continue
+        cur = cand_root
+        for part in rel.parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink() or _is_junction(cur):
+                    return True
+            except OSError:
+                return True
+        break
+    return False
 
-    SECURITY (Audit 2026-10-21): frueher wurde ein Pfad ausserhalb des Workspace
-    still auf WORKSPACE/<dateiname> umgeschrieben. Das war gefaehrlich *und*
-    verwirrend: das Tool schrieb irgendwohin, ohne dass der Aufrufer es merkte.
-    Jetzt bricht der Aufruf mit einem klaren Fehler ab.
-    """
+
+def _resolve_path(path: str) -> Path:
+    """Resolve *path* inside WORKSPACE or raise ToolPathError."""
     raw = str(path or "").strip().strip("'\"")
     if not raw:
         raise ToolPathError("empty path", path=raw)
@@ -361,17 +390,19 @@ def _resolve_path(path: str) -> Path:
     if not p.is_absolute():
         p = WORKSPACE / p
     try:
+        ws_root = WORKSPACE.resolve()
         resolved = p.resolve()
     except (OSError, RuntimeError) as exc:     # Symlink-Loop, kaputte Pfade
         raise ToolPathError(f"cannot resolve path: {exc}", path=raw) from exc
     try:
-        resolved.relative_to(WORKSPACE.resolve())
+        resolved.relative_to(ws_root)
     except ValueError:
-        # Absolut ODER per .. aus dem Workspace heraus -> hart ablehnen
         raise ToolPathError(
             f"path is outside the workspace ({resolved.name} not inside {WORKSPACE.name})",
             path=raw,
         ) from None
+    if _has_link_inside(p, WORKSPACE, ws_root):
+        raise ToolPathError("path traverses a symlink or junction inside workspace", path=raw)
     return resolved
 
 
@@ -817,10 +848,7 @@ _SCRUBBED_SHELL_ENV_RE = re.compile(
 async def tool_shell(cmd: str, timeout: int = 30) -> str:
     safe   = bool(SAFE_SHELL_RE.match(cmd.strip()))
     prefix = "" if safe else "⚠ Unsafe command: "
-    _shell_env = {
-        k: v for k, v in os.environ.items()
-        if k not in _SCRUBBED_SHELL_ENV_KEYS and not _SCRUBBED_SHELL_ENV_RE.search(k)
-    }
+    _shell_env = _scrubbed_env()
     proc: asyncio.subprocess.Process | None = None
     try:
         if IS_WINDOWS:
@@ -1008,12 +1036,14 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
 
     # 1. ripgrep (Windows: rg.exe, Unix: rg)
     rg_bin = "rg.exe" if IS_WINDOWS else "rg"
+    _sc_env = _scrubbed_env()
     try:
         proc = await asyncio.create_subprocess_exec(
             rg_bin, "--line-number", "--no-heading", "--color=never",
             f"--glob={file_glob}", "--", pattern, str(p),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_sc_env,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
         if proc.returncode in (0, 1):
@@ -1033,6 +1063,7 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(p.parent if p.is_file() else p),
+                env=_sc_env,
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
             return _cap_rows(_decode(out))
@@ -1046,6 +1077,7 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
                 "grep", "-rn", "--", pattern, str(p),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_sc_env,
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
             return _cap_rows(out.decode("utf-8", errors="replace"))
@@ -1107,8 +1139,18 @@ async def tool_find_files(pattern: str = "**/*", path: str = ".", max_results: i
                 retryable=True,
             )
         max_results = max(1, min(2000, int(max_results or 150)))
-        files = [p for p in sorted(base.glob(pattern))
-                 if p.is_file() and not _is_blocked_secret(p.as_posix())]
+        ws_root = WORKSPACE.resolve()
+        files: list[Path] = []
+        for p in sorted(base.glob(pattern)):
+            if _has_link_inside(p, WORKSPACE, ws_root):
+                continue
+            try:
+                p_res = p.resolve()
+                rel_p = p_res.relative_to(ws_root).as_posix()
+            except (OSError, ValueError):
+                continue
+            if p_res.is_file() and not _is_blocked_secret(rel_p) and not _is_blocked_secret(p.as_posix()):
+                files.append(p)
         if not files:
             return f"(no matches for '{pattern}' in {base})"
         lines = []
@@ -1261,10 +1303,39 @@ async def tool_memory_get(key: str) -> str:
 
 
 async def tool_memory_set(key: str, value: str) -> str:
+    k = str(key or "").strip()
+    if not k:
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            "memory_set requires a non-empty key.",
+            tool="memory_set",
+            retryable=False,
+        )
+    if (
+        k in (".", "..")
+        or ".." in k
+        or "/" in k
+        or "\\" in k
+        or any(ch in k for ch in ("?", "#", "\x00"))
+        or any(ord(ch) < 32 for ch in k)
+    ):
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            f"Invalid memory key {k!r}: path separators and traversal tokens are not allowed.",
+            tool="memory_set",
+            retryable=False,
+        )
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(f"{HIVEMIND_URL}/memory/{key}", json={"value": value})
-            return f"Saved: {key} = {value[:80]}"
+            r = await client.post(f"{HIVEMIND_URL}/memory/{quote(k, safe='')}", json={"value": value})
+            if getattr(r, "status_code", 200) >= 400:
+                return _tool_error_response(
+                    "MEMORY_SET_FAILED",
+                    f"memory_set failed: HTTP {r.status_code}",
+                    tool="memory_set",
+                    retryable=True,
+                )
+            return f"Saved: {k} = {value[:80]}"
     except Exception as e:
         return _tool_error_response(
             "MEMORY_SET_FAILED",
@@ -1319,7 +1390,6 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
         tmp = f.name
     proc = None
     try:
-        from infra.child_env import scrubbed_env as _scrubbed_env
         proc = await asyncio.create_subprocess_exec(
             sys.executable, tmp,
             stdout=asyncio.subprocess.PIPE,
@@ -1370,6 +1440,7 @@ async def _run_git(argv: list[str], cwd: Path, timeout: float = 60.0) -> tuple[i
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd),
+        env=_scrubbed_env(),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -1629,6 +1700,7 @@ async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> 
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(base),
+                env=_scrubbed_env(),
             )
         else:
             proc = await asyncio.create_subprocess_shell(
@@ -1636,6 +1708,7 @@ async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> 
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(base),
+                env=_scrubbed_env(),
             )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
@@ -2097,7 +2170,12 @@ class _ResourceError(Exception):
 
 
 def _is_blocked_secret(rel_posix: str) -> bool:
-    return bool(_RESOURCE_SECRET_RE.search(str(rel_posix or "")))
+    rel = str(rel_posix or "").replace("\\", "/")
+    parts = [p.rstrip(". ").lower() for p in Path(rel).parts if p]
+    if any(part in {"sessions", "chats"} for part in parts):
+        return True
+    norm_rel = "/".join(p.rstrip(". ") for p in rel.split("/") if p)
+    return bool(_RESOURCE_SECRET_RE.search(rel) or _RESOURCE_SECRET_RE.search(norm_rel))
 
 
 def _secret_path_guard(p: Path, tool: str) -> str | None:
@@ -2161,6 +2239,8 @@ def _walk_workspace_files(base: Path, max_entries: int,
             if item.name.startswith(".") or item.name.lower() in _RESOURCE_SKIP_DIRS:
                 continue
             try:
+                if item.is_symlink() or _is_junction(item):
+                    continue
                 if item.is_dir():
                     if depth + 1 < max_depth:
                         subdirs.append((item, depth + 1))
@@ -2215,16 +2295,18 @@ def _read_resource(uri: str) -> dict:
     JSON-RPC code to answer (-32602 for bad input, -32002 for resource
     problems)."""
     raw = str(uri or "").strip()
-    if not raw:
+    if not raw or "\x00" in raw:
         raise _ResourceError("params.uri must be a non-empty string", code=-32602)
     parts = urlparse(raw)
     scheme = (parts.scheme or "").lower()
     if scheme == "file":
+        if parts.netloc not in ("", "localhost"):
+            raise _ResourceError("file:// remote hosts are not allowed", code=-32602)
         # url2pathname unquotes %xx and maps "/C:/x" -> "C:\x" on Windows.
         p = Path(url2pathname(parts.path))
     elif scheme == "hivemind" and parts.netloc.lower() == "workspace":
         rel = unquote(parts.path).lstrip("/")
-        if not rel:
+        if not rel or "\x00" in rel:
             raise _ResourceError("empty hivemind://workspace path", code=-32602)
         p = WORKSPACE / rel
     else:
@@ -2232,21 +2314,33 @@ def _read_resource(uri: str) -> dict:
             f"unsupported resource URI scheme: {scheme or '(none)'} "
             "(use file:// or hivemind://workspace/<path>)", code=-32602)
     try:
+        root = WORKSPACE.resolve()
         resolved = p.resolve()
     except (OSError, RuntimeError) as exc:
         raise _ResourceError(f"cannot resolve resource path: {exc}", code=-32602)
     try:
-        root = WORKSPACE.resolve()
         rel = resolved.relative_to(root).as_posix()
     except ValueError:
         raise _ResourceError("resource is outside the workspace", code=-32602) from None
     except (OSError, ValueError) as exc:
         raise _ResourceError(f"cannot resolve resource path: {exc}", code=-32602)
-    if not resolved.is_file():
-        raise _ResourceError(f"resource not found: {raw[:200]}")
-    if _is_blocked_secret(rel):
+    if _has_link_inside(p, WORKSPACE, root):
+        raise _ResourceError("symlinks and junctions are not allowed", code=-32602)
+    rel_parts = resolved.relative_to(root).parts
+    if any(":" in part or (IS_WINDOWS and part != part.rstrip(". ")) for part in rel_parts):
+        raise _ResourceError("invalid resource path segment", code=-32602)
+    raw_rel = ""
+    for cand_root in (WORKSPACE, root):
+        try:
+            raw_rel = p.relative_to(cand_root).as_posix()
+            break
+        except ValueError:
+            continue
+    if _is_blocked_secret(rel) or (raw_rel and _is_blocked_secret(raw_rel)) or _is_blocked_secret(p.name):
         raise _ResourceError(
             "resource is blocked as a potential secret (denylist)")
+    if not resolved.is_file():
+        raise _ResourceError(f"resource not found: {raw[:200]}")
     try:
         size = resolved.stat().st_size
     except OSError as exc:

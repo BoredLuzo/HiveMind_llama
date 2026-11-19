@@ -1992,6 +1992,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       <div class="cfg-card-title">Model Config</div>
       <div class="fld-row" style="margin-bottom:11px">
         <select class="fld-input" id="cfg-model-sel" onchange="loadModelConfigs()"></select>
+        <button class="btn" type="button" onclick="openModelProfilesModal(document.getElementById('cfg-model-sel').value)" title="Inspect and override per-model profiles">Model Profiles</button>
         <button class="btn" onclick="refreshCfgModelList()" title="Reload">&#8635;</button>
       </div>
 
@@ -2260,6 +2261,30 @@ document.getElementById('prefetch-lead-val').textContent=v;">
     </div>
     <div class="fld-hint">Start spawns the local gateway process detached (token from the Windows Credential Manager; the master switch is overridden by this button on purpose). Status refreshes every 5 s from the gateway heartbeat. Stop kills that process.</div>
   </div>
+  <!-- Advanced / Engine Settings (collapsed by default) -->
+  <details id="adv-engine-settings-card" class="cfg-card">
+    <summary class="cfg-card-title" style="cursor:pointer;list-style:none;user-select:none">
+      <span>&#9881; Advanced / Engine Settings</span>
+      <span id="adv-settings-count" style="margin-left:auto;font-size:9px;font-weight:400;color:var(--tx2)">expand to load</span>
+    </summary>
+    <div class="fld-hint" style="margin-top:4px">
+      Full settings schema from <code>/settings/schema</code>. Changes save via <code>POST /settings</code>; check the scope pill (<code>live</code>, <code>next_load</code>, <code>restart</code>).
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+      <input id="adv-settings-search" class="fld-input" type="search" placeholder="Search key, group, description..." style="flex:1;min-width:140px">
+      <select id="adv-settings-group" class="fld-input" style="width:auto;min-width:110px">
+        <option value="">All groups</option>
+      </select>
+      <button id="adv-settings-reload-btn" type="button" class="btn" title="Reload settings schema">&#8635;</button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);cursor:pointer">
+        <input type="checkbox" id="adv-settings-modified-only"> Modified only
+      </label>
+      <span id="adv-settings-status" class="status-txt" style="font-size:9.5px"></span>
+    </div>
+    <div id="adv-settings-list" style="display:flex;flex-direction:column;gap:8px;max-height:460px;overflow-y:auto"></div>
+  </details>
   </div>
   <!-- SUBAGENT-LITE: controls now live in the Agentic tab (opt-group "Subagent",
        at the very bottom) — where the Coder/Critic tool layers are also controlled.
@@ -2426,9 +2451,12 @@ document.getElementById('prefetch-lead-val').textContent=v;">
     </div>
 
     <!-- Available models -->
-    <div class="sec" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">
+    <div class="sec" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:6px">
       <span>Available models</span>
-      <button onclick="refreshAvailableModels()" style="background:none;border:1px solid var(--b);border-radius:4px;color:var(--tx2);font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;cursor:pointer" title="Reload list">&#8635; Refresh</button>
+      <div style="display:flex;gap:4px;align-items:center">
+        <button id="open-model-profiles-btn" type="button" onclick="openModelProfilesModal()" style="background:none;border:1px solid rgba(224,144,48,.4);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;cursor:pointer" title="Inspect GGUF metadata and per-model profile overrides">Model Profiles</button>
+        <button onclick="refreshAvailableModels()" style="background:none;border:1px solid var(--b);border-radius:4px;color:var(--tx2);font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;cursor:pointer" title="Reload list">&#8635; Refresh</button>
+      </div>
     </div>
     <div style="display:flex;gap:5px;margin-bottom:6px">
       <input id="model-filter-input" type="text" placeholder="Filter..."
@@ -2630,7 +2658,135 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
+<div id="model-profiles-modal" style="display:none;position:fixed;inset:0;z-index:9990;background:rgba(0,0,0,.68);align-items:center;justify-content:center;padding:16px">
+  <div id="mp-dialog" style="width:min(880px,96vw);max-height:88vh;display:flex;flex-direction:column;background:var(--bg3,#141a22);border:1px solid var(--b2,#2a3644);border-radius:8px;box-shadow:0 16px 48px rgba(0,0,0,.65);overflow:hidden;font-family:'IBM Plex Mono',monospace">
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--b,#1e2435);background:var(--bg2,#10131a)">
+      <span style="font-size:12px;font-weight:700;color:var(--txh,#e5ecf4);letter-spacing:.06em;text-transform:uppercase">Model Profiles</span>
+      <span id="mp-source-badge" class="cfg-card-badge base" style="font-size:9px">generic</span>
+      <span id="mp-file-badge" style="font-size:9px;color:var(--tx2,#7a8fa8)"></span>
+      <button id="mp-rescan-btn" type="button" class="btn" style="margin-left:auto;padding:4px 9px;font-size:10px" title="Clear caches and rescan GGUFs on disk">&#8635; Rescan GGUFs</button>
+      <button id="mp-close-btn" type="button" class="btn" style="padding:4px 9px;font-size:12px;line-height:1" title="Close (Esc)">&times;</button>
+    </div>
+    <div style="display:flex;flex:1;min-height:0;overflow:hidden;flex-wrap:wrap">
+      <div style="flex:0 0 240px;min-width:200px;max-height:70vh;display:flex;flex-direction:column;border-right:1px solid var(--b,#1e2435);padding:10px;gap:6px;background:rgba(0,0,0,.15);overflow:hidden">
+        <input id="mp-model-search" class="fld-input" type="search" placeholder="Filter models..." style="padding:5px 7px;font-size:10px">
+        <select id="mp-model-sel" class="fld-input" style="padding:5px 7px;font-size:10px"></select>
+        <div id="mp-model-list" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:3px;min-height:140px"></div>
+      </div>
+      <div id="mp-editor" style="flex:1;min-width:280px;max-height:70vh;overflow-y:auto;padding:12px 14px">
+        <div id="mp-gguf-summary" style="font-size:10px;color:var(--tx2,#7a8fa8);background:var(--bg2,#10131a);border:1px solid var(--b,#1e2435);border-radius:5px;padding:7px 9px;margin-bottom:10px;line-height:1.55">Select a model to inspect GGUF metadata and edit user overrides.</div>
+        <div class="cfg-grid" style="gap:8px;margin-bottom:8px">
+          <div class="fld" style="margin:0">
+            <div class="fld-label">KV Cache Type (<code>kv_cache_type</code>)</div>
+            <select id="mp-kv-cache-type" class="fld-input">
+              <option value="">auto</option>
+              <option value="q4_0">q4_0</option>
+              <option value="q8_0">q8_0</option>
+              <option value="f16">f16</option>
+              <option value="bf16">bf16</option>
+              <option value="q4_1">q4_1</option>
+              <option value="q5_0">q5_0</option>
+              <option value="q5_1">q5_1</option>
+            </select>
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">Flash Attention (<code>flash_attn</code>)</div>
+            <select id="mp-flash-attn" class="fld-input">
+              <option value="">auto</option>
+              <option value="true">on</option>
+              <option value="false">off</option>
+            </select>
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">Load Mode (<code>load_mode</code>)</div>
+            <select id="mp-load-mode" class="fld-input">
+              <option value="">auto</option>
+              <option value="auto">auto (explicit)</option>
+              <option value="none">none</option>
+              <option value="mmap">mmap</option>
+              <option value="mmap+mlock">mmap+mlock</option>
+            </select>
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">Context (<code>num_ctx</code>)</div>
+            <input id="mp-num-ctx" class="fld-input" type="number" min="1" step="1024" placeholder="auto">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">MoE CPU Experts (<code>moe_cpu_experts</code>)</div>
+            <input id="mp-moe-cpu-experts" class="fld-input" type="number" min="0" step="1" placeholder="auto">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">GPU Layers (<code>gpu_layers</code>)</div>
+            <input id="mp-gpu-layers" class="fld-input" type="number" min="0" step="1" placeholder="auto">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">uBatch (<code>ubatch</code>, 64..4096)</div>
+            <input id="mp-ubatch" class="fld-input" type="number" min="64" max="4096" step="64" placeholder="auto">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">MTP (<code>mtp</code>)</div>
+            <select id="mp-mtp" class="fld-input">
+              <option value="">auto</option>
+              <option value="true">on</option>
+              <option value="false">off</option>
+            </select>
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">MTP Draft (<code>mtp_draft_filename</code>)</div>
+            <input id="mp-mtp-draft" class="fld-input" type="text" placeholder="mtp-...gguf">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">DFlash Draft (<code>dflash_draft_filename</code>)</div>
+            <input id="mp-dflash-draft" class="fld-input" type="text" placeholder="...DFlash...gguf">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">DSpark Draft (<code>dspark_draft_filename</code>)</div>
+            <input id="mp-dspark-draft" class="fld-input" type="text" placeholder="...DSpark...gguf">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">Projector (<code>mmproj_filename</code>)</div>
+            <input id="mp-mmproj" class="fld-input" type="text" placeholder="mmproj-...gguf">
+          </div>
+          <div class="fld" style="margin:0">
+            <div class="fld-label">Capabilities</div>
+            <div style="display:flex;gap:6px">
+              <select id="mp-cap-thinking" class="fld-input" title="thinking">
+                <option value="">think: auto</option>
+                <option value="true">think: on</option>
+                <option value="false">think: off</option>
+              </select>
+              <select id="mp-cap-vision" class="fld-input" title="vision">
+                <option value="">vis: auto</option>
+                <option value="true">vis: on</option>
+                <option value="false">vis: off</option>
+              </select>
+              <select id="mp-cap-toolcall" class="fld-input" title="tool_call">
+                <option value="">tools: auto</option>
+                <option value="true">tools: on</option>
+                <option value="false">tools: off</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="fld">
+          <div class="fld-label">Extra CLI Args (<code>extra_args</code>, space-separated)</div>
+          <input id="mp-extra-args" class="fld-input" type="text" placeholder="--ctx-checkpoints 4">
+        </div>
+        <div class="fld" style="margin-bottom:4px">
+          <div class="fld-label">Sampling Overrides JSON (<code>sampling</code>)</div>
+          <textarea id="mp-sampling" class="fld-input" rows="5" placeholder='{"thinking": {"temperature": 0.6}}'></textarea>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--b,#1e2435);background:var(--bg2,#10131a)">
+      <span id="mp-status" class="status-txt" style="flex:1;font-size:10px"></span>
+      <button id="mp-reset-btn" type="button" class="btn danger">Reset to Default</button>
+      <button id="mp-save-btn" type="button" class="btn primary">Save Override</button>
+    </div>
+  </div>
+</div>
+
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261118-02"></script>
+        <script src="/static/app.js?v=20261119-04"></script>
 </body>
 </html>

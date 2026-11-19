@@ -500,19 +500,27 @@ def synthesize(text: str, settings: dict | None = None, *,
     text = (text or "").strip()
     if not text:
         raise TtsError("TTS_EMPTY", "nothing to say")
-    if len(text) > tts_audio.MAX_CHARS:
-        text = text[:tts_audio.MAX_CHARS].rsplit(" ", 1)[0] + " ..."
+    spoken = tts_audio.clean_for_speech(text) or text
+    chunks = tts_audio.split_speech_chunks(
+        spoken,
+        chunk_chars=tts_audio.MAX_CHARS,
+        max_total_chars=tts_audio.MAX_TOTAL_CHARS,
+    )
+    if not chunks:
+        raise TtsError("TTS_EMPTY", "nothing to say")
+    cache_text = "\n".join(chunks)
     backend = resolve_backend(settings, voice=voice)
     voice = voice if voice in {v[0] for v in voices_for(backend)[0]} else resolve_voice(settings, backend=backend)
     spd = tts_audio.clamp_speed(speed if speed is not None else resolve_speed(settings))
-    _key = (voice, spd, text)
+    _key = (voice, spd, cache_text)
     _hit = _cache_get(_key)
     if _hit is not None:
         _state["last_used"] = time.time()
         return dict(_hit)
 
     if backend == "woof":
-        wav = _synthesize_woof(text, voice, settings)
+        wav_parts = [_synthesize_woof(ch, voice, settings) for ch in chunks]
+        wav = tts_audio.concat_wavs(wav_parts)
         _state["last_used"] = time.time()
         stretched = tts_audio.stretch_wav(wav, spd, normalize_out=bool(settings.get(
             "tts_normalize", True)))
@@ -528,45 +536,51 @@ def synthesize(text: str, settings: dict | None = None, *,
         timeout = float(settings.get("tts_timeout_s") or 120)
     except (TypeError, ValueError):
         timeout = 120.0
-    try:
-        # CLIENT-REUSE (2026-10-18): a fresh httpx.Client per request threw the
-        # connection away every time (20-50 ms on top of the model). The read-aloud
-        # asks for one sentence at a time now, so that overhead was a visible part
-        # of the delay before the first sound.
-        import httpx as _httpx_call
-        # the client is shared (keep-alive), but the TIMEOUT is per request: the
-        # settings value must still cut a hanging synthesis (test_tts_engine pins
-        # it with tts_timeout_s=1 against a slow stub).
-        resp = _client().post(
-            f"{url}/tts",
-            data={"text": text, "voice_url": voice},
-            timeout=_httpx_call.Timeout(connect=5.0, read=timeout,
-                                        write=10.0, pool=5.0))
-        resp.raise_for_status()
-        wav = resp.content
-    except httpx.TimeoutException as exc:
-        raise TtsError("TTS_TIMEOUT", f"the engine took longer than {timeout:.0f}s") from exc
-    except httpx.HTTPError as exc:
-        raise TtsError("TTS_FAILED", f"engine error: {type(exc).__name__}") from exc
-    if not tts_audio.looks_like_wav(wav):
-        # ENGINE-BROKEN (2026-10-21): the sidecar answered 200 without audio.
-        # One retry with the shipped default voice, because the usual cause is
-        # a single voice config (not the engine itself).
-        _hint = _engine_failure_hint()
-        if _allow_fallback and voice != DEFAULT_VOICE:
-            logger.warning("[TTS] voice %s produced no audio (%s) - retrying with %s",
-                           voice, _hint or "no log hint", DEFAULT_VOICE)
-            try:
-                return synthesize(text, settings, voice=DEFAULT_VOICE,
-                                  speed=speed, _allow_fallback=False)
-            except TtsError as exc:
-                _mark_broken(f"{exc.message} {('· ' + _hint) if _hint else ''}".strip())
-                raise TtsError("TTS_ENGINE_BROKEN",
-                               f"{exc.message} {('· ' + _hint) if _hint else ''}".strip()) from exc
-        _reason = ("the voice engine produced no audio"
-                   + (f": {_hint}" if _hint else ""))
-        _mark_broken(_reason)
-        raise TtsError("TTS_ENGINE_BROKEN", _reason)
+    deadline = time.monotonic() + timeout
+    wav_parts = []
+    for ch in chunks:
+        rem = max(0.5, deadline - time.monotonic())
+        try:
+            # CLIENT-REUSE (2026-10-18): a fresh httpx.Client per request threw the
+            # connection away every time (20-50 ms on top of the model). The read-aloud
+            # asks for one sentence at a time now, so that overhead was a visible part
+            # of the delay before the first sound.
+            import httpx as _httpx_call
+            # the client is shared (keep-alive), but the TIMEOUT is per request: the
+            # settings value must still cut a hanging synthesis (test_tts_engine pins
+            # it with tts_timeout_s=1 against a slow stub).
+            resp = _client().post(
+                f"{url}/tts",
+                data={"text": ch, "voice_url": voice},
+                timeout=_httpx_call.Timeout(connect=5.0, read=rem,
+                                            write=10.0, pool=5.0))
+            resp.raise_for_status()
+            part_wav = resp.content
+        except httpx.TimeoutException as exc:
+            raise TtsError("TTS_TIMEOUT", f"the engine took longer than {timeout:.0f}s") from exc
+        except httpx.HTTPError as exc:
+            raise TtsError("TTS_FAILED", f"engine error: {type(exc).__name__}") from exc
+        if not tts_audio.looks_like_wav(part_wav):
+            # ENGINE-BROKEN (2026-10-21): the sidecar answered 200 without audio.
+            # One retry with the shipped default voice, because the usual cause is
+            # a single voice config (not the engine itself).
+            _hint = _engine_failure_hint()
+            if _allow_fallback and voice != DEFAULT_VOICE:
+                logger.warning("[TTS] voice %s produced no audio (%s) - retrying with %s",
+                               voice, _hint or "no log hint", DEFAULT_VOICE)
+                try:
+                    return synthesize(text, settings, voice=DEFAULT_VOICE,
+                                      speed=speed, _allow_fallback=False)
+                except TtsError as exc:
+                    _mark_broken(f"{exc.message} {('· ' + _hint) if _hint else ''}".strip())
+                    raise TtsError("TTS_ENGINE_BROKEN",
+                                   f"{exc.message} {('· ' + _hint) if _hint else ''}".strip()) from exc
+            _reason = ("the voice engine produced no audio"
+                       + (f": {_hint}" if _hint else ""))
+            _mark_broken(_reason)
+            raise TtsError("TTS_ENGINE_BROKEN", _reason)
+        wav_parts.append(part_wav)
+    wav = tts_audio.concat_wavs(wav_parts)
     _state["last_used"] = time.time()
     stretched = tts_audio.stretch_wav(wav, spd, normalize_out=bool(settings.get(
         "tts_normalize", True)))

@@ -24,7 +24,7 @@
 #   BENCH_TGZ   tarball with the bench/ folder (default $HOME/bench_bundle.tgz);
 #               extracted over the clone when present. Needed while bench/ is
 #               not pushed to GitHub:  tar czf bench_bundle.tgz bench
-#   HM_MODEL    default qwen3.6:35b-a3b-ud (key from deploy/fetch_models.py)
+#   HM_MODEL    default qwen3.6:35b-a3b-mtp (key from deploy/fetch_models.py)
 #   HM_RUNS     default 1       HM_CONDITIONS default hivemind_duo,aider
 #   HM_TASKS    default bench/tasks (use bench/tasks_polyglot after `polyglot`)
 set -euo pipefail
@@ -80,8 +80,8 @@ if [ -z "${HM_MODEL:-}" ]; then
     # Smaller GPUs (e.g. Tesla T4 16GB) default to 4B MTP
     HM_MODEL="qwen3.5:4b-mtp"
   else
-    # Larger GPUs (L4 24GB, A100 40/80GB) default to 35B MoE
-    HM_MODEL="qwen3.6:35b-a3b-ud"
+    # Larger GPUs (L4 24GB, A100 40/80GB) default to recommended 35B MoE + MTP (UD-IQ4_XS, ~17.0GB)
+    HM_MODEL="qwen3.6:35b-a3b-mtp"
   fi
 fi
 
@@ -142,7 +142,7 @@ setup() {
   log "Python 3.14 environment and all dependencies installed successfully."
 
   log "[Step 4/5] Downloading llama.cpp with CUDA $HM_LLAMA_CUDA support..."
-  ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda --cuda-version "$HM_LLAMA_CUDA" )
+  ( cd "$HM_DIR" && "$PY" deploy/fetch_llamacpp.py --backend cuda --cuda-version "$HM_LLAMA_CUDA" --upgrade )
   # Linux CUDA builds link the CUDA runtime dynamically; the release ships it
   # in a separate cudart archive next to the main build.
   _exe="$(find "$HM_DIR/llama" -name llama-server -type f | head -1)"
@@ -342,8 +342,8 @@ except ValueError:
 if budget_gb >= 35.0:
     cpu_experts = 0
 else:
-    # qwen3.6:35b-a3b-ud: ~20.2 GB base weights @0 offload (~19.3 GB @2),
-    # 4.66 GB @35 (~0.44 GB freed per MoE layer) + KV/compute reserve.
+    # qwen3.6:35b-a3b-mtp (UD-IQ4_XS): ~17.0 GB base weights (~0.36 GB/expert);
+    # legacy qwen3.6:35b-a3b-ud (UD-Q4_K_XL): ~20.2 GB base weights (~0.44 GB/expert).
     # Tight 20-24 GB GPUs (L4) at >=96k ctx need extra headroom + ubatch=512
     # to avoid CUDA UVM host-paging cliffs under multi-turn KV growth.
     if budget_gb < 20.0:
@@ -354,7 +354,10 @@ else:
         _base_reserve = 2.0
     reserve_gb = _base_reserve + (ctx_tokens / 131072.0) * 1.5
     target_model_gb = max(4.66, budget_gb - reserve_gb)
-    cpu_experts = min(35, max(2, math.ceil((20.2 - target_model_gb) / 0.44)))
+    _mdl_l = os.environ.get("HM_MODEL", "").lower()
+    _base_w = 17.0 if "mtp" in _mdl_l else 20.2
+    _per_exp = 0.36 if "mtp" in _mdl_l else 0.44
+    cpu_experts = 0 if target_model_gb >= _base_w else min(35, max(2, math.ceil((_base_w - target_model_gb) / _per_exp)))
 
 ubatch = 512 if (budget_gb < 14.0 or ("35b" in os.environ.get("HM_MODEL", "").lower() and budget_gb < 24.0 and ctx_tokens >= 98304)) else 1024
 gpu_patch = {
@@ -362,6 +365,7 @@ gpu_patch = {
         "qwen3.6:35b-a3b": cpu_experts,
         "qwen3.6:35b-a3b-ud": cpu_experts,
         "qwen3.6:35b-a3b-mtp": cpu_experts,
+        "qwen3.6:35b-a3b-mtp-ud": cpu_experts,
         "hermes3.6:35b-a3b": cpu_experts,
         "hermes3.6:35b-a3b-uncensored-genesis-apex-mini": cpu_experts,
     },
@@ -683,7 +687,7 @@ stop() {
 
 download() {
   [ -x "$PY" ] || die "run setup first"
-  local target="${2:-${HM_MODEL:-qwen3.6:35b-a3b-ud}}"
+  local target="${2:-${HM_MODEL:-qwen3.6:35b-a3b-mtp}}"
   log "downloading model: $target -> $MODELS_DIR"
   mkdir -p "$MODELS_DIR"
   ( cd "$HM_DIR" && "$PY" deploy/fetch_models.py --models-dir "$MODELS_DIR" \

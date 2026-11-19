@@ -30,7 +30,14 @@ $protFiles = 'settings.json','models.json','vision_model.json','presets.json',
 $protDirs  = 'sessions','logs','custom_prompts','.hive_uploads',
              'learning_logs','.venv','llama','models','voice_models',
              'stt','tts-venv','default_workspace'
-$protSub   = 'context\projects','learning\sessions','model_configs\learned'
+$protSub   = 'context\projects','learning\sessions','model_configs\learned','model_configs\user'
+
+$fullBase = [IO.Path]::GetFullPath($Base).TrimEnd('\', '/')
+$basePrefix = $fullBase + '\'
+$fullExBase = [IO.Path]::GetFullPath($Ex).TrimEnd('\', '/')
+$exPrefix = $fullExBase + '\'
+$fullTrashBase = [IO.Path]::GetFullPath($Trash).TrimEnd('\', '/')
+$trashPrefix = $fullTrashBase + '\'
 
 # NEVER-PRUNE update.bat (audit 2026-11-04): this script runs while
 # update.bat is still executing. If a future release ever dropped
@@ -39,21 +46,37 @@ $protSub   = 'context\projects','learning\sessions','model_configs\learned'
 # final self-swap). The updater must never move itself.
 $old = Get-Content -LiteralPath $Manifest -ErrorAction SilentlyContinue |
   ForEach-Object { ($_ -replace '/', '\').Trim() } |
+  Where-Object { $_ } |
+  ForEach-Object {
+    $raw = $_
+    if ([IO.Path]::IsPathRooted($raw)) { return }
+    try {
+      $fullSrc = [IO.Path]::GetFullPath([IO.Path]::Combine($basePrefix, $raw))
+    } catch {
+      return
+    }
+    if (-not $fullSrc.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase)) { return }
+    $fullSrc.Substring($basePrefix.Length)
+  } |
   Where-Object {
     $rel = $_
     $rel -and ($_ -ne 'update.bat') -and ($protFiles -notcontains $rel) -and
     -not ($rel.StartsWith('gateway_audit.jsonl.')) -and
     ($protDirs -notcontains $rel.Split('\')[0]) -and
     -not ($protSub | Where-Object { ($rel -eq $_) -or ($rel.StartsWith($_ + '\')) }) -and
-    ((Get-Item -LiteralPath (Join-Path $Base $rel) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo])
+    ((Get-Item -LiteralPath ([IO.Path]::GetFullPath((Join-Path $fullBase $rel))) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo])
   }
 
 $n = 0
 $prunedDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($f in $old) {
-  if (-not (Test-Path -LiteralPath (Join-Path $Ex $f))) {
-    $src = Join-Path $Base $f
-    $dst = Join-Path $Trash $f
+  $exTarget = [IO.Path]::GetFullPath((Join-Path $fullExBase $f))
+  if (-not $exTarget.StartsWith($exPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+  if (-not (Test-Path -LiteralPath $exTarget)) {
+    $src = [IO.Path]::GetFullPath((Join-Path $fullBase $f))
+    $dst = [IO.Path]::GetFullPath((Join-Path $fullTrashBase $f))
+    if (-not $src.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+    if (-not $dst.StartsWith($trashPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
     $d = Split-Path $dst -Parent
     if (-not (Test-Path -LiteralPath $d)) {
       New-Item -ItemType Directory -Path $d -Force | Out-Null
@@ -62,7 +85,7 @@ foreach ($f in $old) {
       Move-Item -Force -LiteralPath $src -Destination $dst -ErrorAction Stop
       $n++
       $parent = Split-Path $src -Parent
-      if ($parent -and $parent.Length -gt $Base.Length) {
+      if ($parent -and $parent.Length -gt $fullBase.Length -and $parent.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         [void]$prunedDirs.Add($parent)
       }
     } catch {
@@ -72,7 +95,7 @@ foreach ($f in $old) {
 }
 foreach ($dir in ($prunedDirs | Sort-Object Length -Descending)) {
   $cur = $dir
-  while ($cur -and $cur.Length -gt $Base.Length) {
+  while ($cur -and $cur.Length -gt $fullBase.Length -and $cur.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     if (-not (Test-Path -LiteralPath $cur)) { break }
     $items = Get-ChildItem -LiteralPath $cur -Force -ErrorAction SilentlyContinue
     if ($items.Count -eq 0) {

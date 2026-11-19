@@ -131,15 +131,15 @@ _base_cmd = [
 ]
 
 with mock.patch.object(lsp, "_external_draft_footprint_mib", return_value=1250.0):
-    # Case A: Free = 4250 MiB, calibrated Nemotron+DFlash = 4505 MiB -> fits ONLY without drafter!
-    mgr_tight = SimpleNamespace(can_fit=_fake_can_fit_factory(4250.0, 4505.0))
+    # Case A: Free = 4250 MiB, target alone = 3255 MiB + DFlash upfront = 1250 MiB (4505 MiB) -> fits ONLY without drafter!
+    mgr_tight = SimpleNamespace(can_fit=_fake_can_fit_factory(4250.0, 3255.0))
     cmd_a = list(_base_cmd)
-    fit_in_a = mgr_tight.can_fit("nemotron-3.5-bolt:e4b", 16384)
+    fit_in_a = mgr_tight.can_fit("nemotron-3.5-bolt:e4b", 16384, extra_needed_mib=1250.0)
     fit_out_a, extra_a, dropped_a = lsp._try_drop_external_drafter(
-        mgr_tight, _slot_pf, cmd_a, "nemotron-3.5-bolt:e4b", 16384, fit_in_a, 0.0, 1250.0
+        mgr_tight, _slot_pf, cmd_a, "nemotron-3.5-bolt:e4b", 16384, fit_in_a, 1250.0, 1250.0
     )
     check("Tight VRAM auto-drops DFlash so target alone fits cleanly",
-          dropped_a is True and fit_out_a.ok is True and extra_a == -1250.0,
+          dropped_a is True and fit_out_a.ok is True and extra_a == 0.0,
           f"(dropped={dropped_a}, fit={fit_out_a}, extra={extra_a})")
     check("Stripped command removes all external drafter flags and keeps target flags",
           "--model-draft" not in cmd_a and "--spec-type" not in cmd_a
@@ -148,11 +148,11 @@ with mock.patch.object(lsp, "_external_draft_footprint_mib", return_value=1250.0
           f"({cmd_a})")
 
     # Case B: Free = 4900 MiB -> full ctx+DFlash fits with reduced margin (256), keep drafter!
-    mgr_ok_red = SimpleNamespace(can_fit=_fake_can_fit_factory(4900.0, 4505.0))
+    mgr_ok_red = SimpleNamespace(can_fit=_fake_can_fit_factory(4900.0, 3255.0))
     cmd_b = list(_base_cmd)
-    fit_in_b = mgr_ok_red.can_fit("nemotron-3.5-bolt:e4b", 16384)
+    fit_in_b = mgr_ok_red.can_fit("nemotron-3.5-bolt:e4b", 16384, extra_needed_mib=1250.0)
     fit_out_b, _extra_b, dropped_b = lsp._try_drop_external_drafter(
-        mgr_ok_red, _slot_pf, cmd_b, "nemotron-3.5-bolt:e4b", 16384, fit_in_b, 0.0, 1250.0
+        mgr_ok_red, _slot_pf, cmd_b, "nemotron-3.5-bolt:e4b", 16384, fit_in_b, 1250.0, 1250.0
     )
     check("Reduced-margin VRAM headroom keeps DFlash drafter active",
           dropped_b is False and "--model-draft" in cmd_b,

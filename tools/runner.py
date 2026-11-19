@@ -2,11 +2,15 @@
 from __future__ import annotations
 import asyncio
 import contextvars as _contextvars
+import hashlib
 import json
+import logging
 import os
 import re
 import time
 from pathlib import Path
+
+logger = logging.getLogger("hivemind.tools")
 
 from tools.errors import tool_error_response as _tool_error_response
 from tools.definitions import _tool_names_for_mode
@@ -282,6 +286,18 @@ def _normalize_meta_paths(text: str) -> str:
 # chat_id-or-run_id): a new chat asks again, nothing survives restarts.
 # The old tool_approvals.json persistence was removed on purpose (live: a
 # remembered write from an old chat silenced the gate in a brand-new one).
+_WRITE_APPROVAL_TOOLS = frozenset({
+    "write_file",
+    "edit_file",
+    "write_file_append",
+    "apply_patch",
+    "edit_ast",
+    "replace_lines",
+    "patch_file",
+    "lsp_format",
+})
+
+
 def _workspace_approval_key(workspace) -> str:
     try:
         return str(Path(workspace).resolve())
@@ -289,23 +305,46 @@ def _workspace_approval_key(workspace) -> str:
         return str(workspace)
 
 
+def _clean_approval_args(args: dict | None) -> dict:
+    if not isinstance(args, dict):
+        return {}
+    return {k: v for k, v in args.items() if not str(k).startswith("__")}
+
+
+def _canonical_args_hash(tool: str, args: dict | None) -> str:
+    """Return deterministic SHA-256 hash binding tool name and exact arguments."""
+    payload = {"tool": str(tool or ""), "args": _clean_approval_args(args)}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
+
+
+def _canonical_approval_key(tool: str, args: dict | None) -> str:
+    """Shared canonical key used by both remember-cache and approval cards.
+
+    Write tools with a resolvable target path key per normalized file path(s)
+    so chat-scoped repo approvals cover that file across write tools; all other
+    tools (and write calls with missing paths) key by exact canonical args hash.
+    """
+    clean = _clean_approval_args(args)
+    if tool in _WRITE_APPROVAL_TOOLS:
+        wpath = _norm_write_path(clean, tool)
+        if wpath:
+            return "file:" + wpath
+    raw = json.dumps(clean, sort_keys=True, ensure_ascii=False, default=str)
+    return f"cmd:{tool}|" + hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
+
+
 def _approval_call_key(name: str, args: dict) -> str:
     """EXACT-MATCH memory (2026-09-18 user spec): a workspace approval covers
     precisely this call — writes per FILE, commands per exact 1:1 arguments
     (a new command with different content asks again). Legacy tool-level
     entries are ignored."""
-    if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
-        return "file:" + _norm_write_path(args)
-    import hashlib as _hl
-    _raw = json.dumps(
-        {k: v for k, v in (args or {}).items() if not str(k).startswith("__")},
-        sort_keys=True, ensure_ascii=False)
-    return "cmd:" + name + "|" + _hl.md5(_raw.encode("utf-8", "replace")).hexdigest()
+    return _canonical_approval_key(name, args)
 
 
 def _repo_approval_granted(workspace, name: str, args: dict) -> bool:
     d = _approval_memory.get(_approval_scope(), {})
-    _key = _workspace_approval_key(workspace) + "::" + _approval_call_key(name, args)
+    _key = _workspace_approval_key(workspace) + "::" + _canonical_approval_key(name, args)
     return _key in d
 
 
@@ -313,7 +352,7 @@ def _remember_repo_approval(workspace, name: str, args: dict) -> None:
     _mem = _approval_memory.setdefault(_approval_scope(), {})
     if len(_mem) > 512:
         _mem.clear()
-    _mem[_workspace_approval_key(workspace) + "::" + _approval_call_key(name, args)] = int(time.time())
+    _mem[_workspace_approval_key(workspace) + "::" + _canonical_approval_key(name, args)] = int(time.time())
 
 
 def _parse_approval_answer(text: str) -> str:
@@ -503,15 +542,68 @@ def _pending_approval_info(run_id: str) -> dict | None:
     return _pending_approvals.get(str(run_id))
 
 
-def _norm_write_path(args: dict) -> str:
+def _extract_patch_paths(patch_txt: str) -> list[str]:
+    """Extract unique target paths from unified diffs or *** Update/Add/Delete File headers."""
+    text = str(patch_txt or "").strip()
+    if not text:
+        return []
+    targets: list[str] = []
     try:
-        if str((args or {}).get("path", "")).strip():
-            return os.path.normpath(str((args or {}).get("path", ""))).lower()
-        _patch_txt = str((args or {}).get("patch") or (args or {}).get("diff") or "").strip()
-        if _patch_txt:
-            from tools.patch_diff import patch_targets
-            _tgts = sorted({os.path.normpath(t).lower() for t in patch_targets(_patch_txt) if t})
-            return "|".join(_tgts)
+        from tools.patch_diff import patch_targets, strip_prefix
+        targets.extend(t for t in patch_targets(text) if t)
+    except (ImportError, TypeError, ValueError):
+        strip_prefix = lambda s: s[2:] if s.startswith(("a/", "b/")) and len(s) > 2 else s  # noqa: E731
+
+    def _clean_hdr_path(raw: str) -> str:
+        val = str(raw or "").strip()
+        if not val:
+            return ""
+        if val.startswith('"') and '"' in val[1:]:
+            val = val[1:val.index('"', 1)]
+        else:
+            val = val.split("\t", 1)[0].strip()
+        if val.lower() in ("/dev/null", "nul", "/nul"):
+            return ""
+        val = strip_prefix(val).strip()
+        return val
+
+    for line in text.splitlines():
+        m = re.match(r"^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$", line)
+        if not m:
+            m = re.match(r"^\*\*\*\s+Move\s+to:\s*(.+)$", line)
+        if m:
+            cleaned = _clean_hdr_path(m.group(1))
+            if cleaned:
+                targets.append(cleaned)
+    if not targets:
+        for line in text.splitlines():
+            if line.startswith(("--- ", "+++ ")):
+                cleaned = _clean_hdr_path(line[4:])
+                if cleaned:
+                    targets.append(cleaned)
+    seen: dict[str, str] = {}
+    for t in targets:
+        norm = os.path.normpath(t).lower()
+        if norm and norm not in seen:
+            seen[norm] = t
+    return sorted(seen.keys())
+
+
+def _norm_write_path(args: dict, tool: str = "") -> str:
+    try:
+        if not isinstance(args, dict):
+            return ""
+        if tool == "apply_patch" or (
+            not str(args.get("path", "")).strip()
+            and str(args.get("patch") or args.get("diff") or "").strip()
+        ):
+            _patch_txt = str(args.get("patch") or args.get("diff") or "").strip()
+            if _patch_txt:
+                return "|".join(_extract_patch_paths(_patch_txt))
+        for key in ("path", "file_path", "file", "filepath", "target"):
+            raw = str(args.get(key, "") or "").strip()
+            if raw:
+                return os.path.normpath(raw).lower()
         return ""
     except (OSError, TypeError, ValueError):
         return ""
@@ -562,7 +654,17 @@ def _approval_active_for(name: str) -> bool:
 _approval_free_pass: dict = {}
 
 
-async def stage_approval_card(run_id, name: str, emit) -> None:
+def _clear_staged_approval(run_id: str | None) -> None:
+    """Clear any staged card and pending/pre-decision state for *run_id*."""
+    scope = str(run_id or "")
+    if not scope:
+        return
+    _approval_pre_decisions.pop(scope, None)
+    _pending_approvals.pop(scope, None)
+    _card_staged.pop(scope, None)
+
+
+async def stage_approval_card(run_id, name: str, emit, args: dict | None = None) -> None:
     """Emit the approval card the moment a gated call's NAME is recognized
     in the generation stream (idempotent per run). The user decides WHILE
     the content generates; the decision lands in _approval_pre_decisions
@@ -571,43 +673,153 @@ async def stage_approval_card(run_id, name: str, emit) -> None:
     scope = str(run_id or "")
     if not scope or _card_staged.get(scope):
         return
-    if (_approval_free_pass.get(scope) == "write"
-            and name in ("write_file", "edit_file", "write_file_append", "apply_patch")):
+    if _approval_free_pass.get(scope) == "write" and name in _WRITE_APPROVAL_TOOLS:
         return
     if _approval_pre_decisions.get(scope):
         return  # already decided while generating
-    _card_staged[scope] = True
+    _staged_key = _canonical_approval_key(name, args) if args is not None else ""
+    _staged_hash = _canonical_args_hash(name, args) if args is not None else ""
+    _preview = (
+        _approval_preview(args, tool=name)
+        if args is not None
+        else "(generating, content streams in the panel)"
+    )
+    _card_staged[scope] = {
+        "tool": name,
+        "approval_key": _staged_key,
+        "args_hash": _staged_hash,
+    }
     _appr_log.getLogger("hivemind.tools").info(
         "[APPROVAL] card staged run=%s tool=%s (decision during generation)", scope, name)
-    _pending_approvals[scope] = {"tool": name, "preview": "(generating, content streams in the panel)"}
+    _pending_approvals[scope] = {
+        "tool": name,
+        "preview": _preview,
+        "approval_key": _staged_key,
+        "args_hash": _staged_hash,
+    }
     # NEW-QUESTION RESET (2026-10-01): the expired flag only guards the gap
     # between a timeout-deny and the NEXT question — a fresh card must clear
     # it, otherwise the user's answer to the new (legitimate) question is
     # discarded by the decide endpoint's expired route.
     _approval_expired.pop(scope, None)
     try:
-        await emit({"type": "approval_request",
-                    "run_id": scope, "tool": name,
-                    "preview": "(generating, content streams in the panel)"})
+        ev = {"type": "approval_request", "run_id": scope, "tool": name, "preview": _preview}
+        if _staged_key:
+            ev["approval_key"] = _staged_key
+        await emit(ev)
     except Exception:
         pass
 
 
+def _cap_preview(text: str) -> str:
+    cleaned = _redact_secret_text((text or "").strip())
+    return cleaned[:300] + ("\u2026" if len(cleaned) > 300 else "")
 
 
-def _approval_preview(args: dict) -> str:
+def _approval_preview(args: dict, tool: str = "") -> str:
     # H6 (deep audit 2026-10-06): run_bash/start_background carry "cmd",
     # install_package carries "packages" - the old tuple missed both, so
     # the card fell through to the 60-char generic join while the full
     # command executed (approve sees X, runs Y).
-    for _k in ("cmd", "command", "code", "packages", "package", "url", "path", "patch", "diff"):
+    args = args if isinstance(args, dict) else {}
+    t = str(tool or "").strip()
+
+    if t == "apply_patch" or (not args.get("path") and (args.get("patch") or args.get("diff"))):
+        patch_txt = str(args.get("patch") or args.get("diff") or "").strip()
+        targets = _extract_patch_paths(patch_txt)
+        if targets:
+            head = f"apply_patch [{', '.join(targets[:5])}" + (f", +{len(targets) - 5} more" if len(targets) > 5 else "") + "]"
+            return _cap_preview(f"{head}: {patch_txt}" if patch_txt else head)
+        if patch_txt:
+            return _cap_preview(patch_txt)
+
+    if t in ("write_file", "write_file_append"):
+        p = str(args.get("path") or "").strip()
+        content = str(args.get("content") or "")
+        if p:
+            prefix = "append -> " if t == "write_file_append" else ""
+            return _cap_preview(f"{prefix}{p} ({len(content)} chars)" if content else f"{prefix}{p}")
+
+    if t == "edit_file":
+        p = str(args.get("path") or "").strip()
+        edits = args.get("edits")
+        if p and isinstance(edits, list) and edits:
+            return _cap_preview(f"{p} ({len(edits)} edit(s))")
+        if p:
+            old_t = str(args.get("old_text") or "").strip().splitlines()[0][:50] if str(args.get("old_text") or "").strip() else ""
+            return _cap_preview(f"{p}: {old_t}" if old_t else p)
+
+    if t == "edit_ast":
+        p = str(args.get("path") or "").strip()
+        tt = str(args.get("target_type") or "").strip()
+        tn = str(args.get("target_name") or "").strip()
+        if p:
+            return _cap_preview(f"{p} ({tt} {tn})".strip())
+
+    if t == "replace_lines":
+        p = str(args.get("path") or "").strip()
+        sl = args.get("start_line")
+        el = args.get("end_line")
+        if p:
+            return _cap_preview(f"{p} (lines {sl}-{el})" if sl is not None else p)
+
+    if t == "patch_file":
+        p = str(args.get("path") or "").strip()
+        old_s = str(args.get("old_str") or "").strip().splitlines()[0][:50] if str(args.get("old_str") or "").strip() else ""
+        if p:
+            return _cap_preview(f"{p}: {old_s}" if old_s else p)
+
+    if t == "lsp_rename":
+        p = str(args.get("path") or "").strip()
+        nn = str(args.get("new_name") or "").strip()
+        if p:
+            return _cap_preview(f"{p}:{args.get('line', '?')}:{args.get('character', '?')} -> {nn}")
+
+    if t == "lsp_format":
+        p = str(args.get("path") or "").strip()
+        if p:
+            return _cap_preview(f"format {p}")
+
+    if t == "git_commit":
+        msg = str(args.get("message") or "").strip()
+        paths = [str(x) for x in (args.get("paths") or []) if x]
+        if msg or paths:
+            p_txt = ", ".join(paths[:5]) + ("..." if len(paths) > 5 else "")
+            return _cap_preview(f"{msg} [{p_txt}]" if p_txt else msg)
+
+    if t == "install_package":
+        mgr = str(args.get("manager") or "").strip()
+        pkgs = str(args.get("packages") or args.get("package") or "").strip()
+        dev = " --save-dev" if args.get("dev") else ""
+        if pkgs or mgr:
+            return _cap_preview(f"{mgr} install {pkgs}{dev}".strip())
+
+    if t == "run_tests":
+        bits = []
+        if args.get("lang_override"):
+            bits.append(str(args["lang_override"]))
+        tgt = args.get("paths") or args.get("targets")
+        if tgt:
+            bits.append(", ".join(str(x) for x in (tgt if isinstance(tgt, list) else [tgt])[:4]))
+        return _cap_preview(f"run_tests ({'; '.join(bits)})" if bits else "run_tests (full suite)")
+
+    if t == "undo_last":
+        p = str(args.get("path") or "").strip()
+        return _cap_preview(f"undo_last ({p})" if p else "undo_last (all files in round)")
+
+    if t == "browser":
+        act = str(args.get("action") or "").strip()
+        tgt = str(args.get("url") or args.get("selector") or args.get("path") or args.get("js") or "").strip()
+        if act:
+            return _cap_preview(f"browser {act}: {tgt}" if tgt else f"browser {act}")
+
+    for _k in ("cmd", "command", "code", "source", "packages", "package", "url", "path", "patch", "diff"):
         _v = args.get(_k)
         if isinstance(_v, str) and _v.strip():
-            _v = _redact_secret_text(_v.strip())
-            return _v[:300] + ("\u2026" if len(_v) > 300 else "")
+            return _cap_preview(_v)
     _joined = "; ".join(f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3]
                         if not str(k).startswith("__"))
-    return _joined[:300] + ("\u2026" if len(_joined) > 300 else "")
+    return _cap_preview(_joined)
 
 
 async def _safe_emit(ev) -> None:
@@ -636,6 +848,38 @@ def _redact_secret_text(text: str) -> str:
     return _REDACT_SECRET_RE.sub(lambda m: m.group(1) + "***", text or "")
 
 
+def _pre_decision_matches(
+    name: str,
+    args_hash: str,
+    canon_key: str,
+    pre: dict | None,
+    staged: dict | bool | None,
+) -> bool:
+    """True when a staged pre-decision binds to this exact tool and args."""
+    if not isinstance(pre, dict):
+        return False
+    pre_tool = pre.get("tool")
+    if pre_tool and pre_tool != name:
+        return False
+    pre_hash = pre.get("args_hash")
+    if pre_hash and pre_hash != args_hash:
+        return False
+    pre_key = pre.get("approval_key")
+    if pre_key and pre_key != canon_key:
+        return False
+    if not pre_hash and not pre_key and isinstance(staged, dict):
+        st_tool = staged.get("tool")
+        if st_tool and st_tool != name:
+            return False
+        st_hash = staged.get("args_hash")
+        if st_hash and st_hash != args_hash:
+            return False
+        st_key = staged.get("approval_key")
+        if st_key and st_key != canon_key:
+            return False
+    return True
+
+
 def _apply_pre_decision(
     run_id: str,
     workspace: str,
@@ -652,7 +896,7 @@ def _apply_pre_decision(
     decision = _parse_approval_answer(ans)
     _lg.warning("[APPROVAL] %s=%s run=%s tool=%s note=%r",
                 label, decision, run_id, name, str(note)[:80])
-    _is_write = name in ("write_file", "edit_file", "write_file_append", "apply_patch")
+    _is_write = name in _WRITE_APPROVAL_TOOLS
     if decision == "repo":
         _remember_repo_approval(workspace, name, args or {})
         if _is_write:
@@ -660,8 +904,9 @@ def _apply_pre_decision(
         return ("NOTE", note) if note else None
     if decision == "once":
         if _is_write:
-            _wpp = _workspace_approval_key(workspace) + "::" + _norm_write_path(args or {})
-            if _wpp:
+            _wpath_part = _norm_write_path(args or {}, name)
+            if _wpath_part:
+                _wpp = _workspace_approval_key(workspace) + "::" + _wpath_part
                 _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp)
             _approval_free_pass[str(run_id)] = "write"
         return ("NOTE", note) if note else None
@@ -721,34 +966,31 @@ async def _check_action_approval(name: str, args: dict, workspace,
     # the decision was made FOR; a stored decision for a DIFFERENT tool
     # (late duplicate answering a new card) is dropped and asked fresh.
     # Empty/absent tool = unknown (legacy UI payloads) → compatible.
+    _canon_key = _canonical_approval_key(name, args or {})
+    _args_hash = _canonical_args_hash(name, args or {})
+    _staged = _card_staged.get(str(run_id))
     _pre = _approval_pre_decisions.get(str(run_id))
-    _pre_tool = _pre.get("tool") if isinstance(_pre, dict) else None
-    if _pre is not None and _pre_tool and _pre_tool != name:
-        # stale decision for a DIFFERENT tool (model changed course in the
-        # re-POST) — drop it and ask fresh
-        _approval_pre_decisions.pop(str(run_id), None)
-        _pending_approvals.pop(str(run_id), None)
-        _card_staged.pop(str(run_id), None)
+    if _pre is not None and not _pre_decision_matches(name, _args_hash, _canon_key, _pre, _staged):
+        # stale decision for a DIFFERENT tool or mismatched args (drift/truncation/re-POST) — drop and ask fresh
+        _clear_staged_approval(str(run_id))
         _pre = None
     if _pre is not None:
-        _approval_pre_decisions.pop(str(run_id), None)
-        _pending_approvals.pop(str(run_id), None)
-        _card_staged.pop(str(run_id), None)
+        _clear_staged_approval(str(run_id))
         return _apply_pre_decision(run_id, workspace, name, args, _pre)
     # "once" for writes covers the path: continuations of an approved write
     # (auto-split part 2, follow-up edits) must not re-ask.
     _scope = _approval_scope()
-    _wpath = _norm_write_path(args)
+    _wpath = _norm_write_path(args or {}, name)
     if _wpath:
         _wpath = _workspace_approval_key(workspace) + "::" + _wpath
-    if (name in ("write_file", "edit_file", "write_file_append", "apply_patch")
+    if (name in _WRITE_APPROVAL_TOOLS
             and _wpath and _wpath in _approval_once_paths.get(_scope, set())):
         _lg.info("[APPROVAL] skip: %s on %s already approved in this chat", name, _wpath)
         _pending_approvals.pop(str(run_id), None)
         _card_staged.pop(str(run_id), None)
         return None
 
-    _preview = _approval_preview(args)
+    _preview = _approval_preview(args or {}, tool=name)
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
     _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
     from infra import run_control as _rc
@@ -765,6 +1007,8 @@ async def _check_action_approval(name: str, args: dict, workspace,
         _appr_to_s = 0
     _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
     _pending_approvals[run_id] = {"tool": name, "preview": _preview,
+                                  "approval_key": _canon_key,
+                                  "args_hash": _args_hash,
                                   "decision_id": "", "auto_timeout_s": _appr_to_s}
     # PAUSE-SETUP RACE FIX (2026-09-19): register the pause BEFORE the card
     # goes out. The old order (publish -> initiate_pause) had a window where
@@ -777,7 +1021,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
     # A decision that slipped in between the pre-decision check above and
     # the pause setup is consumed here instead of waiting forever.
     _pre_late = _approval_pre_decisions.pop(str(run_id), None)
-    if _pre_late is not None and _pre_late.get("tool") in (None, name):
+    if _pre_late is not None and _pre_decision_matches(name, _args_hash, _canon_key, _pre_late, _staged):
         _rc.cleanup_pause(run_id)
         _pending_approvals.pop(str(run_id), None)
         _card_staged.pop(str(run_id), None)
@@ -788,6 +1032,8 @@ async def _check_action_approval(name: str, args: dict, workspace,
     # card and every decide POST validate against it from here on.
     _decision_id = _rc.get_decision_id(run_id)
     _pending_approvals[run_id] = {"tool": name, "preview": _preview,
+                                  "approval_key": _canon_key,
+                                  "args_hash": _args_hash,
                                   "decision_id": _decision_id,
                                   "auto_timeout_s": _appr_to_s}
     # NEW-QUESTION RESET (2026-10-01): same as in stage_approval_card — a
@@ -800,6 +1046,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
     # /api/run/{id}/resume.
     await _safe_emit({"type": "approval_request",
                       "run_id": run_id, "tool": name, "preview": _preview,
+                      "approval_key": _canon_key,
                       "decision_id": _decision_id,
                       "auto_timeout_s": _appr_to_s})
     await _safe_emit({"type": "status", "content": "Approval needed. Waiting for your decision\u2026"})
@@ -911,7 +1158,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
                 decision, run_id, name, _note[:80], str(answer)[:60])
     if decision == "repo":
         _remember_repo_approval(workspace, name, args or {})
-        if name in ("write_file", "edit_file", "write_file_append", "apply_patch"):
+        if name in _WRITE_APPROVAL_TOOLS:
             _approval_free_pass[str(run_id)] = "write"
         if _note:
             return ("NOTE", _note)
@@ -921,7 +1168,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
         # the model as the call's outcome so it can adjust and retry.
         return ("INPUT_ONLY", _note or "(empty)")
     if decision == "once":
-        if name in ("write_file", "edit_file", "write_file_append", "apply_patch") and _wpath:
+        if name in _WRITE_APPROVAL_TOOLS and _wpath:
             _approval_once_paths.setdefault(_scope, set()).add(_wpath)
             if len(_approval_once_paths) > 64:
                 _approval_once_paths.clear()
@@ -1857,6 +2104,28 @@ async def _run_inline_tool(
             if _gate_block is not None:
                 return _gate_block
 
+        _write_existed_before = True
+        if name == "write_file" and isinstance(args, dict) and args.get("path"):
+            try:
+                _pre_p = Path(str(args["path"]))
+                if not _pre_p.is_absolute():
+                    _pre_p = workspace / _pre_p
+                _write_existed_before = _pre_p.exists()
+            except OSError as _pre_err:
+                logger.debug("[LSP] pre-write exists check skipped: %s", _pre_err)
+        _ap_existed_before: set[str] = set()
+        if name == "apply_patch" and isinstance(args, dict) and (args.get("patch") or args.get("diff")):
+            try:
+                from tools.patch_diff import patch_targets as _patch_targets_pre
+                for _pre_ap in _patch_targets_pre(str(args.get("patch") or args.get("diff") or ""), include_delete=False):
+                    _pre_ap_p = Path(_pre_ap)
+                    if not _pre_ap_p.is_absolute():
+                        _pre_ap_p = workspace / _pre_ap_p
+                    if _pre_ap_p.exists():
+                        _ap_existed_before.add(_pre_ap)
+            except (ImportError, OSError, ValueError, TypeError) as _pre_ap_err:
+                logger.debug("[LSP] pre-patch exists check skipped: %s", _pre_ap_err)
+
         _tok = _dispatch_active_cv.set(True)
         try:
             _result = await handler(args or {}, workspace, workspace_lock)
@@ -1974,12 +2243,14 @@ async def _run_inline_tool(
                         from tools.handlers.lsp import (
                             auto_diagnostics_block as _lsp_auto,
                             merge_post_write_diagnostics as _lsp_merge,
+                            notify_watched_change as _lsp_watch,
                         )
+                        _lsp_created = (name == "write_file" and not _write_existed_before)
+                        if _lsp_watch(workspace, [args["path"]], created=_lsp_created):
+                            await asyncio.sleep(0)
                         _lsp_note, _lsp_handled = await _lsp_auto(
                             workspace, args["path"], return_status=True)
                         _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
-                        from tools.handlers.lsp import notify_watched_change as _lsp_watch
-                        _lsp_watch(workspace, [args["path"]])
                     except (ImportError, OSError, RuntimeError, ValueError,
                             AttributeError, TypeError):
                         pass
@@ -2020,7 +2291,15 @@ async def _run_inline_tool(
                         merge_post_write_diagnostics as _lsp_merge,
                         notify_watched_change as _lsp_watch,
                     )
-                    _lsp_watch(workspace, _ap_live_targets)
+                    _ap_created = [t for t in _ap_live_targets if t not in _ap_existed_before]
+                    _ap_changed = [t for t in _ap_live_targets if t in _ap_existed_before]
+                    _notified = 0
+                    if _ap_created:
+                        _notified += _lsp_watch(workspace, _ap_created, created=True)
+                    if _ap_changed:
+                        _notified += _lsp_watch(workspace, _ap_changed, created=False)
+                    if _notified:
+                        await asyncio.sleep(0)
                     _ap_lsp_results = await asyncio.gather(*(
                         _lsp_auto(workspace, _ap_live, return_status=True)
                         for _ap_live in _ap_live_targets[:4]
@@ -2034,6 +2313,16 @@ async def _run_inline_tool(
                 except (ImportError, OSError, RuntimeError, ValueError,
                         AttributeError, TypeError):
                     pass
+
+        if name in ("run_bash", "install_package") and not _result.startswith("[TOOL_ERROR"):
+            _cmd_low = str((args or {}).get("cmd", "") or "").lower()
+            if (name == "install_package"
+                    or any(k in _cmd_low for k in ("pip install", "uv pip", "uv add", "uv sync", "venv"))):
+                try:
+                    from tools.handlers.lsp import notify_config_changed as _lsp_cfg_refresh
+                    _lsp_cfg_refresh(workspace, languages=("python",))
+                except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _cfg_err:
+                    logger.debug("[LSP] post-install config refresh skipped: %s", _cfg_err)
 
         # ── ProjectState: record build steps ──
         _ps = _current_project_state.get()

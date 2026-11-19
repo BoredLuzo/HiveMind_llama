@@ -89,6 +89,7 @@ learning_logs/
 learning/sessions/
 model_configs/learning_logs/
 model_configs/learned/
+model_configs/user/
 context/projects/
 context/last_workspace.json
 context/decider_cache.json
