@@ -384,13 +384,21 @@ def _append_chat_template(cmd: list, model_base: str, reg_template: str | None) 
     has priority; only when it is unset does the fallback chain
     sharp_v22.5.0 -> chat_template22.5 -> qwen3.6 template fire.
     """
-    _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
+    _templates_dir = (Path(__file__).resolve().parent.parent / "model_configs").resolve()
     # Registry template (explicit path or base name) wins.
     if reg_template:
-        _reg_template_path = Path(reg_template)
-        if not _reg_template_path.is_absolute():
-            _reg_template_path = _templates_dir / _reg_template_path
-        if _reg_template_path.exists():
+        _raw_tpl = Path(reg_template)
+        try:
+            _reg_template_path = (
+                _raw_tpl.resolve()
+                if _raw_tpl.is_absolute()
+                else (_templates_dir / _raw_tpl).resolve()
+            )
+            _reg_template_path.relative_to(_templates_dir)
+        except (OSError, ValueError):
+            logger.warning(f"Rejected chat_template outside model_configs/: {reg_template}")
+            return
+        if _reg_template_path.is_file():
             cmd += ["--chat-template-file", str(_reg_template_path)]
             logger.info(f"--chat-template-file (Registry): {_reg_template_path}")
         else:
@@ -705,96 +713,126 @@ class LlamaLoadMixin:
         _need_start = False
         _owned_gen: Optional[int] = None
         slot = None
-        while True:
-            cand = await self._find_loaded(model)
-            async with self._lock:
-                slot = (
-                    cand
-                    if (
-                        cand is not None
-                        and any(s is cand for s in self._slots)
-                        and _nm(cand.model) == _nm(model)
-                        and (cand.is_running or getattr(cand, "_loading", False))
-                    )
-                    else self._active_slot_for(model)
-                )
-                if slot is not None:
-                    if not slot._loading:
-                        slot.touch()
-                        if pin:
-                            slot.set_pinned(True)
-                        return slot
-                    break
-            slot, _owned_gen = await self._claim_free_or_evict_slot(
-                model, pin=pin, idle_timeout=keep_alive_seconds,
-            )
-            if slot is None:
-                continue
-            _need_start = True
-            break
-
-        try:
-            if _need_start:
-                # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
-                # CRASHED slot carries a stale SET event from its previous
-                # load; skipping _start_process handed callers a dead port.
-                # On a fresh claim nobody else is starting this slot and
-                # _start_process clears the event itself.
-                try:
-                    await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                              ctx_graceful=ctx_graceful)
-                except RuntimeError as _load_exc:
-                    _has_running_peers = any(
-                        s.is_running for s in self._slots if s.slot_id != slot.slot_id
-                    )
-                    if "exit=-1" in str(_load_exc) and _has_running_peers:
-                        logger.warning(
-                            f"AMD Vulkan collision for '{model}' in load() (exit=-1) — "
-                            f"waiting 5s and retrying once ..."
+        for _waiter_pass in range(3):
+            _need_start = False
+            _owned_gen = None
+            slot = None
+            while True:
+                cand = await self._find_loaded(model)
+                async with self._lock:
+                    slot = (
+                        cand
+                        if (
+                            cand is not None
+                            and any(s is cand for s in self._slots)
+                            and _nm(cand.model) == _nm(model)
+                            and (cand.is_running or getattr(cand, "_loading", False))
                         )
-                        await _kill_slot_async(slot)
-                        _owned_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                        slot._lifecycle_gen = _owned_gen
-                        slot._loading = True
-                        slot.model    = model
-                        if hasattr(slot, "_ready_event"):
-                            slot._ready_event.clear()
-                        await asyncio.sleep(5.0)
-                        try:
-                            await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                                      ctx_graceful=ctx_graceful)
-                        except Exception:
-                            await _kill_slot_async(slot)
-                            raise
-                    else:
-                        await _kill_slot_async(slot)
-                        raise
-                except Exception:
-                    await _kill_slot_async(slot)
-                    raise
+                        else self._active_slot_for(model)
+                    )
+                    if slot is not None:
+                        if not slot._loading:
+                            slot.touch()
+                            if pin:
+                                slot.set_pinned(True)
+                                slot._idle_timeout = None
+                            return slot
+                        break
+                slot, _owned_gen = await self._claim_free_or_evict_slot(
+                    model, pin=pin, idle_timeout=keep_alive_seconds,
+                )
+                if slot is None:
+                    continue
+                _need_start = True
+                break
 
             try:
-                await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
-            except asyncio.TimeoutError:
-                raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
-            # A.2 (deep audit): a concurrent loader's kill swaps in a fresh
-            # event and wakes us with model=None - never return that slot.
-            if slot.model is None:
-                raise RuntimeError(
-                    f"Shared slot for '{model}' died during startup - the "
-                    "underlying llama-server process failed to load.")
+                if _need_start:
+                    # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
+                    # CRASHED slot carries a stale SET event from its previous
+                    # load; skipping _start_process handed callers a dead port.
+                    # On a fresh claim nobody else is starting this slot and
+                    # _start_process clears the event itself.
+                    try:
+                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                                  ctx_graceful=ctx_graceful)
+                    except RuntimeError as _load_exc:
+                        _has_running_peers = any(
+                            s.is_running for s in self._slots if s.slot_id != slot.slot_id
+                        )
+                        if "exit=-1" in str(_load_exc) and _has_running_peers:
+                            logger.warning(
+                                f"AMD Vulkan collision for '{model}' in load() (exit=-1) — "
+                                f"waiting 5s and retrying once ..."
+                            )
+                            await _kill_slot_async(slot)
+                            async with self._lock:
+                                if slot.model is not None or getattr(slot, "_loading", False):
+                                    raise SlotAbortedError(
+                                        f"Model load for '{model}' aborted (slot reclaimed by peer)."
+                                    )
+                                _owned_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                slot._lifecycle_gen = _owned_gen
+                                slot._loading = True
+                                slot.model    = model
+                                slot._idle_timeout = None if pin else keep_alive_seconds
+                                slot.set_pinned(pin)
+                                if hasattr(slot, "_ready_event"):
+                                    slot._ready_event.clear()
+                            await asyncio.sleep(5.0)
+                            try:
+                                await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                                          ctx_graceful=ctx_graceful)
+                            except Exception:
+                                await _kill_slot_async(slot)
+                                raise
+                        else:
+                            await _kill_slot_async(slot)
+                            raise
+                    except Exception:
+                        await _kill_slot_async(slot)
+                        raise
 
-            _owned_gen = None
-            slot.touch()
-            return slot
-        except BaseException:
-            if (
-                _owned_gen is not None
-                and getattr(slot, "_lifecycle_gen", _owned_gen) == _owned_gen
-                and (getattr(slot, "_loading", False) or getattr(slot, "model", None) is not None or getattr(slot, "process", None) is not None)
-            ):
-                await _kill_slot_async(slot)
-            raise
+                try:
+                    await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
+                except asyncio.TimeoutError:
+                    raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
+                # A.2 (deep audit): a concurrent loader's kill swaps in a fresh
+                # event and wakes us with model=None - never return that slot.
+                if slot.model is None:
+                    raise RuntimeError(
+                        f"Shared slot for '{model}' died during startup - the "
+                        "underlying llama-server process failed to load.")
+
+                _owned_gen = None
+                if not _need_start:
+                    _retry_load_waiter = False
+                    async with self._lock:
+                        _same_loaded = _nm(slot.model) == _nm(model) and (
+                            getattr(slot, "is_running", False) or getattr(slot, "_loading", False)
+                        )
+                        if not _same_loaded:
+                            if _waiter_pass < 2:
+                                _retry_load_waiter = True
+                            else:
+                                raise RuntimeError(
+                                    f"Shared slot for '{model}' was reassigned during startup."
+                                )
+                        elif pin and not getattr(slot, "pinned", False):
+                            slot.set_pinned(True)
+                            slot._idle_timeout = None
+                    if _retry_load_waiter:
+                        continue
+                slot.touch()
+                return slot
+            except BaseException:
+                if (
+                    _owned_gen is not None
+                    and getattr(slot, "_lifecycle_gen", _owned_gen) == _owned_gen
+                    and (getattr(slot, "_loading", False) or getattr(slot, "model", None) is not None or getattr(slot, "process", None) is not None)
+                ):
+                    await _kill_slot_async(slot)
+                raise
 
     async def prefetch_next(self, model: str, num_ctx: Optional[int] = None):
         _prefetch_ctx = int(num_ctx or CONTEXT_SIZE_DEFAULT)
@@ -957,443 +995,491 @@ class LlamaLoadMixin:
                     "ensure_loaded: orphan-adoption scan failed: %s", _adopt_exc
                 )
 
-        while True:
-            _cand_slot = await self._find_loaded(model)
-            _kill_before_retry = None
-            _probe_port_slot = None
-            async with self._lock:
-                slot = (
-                    _cand_slot
-                    if (
-                        _cand_slot is not None
-                        and any(s is _cand_slot for s in self._slots)
-                        and _nm(_cand_slot.model) == _nm(model)
-                        and (_cand_slot.is_running or getattr(_cand_slot, "_loading", False))
+        for _waiter_pass in range(3):
+            _need_start = False
+            _claim_gen = 0
+            _owned_gen = None
+            _vision_upgrade_pending = False
+            _did_vision_upgrade = False
+            slot = None
+            while True:
+                _cand_slot = await self._find_loaded(model)
+                _kill_before_retry = None
+                _probe_port_slot = None
+                async with self._lock:
+                    slot = (
+                        _cand_slot
+                        if (
+                            _cand_slot is not None
+                            and any(s is _cand_slot for s in self._slots)
+                            and _nm(_cand_slot.model) == _nm(model)
+                            and (_cand_slot.is_running or getattr(_cand_slot, "_loading", False))
+                        )
+                        else self._active_slot_for(model)
                     )
-                    else self._active_slot_for(model)
-                )
-                if slot is not None:
-                    if slot._loading:
-                        if slot.process is not None and slot.process.poll() is not None:
-                            slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                            slot.model = None
-                            _kill_before_retry = slot
+                    if slot is not None:
+                        if slot._loading:
+                            if slot.process is not None and slot.process.poll() is not None:
+                                slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                slot.model = None
+                                _kill_before_retry = slot
+                            else:
+                                if needs_vision_reload(slot._vision, vision):
+                                    # VISION-LOAD-RACE (2026-10-06, live 11:13): a text-only
+                                    # prefetch can still be LOADING when an image request
+                                    # arrives. Park the upgrade; it runs after the ready
+                                    # wait below (wait-then-upgrade, no caller sees an
+                                    # exception).
+                                    _vision_upgrade_pending = True
+                                break
                         else:
+                            # UPGRADE-ONLY RELOAD (2026-10-01): reload from WITHOUT to
+                            # WITH projector only. A plain load (no vision flag — chat,
+                            # compression, critic loads of the same model) must not
+                            # strip a vision slot's projector.
                             if needs_vision_reload(slot._vision, vision):
-                                # VISION-LOAD-RACE (2026-10-06, live 11:13): a text-only
-                                # prefetch can still be LOADING when an image request
-                                # arrives. Park the upgrade; it runs after the ready
-                                # wait below (wait-then-upgrade, no caller sees an
-                                # exception).
-                                _vision_upgrade_pending = True
-                            break
-                    else:
-                        # UPGRADE-ONLY RELOAD (2026-10-01): reload from WITHOUT to
-                        # WITH projector only. A plain load (no vision flag — chat,
-                        # compression, critic loads of the same model) must not
-                        # strip a vision slot's projector.
-                        if needs_vision_reload(slot._vision, vision):
-                            self._metric_inc("evictions_total")
-                            slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                            slot._loading = True
-                            slot.model = None
-                            _kill_before_retry = slot
-                        # "Cannot read image.png" via GGUF chat template on b8940+.
-                        elif _wants_jinja(model, _base) and not slot._jinja:
-                            logger.info(
-                                "ensure_loaded: %s jinja mismatch (--jinja missing) — reload.", model
-                            )
-                            self._metric_inc("evictions_total")
-                            slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                            slot._loading = True
-                            slot.model = None
-                            _kill_before_retry = slot
-                        else:
-                            _req_ctx = num_ctx or CONTEXT_SIZE_DEFAULT
-                            _in_flight = (
-                                slot.in_flight_active()
-                                if hasattr(slot, "in_flight_active")
-                                else int(getattr(slot, "in_flight", 0) or 0) > 0
-                            )
-                            _busy = _in_flight or (bool(getattr(slot, "pinned", False)) and not pin)
-                            _ctx_short = slot._num_ctx > 0 and _req_ctx > slot._num_ctx
-                            _par_short = (getattr(slot, "_n_parallel", 1) > 0
-                                          and n_parallel > getattr(slot, "_n_parallel", 1))
-                            if _busy and (_ctx_short or _par_short):
-                                logger.warning(
-                                    "ensure_loaded: %s busy (in-flight/pinned) - reusing slot "
-                                    "instead of reload (ctx %d<%d, parallel_short=%s)",
-                                    model, slot._num_ctx, _req_ctx, _par_short,
-                                )
-                            if _ctx_short and not _busy:
-                                logger.info(
-                                    f"ensure_loaded: {model} ctx mismatch "
-                                    f"(running with {slot._num_ctx}, needs {_req_ctx}) — reload."
-                                )
                                 self._metric_inc("evictions_total")
-                                self._metric_inc("evictions_ctx_reload")
                                 slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
                                 slot._loading = True
                                 slot.model = None
                                 _kill_before_retry = slot
-                            elif _par_short and not _busy:
+                            # "Cannot read image.png" via GGUF chat template on b8940+.
+                            elif _wants_jinja(model, _base) and not slot._jinja:
                                 logger.info(
-                                    f"ensure_loaded: {model} parallel mismatch "
-                                    f"(running with --parallel {getattr(slot, '_n_parallel', 1)}, needs {n_parallel}) — reload."
+                                    "ensure_loaded: %s jinja mismatch (--jinja missing) — reload.", model
                                 )
                                 self._metric_inc("evictions_total")
-                                self._metric_inc("evictions_parallel_reload")
                                 slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
                                 slot._loading = True
                                 slot.model = None
                                 _kill_before_retry = slot
                             else:
-                                _probe_port_slot = (slot, getattr(slot, "_lifecycle_gen", None))
-            if _kill_before_retry is not None:
-                await self._kill_claimed_slot(_kill_before_retry)
-                continue
-            if _probe_port_slot is not None:
-                slot, _probe_gen = _probe_port_slot
-                # STALE-PORT-GUARD (2026-08-31): probe outside self._lock so
-                # other manager calls do not queue behind the TCP check.
-                try:
-                    _stale_alive = await self._port_alive(slot.port)
-                except (OSError, RuntimeError, TimeoutError):
-                    _stale_alive = False
-                async with self._lock:
-                    if (
-                        getattr(slot, "_lifecycle_gen", None) != _probe_gen
-                        or _nm(slot.model) != _nm(model)
-                        or getattr(slot, "_loading", False)
-                    ):
-                        continue
-                    if _stale_alive:
-                        slot.touch()
-                        if pin and not slot.pinned:
-                            slot.set_pinned(True)
-                            slot._idle_timeout = None
-                        return slot.port
-                    logger.warning(
-                        "ensure_loaded: %s port %d dead despite loaded slot - reload.",
-                        model, slot.port,
-                    )
-                    self._metric_inc("evictions_total")
-                    self._metric_inc("evictions_stale_port")
-                    slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                    slot._loading = True
-                    slot.model = None
-                    _kill_before_retry = slot
-                await self._kill_claimed_slot(_kill_before_retry)
-                continue
+                                _req_ctx = num_ctx or CONTEXT_SIZE_DEFAULT
+                                _in_flight = (
+                                    slot.in_flight_active()
+                                    if hasattr(slot, "in_flight_active")
+                                    else int(getattr(slot, "in_flight", 0) or 0) > 0
+                                )
+                                _busy = _in_flight or (bool(getattr(slot, "pinned", False)) and not pin)
+                                _ctx_short = slot._num_ctx > 0 and _req_ctx > slot._num_ctx
+                                _par_short = (getattr(slot, "_n_parallel", 1) > 0
+                                              and n_parallel > getattr(slot, "_n_parallel", 1))
+                                if _busy and (_ctx_short or _par_short):
+                                    logger.warning(
+                                        "ensure_loaded: %s busy (in-flight/pinned) - reusing slot "
+                                        "instead of reload (ctx %d<%d, parallel_short=%s)",
+                                        model, slot._num_ctx, _req_ctx, _par_short,
+                                    )
+                                if _ctx_short and not _busy:
+                                    logger.info(
+                                        f"ensure_loaded: {model} ctx mismatch "
+                                        f"(running with {slot._num_ctx}, needs {_req_ctx}) — reload."
+                                    )
+                                    self._metric_inc("evictions_total")
+                                    self._metric_inc("evictions_ctx_reload")
+                                    slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                    slot._loading = True
+                                    slot.model = None
+                                    _kill_before_retry = slot
+                                elif _par_short and not _busy:
+                                    logger.info(
+                                        f"ensure_loaded: {model} parallel mismatch "
+                                        f"(running with --parallel {getattr(slot, '_n_parallel', 1)}, needs {n_parallel}) — reload."
+                                    )
+                                    self._metric_inc("evictions_total")
+                                    self._metric_inc("evictions_parallel_reload")
+                                    slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                    slot._loading = True
+                                    slot.model = None
+                                    _kill_before_retry = slot
+                                else:
+                                    _probe_port_slot = (slot, getattr(slot, "_lifecycle_gen", None))
+                if _kill_before_retry is not None:
+                    await self._kill_claimed_slot(_kill_before_retry)
+                    continue
+                if _probe_port_slot is not None:
+                    slot, _probe_gen = _probe_port_slot
+                    # STALE-PORT-GUARD (2026-08-31): probe outside self._lock so
+                    # other manager calls do not queue behind the TCP check.
+                    try:
+                        _stale_alive = await self._port_alive(slot.port)
+                    except (OSError, RuntimeError, TimeoutError):
+                        _stale_alive = False
+                    async with self._lock:
+                        if (
+                            getattr(slot, "_lifecycle_gen", None) != _probe_gen
+                            or _nm(slot.model) != _nm(model)
+                            or getattr(slot, "_loading", False)
+                        ):
+                            continue
+                        if _stale_alive:
+                            slot.touch()
+                            if pin and not slot.pinned:
+                                slot.set_pinned(True)
+                                slot._idle_timeout = None
+                            return slot.port
+                        logger.warning(
+                            "ensure_loaded: %s port %d dead despite loaded slot - reload.",
+                            model, slot.port,
+                        )
+                        self._metric_inc("evictions_total")
+                        self._metric_inc("evictions_stale_port")
+                        slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                        slot._loading = True
+                        slot.model = None
+                        _kill_before_retry = slot
+                    await self._kill_claimed_slot(_kill_before_retry)
+                    continue
 
-            slot, _claim_gen = await self._claim_free_or_evict_slot(
-                model,
-                pin=pin,
-                idle_timeout=DEFAULT_IDLE_TIMEOUT_SECONDS,
-                load_seq=_my_load_seq,
-            )
-            if slot is None:
-                continue
-            _need_start = True
-            _owned_gen = _claim_gen
-            break
-
-        def _slot_aborted(expected_gen: int) -> bool:
-            return getattr(slot, "_lifecycle_gen", expected_gen) != expected_gen
-
-        async def _kill_if_owned(expected_gen: int) -> None:
-            if not _slot_aborted(expected_gen):
-                await _kill_slot_async(slot)
-
-        async def _reclaim_for_retry(expected_gen: int) -> int:
-            nonlocal _owned_gen
-            if _slot_aborted(expected_gen):
-                raise SlotAbortedError(
-                    f"Model load for '{model}' aborted (slot killed or purged)."
+                slot, _claim_gen = await self._claim_free_or_evict_slot(
+                    model,
+                    pin=pin,
+                    idle_timeout=DEFAULT_IDLE_TIMEOUT_SECONDS,
+                    load_seq=_my_load_seq,
                 )
-            await _kill_slot_async(slot)
-            if slot.model is not None or getattr(slot, "_loading", False):
-                raise SlotAbortedError(
-                    f"Model load for '{model}' aborted (slot reclaimed by peer)."
-                )
-            new_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-            slot._lifecycle_gen = new_gen
-            slot._loading = True
-            slot.model = model
-            slot._entry_load_seq = _my_load_seq
-            if hasattr(slot, "_ready_event"):
-                slot._ready_event.clear()
-            _owned_gen = new_gen
-            return new_gen
+                if slot is None:
+                    continue
+                _need_start = True
+                _owned_gen = _claim_gen
+                break
 
-        def _reset_leaked_slot() -> None:
-            slot._loading = False
-            slot.model = None
-            slot.pinned = False
-            if hasattr(slot, "pinned_at"):
-                slot.pinned_at = 0.0
-            if hasattr(slot, "_entry_load_seq"):
-                slot._entry_load_seq = None
-            old_ev = getattr(slot, "_ready_event", None)
-            if old_ev is not None:
-                old_ev.set()
-                if isinstance(old_ev, asyncio.Event):
-                    slot._ready_event = asyncio.Event()
+            def _slot_aborted(expected_gen: int) -> bool:
+                return getattr(slot, "_lifecycle_gen", expected_gen) != expected_gen
 
-        try:
-            await self._enforce_vram_budget(slot)
+            async def _kill_if_owned(expected_gen: int) -> None:
+                if not _slot_aborted(expected_gen):
+                    await _kill_slot_async(slot)
 
-            if _need_start:
-                # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
-                # CRASHED slot carries a stale SET event from its previous
-                # load; skipping _start_process handed callers a dead port.
-                # On a fresh claim nobody else is starting this slot and
-                # _start_process clears the event itself.
-                if _slot_aborted(_claim_gen):
+            async def _reclaim_for_retry(expected_gen: int) -> int:
+                nonlocal _owned_gen
+                if _slot_aborted(expected_gen):
                     raise SlotAbortedError(
                         f"Model load for '{model}' aborted (slot killed or purged)."
                     )
-                try:
-                    await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                              vision=vision, n_parallel=n_parallel,
-                                              ctx_graceful=ctx_graceful)
-                except SlotAbortedError:
-                    raise
-                except RuntimeError as _start_exc:
+                await _kill_slot_async(slot)
+                async with self._lock:
+                    if slot.model is not None or getattr(slot, "_loading", False):
+                        raise SlotAbortedError(
+                            f"Model load for '{model}' aborted (slot reclaimed by peer)."
+                        )
+                    new_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                    slot._lifecycle_gen = new_gen
+                    slot._loading = True
+                    slot.model = model
+                    slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
+                    slot.set_pinned(pin)
+                    slot._entry_load_seq = _my_load_seq
+                    if hasattr(slot, "_ready_event"):
+                        slot._ready_event.clear()
+                    _owned_gen = new_gen
+                    return new_gen
+
+            def _reset_leaked_slot() -> None:
+                slot._loading = False
+                slot.model = None
+                slot.pinned = False
+                if hasattr(slot, "pinned_at"):
+                    slot.pinned_at = 0.0
+                if hasattr(slot, "_entry_load_seq"):
+                    slot._entry_load_seq = None
+                old_ev = getattr(slot, "_ready_event", None)
+                if old_ev is not None:
+                    old_ev.set()
+                    if isinstance(old_ev, asyncio.Event):
+                        slot._ready_event = asyncio.Event()
+
+            try:
+                await self._enforce_vram_budget(slot)
+
+                if _need_start:
+                    # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
+                    # CRASHED slot carries a stale SET event from its previous
+                    # load; skipping _start_process handed callers a dead port.
+                    # On a fresh claim nobody else is starting this slot and
+                    # _start_process clears the event itself.
                     if _slot_aborted(_claim_gen):
                         raise SlotAbortedError(
                             f"Model load for '{model}' aborted (slot killed or purged)."
-                        ) from _start_exc
-                    # EXPERT-CACHE-RETRY (2026-11-03): a load crash caused by
-                    # --moe-cache-mib (Vulkan #30697) is cured by dropping the
-                    # flag; retry once before any other fallback.
-                    _cache_live = 0
-                    try:
-                        from . import llama_config as _lc_retry
-                        _cache_live = int(getattr(_lc_retry, "MOE_CACHE_MIB", 0) or 0)
-                    except (ImportError, AttributeError, TypeError, ValueError):
-                        _cache_live = 0
-                    # ONLY the flag on the failed command matters (audit
-                    # 2026-11-03): re-deriving MoE-ness from registry/table
-                    # missed a UI-forced moe_cpu_experts override and skipped
-                    # the cure. slot._moe_cache_used is set in the same
-                    # _start_process call that built the argv.
-                    _cache_wanted = bool(getattr(slot, "_moe_cache_used", False))
-                    # CACHE-RETRY-BOOKKEEPING (audit 2026-11-03): do NOT return
-                    # early on a successful retry - that bypassed touch(), the
-                    # dead-slot guard and the parked vision upgrade. Fall through
-                    # to the shared post-start path; the flag keeps the AMD/CPU
-                    # branches from firing on the stale original error.
-                    _cache_retried_ok = False
-                    if _cache_live > 0 and _cache_wanted:
-                        logger.warning(
-                            "Load failed with --moe-cache-mib=%d - retrying once "
-                            "without the expert cache", _cache_live)
-                        _claim_gen = await _reclaim_for_retry(_claim_gen)
-                        try:
-                            await self._start_process(
-                                slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                vision=vision, n_parallel=n_parallel,
-                                ctx_graceful=ctx_graceful, moe_cache=False)
-                        except SlotAbortedError:
-                            raise
-                        except Exception as _cache_exc:
-                            if _slot_aborted(_claim_gen):
-                                raise SlotAbortedError(
-                                    f"Model load for '{model}' aborted (slot killed or purged)."
-                                ) from _cache_exc
-                            # Fall through to the normal error handling with the
-                            # ORIGINAL exception instead of swallowing the AMD /
-                            # CPU fallback paths.
-                            logger.warning(
-                                "Retry without --moe-cache-mib failed too: %s",
-                                _cache_exc)
-                        else:
-                            _cache_retried_ok = True
-                    # AMD-VULKAN-KOLLISIONS- & SINGLE-SLOT-GPU-RETRY: wait for VRAM
-                    # reclaim and retry ONCE on GPU before falling back to CPU or
-                    # failing loudly.
-                    _has_running_peers = any(
-                        s.is_running for s in self._slots if s.slot_id != slot.slot_id
-                    )
-                    if not _cache_retried_ok and "exit=-1" in str(_start_exc) and (_has_running_peers or GPU_LAYERS > 0):
-                        _model_vram = _vram_of(_strip_alias(model))
-                        _need_reclaim_mib = max(1024, int(_model_vram * 1024))
-                        logger.warning(
-                            "Vulkan start failure for '%s' (exit=-1, peers=%s) — "
-                            "waiting for VRAM reclaim and retrying once on GPU ...",
-                            model, _has_running_peers,
                         )
-                        _claim_gen = await _reclaim_for_retry(_claim_gen)
-                        _reclaimed = False
-                        try:
-                            _reclaimed = await wait_for_vram_reclaim(
-                                _need_reclaim_mib,
-                                timeout_sec=12 if _has_running_peers else 15,
-                                stall_abort_s=4.0 if _has_running_peers else 5.0,
-                            )
-                        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                                AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_err:
-                            logger.debug("[LOAD-RETRY] reclaim wait skipped: %s", _rw_err)
-                        if _has_running_peers or not _reclaimed:
-                            await asyncio.sleep(5.0 if _has_running_peers else 2.0)
+                    try:
+                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                                  vision=vision, n_parallel=n_parallel,
+                                                  ctx_graceful=ctx_graceful)
+                    except SlotAbortedError:
+                        raise
+                    except RuntimeError as _start_exc:
                         if _slot_aborted(_claim_gen):
                             raise SlotAbortedError(
                                 f"Model load for '{model}' aborted (slot killed or purged)."
-                            )
+                            ) from _start_exc
+                        # EXPERT-CACHE-RETRY (2026-11-03): a load crash caused by
+                        # --moe-cache-mib (Vulkan #30697) is cured by dropping the
+                        # flag; retry once before any other fallback.
+                        _cache_live = 0
                         try:
-                            await self._start_process(
-                                slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                vision=vision, n_parallel=n_parallel,
-                                ctx_graceful=ctx_graceful,
+                            from . import llama_config as _lc_retry
+                            _cache_live = int(getattr(_lc_retry, "MOE_CACHE_MIB", 0) or 0)
+                        except (ImportError, AttributeError, TypeError, ValueError):
+                            _cache_live = 0
+                        # ONLY the flag on the failed command matters (audit
+                        # 2026-11-03): re-deriving MoE-ness from registry/table
+                        # missed a UI-forced moe_cpu_experts override and skipped
+                        # the cure. slot._moe_cache_used is set in the same
+                        # _start_process call that built the argv.
+                        _cache_wanted = bool(getattr(slot, "_moe_cache_used", False))
+                        # CACHE-RETRY-BOOKKEEPING (audit 2026-11-03): do NOT return
+                        # early on a successful retry - that bypassed touch(), the
+                        # dead-slot guard and the parked vision upgrade. Fall through
+                        # to the shared post-start path; the flag keeps the AMD/CPU
+                        # branches from firing on the stale original error.
+                        _cache_retried_ok = False
+                        if _cache_live > 0 and _cache_wanted:
+                            logger.warning(
+                                "Load failed with --moe-cache-mib=%d - retrying once "
+                                "without the expert cache", _cache_live)
+                            _claim_gen = await _reclaim_for_retry(_claim_gen)
+                            try:
+                                await self._start_process(
+                                    slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                    vision=vision, n_parallel=n_parallel,
+                                    ctx_graceful=ctx_graceful, moe_cache=False)
+                            except SlotAbortedError:
+                                raise
+                            except Exception as _cache_exc:
+                                if _slot_aborted(_claim_gen):
+                                    raise SlotAbortedError(
+                                        f"Model load for '{model}' aborted (slot killed or purged)."
+                                    ) from _cache_exc
+                                # Fall through to the normal error handling with the
+                                # ORIGINAL exception instead of swallowing the AMD /
+                                # CPU fallback paths.
+                                logger.warning(
+                                    "Retry without --moe-cache-mib failed too: %s",
+                                    _cache_exc)
+                            else:
+                                _cache_retried_ok = True
+                        # AMD-VULKAN-KOLLISIONS- & SINGLE-SLOT-GPU-RETRY: wait for VRAM
+                        # reclaim and retry ONCE on GPU before falling back to CPU or
+                        # failing loudly.
+                        _has_running_peers = any(
+                            s.is_running for s in self._slots if s.slot_id != slot.slot_id
+                        )
+                        if not _cache_retried_ok and "exit=-1" in str(_start_exc) and (_has_running_peers or GPU_LAYERS > 0):
+                            _model_vram = _vram_of(_strip_alias(model))
+                            _need_reclaim_mib = max(1024, int(_model_vram * 1024))
+                            logger.warning(
+                                "Vulkan start failure for '%s' (exit=-1, peers=%s) — "
+                                "waiting for VRAM reclaim and retrying once on GPU ...",
+                                model, _has_running_peers,
                             )
-                        except SlotAbortedError:
-                            raise
-                        except Exception as _gpu_retry_exc:
+                            _claim_gen = await _reclaim_for_retry(_claim_gen)
+                            _reclaimed = False
+                            try:
+                                _reclaimed = await wait_for_vram_reclaim(
+                                    _need_reclaim_mib,
+                                    timeout_sec=12 if _has_running_peers else 15,
+                                    stall_abort_s=4.0 if _has_running_peers else 5.0,
+                                )
+                            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                                    AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_err:
+                                logger.debug("[LOAD-RETRY] reclaim wait skipped: %s", _rw_err)
+                            if _has_running_peers or not _reclaimed:
+                                await asyncio.sleep(5.0 if _has_running_peers else 2.0)
                             if _slot_aborted(_claim_gen):
                                 raise SlotAbortedError(
                                     f"Model load for '{model}' aborted (slot killed or purged)."
-                                ) from _gpu_retry_exc
-                            if not ("exit=-1" in str(_gpu_retry_exc) and GPU_LAYERS > 0):
-                                await _kill_if_owned(_claim_gen)
-                                raise
-                            # 3.0 GB (2026-09-08): only genuinely small models
-                            # may still fall back to --n-gpu-layers 0 AFTER a failed GPU retry.
-                            if _model_vram > 3.0:
-                                await _kill_if_owned(_claim_gen)
-                                raise RuntimeError(
-                                    f"Model '{model}' ({_model_vram:.1f}GB) could not be loaded on the GPU (exit=-1).\n"
-                                    f"Likely cause: VRAM not yet released (AMD Vulkan timing).\n"
-                                    f"  → Restart the server, or wait 10s and try again.\n"
-                                    f"  → CPU fallback skipped: {_model_vram:.1f}GB on CPU is too slow."
-                                ) from _gpu_retry_exc
-                            _claim_gen = await _reclaim_for_retry(_claim_gen)
-                            logger.warning(
-                                f"Single-model GPU retry for '{model}' with exit=-1 failed - "
-                                "one-time CPU fallback with --n-gpu-layers 0"
-                            )
+                                )
                             try:
                                 await self._start_process(
-                                    slot,
-                                    model,
-                                    num_ctx or CONTEXT_SIZE_DEFAULT,
-                                    vision=vision,
-                                    n_parallel=n_parallel,
-                                    gpu_layers_override=0,
+                                    slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                    vision=vision, n_parallel=n_parallel,
                                     ctx_graceful=ctx_graceful,
                                 )
                             except SlotAbortedError:
                                 raise
-                            except Exception:
-                                await _kill_if_owned(_claim_gen)
-                                raise
-                    elif not _cache_retried_ok:
+                            except Exception as _gpu_retry_exc:
+                                if _slot_aborted(_claim_gen):
+                                    raise SlotAbortedError(
+                                        f"Model load for '{model}' aborted (slot killed or purged)."
+                                    ) from _gpu_retry_exc
+                                if not ("exit=-1" in str(_gpu_retry_exc) and GPU_LAYERS > 0):
+                                    await _kill_if_owned(_claim_gen)
+                                    raise
+                                # 3.0 GB (2026-09-08): only genuinely small models
+                                # may still fall back to --n-gpu-layers 0 AFTER a failed GPU retry.
+                                if _model_vram > 3.0:
+                                    await _kill_if_owned(_claim_gen)
+                                    raise RuntimeError(
+                                        f"Model '{model}' ({_model_vram:.1f}GB) could not be loaded on the GPU (exit=-1).\n"
+                                        f"Likely cause: VRAM not yet released (AMD Vulkan timing).\n"
+                                        f"  → Restart the server, or wait 10s and try again.\n"
+                                        f"  → CPU fallback skipped: {_model_vram:.1f}GB on CPU is too slow."
+                                    ) from _gpu_retry_exc
+                                _claim_gen = await _reclaim_for_retry(_claim_gen)
+                                logger.warning(
+                                    f"Single-model GPU retry for '{model}' with exit=-1 failed - "
+                                    "one-time CPU fallback with --n-gpu-layers 0"
+                                )
+                                try:
+                                    await self._start_process(
+                                        slot,
+                                        model,
+                                        num_ctx or CONTEXT_SIZE_DEFAULT,
+                                        vision=vision,
+                                        n_parallel=n_parallel,
+                                        gpu_layers_override=0,
+                                        ctx_graceful=ctx_graceful,
+                                    )
+                                except SlotAbortedError:
+                                    raise
+                                except Exception:
+                                    await _kill_if_owned(_claim_gen)
+                                    raise
+                        elif not _cache_retried_ok:
+                            await _kill_if_owned(_claim_gen)
+                            raise
+                    except Exception as _other_exc:
+                        if isinstance(_other_exc, SlotAbortedError) or _slot_aborted(_claim_gen):
+                            raise SlotAbortedError(
+                                f"Model load for '{model}' aborted (slot killed or purged)."
+                            ) from _other_exc
                         await _kill_if_owned(_claim_gen)
                         raise
-                except Exception as _other_exc:
-                    if isinstance(_other_exc, SlotAbortedError) or _slot_aborted(_claim_gen):
-                        raise SlotAbortedError(
-                            f"Model load for '{model}' aborted (slot killed or purged)."
-                        ) from _other_exc
-                    await _kill_if_owned(_claim_gen)
-                    raise
 
-            try:
-                await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
-            except asyncio.TimeoutError:
-                raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
-
-            # A.2 FIX: Shared-slot guard — if the slot died during startup
-            # (e.g., another caller's load failed → kill() set ready_event),
-            # detect the dead slot here instead of silently continuing.
-            if slot.model is None:
-                raise RuntimeError(
-                    f"Shared slot for '{model}' died during startup — "
-                    f"the underlying llama-server process failed to load."
-                )
-
-            _owned_gen = None
-
-            if _vision_upgrade_pending and needs_vision_reload(slot._vision, vision):
-                # Parked upgrade from the loading-slot branch: the prefetch
-                # finished WITHOUT the projector while an image request was
-                # waiting — reload WITH mmproj now. kill() swaps in a fresh
-                # ready event, so the second wait below is safe.
-                logger.info(
-                    "ensure_loaded: %s loaded WITHOUT the projector while an "
-                    "image request was waiting — upgrade reload with mmproj.",
-                    model,
-                )
-                self._metric_inc("evictions_total")
-                self._metric_inc("evictions_vision_race")
-                _upgrade_gen = int(getattr(slot, "_lifecycle_gen", 0))
-                if _slot_aborted(_upgrade_gen):
-                    raise SlotAbortedError(
-                        f"Model load for '{model}' aborted (slot killed or purged)."
-                    )
-                # Keep direct _kill_slot_async(slot) call so AST guard in test_vision_load_race stays intact.
-                await _kill_slot_async(slot)
-                if slot.model is not None or getattr(slot, "_loading", False):
-                    raise SlotAbortedError(
-                        f"Model load for '{model}' aborted (slot reclaimed by peer)."
-                    )
-                _upgrade_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                slot._lifecycle_gen = _upgrade_gen
-                slot._loading = True
-                slot.model = model
-                slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
-                slot.set_pinned(pin)
-                slot._entry_load_seq = _my_load_seq   # B1: for the AMD commit wait
-                if hasattr(slot, "_ready_event"):
-                    slot._ready_event.clear()
-                _owned_gen = _upgrade_gen
-                try:
-                    # H4 (deep audit): same zombie-guard as upgrade_port_to_vision
-                    await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                              vision=True, n_parallel=n_parallel,
-                                              ctx_graceful=ctx_graceful)
-                except SlotAbortedError:
-                    raise
-                except Exception as _uv_exc:
-                    if _slot_aborted(_upgrade_gen):
-                        raise SlotAbortedError(
-                            f"Model load for '{model}' aborted (slot killed or purged)."
-                        ) from _uv_exc
-                    await _kill_if_owned(_upgrade_gen)
-                    raise
                 try:
                     await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
                 except asyncio.TimeoutError:
                     raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
+
+                # A.2 FIX: Shared-slot guard — if the slot died during startup
+                # (e.g., another caller's load failed → kill() set ready_event),
+                # detect the dead slot here instead of silently continuing.
                 if slot.model is None:
                     raise RuntimeError(
-                        f"Shared slot for '{model}' died during the vision upgrade — "
+                        f"Shared slot for '{model}' died during startup — "
                         f"the underlying llama-server process failed to load."
                     )
+
                 _owned_gen = None
 
-            slot.touch()
-            return slot.port
-        except BaseException:
-            if _owned_gen is not None and not _slot_aborted(_owned_gen):
-                if (
-                    getattr(slot, "_loading", False)
-                    or getattr(slot, "model", None) is not None
-                    or getattr(slot, "process", None) is not None
-                ):
+                if _vision_upgrade_pending and needs_vision_reload(slot._vision, vision):
+                    # Parked upgrade from the loading-slot branch: the prefetch
+                    # finished WITHOUT the projector while an image request was
+                    # waiting — reload WITH mmproj now. kill() swaps in a fresh
+                    # ready event, so the second wait below is safe.
+                    _did_vision_upgrade = True
+                    logger.info(
+                        "ensure_loaded: %s loaded WITHOUT the projector while an "
+                        "image request was waiting — upgrade reload with mmproj.",
+                        model,
+                    )
+                    self._metric_inc("evictions_total")
+                    self._metric_inc("evictions_vision_race")
+                    _upgrade_gen = int(getattr(slot, "_lifecycle_gen", 0))
+                    if _slot_aborted(_upgrade_gen):
+                        raise SlotAbortedError(
+                            f"Model load for '{model}' aborted (slot killed or purged)."
+                        )
+                    # Keep direct _kill_slot_async(slot) call so AST guard in test_vision_load_race stays intact.
+                    await _kill_slot_async(slot)
+                    if slot.model is not None or getattr(slot, "_loading", False):
+                        raise SlotAbortedError(
+                            f"Model load for '{model}' aborted (slot reclaimed by peer)."
+                        )
+                    _upgrade_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                    slot._lifecycle_gen = _upgrade_gen
+                    slot._loading = True
+                    slot.model = model
+                    slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
+                    slot.set_pinned(pin)
+                    slot._entry_load_seq = _my_load_seq   # B1: for the AMD commit wait
+                    if hasattr(slot, "_ready_event"):
+                        slot._ready_event.clear()
+                    _owned_gen = _upgrade_gen
                     try:
-                        await _kill_slot_async(slot)
-                    finally:
-                        if not _slot_aborted(_owned_gen) and getattr(slot, "_loading", False):
-                            _reset_leaked_slot()
-            raise
-        finally:
-            if (
-                _owned_gen is not None
-                and not _slot_aborted(_owned_gen)
-                and getattr(slot, "_loading", False)
-            ):
-                _reset_leaked_slot()
+                        # H4 (deep audit): same zombie-guard as upgrade_port_to_vision
+                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                                  vision=True, n_parallel=n_parallel,
+                                                  ctx_graceful=ctx_graceful)
+                    except SlotAbortedError:
+                        raise
+                    except Exception as _uv_exc:
+                        if _slot_aborted(_upgrade_gen):
+                            raise SlotAbortedError(
+                                f"Model load for '{model}' aborted (slot killed or purged)."
+                            ) from _uv_exc
+                        await _kill_if_owned(_upgrade_gen)
+                        raise
+                    try:
+                        await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
+                    if slot.model is None:
+                        raise RuntimeError(
+                            f"Shared slot for '{model}' died during the vision upgrade — "
+                            f"the underlying llama-server process failed to load."
+                        )
+                    _owned_gen = None
+
+                if not _need_start and not _did_vision_upgrade:
+                    _retry_waiter = False
+                    async with self._lock:
+                        _same_model = _nm(slot.model) == _nm(model) and (
+                            getattr(slot, "is_running", False) or getattr(slot, "_loading", False)
+                        )
+                        _req_ctx = num_ctx or CONTEXT_SIZE_DEFAULT
+                        _in_flight = (
+                            slot.in_flight_active()
+                            if hasattr(slot, "in_flight_active")
+                            else int(getattr(slot, "in_flight", 0) or 0) > 0
+                        )
+                        _busy = _in_flight or (bool(getattr(slot, "pinned", False)) and not pin)
+                        _mismatch = (
+                            not _same_model
+                            or needs_vision_reload(slot._vision, vision)
+                            or (_wants_jinja(model, _base) and not getattr(slot, "_jinja", False))
+                            or (not _busy and getattr(slot, "_num_ctx", 0) > 0 and _req_ctx > getattr(slot, "_num_ctx", 0))
+                            or (
+                                not _busy
+                                and getattr(slot, "_n_parallel", 1) > 0
+                                and n_parallel > getattr(slot, "_n_parallel", 1)
+                            )
+                        )
+                        if _mismatch:
+                            if _waiter_pass < 2:
+                                _retry_waiter = True
+                            elif not _same_model:
+                                raise RuntimeError(
+                                    f"Shared slot for '{model}' was reassigned during startup."
+                                )
+                        if not _retry_waiter and pin and not getattr(slot, "pinned", False):
+                            slot.set_pinned(True)
+                            slot._idle_timeout = None
+                    if _retry_waiter:
+                        continue
+
+                slot.touch()
+                return slot.port
+            except BaseException:
+                if _owned_gen is not None and not _slot_aborted(_owned_gen):
+                    if (
+                        getattr(slot, "_loading", False)
+                        or getattr(slot, "model", None) is not None
+                        or getattr(slot, "process", None) is not None
+                    ):
+                        try:
+                            await _kill_slot_async(slot)
+                        finally:
+                            if not _slot_aborted(_owned_gen) and getattr(slot, "_loading", False):
+                                _reset_leaked_slot()
+                raise
+            finally:
+                if (
+                    _owned_gen is not None
+                    and not _slot_aborted(_owned_gen)
+                    and getattr(slot, "_loading", False)
+                ):
+                    _reset_leaked_slot()
 
     async def upgrade_port_to_vision(self, port: int) -> bool:
         """STEER-IMAGE (2026-10-06, live T2): a mid-run image steer can

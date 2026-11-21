@@ -4108,7 +4108,7 @@ async function loadMemory() {
   } catch(e) {
     console.error('loadMemory:', e);
     const c = document.getElementById('memory-list');
-    if (c) c.innerHTML = '<div style="font-family:monospace;font-size:10px;color:#b04040;padding:8px">Error: ' + e.message + '</div>';
+    if (c) c.innerHTML = '<div style="font-family:monospace;font-size:10px;color:#b04040;padding:8px">Error: ' + esc(e.message || String(e)) + '</div>';
   }
 }
 
@@ -8265,11 +8265,13 @@ function handleEvent(d) {
         if (_am2) {
           var _trEl2 = _phdr2.querySelector('#planner-tokrate');
           var _elEl2 = _phdr2.querySelector('#planner-elapsed');
-          var _trTxt2 = _trEl2 ? _trEl2.textContent : '&nbsp;';
+          var _trTxt2 = _trEl2 ? _trEl2.textContent : '\u00a0';
           var _elTxt2 = _elEl2 ? _elEl2.textContent : '0s';
-          _am2.innerHTML = '<span id="planner-tokrate"></span> Plan \u00b7 ' + (window._plannerModelShort || '') + ' &middot; <span id="planner-elapsed"></span>';
-          if (_trEl2) _trEl2.textContent = _trTxt2;
-          if (_elEl2) _elEl2.textContent = _elTxt2;
+          _am2.innerHTML = '<span id="planner-tokrate"></span> Plan \u00b7 ' + esc(window._plannerModelShort || '') + ' &middot; <span id="planner-elapsed"></span>';
+          var _newTr2 = _am2.querySelector('#planner-tokrate');
+          var _newEl2 = _am2.querySelector('#planner-elapsed');
+          if (_newTr2) _newTr2.textContent = _trTxt2;
+          if (_newEl2) _newEl2.textContent = _elTxt2;
         }
       }
       // create the standalone plan block in #chat
@@ -9333,10 +9335,8 @@ function handleEvent(d) {
               _more.style.cssText = 'font-size:8px;color:#304850;padding:1px 4px;';
               _more.textContent = '+' + (_exports.length - 8) + ' more';
               _chipRow.appendChild(_more);
-  }
-
-  updateMoeVisibility();
-}
+            }
+          }
           _body2.appendChild(_chipRow);
         }
         // plan steps
@@ -12052,9 +12052,11 @@ async function loadSkillsUI() {
           '<div style="font-size:8px;color:#7a8fa8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(sk.description || '') + '</div>' +
         '</div>' +
         '<label class="cfl-sw">' +
-          '<input type="checkbox" ' + (sk.enabled ? 'checked' : '') + ' onchange="toggleSkill(this,\'' + sk.name.replace(/'/g, "\\'") + '\')">' +
+          '<input type="checkbox" ' + (sk.enabled ? 'checked' : '') + '>' +
           '<span class="sl"></span>' +
         '</label>';
+      const _cb = row.querySelector('input[type="checkbox"]');
+      if (_cb) _cb.addEventListener('change', function() { toggleSkill(this, sk.name); });
       listEl.appendChild(row);
     });
   } catch (e) {
@@ -13848,7 +13850,7 @@ async function loadSpecialAgentsConfig(cachedSettings) {
     const isel = document.getElementById('intent-model-sel');
     if (isel) {
         isel.innerHTML = '<option value="">-- No model --</option>'
-        + S.models.map(m => `<option value="${m}"${m===S.intentModel?' selected':''}>${m}</option>`).join('');
+        + S.models.map(m => `<option value="${esc(m)}"${m===S.intentModel?' selected':''}>${esc(m)}</option>`).join('');
     }
     const itsl = document.getElementById('intent-temp-sl');
     if (itsl && icfg.temperature !== undefined) {

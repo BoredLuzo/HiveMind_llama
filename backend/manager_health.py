@@ -22,11 +22,17 @@ logger = logging.getLogger("llama_manager")
 def _idle_evictable(slot, now: float) -> bool:
     """Idle-eviction predicate — one definition for the scan AND the
     pre-kill freshness re-check (the two copies drifted once already).
-    `_loading` slots are never evictable (a slot claimed after the scan
-    must not die mid-start); `now` is monotonic, paired with the
-    claim-time/touch stamps."""
+    `_loading` and in-flight slots are never evictable (a slot claimed
+    after the scan or actively serving a request must not die mid-flight);
+    `now` is monotonic, paired with the claim-time/touch stamps."""
+    _in_flight = (
+        slot.in_flight_active()
+        if hasattr(slot, "in_flight_active")
+        else int(getattr(slot, "in_flight", 0) or 0) > 0
+    )
     return (slot.is_running and not slot.pinned
             and not getattr(slot, "_loading", False)
+            and not _in_flight
             and slot._idle_timeout is not None
             and (now - slot.last_used) > slot._idle_timeout)
 
@@ -60,11 +66,23 @@ class LlamaHealthMixin:
                     await self._trigger_pending_prefetch()
                 for slot in _to_evict:
                     try:
-                        if _idle_evictable(slot, time.monotonic()):
-                            logger.info(f"Idle-Evicting {slot.model} (slot {slot.slot_id})")
-                            self._metric_inc("evictions_total")
-                            self._metric_inc("evictions_idle")
-                            await _kill_slot_async(slot)
+                        _evict_claimed = False
+                        _evict_model = slot.model
+                        async with self._lock:
+                            if _idle_evictable(slot, time.monotonic()):
+                                slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                slot._loading = True
+                                slot.model = None
+                                self._metric_inc("evictions_total")
+                                self._metric_inc("evictions_idle")
+                                _evict_claimed = True
+                        if _evict_claimed:
+                            logger.info(f"Idle-Evicting {_evict_model} (slot {slot.slot_id})")
+                            try:
+                                await _kill_slot_async(slot)
+                            finally:
+                                if getattr(slot, "_loading", False) and slot.model is None:
+                                    slot._loading = False
                         else:
                             logger.info(
                                 "[idle_monitor] slot %s touched again between scan and kill - not evicting",

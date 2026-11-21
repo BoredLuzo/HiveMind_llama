@@ -75,7 +75,11 @@ async def _inline_tool_find_references(args: dict, workspace: Path, workspace_lo
             "find_references: runtime dependencies not initialized.",
             tool="find_references" )
     try:
-        return await asyncio.to_thread(_fr_fn, p, symbol, max_items)
+        _sec_root = workspace_lock or workspace
+        return await asyncio.to_thread(
+            _fr_fn, p, symbol, max_items,
+            exclude_fn=lambda fp: is_secret_path(fp, _sec_root),
+        )
     except Exception as e:
         return _tool_error_response(
             "FIND_REFERENCES_FAILED",
@@ -335,14 +339,34 @@ def _python_content_search(
         rx = re.compile(pattern)
     except re.error:
         rx = re.compile(re.escape(pattern))
-    files: list[Path] = [root] if root.is_file() else []
+    try:
+        _abs_root = root.resolve()
+    except (OSError, ValueError):
+        return None
+    if root.is_file():
+        if root.is_symlink() or _is_junction(root) or is_secret_path(root, root.parent):
+            return None
+        files = [root]
+    else:
+        files = []
     if not files:
-        for dp, dns, fns in os.walk(root):
-            dns[:] = [d for d in sorted(dns) if d not in _SKIP_SEARCH_DIRS]
+        for dp, dns, fns in os.walk(root, followlinks=False):
+            dns[:] = [
+                d for d in sorted(dns)
+                if d not in _SKIP_SEARCH_DIRS
+                and not (Path(dp) / d).is_symlink()
+                and not _is_junction(Path(dp) / d)
+            ]
             for fn in sorted(fns):
                 if len(files) >= max_files:
                     break
                 p = Path(dp) / fn
+                if p.is_symlink() or _is_junction(p):
+                    continue
+                try:
+                    p.resolve().relative_to(_abs_root)
+                except (OSError, ValueError):
+                    continue
                 if is_secret_path(p, root):
                     continue
                 try:

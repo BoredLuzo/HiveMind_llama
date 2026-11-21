@@ -36,6 +36,12 @@ _vram_status_cache = {"ts": 0.0, "payload": None, "etag": ""}
 _VRAM_STATUS_CACHE_TTL = 30.0
 
 
+def _invalidate_vram_status_cache() -> None:
+    _vram_status_cache["ts"] = 0.0
+    _vram_status_cache["payload"] = None
+    _vram_status_cache["etag"] = ""
+
+
 @router.get("/stats")
 async def get_prefetch_stats():
     avgs = settings.get("prefetch_agent_avgs", {})
@@ -102,6 +108,8 @@ async def ollama_ps():
 async def vram_status(req: Request):
     now = time.time()
     if now - _vram_status_cache["ts"] < _VRAM_STATUS_CACHE_TTL and _vram_status_cache["payload"] is not None:
+        if req.headers.get("If-None-Match") == _vram_status_cache["etag"]:
+            return Response(status_code=304, headers={"ETag": _vram_status_cache["etag"], "Cache-Control": "max-age=5"})
         return JSONResponse(content=_vram_status_cache["payload"],
                            headers={"ETag": _vram_status_cache["etag"], "Cache-Control": "max-age=5"})
     try:
@@ -307,6 +315,7 @@ async def set_vram_budget(req: Request):
     except Exception:
         pass
     await asyncio.to_thread(save_settings, settings)
+    _invalidate_vram_status_cache()
     _verify = load_settings()
     logger.info("[VRAM-BUDGET] After save: settings['vram_budget_gb']=%s, verify_reload=%s",
                  settings.get("vram_budget_gb"), _verify.get("vram_budget_gb"))
@@ -315,6 +324,8 @@ async def set_vram_budget(req: Request):
 
 @router.get("/budget/debug")
 async def vram_budget_debug():
+    if not settings.get("debug_api_enabled", False):
+        return JSONResponse({"error": "Debug API disabled"}, status_code=404)
     _result = {
         "in_memory": settings.get("vram_budget_gb"),
         "in_memory_type": type(settings.get("vram_budget_gb")).__name__,
@@ -355,6 +366,7 @@ async def ollama_preload_judge():
             return JSONResponse({"ok": False, "error": "No judge configured"}, status_code=400)
         _pj_ctx = _get_num_ctx(judge.model)
         await _bk_load(judge.model, keep_alive="10m", num_ctx=_pj_ctx)
+        _invalidate_vram_status_cache()
         return {"ok": True, "model": judge.model}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -396,6 +408,7 @@ async def ollama_load(req: Request):
         logger.info("[VRAM-LOAD] %s ctx=%d ctx_source=%s",
                     model, _load_ctx, _ctx_src)
         await _bk_load(model, keep_alive=keep_alive, num_ctx=_load_ctx)
+        _invalidate_vram_status_cache()
         return {"ok": True, "model": model, "keep_alive": keep_alive,
                 "num_ctx": _load_ctx, "ctx_source": _ctx_src}
     except Exception as e:
@@ -411,6 +424,7 @@ async def ollama_unload(req: Request):
         if not model:
             return JSONResponse({"error": "model missing"}, status_code=400)
         await _bk_evict(model)
+        _invalidate_vram_status_cache()
         return {"ok": True, "model": model}
     except Exception as e:
         import traceback
@@ -437,6 +451,7 @@ async def ollama_preload_pipeline():
                 results[model] = "loaded"
             except Exception as e:
                 results[model] = f"error: {str(e)[:60]}"
+        _invalidate_vram_status_cache()
         return {"ok": True, "results": results}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

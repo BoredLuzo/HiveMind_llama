@@ -2485,9 +2485,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
     _matched_skills: list = []
     try:
         from hive_functions.skills import load_skills, match_skills, format_skill_coder, workspace_file_paths
-        _skills_loaded = load_skills(_ws_str) if _ws_str else []
+        _skills_loaded = await asyncio.to_thread(load_skills, _ws_str) if _ws_str else []
         if _skills_loaded:
-            _ws_files = workspace_file_paths(_ws_str)
+            _ws_files = await asyncio.to_thread(workspace_file_paths, _ws_str)
             _matched_skills = match_skills(_skills_loaded, ctx.user_input, _ws_files)
             if _matched_skills:
                 _skills_lines = ["[Skills: relevant reusable patterns]"]

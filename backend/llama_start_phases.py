@@ -759,7 +759,7 @@ def _try_drop_external_drafter(self, slot, cmd: list[str], model: str,
     )
     if fit_red.ok:
         return fit, moe_cache_used, False
-    without_draft_extra = max(0.0, float(moe_cache_used) - float(draft_save_mib))
+    without_draft_extra = float(moe_cache_used) - float(draft_save_mib)
     fit_undrafted = self.can_fit(
         model, num_ctx,
         exclude_slot_id=slot.slot_id,
@@ -1824,7 +1824,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             # If stepping all MoE experts couldn't fit with the sidecar drafter,
             # drop the drafter and retry MoE stepping on the target alone.
             cmd[:] = _strip_external_drafter_flags(cmd)
-            _moe_cache_used = max(0.0, float(_moe_cache_used) - float(_draft_save_mib))
+            _moe_cache_used = float(_moe_cache_used) - float(_draft_save_mib)
             _draft_save_mib = 0.0
             _new_lm = await _refresh_load_mode_on_draft_drop(cmd, model, load_mode_cfg)
             if _new_lm:
@@ -2233,8 +2233,8 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             raise SlotAbortedError(
                 f"Model load for '{model}' aborted (slot killed or purged)."
             )
-        slot._loading = False
         if not ready:
+            slot._loading = False
             _exit = slot.process.poll() if slot.process else -1
             _log_content = _log_path.read_text(encoding="utf-8", errors="replace")[-8000:]
             await _kill_slot_async(slot)
@@ -2328,18 +2328,12 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 )
             raise RuntimeError(_msg)
 
-        slot._ready_event.set()
-        logger.info(f"Slot {slot.slot_id}: {model} ready on port {slot.port}")
-        try:
-            from utils.mem_watch import log_snapshot as _mem_snap
-            _mem_snap(f"load:{model}")
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _mem_err:
-            logger.debug("[MEM-WATCH] load snapshot failed: %s", _mem_err)
         # VRAM-HEADROOM (2026-10-27, live): a load that only just fits is
         # the slow case - the driver pages VRAM once the KV cache grows, and
         # decode drops by an order of magnitude an hour into the run. The
         # pre-flight estimate cannot see compute buffers or the desktop, so
         # measure the real headroom after the server is up.
+        slot.last_warning = ""
         try:
             from .llama_vram_table import get_live_gpu_free_mib as _free_mib
             _head = _free_mib()
@@ -2354,26 +2348,55 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     f"slow decode as the context fills")
         except (ImportError, OSError, AttributeError, TypeError) as _hx:
             logger.debug("[VRAM-TIGHT] headroom check skipped: %s", _hx)
-        # SWA-FIX: populate swa_window from /props for fresh loads
-        # (startup_cleanup only covers orphan slots)
+        # SWA-FIX: populate swa_window from /props for fresh loads BEFORE
+        # signaling _ready_event so waiters see true vision_active/swa_window.
+        _props_timeout = httpx.Timeout(connect=2.0, read=10.0, write=2.0, pool=2.0)
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=2.0, read=10.0, write=2.0, pool=2.0)) as _c:
-                _p = (await _c.get(f"http://127.0.0.1:{slot.port}/props")).json()
-                _attn = _p.get("attention", {})
-                slot.swa_window = int(
-                    _attn.get("sliding_window_size") or
-                    _attn.get("sliding_window") or
-                    _attn.get("rope_sliding_window") or 0
-                )
-                # VISION TRUTH (2026-10-04 review): /props.modalities.vision
-                # reports what the server ACTUALLY runs with - the requested
-                # vision flag can silently drop (e.g. mmproj missing on
-                # reload). Stored separately from the requested slot._vision
-                # so the duo gate can compare plan vs reality.
-                slot.vision_active = bool((_p.get("modalities") or {}).get("vision"))
+            _shared_c = (
+                self._get_shared_http_client()
+                if hasattr(self, "_get_shared_http_client")
+                else None
+            )
+            if _shared_c is not None and not getattr(_shared_c, "is_closed", False):
+                _p = (
+                    await _shared_c.get(
+                        f"http://127.0.0.1:{slot.port}/props",
+                        timeout=_props_timeout,
+                    )
+                ).json()
+            else:
+                async with httpx.AsyncClient(timeout=_props_timeout) as _c:
+                    _p = (await _c.get(f"http://127.0.0.1:{slot.port}/props")).json()
+            _attn = _p.get("attention", {})
+            slot.swa_window = int(
+                _attn.get("sliding_window_size") or
+                _attn.get("sliding_window") or
+                _attn.get("rope_sliding_window") or 0
+            )
+            # VISION TRUTH (2026-10-04 review): /props.modalities.vision
+            # reports what the server ACTUALLY runs with - the requested
+            # vision flag can silently drop (e.g. mmproj missing on
+            # reload). Stored separately from the requested slot._vision
+            # so the duo gate can compare plan vs reality.
+            slot.vision_active = bool((_p.get("modalities") or {}).get("vision"))
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                 AttributeError, IndexError, httpx.HTTPError):
             slot.swa_window = 0
+        if (
+            _entry_slot_gen is not None
+            and getattr(slot, "_lifecycle_gen", _entry_slot_gen) != _entry_slot_gen
+        ):
+            raise SlotAbortedError(
+                f"Model load for '{model}' aborted (slot killed or purged)."
+            )
+        slot._loading = False
+        slot._ready_event.set()
+        logger.info(f"Slot {slot.slot_id}: {model} ready on port {slot.port}")
+        try:
+            from utils.mem_watch import log_snapshot as _mem_snap
+            _mem_snap(f"load:{model}")
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _mem_err:
+            logger.debug("[MEM-WATCH] load snapshot failed: %s", _mem_err)
     finally:
         if (
             _entry_slot_gen is None

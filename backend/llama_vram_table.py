@@ -758,15 +758,38 @@ def _effective_total_vram_mib() -> int:
 _sel_path_cache: str | None = None
 
 
-def _select_gpu_instance(by_path: dict[str, float]) -> str:
+def _pdh_instance_name(counter_path: str) -> str:
+    """Extract PDH instance identifier between the outermost parentheses."""
+    if "(" in counter_path and ")" in counter_path:
+        return counter_path.rsplit("(", 1)[-1].split(")", 1)[0]
+    return counter_path
 
 
+def _select_gpu_instance(
+    by_path: dict[str, float],
+    limits_by_inst: dict[str, float] | None = None,
+) -> str:
+    """Select the primary GPU PDH counter instance (highest Dedicated Limit, then Usage)."""
     global _sel_path_cache
     if _sel_path_cache is not None and _sel_path_cache in by_path:
         return _sel_path_cache
-    # No device-specific LUID hint — always the highest dedicated occupancy.
+    if limits_by_inst:
+        matched = [
+            p for p in by_path
+            if limits_by_inst.get(_pdh_instance_name(p), 0.0) > 0.0
+        ]
+        if matched:
+            _sel = max(
+                matched,
+                key=lambda p: (limits_by_inst[_pdh_instance_name(p)], by_path[p]),
+            )
+            _sel_path_cache = _sel
+            return _sel
+    # Fallback when Dedicated Limit is unavailable: highest Dedicated Usage,
+    # caching only on single-adapter hosts so an idle dGPU is not skipped.
     _max = max(by_path, key=lambda k: by_path[k])
-    _sel_path_cache = _max
+    if len(by_path) == 1:
+        _sel_path_cache = _max
     return _max
 
 
@@ -796,9 +819,9 @@ def get_live_gpu_free_mib() -> float | None:
                     _uv = float(_u.read_text().strip())
                 except (OSError, ValueError):
                     continue
-                if _tv > 0:
-                    _sysfs_total = max(_sysfs_total, _tv)
-                    _sysfs_used = max(_sysfs_used, _uv)
+                if _tv > _sysfs_total or (_tv == _sysfs_total and _tv > 0 and _uv < _sysfs_used):
+                    _sysfs_total = _tv
+                    _sysfs_used = _uv
             if _sysfs_total > 0:
                 _free = max(0.0, (_sysfs_total - _sysfs_used) / (1024 * 1024))
                 _logger.debug("get_live_gpu_free_mib: sysfs amdgpu %.0f MiB free", _free)
@@ -850,18 +873,43 @@ def get_live_gpu_free_mib() -> float | None:
         if not _by_path:
             _logger.warning("get_live_gpu_free_mib: no formatted counter values received")
             return None
-        # 1. Stabilitaets-Cache, 2. hoechste Dedicated-Belegung.
+        _limits_by_inst: dict[str, float] | None = None
+        if len(_by_path) > 1 and (_sel_path_cache is None or _sel_path_cache not in _by_path):
+            _lh = None
+            _pdh_err = getattr(win32pdh, "error", OSError)
+            try:
+                _lim_paths = win32pdh.ExpandCounterPath(r"\GPU Adapter Memory(*)\Dedicated Limit")
+                if _lim_paths:
+                    _lh = win32pdh.OpenQuery()
+                    _lim_counters = [(lp, win32pdh.AddCounter(_lh, lp)) for lp in _lim_paths]
+                    win32pdh.CollectQueryData(_lh)
+                    _limits_by_inst = {}
+                    for lp, lc in _lim_counters:
+                        try:
+                            _lt, _lv = win32pdh.GetFormattedCounterValue(lc, win32pdh.PDH_FMT_LARGE)
+                            _limits_by_inst[_pdh_instance_name(lp)] = float(_lv)
+                        except (OSError, ValueError, TypeError, _pdh_err):
+                            continue
+            except (OSError, ValueError, TypeError, RuntimeError, _pdh_err) as _le:
+                _logger.debug("get_live_gpu_free_mib: Dedicated Limit query skipped: %s", _le)
+                _limits_by_inst = None
+            finally:
+                if _lh is not None:
+                    try:
+                        win32pdh.CloseQuery(_lh)
+                    except (OSError, _pdh_err):
+                        pass
+        # 1. Cached instance, 2. Highest Dedicated Limit (dGPU over iGPU).
         _sel_before = _sel_path_cache
-        _sel_path = _select_gpu_instance(_by_path)
+        _sel_path = _select_gpu_instance(_by_path, _limits_by_inst)
         if _sel_before != _sel_path:
             _inst_desc = ", ".join(
-                f"{p.rsplit('(', 1)[-1].split(')')[0]}={_by_path[p]/(1024*1024):.0f}MiB"
+                f"{_pdh_instance_name(p)}={_by_path[p]/(1024*1024):.0f}MiB"
                 for p in sorted(_by_path)
             )
             _logger.info(
-                "get_live_gpu_free_mib: Instanz '%s' gewaehlt [%s] — "
-                "hoechste Dedicated-Belegung",
-                _sel_path.rsplit("(", 1)[-1].split(")")[0], _inst_desc,
+                "get_live_gpu_free_mib: selected GPU instance '%s' [%s]",
+                _pdh_instance_name(_sel_path), _inst_desc,
             )
         used_mib = _by_path[_sel_path] / (1024 * 1024)
         free_mib = _effective_total_vram_mib() - used_mib

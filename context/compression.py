@@ -12,8 +12,10 @@ from utils.patterns import _RE_PATH_KEY
 
 logger = logging.getLogger("hivemind.compression")
 
-# bzw. "[path lines X-Y / N]".
-_RE_READ_PATH = re.compile(r"[A-Za-z]:[\\/][^\s\]'\"]+")
+# matches both Windows drive paths and POSIX absolute paths in read_file outputs
+_RE_READ_PATH = re.compile(
+    r"(?:(?<![A-Za-z])[A-Za-z]:[\\/](?![\\/])[^\s\]'\"]+|(?<![A-Za-z0-9_/:])/(?:[^\s\]'\"/:]+/)+[^\s\]'\"/:]+)"
+)
 _RE_THINK_BLOCK = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 _ERROR_MARKERS = ("[TOOL_ERROR", "Error:", "Traceback", "FAILED", "[stderr]", "SyntaxError", "TypeError")
@@ -591,22 +593,23 @@ async def _compress_tool_context(
         # wiederverwenden. _cut referenziert Indizes der ORIGINAL-messages
         # (system steht an [0] und wird unten separat als _system_msg neu
         # aufgebaut).
-        _older_msgs = messages[:_cut]
-        _recent_tail_msgs = messages[_cut:]
+        _older_msgs = list(messages[:_cut])
+        _recent_tail_msgs = list(messages[_cut:])
     elif _keep_recent > 0 and len(_history_msgs) > _keep_recent:
-        _older_msgs = _history_msgs[:-_keep_recent]
-        _recent_tail_msgs = _history_msgs[-_keep_recent:]
+        _older_msgs = list(_history_msgs[:-_keep_recent])
+        _recent_tail_msgs = list(_history_msgs[-_keep_recent:])
     else:
-        _older_msgs = _history_msgs
+        _older_msgs = list(_history_msgs)
         _recent_tail_msgs = []
 
     # PAIR-INTEGRITY (2026-10-03): the count-based tail boundary can land
     # between an assistant tool_calls message and its tool result. A tail
     # STARTING with an orphan role=="tool" message is rejected by the
     # server ("tool message must follow tool_calls") - trim until the
-    # first tail message is not an orphaned tool result.
+    # first tail message is not an orphaned tool result, and record
+    # moved tool outputs in _older_msgs so their paths enter _condensed_files.
     while _recent_tail_msgs and _recent_tail_msgs[0].get("role") == "tool":
-        _recent_tail_msgs.pop(0)
+        _older_msgs.append(_recent_tail_msgs.pop(0))
 
     _condensed_files: set = set()
     for _om in _older_msgs:
@@ -825,7 +828,7 @@ async def _compress_tool_context(
             if _m.get("role") != "tool":
                 continue
             _c = _m.get("content") or ""
-            if len(_c) > _cap:
+            if isinstance(_c, str) and len(_c) > _cap:
                 # KEEP-THE-END (Audit 30.10): test/build errors, tracebacks
                 # and diffs stand at the END of a tool output; keeping the
                 # head would hide exactly the part the next round needs.
@@ -838,6 +841,28 @@ async def _compress_tool_context(
                     + _c[-_cap:]
                 )
                 _capped += 1
+            elif isinstance(_c, list):
+                _new_parts = []
+                _part_changed = False
+                for _p in _c:
+                    if isinstance(_p, dict) and _p.get("type") == "text":
+                        _pt = _p.get("text") or ""
+                        if isinstance(_pt, str) and len(_pt) > _cap:
+                            _dropped = len(_pt) - _cap
+                            _np = dict(_p)
+                            _np["text"] = (
+                                f"[... first {_dropped} of {len(_pt)} chars dropped "
+                                f"(duo_compress_tail_tool_max_chars={_cap})]\n"
+                                + _pt[-_cap:]
+                            )
+                            _new_parts.append(_np)
+                            _part_changed = True
+                            continue
+                    _new_parts.append(_p)
+                if _part_changed:
+                    _recent_tail_msgs[_i] = dict(_m)
+                    _recent_tail_msgs[_i]["content"] = _new_parts
+                    _capped += 1
         if _capped:
             logger.warning(
                 "[CTX-COMPRESS] tail-tool-cap: %d kept tool output(s) truncated to %d chars",
@@ -986,7 +1011,14 @@ async def _compress_chat_session(sess_msgs: list) -> list:
     # emitting two user messages back to back.
     if _keep_msgs and _keep_msgs[0].get("role") == "user":
         _keep_msgs[0] = dict(_keep_msgs[0])
-        _keep_msgs[0]["content"] = _compressed_block["content"] + "\n\n" + _keep_msgs[0]["content"]
+        _k0c = _keep_msgs[0].get("content")
+        if isinstance(_k0c, list):
+            _keep_msgs[0]["content"] = (
+                [{"type": "text", "text": _compressed_block["content"] + "\n\n"}]
+                + list(_k0c)
+            )
+        else:
+            _keep_msgs[0]["content"] = _compressed_block["content"] + "\n\n" + str(_k0c or "")
         return _keep_msgs
     return [_compressed_block] + _keep_msgs
 

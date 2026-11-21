@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import os
 from hive_functions.prompts import build_partition_explore_prompt
 from core.model_sampling import get_sampling_profile
 import json
 from hive_functions.tree_scout import parse_contract_summary
 import re
+from utils.file import is_secret_path, _is_junction
 
 _CODE_EXTS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".cpp",
     ".c", ".h", ".cs", ".kt", ".rb", ".php", ".swift", ".vue", ".svelte",
     ".json", ".yaml", ".yml", ".toml", ".md", ".html", ".css", ".sh",
-    ".sql", ".env", ".cfg", ".ini", ".xml",
+    ".sql", ".cfg", ".ini", ".xml",
     ".scss", ".less", ".bat", ".ps1", ".r", ".lua", ".vim", ".el",
     ".dockerfile", ".makefile", ".cmake",
     ".txt", ".rst", ".tex", ".csv",
@@ -65,6 +67,25 @@ from .tooling import _path_has_excluded_dir
 from .llm import _resolve_worker_thinking
 from .contracts import _sanitize_toml
 from .contracts import logger
+
+
+def _has_junction_under(path_obj: Path, stop_root: Path) -> bool:
+    """Return True if any path component strictly inside stop_root is a symlink/junction."""
+    try:
+        cur = Path(os.path.abspath(str(path_obj)))
+        stop = Path(os.path.abspath(str(stop_root)))
+    except (OSError, ValueError, TypeError):
+        return False
+    while True:
+        if cur == stop:
+            break
+        if cur.is_symlink() or _is_junction(cur):
+            return True
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return False
 
 async def _explore_partition(
     *,
@@ -261,8 +282,9 @@ async def _explore_partition(
             _fp_parts = _fp_raw[len("/workspace/"):].lstrip("/").split("/", 1)
             if _fp_parts and _fp_parts[0].lower() == _ws_base.lower():
                 _fp_raw = _fp_parts[1] if len(_fp_parts) > 1 else _fp_parts[0]
+        _raw_candidate = Path(workspace) / _fp_raw
         try:
-            _fp_abs = str((Path(workspace) / _fp_raw).resolve())
+            _fp_abs = str(_raw_candidate.resolve())
         except Exception:
             _fp_abs = _fp_raw
         _norm_fp = _fp_abs.replace("\\", "/").lower()
@@ -273,6 +295,19 @@ async def _explore_partition(
             fc = f"[ERROR: '{fp}' is outside workspace — not readable]"
             results_out.append(f"[read_file: {fp}]\n{fc}")
             await _emit_tok(f"skip({fp}): outside workspace")
+            if track_failures:
+                _failed_reads.add(fp)
+            _hallucinated_paths.add(fp)
+            return
+
+        if (
+            _has_junction_under(_raw_candidate, Path(workspace))
+            or is_secret_path(Path(_fp_abs), _abs_ws)
+            or is_secret_path(_raw_candidate, Path(workspace))
+        ):
+            fc = f"[ERROR: '{fp}' is a protected secret/junction path — not readable]"
+            results_out.append(f"[read_file: {fp}]\n{fc}")
+            await _emit_tok(f"skip({fp}): protected/junction")
             if track_failures:
                 _failed_reads.add(fp)
             _hallucinated_paths.add(fp)
@@ -330,7 +365,7 @@ async def _explore_partition(
         elif max_unique_reads > 0 and len(_seen_files) >= max_unique_reads:
             fc = f"[read cap reached ({max_unique_reads}) — skipped]"
         else:
-            fc = await _exec_tool("read_file", ta_arg, workspace, _DummyTx(),
+            fc = await _exec_tool("read_file", {"path": _fp_abs}, workspace, _DummyTx(),
                                   max_read=MAX_FILE_CHARS)
 
         if _norm_fp not in _seen_files:
@@ -437,7 +472,26 @@ async def _explore_partition(
                         append_preview=False,
                     )
                 elif tn == "list_dir":
-                    fc = await _exec_tool("list_dir", ta, workspace, _DummyTx())
+                    _ld_raw = str((ta or {}).get("path", "") or "").strip()
+                    if _ld_raw.startswith("/workspace/"):
+                        _ws_base_ld = Path(workspace).name
+                        _ld_parts = _ld_raw[len("/workspace/"):].lstrip("/").split("/", 1)
+                        if _ld_parts and _ld_parts[0].lower() == _ws_base_ld.lower():
+                            _ld_raw = _ld_parts[1] if len(_ld_parts) > 1 else "."
+                    _ld_cand = Path(workspace) / _ld_raw if _ld_raw else Path(workspace)
+                    try:
+                        _ld_abs = _ld_cand.resolve()
+                        _abs_ws_ld = Path(workspace).resolve()
+                        _ld_abs.relative_to(_abs_ws_ld)
+                    except (OSError, ValueError):
+                        tool_results.append("[list_dir]\n[ERROR: path outside workspace — denied]")
+                        continue
+                    if _has_junction_under(_ld_cand, Path(workspace)) or (
+                        _ld_abs != _abs_ws_ld and _path_has_excluded_dir(str(_ld_abs))
+                    ):
+                        tool_results.append(f"[list_dir]\n{_EXCLUDE_MSG}")
+                        continue
+                    fc = await _exec_tool("list_dir", {"path": str(_ld_abs)}, workspace, _DummyTx())
                     tool_results.append(f"[list_dir]\n{fc}")
                 elif tn == "write_contract":
                     _ta = ta or {}
@@ -1120,14 +1174,21 @@ async def _make_fallback_partition(workspace: str, tree_ctx: str, user_input: st
         import os as _os
         _skip_dirs_l = {str(d).lower() for d in _SKIP_DIRS}
         found: list[str] = []
-        for _dirpath, _dirnames, _filenames in _os.walk(ws):
-            _dirnames[:] = sorted(d for d in _dirnames if d.lower() not in _skip_dirs_l)
+        for _dirpath, _dirnames, _filenames in _os.walk(ws, followlinks=False):
+            _dirnames[:] = sorted(
+                d for d in _dirnames
+                if d.lower() not in _skip_dirs_l
+                and not (Path(_dirpath) / d).is_symlink()
+                and not _is_junction(Path(_dirpath) / d)
+            )
             for _fname in sorted(_filenames):
                 if _fname.startswith(_SKIP_FILE_PREFIXES):
                     continue
                 if Path(_fname).suffix.lower() not in _CODE_EXTS:
                     continue
                 _fpath = Path(_dirpath) / _fname
+                if _fpath.is_symlink() or _is_junction(_fpath) or is_secret_path(_fpath, ws):
+                    continue
                 try:
                     found.append(str(_fpath.relative_to(ws)))
                 except ValueError:

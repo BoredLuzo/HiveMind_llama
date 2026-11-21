@@ -46,6 +46,15 @@ def free_ram_gb() -> float:
         except (OSError, AttributeError, ValueError):
             return -1.0
     try:
+        _meminfo = Path("/proc/meminfo")
+        if _meminfo.is_file():
+            for _line in _meminfo.read_text(encoding="ascii", errors="replace").splitlines():
+                if _line.startswith("MemAvailable:"):
+                    _kb = int(_line.split()[1])
+                    return _kb / (1024 * 1024)
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
         return (os.sysconf("SC_AVPHYS_PAGES")
                 * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
     except (ValueError, OSError, AttributeError):

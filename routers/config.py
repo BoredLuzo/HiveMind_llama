@@ -1276,7 +1276,7 @@ def _validate_model_profile_key(key: str, val) -> str | None:
     if expected == "str":
         if not isinstance(val, str):
             return f"key '{key}' requires a string or null"
-        if key in ("mmproj_filename", "dspark_draft_filename"):
+        if key in ("mmproj_filename", "dspark_draft_filename", "chat_template"):
             if "/" in val or "\\" in val or ".." in val:
                 return f"key '{key}' must be a filename, not a path"
         if key == "load_mode" and val not in ("auto", "none", "mmap", "mmap+mlock", ""):

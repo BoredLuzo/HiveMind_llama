@@ -31,6 +31,7 @@ _PROTECTED_DIRS = frozenset({"static", "sessions", "llama", ".git", ".venv",
 _PROTECTED_ROOT_FILES = frozenset({
     "index.html", "gateway.toml", "gateway.toml.example", "build_info.txt",
     "update.bat", "install.bat", "start_hivemind.bat", "run.py", "server.py",
+    "memory.json", "automations.json", "presets.json", "runtime_models.json", "vision_model.json",
 })
 _PROTECTED_SUFFIXES = (".py", ".pyc", ".bat", ".sh", ".ps1", ".service")
 
@@ -97,7 +98,7 @@ def _is_protected_path(p: Path) -> bool:
         _rel = _resolved.relative_to(_HIVEMIND_ROOT)
         if _rel.parts and _rel.parts[0].lower() in _PROTECTED_DIRS:
             return True
-        if len(_rel.parts) == 1 and _rel.parts[0].lower() in _PROTECTED_ROOT_FILES:
+        if len(_rel.parts) == 1 and _rel.parts[0].rstrip(". ").lower() in _PROTECTED_ROOT_FILES:
             return True
         _in_default_ws = False
         if _rel.parts and _rel.parts[0].lower() == "default_workspace":

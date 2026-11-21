@@ -1,9 +1,12 @@
 
 from __future__ import annotations
 import ast
+import os
 import re
 import textwrap
 from pathlib import Path
+
+from utils.file import is_secret_path, _is_junction
 
 
 _JS_TS_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
@@ -63,22 +66,43 @@ def _iter_py_assign_names(node: ast.AST) -> list[str]:
 
 def _iter_reference_files(base: Path, max_files: int, exclude_fn=None) -> list[Path]:
     if base.is_file():
-        return [] if (exclude_fn and exclude_fn(base)) else [base]
+        if (
+            base.is_symlink()
+            or _is_junction(base)
+            or is_secret_path(base, base.parent)
+            or (exclude_fn and exclude_fn(base))
+        ):
+            return []
+        return [base]
+
+    try:
+        _abs_base = base.resolve()
+    except (OSError, ValueError):
+        return []
 
     files: list[Path] = []
-    for p in base.rglob("*"):
-        if len(files) >= max_files:
-            break
-        if not p.is_file():
-            continue
-        if exclude_fn and exclude_fn(p):
-            continue
-        if any(part in _REFERENCE_SKIP_DIRS for part in p.parts):
-            continue
-        if p.suffix.lower() in _REFERENCE_EXTS:
-            files.append(p)
-        elif p.suffix.lower() in _TEXT_FALLBACK_EXTS:
-            files.append(p)  # use-only Scan (AUDIT-FIX M6)
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in _REFERENCE_SKIP_DIRS
+            and not (Path(dirpath) / d).is_symlink()
+            and not _is_junction(Path(dirpath) / d)
+        )
+        for fn in sorted(filenames):
+            if len(files) >= max_files:
+                return files
+            p = Path(dirpath) / fn
+            if p.is_symlink() or _is_junction(p):
+                continue
+            try:
+                p.resolve().relative_to(_abs_base)
+            except (OSError, ValueError):
+                continue
+            if is_secret_path(p, _abs_base) or (exclude_fn and exclude_fn(p)):
+                continue
+            ext = p.suffix.lower()
+            if ext in _REFERENCE_EXTS or ext in _TEXT_FALLBACK_EXTS:
+                files.append(p)
     return files
 
 

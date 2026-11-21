@@ -883,7 +883,14 @@ async def _build_symbol_reference_hints(
             break
         try:
             from hive_functions.hivemind_feature.ast_tools import find_references_report
-            report = await asyncio.to_thread(find_references_report, root, sym, max_items)
+            from utils.file import is_secret_path
+            report = await asyncio.to_thread(
+                find_references_report,
+                root,
+                sym,
+                max_items,
+                exclude_fn=lambda fp: is_secret_path(fp, root),
+            )
         except Exception:
             continue
         low = str(report or "").lower()

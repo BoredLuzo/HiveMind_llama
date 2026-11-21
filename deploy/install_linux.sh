@@ -125,6 +125,9 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude '/searxng-config/settings.yml' --exclude '/searxng-config/docker-compose.yml' \
       --exclude '/bench/results' --exclude '/bench/.work' \
       --exclude '/_update_tmp' --exclude '/update_backup_*' \
+      --exclude '/gateway.pid' --exclude '/gateway.lock' \
+      --exclude '/gateway_state.*' --exclude '/gateway_audit.jsonl.*' \
+      --exclude '/update_removed_*' \
       --exclude 'BUILD_INFO.txt' \
       "$SCRIPT_DIR"/ "$INSTALL_DIR"/
   else
@@ -151,6 +154,9 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude='./searxng-config/settings.yml' --exclude='./searxng-config/docker-compose.yml' \
       --exclude='./bench/results' --exclude='./bench/.work' \
       --exclude='./_update_tmp' --exclude='./update_backup_*' \
+      --exclude='./gateway.pid' --exclude='./gateway.lock' \
+      --exclude='./gateway_state.*' --exclude='./gateway_audit.jsonl.*' \
+      --exclude='./update_removed_*' \
       --exclude='./BUILD_INFO.txt' \
       -cf - . | tar -C "$INSTALL_DIR" -xf -
   fi
@@ -169,7 +175,7 @@ if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
   # execute .venv/bin/python at all. Provision under $INSTALL_DIR (chowned to
   # hivemind in step [6/8], protected from rsync --delete via /.cache).
   if UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv python install 3.14 \
-     && UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv sync --all-extras --frozen --inexact; then
+     && UV_NO_DEV=1 UV_PYTHON=3.14 UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv sync --all-extras --frozen --inexact; then
     _uv_sync_ok=1
     if [ -x "$INSTALL_DIR/.venv/bin/playwright" ]; then
       HOME="$INSTALL_DIR" PLAYWRIGHT_BROWSERS_PATH="$INSTALL_DIR/.cache/ms-playwright" \

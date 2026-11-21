@@ -374,6 +374,9 @@ class ModelSlot:
             self._entry_load_seq = None
             self.swa_window     = 0
             self.vision_active  = None
+            self.in_flight      = 0
+            self.in_flight_since = 0.0
+            self.last_warning   = ""
             # A.2 FIX: Object-swap wake — set() on old Event instance wakes all
             # already-registered waiters; new Event instance prevents new callers
             # from ever hitting a stale event. model=None (line above) ensures

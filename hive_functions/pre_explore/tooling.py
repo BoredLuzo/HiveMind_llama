@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import asyncio
+import os
 import re
+
+from utils.file import is_secret_path, _is_junction
 
 _EXCLUDE_DIRS = {"node_modules", ".git", "__pycache__", ".cache",
                  "dist", "build", ".astro", "target"}
@@ -98,6 +101,41 @@ class FileTransaction:
         self._on = False
 
 
+def _check_contained(
+    fp: Path,
+    workspace: str | Path,
+    *,
+    allow_secret_dir: bool = False,
+    tool_name: str = "",
+) -> str | None:
+    """Enforce workspace containment, non-junction/symlink path, and secret denylist."""
+    try:
+        abs_ws = Path(workspace).resolve()
+        abs_fp = fp.resolve()
+        abs_fp.relative_to(abs_ws)
+    except (OSError, ValueError):
+        return _tool_err("CONTAINMENT", f"Path '{fp}' is outside workspace", tool_name)
+
+    try:
+        cur = Path(os.path.abspath(str(fp)))
+        stop = Path(os.path.abspath(str(workspace)))
+        while True:
+            if cur == stop:
+                break
+            if cur.is_symlink() or _is_junction(cur):
+                return _tool_err("JUNCTION", f"Symlink/junction path denied: '{cur}'", tool_name)
+            parent = cur.parent
+            if parent == cur:
+                break
+            cur = parent
+    except (OSError, ValueError, TypeError):
+        return _tool_err("CONTAINMENT", f"Cannot validate path '{fp}'", tool_name)
+
+    if not allow_secret_dir and (is_secret_path(abs_fp, abs_ws) or is_secret_path(fp, workspace)):
+        return _tool_err("SECRET", f"Protected secret path denied: '{fp}'", tool_name)
+    return None
+
+
 async def _exec_tool(name, args, workspace, tx, max_read=30000, bash_to=60.0):
     def _r(p):
         pp = Path(p)
@@ -108,7 +146,10 @@ async def _exec_tool(name, args, workspace, tx, max_read=30000, bash_to=60.0):
         if not p:
             return _tool_err("ARG", "path required", name)
         try:
-            c = await asyncio.to_thread(_r(p).read_text, "utf-8", errors="replace")
+            fp = _r(p)
+            if err := _check_contained(fp, workspace, tool_name=name):
+                return err
+            c = await asyncio.to_thread(fp.read_text, "utf-8", errors="replace")
             return c[:max_read] + f"\n... [{len(c)} chars]" if len(c) > max_read else c
         except Exception as e:
             return _tool_err("READ", str(e), name)
@@ -160,15 +201,27 @@ async def _exec_tool(name, args, workspace, tx, max_read=30000, bash_to=60.0):
         p = args.get("path", workspace)
         try:
             fp = _r(p)
+            if err := _check_contained(fp, workspace, allow_secret_dir=True, tool_name=name):
+                return err
+            abs_ws = Path(workspace).resolve()
             entries = sorted(
                 await asyncio.to_thread(lambda: list(fp.iterdir())),
                 key=lambda e: (not e.is_dir(), e.name.lower()),
             )
-            return "\n".join(
-                f"{'dir ' if e.is_dir() else '    '}{e.name}"
-                for e in entries[:100]
-                if e.name.lower() not in _SKIP_DIRS
-            ) or "(empty)"
+            lines_out = []
+            for e in entries:
+                if e.name.lower() in _SKIP_DIRS:
+                    continue
+                if e.is_symlink() or _is_junction(e) or is_secret_path(e, workspace):
+                    continue
+                try:
+                    e.resolve().relative_to(abs_ws)
+                except (OSError, ValueError):
+                    continue
+                lines_out.append(f"{'dir ' if e.is_dir() else '    '}{e.name}")
+                if len(lines_out) >= 100:
+                    break
+            return "\n".join(lines_out) or "(empty)"
         except Exception as e:
             return _tool_err("LS", str(e), name)
 
@@ -176,11 +229,19 @@ async def _exec_tool(name, args, workspace, tx, max_read=30000, bash_to=60.0):
         pat, p = args.get("pattern", "*"), args.get("path", workspace)
         try:
             fp = _r(p)
+            if err := _check_contained(fp, workspace, allow_secret_dir=True, tool_name=name):
+                return err
             found = await asyncio.to_thread(lambda: list(fp.rglob(pat)))
-            return "\n".join(
-                str(f.relative_to(fp)) for f in found[:50]
-                if not any(s in (p.lower() for p in f.parts) for s in _SKIP_DIRS)
-            ) or "(none)"
+            kept = []
+            for f in found:
+                if any(s in (part.lower() for part in f.parts) for s in _SKIP_DIRS):
+                    continue
+                if _check_contained(f, workspace, tool_name=name) is not None:
+                    continue
+                kept.append(str(f.relative_to(fp)))
+                if len(kept) >= 50:
+                    break
+            return "\n".join(kept) or "(none)"
         except Exception as e:
             return _tool_err("FIND", str(e), name)
 

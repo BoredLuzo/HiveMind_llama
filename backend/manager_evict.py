@@ -129,8 +129,8 @@ class LlamaEvictMixin:
         except (ImportError, AttributeError):
             _ub_now = 256
         _ub_extra_mib = ubatch_extra_mib(int(_ub_now))
-        needed_mib = round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024
-                           + _ub_extra_mib + float(extra_needed_mib or 0.0), 1)
+        needed_mib = max(0.0, round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024
+                                    + _ub_extra_mib + float(extra_needed_mib or 0.0), 1))
         free_mib = get_live_gpu_free_mib()
         source = "live"
         if free_mib is None:

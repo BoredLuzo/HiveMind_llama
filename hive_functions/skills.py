@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import re
 from pathlib import Path
+
+from utils.file import _is_junction
 
 logger = logging.getLogger("hivemind.skills")
 
@@ -102,23 +105,31 @@ _SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "b
 def workspace_file_paths(workspace_root: str | Path, max_files: int = 200) -> list[str]:
     try:
         _root = Path(workspace_root)
-    except Exception:
+        _abs_root = _root.resolve()
+    except (OSError, ValueError, TypeError):
         return []
+    _skip_lower = {d.lower() for d in _SKIP_DIRS}
     _out: list[str] = []
     try:
-        for _p in _root.rglob("*"):
-            if len(_out) >= max_files:
-                break
-            if not _p.is_file():
-                continue
-            if any(part in _SKIP_DIRS for part in _p.parts):
-                continue
-            try:
-                _rel = _p.relative_to(_root).as_posix()
-            except Exception:
-                _rel = _p.name
-            _out.append(_rel)
-    except Exception:
+        for dirpath, dirnames, filenames in os.walk(_root, followlinks=False):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if d.lower() not in _skip_lower
+                and not (Path(dirpath) / d).is_symlink()
+                and not _is_junction(Path(dirpath) / d)
+            )
+            for fn in sorted(filenames):
+                if len(_out) >= max_files:
+                    return _out
+                _p = Path(dirpath) / fn
+                if _p.is_symlink() or _is_junction(_p):
+                    continue
+                try:
+                    _rel = _p.resolve().relative_to(_abs_root).as_posix()
+                except (OSError, ValueError):
+                    continue
+                _out.append(_rel)
+    except OSError:
         pass
     return _out
 
@@ -205,13 +216,26 @@ def select_skill_candidates(insights: list[dict], max_candidates: int = 3) -> li
     return candidates[:max_candidates]
 
 
+def _safe_skill_slug(name: str) -> str:
+    raw = str(name or "").strip().lower().replace(" ", "-")
+    slug = re.sub(r"[^a-z0-9._-]+", "-", raw).strip(".-")
+    if not slug or ".." in slug:
+        return ""
+    return slug[:80]
+
+
 def skill_file_exists(workspace_root: str | Path, name: str) -> bool:
     try:
-        _slug = str(name).strip().lower().replace(" ", "-")
+        _slug = _safe_skill_slug(name)
         if not _slug:
             return False
         for _d in _skill_dirs(workspace_root):
-            if (_d / f"{_slug}.md").exists():
+            _candidate = _d / f"{_slug}.md"
+            try:
+                _candidate.resolve().relative_to(_d.resolve())
+            except (OSError, ValueError):
+                continue
+            if _candidate.exists():
                 return True
         return False
     except Exception:
@@ -224,7 +248,7 @@ def write_skill_md(workspace_root: str | Path, skill: dict) -> bool:
         skills_dir = ws / SKILLS_DIR_NAME
         skills_dir.mkdir(parents=True, exist_ok=True)
 
-        _name = str(skill.get("name", "")).strip().lower().replace(" ", "-")
+        _name = _safe_skill_slug(skill.get("name", ""))
         if not _name:
             return False
 
@@ -267,6 +291,11 @@ def write_skill_md(workspace_root: str | Path, skill: dict) -> bool:
             _body.append("```")
 
         _fname = skills_dir / f"{_name}.md"
+        try:
+            _fname.resolve().relative_to(skills_dir.resolve())
+        except (OSError, ValueError):
+            logger.warning("[SKILLS] Rejected skill write outside skills dir: %s", _name)
+            return False
         _fname.write_text(
             "---\n" + "\n".join(_fm) + "\n---\n\n" + "\n".join(_body) + "\n",
             encoding="utf-8",
