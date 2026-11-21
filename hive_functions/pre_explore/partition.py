@@ -964,7 +964,7 @@ async def _explore_partition(
                 "files_total":  len(paths),               # ← total so UI can show skipped count
                 "paths":        list(paths),              # ← original paths for skipped-file diff
                 "files_read": sorted(_read_set),          # ← full path list for UI file tree
-                "touched": _c.get("touched_by_task", False),
+                "touched": _is_touched_flag(_c.get("touched_by_task", False)),
                 "complexity": _c.get("complexity_score", 0.5),
                 "hint": _c.get("hint", ""),
                 "exports": _c.get("exports", []),
@@ -981,6 +981,12 @@ async def _explore_partition(
     logger.info("[%s] %s DONE: %s (%d/%d files, contract=%s)",
                 sid, wk, label, read_n, len(paths), contract is not None)
     return result
+
+
+def _is_touched_flag(val) -> bool:
+    if isinstance(val, bool):
+        return val
+    return str(val or "").strip().lower() in ("yes", "true", "1", "likely")
 
 
 def _infer_importance(contract: dict) -> int:
@@ -1079,7 +1085,7 @@ async def _worker_drain(
         result.setdefault("entry_points", (result.get("contract") or {}).get("entry_points", []))
         result.setdefault("imports_needed", (result.get("contract") or {}).get("imports_needed", []))
         result.setdefault("hint", (result.get("contract") or {}).get("hint", ""))
-        result.setdefault("touched", (result.get("contract") or {}).get("touched_by_task", False))
+        result.setdefault("touched", _is_touched_flag((result.get("contract") or {}).get("touched_by_task", False)))
         result.setdefault("complexity", (result.get("contract") or {}).get("complexity_score", 0.5))
         # files_read: working version returns int, our result dict expects list for emit
         if isinstance(result.get("files_read"), int):

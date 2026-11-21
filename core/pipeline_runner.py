@@ -103,6 +103,7 @@ async def run_pipeline(ctx):
     # Full pipeline
     yield await ctx.emit({"type": "pipeline_start", "content": ctx.user_input})
 
+    _va_parallel_task = None
     # Logik:
     _pinned_models: set[str] = set()
     _restore_keep_alive = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
@@ -738,6 +739,7 @@ async def run_pipeline(ctx):
             if not _synth_is_error:
                 ctx.memory.add_to_session("user", ctx.user_input)
                 ctx.memory.add_to_session("assistant", synth_out)
+                _persist_pipeline_ctx_session(ctx)
 
             run_count = ctx.increment_run_counter()
             spawn(run_peer_ratings(
@@ -773,27 +775,7 @@ async def run_pipeline(ctx):
             ctx.memory.add_to_session("user", ctx.user_input)  # SESSION-ORDER FIX
             ctx.memory.add_to_session("assistant", synth_out)
 
-            # SIDECAR SESSION (2026-10-03): pipeline runs never persisted the
-            # chat context, so a chat whose last run was a pipeline reloaded
-            # with zero/stale history (audit finding, lens continuity).
-            # Same contract as direct_runner: last 40 messages, no caps.
-            if getattr(ctx, "chat_id", None):
-                try:
-                    import logging as _logging
-                    from context.chat import _mutate_chat_context
-
-                    def _persist_pipeline_session(cdict):
-                        cdict["session"] = ctx.memory.get_session_messages(
-                            limit=40, user_cap=10**6, assistant_cap=10**6,
-                        )
-                        cdict["ts"] = time.time()
-
-                    _mutate_chat_context(ctx.chat_id, _persist_pipeline_session)
-                except (OSError, ValueError) as _persist_exc:
-                    _logging.getLogger("hivemind.pipeline").warning(
-                        "[Pipeline] session persist failed (chat=%s): %s",
-                        ctx.chat_id, _persist_exc,
-                    )
+            _persist_pipeline_ctx_session(ctx)
 
             # FIX: start peer ratings BEFORE "done"
             run_count = ctx.increment_run_counter()
@@ -822,6 +804,8 @@ async def run_pipeline(ctx):
 
         spawn(asyncio.to_thread(ctx.flush_prefetch_settings, ctx.prefetch_state))
     finally:
+        if _va_parallel_task is not None and not _va_parallel_task.done():
+            _va_parallel_task.cancel()
         ctx.prefetch_run_active = False
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing — ensure cleanup on finally path
@@ -875,6 +859,28 @@ async def _unpin_pipeline_models(ctx, pinned_models: set, restore_keep_alive: st
                 pass
     except Exception:
         pass
+
+
+def _persist_pipeline_ctx_session(ctx) -> None:
+    """Persist pipeline session turns to chat sidecar JSON (same contract as direct_runner)."""
+    if not getattr(ctx, "chat_id", None):
+        return
+    try:
+        import logging as _logging
+        from context.chat import _mutate_chat_context
+
+        def _persist_pipeline_session(cdict):
+            cdict["session"] = ctx.memory.get_session_messages(
+                limit=40, user_cap=10**6, assistant_cap=10**6,
+            )
+            cdict["ts"] = time.time()
+
+        _mutate_chat_context(ctx.chat_id, _persist_pipeline_session)
+    except (OSError, ValueError) as _persist_exc:
+        _logging.getLogger("hivemind.pipeline").warning(
+            "[Pipeline] session persist failed (chat=%s): %s",
+            ctx.chat_id, _persist_exc,
+        )
 
 
 def _role_vision(ctx, role_key: str, iteration: int, vision_agent_images: list,

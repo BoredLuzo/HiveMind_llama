@@ -80,8 +80,7 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
 
     best_start = -1
     best_ratio = 0.0
-    good_windows = 0
-    second_ratio = 0.0
+    candidates: list[tuple[int, float]] = []
 
     # LARGE-BLOCK MODE (2026-09-16): for big SEARCH blocks the first-line
     # anchor + char-level ratio are too brittle — one drifted line inside the
@@ -99,7 +98,6 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
         if not large_block and first_search and c_lines[start].strip() != first_search:
             continue
 
-        cand = "\n".join(c_lines[start:start + o_len])
         if large_block:
             # AUTOJUNK-OFF (2026-10-15): see best_match_location — popular-
             # element purging collapses the ratio on identical-line blocks.
@@ -108,22 +106,32 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
                 continue
             ratio = sm.ratio()
         else:
+            cand = "\n".join(c_lines[start:start + o_len])
             ratio = difflib.SequenceMatcher(None, o_norm, cand, autojunk=False).ratio()
 
+        if ratio >= 0.80:
+            candidates.append((start, ratio))
         if ratio > best_ratio:
-            second_ratio = best_ratio
             best_ratio = ratio
             best_start = start
-            good_windows = 1
-        elif ratio == best_ratio:
-            good_windows += 1
 
-    # AMBIGUITY (2026-09-17, margin rule): EVERY window above the threshold
-    # counts — not just exact ties. AND a near-tie second window (within 0.05
-    # of the best, e.g. 0.99 vs 0.985 in repetitive code) means the edit is
-    # genuinely ambiguous: reject and let the model add surrounding context.
-    if best_ratio < 0.85 or good_windows > 1 or second_ratio >= best_ratio - 0.05:
+    # AMBIGUITY (2026-09-17, margin rule + overlap scoping):
+    # Check every OTHER candidate regardless of scan order (before OR after
+    # best_start). Within the winning window's own overlap (< o_len lines away),
+    # an exact tie (cand_ratio == best_ratio, e.g. 20 lines inside 21 identical
+    # lines) is genuinely ambiguous; a strictly lower overlapping score is only
+    # an artifact of shifting out of a unique exact (1.0) or >=20-line match,
+    # while small drifted blocks still treat tight overlaps as ambiguous.
+    if best_start < 0 or best_ratio < 0.85:
         return None
+    for cand_start, cand_ratio in candidates:
+        if cand_start == best_start:
+            continue
+        _overlaps = abs(cand_start - best_start) < o_len
+        if _overlaps and cand_ratio < best_ratio and (large_block or best_ratio >= 1.0):
+            continue
+        if cand_ratio >= best_ratio - 0.05:
+            return None
 
     # LINE-GRANULAR SPLICE (2026-09-16): cut exactly the o_len raw lines via
     # keepends — the old char-offset math left CRLF/terminator residue behind

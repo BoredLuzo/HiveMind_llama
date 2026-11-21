@@ -462,6 +462,7 @@ SUITES = [
     ("headless_gate_and_abort_wake", "tests/test_headless_gate_and_abort_wake.py", 30),
     ("planner_preseed_and_briefing", "tests/test_planner_preseed_and_briefing.py", 30),
     ("chat_history_chrome_strip",    "tests/test_chat_history_chrome_strip.py",    30),
+    ("audit_wave1_quickwins",        "tests/test_audit_wave1_quickwins.py",        30),
 
 ]
 

@@ -360,8 +360,8 @@ def slice_toml_ctx_inline(explore_ctx: str, max_chars: int) -> str:
         return explore_ctx
 
     _block_re   = re.compile(r"```toml([\s\S]*?)```", re.IGNORECASE)
-    _touched_re = re.compile(r"touched_by_task\s*=\s*(true|likely|\"likely\"|\"true\")", re.IGNORECASE)
-    _unlikely_re = re.compile(r"touched_by_task\s*=\s*(false|unlikely|\"unlikely\"|\"false\")", re.IGNORECASE)
+    _touched_re = re.compile(r'touched_by_task\s*=\s*(?:"?(?:true|likely|yes)"?)', re.IGNORECASE)
+    _unlikely_re = re.compile(r'touched_by_task\s*=\s*(?:"?(?:false|unlikely|no)"?)', re.IGNORECASE)
     _file_re    = re.compile(r'file\s*=\s*"?([^"\n]+)"?')
 
     likely_blocks:   list[str] = []

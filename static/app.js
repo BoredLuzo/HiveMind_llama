@@ -14953,23 +14953,21 @@ function toggleSidebar() {
 }
 
 function _cpSyntaxHighlight(code) {
-  // Minimal syntax coloring — no external lib needed
-  var s = code
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  // Strings
-  s = s.replace(/(&#39;&#39;&#39;|""")([\s\S]*?)\1/g,'<span style="color:#7ea">$1$2$1</span>');
-  s = s.replace(/(["'`])((?:\\.|(?!\1)[^\\])*)\1/g,'<span style="color:#9a8">$1$2$1</span>');
-  // Comments
-  s = s.replace(/(#[^\n]*)/g,'<span style="color:#5a7a5a">$1</span>');
-  s = s.replace(/(\/\/[^\n]*)/g,'<span style="color:#5a7a5a">$1</span>');
-  // Keywords
-  s = s.replace(/\b(def|class|return|import|from|if|else|elif|for|while|try|except|finally|with|as|pass|break|continue|yield|async|await|const|let|var|function|export|default|new|this|null|true|false|None|True|False|and|or|not|in|is)\b/g,
-    '<span style="color:#7ab">$1</span>');
-  // Numbers
-  s = s.replace(/\b(\d+\.?\d*)\b/g,'<span style="color:#c8a">$1</span>');
-  // Function calls
-  s = s.replace(/\b([a-zA-Z_]\w*)\s*(?=\()/g,'<span style="color:#acb">$1</span>');
-  return s;
+  // Single-pass tokenizer so generated <span style="color:#..."> attributes
+  // are never re-matched by later comment/string regex passes.
+  var src = String(code || '');
+  var re = /("""[\s\S]*?"""|'''[\s\S]*?''')|("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|(#[^\n]*|\/\/[^\n]*)|\b(def|class|return|import|from|if|else|elif|for|while|try|except|finally|with|as|pass|break|continue|yield|async|await|const|let|var|function|export|default|new|this|null|true|false|None|True|False|and|or|not|in|is)\b|\b(\d+\.?\d*)\b|\b([a-zA-Z_]\w*)(?=\s*\()/g;
+  var out = [];
+  var last = 0;
+  var m;
+  while ((m = re.exec(src)) !== null) {
+    if (m.index > last) out.push(_escHtml(src.slice(last, m.index)));
+    var col = m[1] ? '#7ea' : m[2] ? '#9a8' : m[3] ? '#5a7a5a' : m[4] ? '#7ab' : m[5] ? '#c8a' : '#acb';
+    out.push('<span style="color:' + col + '">' + _escHtml(m[0]) + '</span>');
+    last = re.lastIndex;
+  }
+  if (last < src.length) out.push(_escHtml(src.slice(last)));
+  return out.join('');
 }
 
 // Findet den _cpFiles-Key zu einem (evtl. kurzen/relativen) Pfad vom Tool-Chip.

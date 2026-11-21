@@ -1898,14 +1898,27 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "edit_file",
-        "description": "Surgical SEARCH/REPLACE edits in an existing file (same tool as the internal agent loop).",
+        "description": "Surgical verbatim replacements in an existing file: pass old_text+new_text or edits=[{old_text,new_text}].",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path":  {"type": "string"},
-                "edits": {"type": "string"},
+                "path":           {"type": "string"},
+                "old_text":       {"type": "string"},
+                "new_text":       {"type": "string"},
+                "edits":          {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_text": {"type": "string"},
+                            "new_text": {"type": "string"},
+                        },
+                        "required": ["old_text", "new_text"],
+                    },
+                },
+                "confirm_shrink": {"type": "boolean"},
             },
-            "required": ["path", "edits"],
+            "required": ["path"],
         },
     },
     {

@@ -3821,6 +3821,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _call_sigs=_call_sigs,
                                 _coder_est_at_real=_coder_est_at_real,
                                 _coder_real_prompt_tokens=_coder_real_prompt_tokens,
+                                _coder_real_at_msgs_len=_coder_real_at_msgs_len,
                                 _comp_llm_cfg=_comp_llm_cfg,
                                 _comp_llm_timeout_s=_comp_llm_timeout_s,
                                 _compress_local_only=_compress_local_only,

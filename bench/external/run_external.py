@@ -144,7 +144,7 @@ def parse_codex(stdout: str, stderr: str) -> dict:
             if isinstance(node.get("model"), str) and node["model"]:
                 model = node["model"]
     uncached_in = int(usage.get("input_tokens") or 0)
-    cached = int(usage.get("cached_output_tokens") or 0)
+    cached = int(usage.get("cached_input_tokens") or usage.get("cached_output_tokens") or 0)
     completion = int(usage.get("output_tokens") or 0)
     total = int(usage.get("total_tokens") or (uncached_in + completion + cached))
     return {

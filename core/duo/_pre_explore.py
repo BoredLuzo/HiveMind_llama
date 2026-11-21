@@ -1833,7 +1833,7 @@ async def _phase_pre_explore(ctx, state: dict):
                     _normal_all_dedup = [p for p in _partitions if not p.get("is_shared")]
                     yield await ctx.emit({
                         "type": "pre_explore_partition_shape",
-                        "ctx.mode": "parallel",
+                        "mode": "parallel",
                         "shared_count": len(_shared),
                         "normal_count": len(_normal_all_dedup),
                         "configured_partitions": int(_n_parts_cfg),
@@ -1889,7 +1889,7 @@ async def _phase_pre_explore(ctx, state: dict):
                     })
                     yield await ctx.emit({
                         "type": "pre_explore_info",
-                        "ctx.mode": "parallel",
+                        "mode": "parallel",
                         "n_partitions": len(_partitions),
                         "n_files_total": _pre_files_total,
                         "n_files_unique": _pre_files_unique,
@@ -2164,7 +2164,7 @@ async def _phase_pre_explore(ctx, state: dict):
                 _workers_were_loaded = True
                 yield await ctx.emit({
                     "type": "pre_explore_info",
-                    "ctx.mode": "sequential",
+                    "mode": "sequential",
                     "n_partitions": 1,
                     "workers": [
                         {

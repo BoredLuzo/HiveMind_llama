@@ -419,7 +419,7 @@ def _validate_contract(data: dict, partition_label: str = "") -> dict:
     _df_raw = data.get("data_flow")
     if _df_raw in (None, ""):
         _df_raw = data.get("hint", "")
-    return {
+    out = {
         "partition":        _partition,
         "role":             _coerce_str(data.get("role", "")),
         "exports":          _coerce_str_list(data.get("exports")),
@@ -428,7 +428,14 @@ def _validate_contract(data: dict, partition_label: str = "") -> dict:
         "complexity_score": _sanitize_complexity_score(data.get("complexity_score", 0.5)),
         "data_flow":        _coerce_str(_df_raw),
         "imports_internal": _coerce_str_list(data.get("imports_internal")),
+        "imports_external": _coerce_str_list(data.get("imports_external")),
+        "config":           _coerce_str(data.get("config", "")),
+        "hint":             _coerce_str(data.get("hint", "")),
+        "entry_points":     _coerce_str_list(data.get("entry_points")),
+        "imports_needed":   _coerce_str_list(data.get("imports_needed")),
+        "skipped_files":    _coerce_str_list(data.get("skipped_files")),
     }
+    return out
 
 
 def _build_contract_dict(data: dict, partition_label: str) -> dict:

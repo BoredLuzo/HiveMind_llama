@@ -1998,7 +1998,11 @@ async def _run_inline_tool(
     _WRITE_TOOLS_NO_FUZZY = {"patch_file", "edit_file", "write_file", "write_file_append", "replace_lines"}
     if name in _path_based_tools and "path" in args:
         requested = args["path"]
-        if not Path(requested).exists():
+        try:
+            _req_exists = _inline_resolve_path(workspace, requested).exists()
+        except (OSError, ValueError, TypeError):
+            _req_exists = False
+        if not _req_exists:
             if name not in _WRITE_TOOLS_NO_FUZZY:
                 corrected = _fuzzy_resolve_path(requested, str(workspace))
                 if corrected:
@@ -2258,7 +2262,10 @@ async def _run_inline_tool(
                 try:
                     import json as _json_call
                     _call_chars = len(_json_call.dumps(args, ensure_ascii=False))
-                    _diff = get_transaction().diff_for(args["path"], call_chars=_call_chars)
+                    _diff = get_transaction().diff_for(
+                        _inline_resolve_path(workspace, args["path"]),
+                        call_chars=_call_chars,
+                    )
                     if _diff:
                         _result += "\n\n[Diff — what changed]\n```diff\n" + _diff + "\n```"
                 except Exception:
@@ -2307,7 +2314,10 @@ async def _run_inline_tool(
                 _call_chars_ap = len(_json_call_ap.dumps(args, ensure_ascii=False))
                 _ap_diffs = [
                     _d for _ap_fp in _ap_targets
-                    for _d in [get_transaction().diff_for(_ap_fp, call_chars=_call_chars_ap)]
+                    for _d in [get_transaction().diff_for(
+                        _inline_resolve_path(workspace, _ap_fp),
+                        call_chars=_call_chars_ap,
+                    )]
                     if _d
                 ]
                 if _ap_diffs:

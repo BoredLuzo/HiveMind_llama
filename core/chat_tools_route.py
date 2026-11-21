@@ -167,6 +167,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                     max_tokens=_tool_opts.get("num_predict", 1200),
                     num_ctx=_tool_opts.get("num_ctx", 4096),
                     tools=_active_tools, tool_mode="tool_agent",
+                    require_tool_call=False,
                     include_websearch=_tool_ws,
                     include_git=_tool_git,
                     settings=settings,

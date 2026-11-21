@@ -584,6 +584,12 @@ def _agent_timeout_s(task: Task, cfg: Config) -> float:
     return base
 
 
+def _check_timeout_s(task: Task, cfg: Config | None = None) -> int:
+    """Verifier check timeout in seconds — shared between _one_run and cell budget."""
+    raw = task.timeout_s or (cfg.task_timeout_s if cfg else None) or 300
+    return int(max(120, min(float(raw), 1800)))
+
+
 async def _abort_hivemind(base_url: str, chat_id: str) -> None:
     """Best-effort abort so a timed-out HiveMind run stops using llama-server."""
     if not chat_id:
@@ -1329,7 +1335,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     _churn = diff_stats(task.repo, work)
     # Run blocking verification off the event loop so heartbeat and cell timeout stay live.
     _check_t0 = time.monotonic()
-    _check_timeout = min(int(cfg.task_timeout_s or 300), 60)
+    _check_timeout = _check_timeout_s(task, cfg)
     ok, check_out = await asyncio.to_thread(run_check, task, work, _check_timeout)
     await asyncio.to_thread(_reap_workspace_orphans, work)
     check_seconds = round(time.monotonic() - _check_t0, 1)
@@ -1810,7 +1816,7 @@ def main() -> int:
                         # The check command runs AFTER the agent timeout and needs
                         # real headroom (DeepSWE verifiers can run for minutes);
                         # a flat +60 s aborted long checks.
-                        _check_budget = max(120.0, min(float(task.timeout_s or 300), 1800.0))
+                        _check_budget = float(_check_timeout_s(task, cfg))
                         _cell_cap = max(float(cfg.cell_timeout_s),
                                         _agent_timeout_s(task, cfg) + _check_budget + 30.0)
                         try:

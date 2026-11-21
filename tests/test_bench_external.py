@@ -45,6 +45,13 @@ _CODEX_JSONL = "\n".join([
                                                "output_tokens": 200,
                                                "total_tokens": 1200}}}),
 ])
+_CODEX_INPUT_CACHE_JSONL = json.dumps({
+    "type": "token_count",
+    "info": {"total_token_usage": {"input_tokens": 700,
+                                   "cached_input_tokens": 350,
+                                   "output_tokens": 200,
+                                   "total_tokens": 1200}},
+})
 
 parsed = run_external.parse_claude(_CLAUDE_JSON, "")
 check("claude parse: tokens incl. cached prompt",
@@ -75,6 +82,10 @@ check("codex parse: last token_count event wins",
 check("codex parse: cached/net split",
       parsed["cached_tokens"] == 300 and parsed["net_tokens"] == 900,
       f" ({parsed['cached_tokens']}/{parsed['net_tokens']})")
+parsed_in_cache = run_external.parse_codex(_CODEX_INPUT_CACHE_JSONL, "")
+check("codex parse: cached_input_tokens parsed for real Codex CLI output",
+      parsed_in_cache["cached_tokens"] == 350 and parsed_in_cache["net_tokens"] == 850,
+      f" ({parsed_in_cache['cached_tokens']}/{parsed_in_cache['net_tokens']})")
 check("codex parse: model detected",
       parsed["model_detected"] == "gpt-5.1-codex", f" ({parsed['model_detected']})")
 check("codex parse: no cost field is None",

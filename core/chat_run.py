@@ -357,6 +357,7 @@ async def _run_stream_locked(
         return {
             "coder": "coder_loop", "planner": "soft_planner",
             "pre_explore": "pre_explore", "critic": "coder_loop",
+            "direct": "direct_chat", "direct_tools": "direct_chat",
             "analyst": "pipeline_analyst", "refiner": "pipeline_refiner",
             "synthesizer": "pipeline_synthesizer", "vision": "pipeline_vision",
             "pipeline_critic": "pipeline_critic",
@@ -364,8 +365,23 @@ async def _run_stream_locked(
 
     _ledger = RunTokenLedger()
     complexity: str = ""
+    _ctx_pressure_peak = 0.0
+    _ctx_peak_tokens = 0
+    _ctx_limit_seen = 0
+
+    def _record_ctx_meter(event_data: dict) -> None:
+        nonlocal _ctx_pressure_peak, _ctx_peak_tokens, _ctx_limit_seen
+        _est = int(event_data.get("est_tokens") or 0)
+        _lim = int(event_data.get("ctx_limit") or 0)
+        if _est > 0:
+            _ctx_peak_tokens = max(_ctx_peak_tokens, _est)
+            _ctx_limit_seen = max(_ctx_limit_seen, _lim)
+            if _lim > 0:
+                _ctx_pressure_peak = max(_ctx_pressure_peak, _est / _lim)
 
     async def emit(data: dict) -> str:
+        if data.get("type") == "ctx_meter":
+            _record_ctx_meter(data)
         # Track generated output tokens from content events (all token types)
         _tok_types = {"token", "thinking_token", "planner_token", "planner_thinking_token", "planner_plan_token"}
         if (data.get("type") in _tok_types and data.get("content")
@@ -727,9 +743,6 @@ async def _run_stream_locked(
         vram_cache=await _get_loaded_models_set() if smart_preload else set())
 
     # Phase H: run-scoped perf metrics + prefetch tuning state.
-    _ctx_pressure_peak = 0.0
-    _ctx_peak_tokens = 0
-    _ctx_limit_seen = 0
     _ctx_evictions = 0
     _ctx_compressions = 0
     _tool_round_durations: list[float] = []
@@ -1232,12 +1245,6 @@ async def _run_stream_locked(
     async with contextlib.aclosing(run_stream_orchestrated(_ctx)) as _orch_stream:
         async for event in _orch_stream:
             if isinstance(event, dict) and event.get("type") == "ctx_meter":
-                _est = int(event.get("est_tokens") or 0)
-                _lim = int(event.get("ctx_limit") or 0)
-                if _est > 0:
-                    _ctx_peak_tokens = max(_ctx_peak_tokens, _est)
-                    _ctx_limit_seen = max(_ctx_limit_seen, _lim)
-                    if _lim > 0:
-                        _ctx_pressure_peak = max(_ctx_pressure_peak, _est / _lim)
+                _record_ctx_meter(event)
             yield event
     return

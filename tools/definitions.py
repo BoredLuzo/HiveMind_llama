@@ -793,6 +793,9 @@ _TOOL_PRIORITY = [
     "lsp_status", "lsp_diagnostics",
     # tier 2 — everything else (web, git, background, browser, research...)
 ]
+_TIER0_TOOLS = frozenset({
+    "read_file", "edit_file", "write_file", "run_bash", "task_complete",
+})
 
 
 def _tool_priority(name: str, mode: str = "") -> int:
@@ -846,7 +849,7 @@ def fit_tools_to_budget(tools: list, budget_chars: int, *, mode: str = "") -> li
     for n in sorted(pool, key=lambda name: _tool_priority(name, mode), reverse=True):
         if cur_total <= budget_chars:
             break
-        if _tool_priority(n, mode) == 0:
+        if n in _TIER0_TOOLS:
             continue  # tier 0 is always kept
         cur_total -= sizes[n][0]
         del pool[n]

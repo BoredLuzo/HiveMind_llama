@@ -94,11 +94,61 @@ def _walk_workspace_inventory(ws_str: str, cap: int = 80) -> list[str]:
     return sorted(_inv)
 
 
+def _merge_compress_usage(u1: dict | None, u2: dict | None) -> dict | None:
+    """Combine token/timing counters from two compression LLM calls."""
+    if not u1:
+        return dict(u2) if u2 else None
+    if not u2:
+        return dict(u1)
+    return {
+        "completion_tokens": int(u1.get("completion_tokens") or 0) + int(u2.get("completion_tokens") or 0),
+        "prompt_tokens": int(u1.get("prompt_tokens") or 0) + int(u2.get("prompt_tokens") or 0),
+        "cached_tokens": int(u1.get("cached_tokens") or 0) + int(u2.get("cached_tokens") or 0),
+        "gen_ms": float(u1.get("gen_ms") or 0) + float(u2.get("gen_ms") or 0),
+    }
+
+
+def _compress_usage_event(usage: dict | None) -> dict | None:
+    if not usage or not usage.get("completion_tokens"):
+        return None
+    return {
+        "type": "usage_meta",
+        "phase": "coder",
+        "completion_tokens": int(usage["completion_tokens"]),
+        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+        # TOKEN-TRACKER (2026-08-25): compression request
+        "cached_tokens": int(usage.get("cached_tokens") or 0),
+        "gen_ms": int(usage.get("gen_ms") or 0),
+    }
+
+
+def _evict_condensed_from_read_guard(condensed_files: list | None, ws_str: str) -> None:
+    """Drop evicted read_file paths from the active read-guard set."""
+    if not condensed_files:
+        return
+    from tools.runner import _files_read_in_run as _fic_read_ctx
+    _read_set_c = _fic_read_ctx.get(None)
+    if not _read_set_c:
+        return
+    _removed_read = set()
+    for _cfp in condensed_files:
+        _cfp_norm = _normalize_tool_path(_cfp, ws_str)
+        if _cfp_norm and _cfp_norm in _read_set_c:
+            _read_set_c.discard(_cfp_norm)
+            _removed_read.add(_cfp_norm)
+    if _removed_read:
+        logger.warning(
+            "[READ-GUARD] Compression: removed %d compacted read_file paths from the read guard (keep for tail remains)",
+            len(_removed_read),
+        )
+
+
 async def _duo_compress_cycle(ctx, ps):
     exec_mdl = ps.carry["exec_mdl"]
     _call_sigs = ps._call_sigs
     _coder_est_at_real = ps._coder_est_at_real
     _coder_real_prompt_tokens = ps._coder_real_prompt_tokens
+    _coder_real_at_msgs_len = ps._coder_real_at_msgs_len
     _comp_llm_cfg = ps._comp_llm_cfg
     _comp_llm_timeout_s = ps._comp_llm_timeout_s
     _compress_local_only = ps._compress_local_only
@@ -463,50 +513,15 @@ async def _duo_compress_cycle(ctx, ps):
                     _retry_helped,
                 )
                 _dtool_msgs = _dtool_msgs2
-                # POST-COMPRESS RE-ANCHOR (2026-10-08,
-                # owner-approved fix 1+2): compression
-                # replaces file contents with summaries -
-                # the model loses the exact file state and
-                # starts editing from memory (the
-                # old_text-not-found loops). Re-anchor with
-                # a fresh project inventory right after the
-                # compressed messages are installed.
-                try:
-                    # F4 (deep audit 2026-11-07): the os.walk inventory is sync
-                    # I/O — run it on a worker thread, never on the loop.
-                    _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
-                    if _inv:
-                        _dtool_msgs.append({"role": "user", "content":
-                            "[PROJECT FILES - these exist in the workspace "
-                            "right now]\n" + "\n".join(_inv[:80])
-                            + "\nread_file any file before editing it - "
-                            "do not edit from memory."})
-                except (OSError, RuntimeError, ValueError, TypeError) as _inv_err:
-                    logger.debug("[COMPRESS-INVENTORY] workspace inventory skipped: %s", _inv_err)
-                _condensed_files = _condensed_files2
-                _compress_usage = _compress_usage2
-    if _compress_usage and _compress_usage.get("completion_tokens"):
-        yield await ctx.emit({"type": "usage_meta", "phase": "coder",
-            "completion_tokens": int(_compress_usage["completion_tokens"]),
-            "prompt_tokens": int(_compress_usage.get("prompt_tokens") or 0),
-            # TOKEN-TRACKER (2026-08-25): compression request
-            "cached_tokens": int(_compress_usage.get("cached_tokens") or 0),
-            "gen_ms": int(_compress_usage.get("gen_ms") or 0)})
-    if _condensed_files:
-        from tools.runner import _files_read_in_run as _fic_read_ctx
-        _read_set_c = _fic_read_ctx.get(None)
-        if _read_set_c:
-            _removed_read = set()
-            for _cfp in _condensed_files:
-                _cfp_norm = _normalize_tool_path(_cfp, _ws_str)
-                if _cfp_norm and _cfp_norm in _read_set_c:
-                    _read_set_c.discard(_cfp_norm)
-                    _removed_read.add(_cfp_norm)
-            if _removed_read:
-                logger.warning(
-                    "[READ-GUARD] Compression: removed %d compacted read_file paths from the read guard (keep for tail remains)",
-                    len(_removed_read),
-                )
+                _condensed_files = list(dict.fromkeys([
+                    *(_condensed_files or []),
+                    *(_condensed_files2 or []),
+                ]))
+                _compress_usage = _merge_compress_usage(_compress_usage, _compress_usage2)
+    _u_ev1 = _compress_usage_event(_compress_usage)
+    if _u_ev1:
+        yield await ctx.emit(_u_ev1)
+    _evict_condensed_from_read_guard(_condensed_files, _ws_str)
     if _duo_mode != "mask_only":
         # Validate compression summary quality
         _cs_summary = (_dtool_msgs[1].get("content", "") if len(_dtool_msgs) >= 2 else "")
@@ -527,6 +542,7 @@ async def _duo_compress_cycle(ctx, ps):
             _cs_valid = "COMPRESSION FAILED" not in (
                 _dtool_msgs[-1].get("content", "") or ""
             )
+    _compression_rewrote_msgs = True
     if not _cs_valid:
         _llm_compress_fails += 1
         # RULE-BASED FALLBACK (2026-09-04): compress
@@ -590,6 +606,7 @@ async def _duo_compress_cycle(ctx, ps):
             yield await ctx.emit({"type": "status",
                 "content": "⚠ Compression failed — keeping uncompressed context"})
             _dtool_msgs = _msgs_before_compress  # Restore original, don't inject degraded summary
+            _compression_rewrote_msgs = False
             if _rule_compress_fails >= 3:
                 _compress_fail_streak, _compress_stop = _compress_fail_streak_update(
                     _compress_fail_streak, False, 3,
@@ -655,11 +672,20 @@ async def _duo_compress_cycle(ctx, ps):
                 aggressive_retry=True,
             )
             try:
-                _msgs_full, _, _ = await _compress_tool_context(**_kw_full)
+                _msgs_full, _condensed_full, _usage_full = await _compress_tool_context(**_kw_full)
+                _u_ev_full = _compress_usage_event(_usage_full)
+                if _u_ev_full:
+                    yield await ctx.emit(_u_ev_full)
                 _est_full = _estimate_ctx_tokens(_msgs_full)
                 if _est_full < _est_tokens_after_compress:
                     _dtool_msgs = _msgs_full
                     _est_tokens_after_compress = _est_full
+                    if _condensed_full:
+                        _condensed_files = list(dict.fromkeys([
+                            *(_condensed_files or []),
+                            *_condensed_full,
+                        ]))
+                        _evict_condensed_from_read_guard(_condensed_full, _ws_str)
                     logger.warning(
                         "[CTX-COMPRESS] immediate full escalation: -> %d",
                         int(_est_full),
@@ -702,6 +728,8 @@ async def _duo_compress_cycle(ctx, ps):
     # until the next usage_meta delivers the new real value.
     _coder_real_prompt_tokens[0] = 0
     _coder_est_at_real[0] = 0
+    if _coder_real_at_msgs_len:
+        _coder_real_at_msgs_len[0] = 0
     # D1-DIAG: log the result (shrinkage).
     logger.warning(
         "[CTX-COMPRESS] done before=%d after=%d condensed_files=%d mode=%s llm_fails=%d rule_fails=%d rule_used=%s",
@@ -748,6 +776,20 @@ async def _duo_compress_cycle(ctx, ps):
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _cc_err:
         # Never break a completed compression over cleanup cosmetics.
         logger.debug("[COMPRESS-CLEANUP] Cleanup failed: %s", _cc_err)
+    # POST-COMPRESS RE-ANCHOR (2026-10-08, owner-approved fix 1+2): compression
+    # replaces file contents with summaries - re-anchor EVERY completed
+    # compression (when messages were rewritten) with a fresh workspace inventory.
+    if _ws_str and _compression_rewrote_msgs:
+        try:
+            _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
+            if _inv:
+                _dtool_msgs.append({"role": "user", "content":
+                    "[PROJECT FILES - these exist in the workspace "
+                    "right now]\n" + "\n".join(_inv[:80])
+                    + "\nread_file any file before editing it - "
+                    "do not edit from memory."})
+        except (OSError, RuntimeError, ValueError, TypeError) as _inv_err:
+            logger.debug("[COMPRESS-INVENTORY] workspace inventory skipped: %s", _inv_err)
     # PLAN-REINJECT-FIX (2026-08-31): plan pin as its own
     # user message, so the coder keeps plan overview even
     # with LLM-fallback compression. _plan_anchor_text
@@ -790,6 +832,7 @@ class _DuoCompressCycleState:
     _call_sigs: list = dataclasses.field(default_factory=list)
     _coder_est_at_real: list = dataclasses.field(default_factory=list)
     _coder_real_prompt_tokens: list = dataclasses.field(default_factory=list)
+    _coder_real_at_msgs_len: list = dataclasses.field(default_factory=list)
     _comp_llm_cfg: str = ""
     _comp_llm_timeout_s: int = 180
     _compress_local_only: bool = False
