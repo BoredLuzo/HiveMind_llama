@@ -122,14 +122,30 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 
 ## Benchmarks
 
-Measured local comparison on the 21-task coding starter suite with `qwen3.5:4b-mtp` on `llama-server` (`bench/results/run-full21-core-aider-2026-11-09-clean.json`, see [bench/README.md](bench/README.md)):
+Same-model, same-`llama-server` comparisons (every harness hits the identical local endpoint with identical per-cell timeouts and hidden tests):
+
+### Aider Polyglot (34 Python Exercism tasks × 3 runs = 102 cells/harness)
+
+`qwen3.6:35b-a3b-mtp` (`120k` context, NVIDIA A100 40 GB, HiveMind `v1.6.4`; see [bench/README.md](bench/README.md#measured-results)):
+
+| Condition | `pass@1` (95% CI) | `pass@3` | Median Time | Net Tokens | KV Cache | Timeouts |
+|---|---|---|---|---|---|---|
+| **`hivemind_duo`** (`duo_core`) | **58.8%** (60/102, `[49.1%, 67.9%]`) | **79.4%** (27/34) | **26.9 s** | 1.70 M | **93.2%** | **2** |
+| `hermes` | 55.9% (57/102, `[46.2%, 65.1%]`) | 70.6% (24/34) | 71.8 s | 3.41 M | 80.7% | 17 |
+| `aider` | 52.9% (54/102, `[43.3%, 62.3%]`) | 67.6% (23/34) | 41.1 s | 0.91 M\* | —\* | 4 |
+| `hivemind_duo_lean` (`duo_lean`) | 52.0% (53/102, `[42.4%, 61.4%]`) | 76.5% (26/34) | 29.5 s | 1.63 M | 92.7% | 6 |
+| `pi` | 51.0% (52/102, `[41.4%, 60.5%]`) | 64.7% (22/34) | 31.6 s | 1.28 M | 90.1% | 4 |
+
+\* Aider's CLI reports rounded token totals with no prompt-cache split. Pass-rate 95% Wilson CIs overlap at `N = 102`; `hivemind_duo` ranked #1 (or tied #1) in all three runs while running **2.7× faster in median wall time**, spending **50% fewer net tokens**, and hitting **8.5× fewer timeouts** than the closest competitor (`hermes`).
+
+### Local 4B starter suite (21 tasks, `qwen3.5:4b-mtp`)
 
 | Condition | Pass Rate | Median Wall Time | Notes |
 |---|---|---|---|
-| `hivemind_duo` (`duo_core`) | **95.2%** (20/21) | 27.7 s | Autonomous tool loop + verification gate + edit salvage (~84% cached prefix reuse across rounds) |
-| `aider` | 85.7% (18/21) | 20.9 s | Lower total per-turn prompt tokens; Aider's reported CLI token count is rounded and not cache-aware |
+| `hivemind_duo` (`duo_core`) | **95.2%** (20/21) | 27.7 s | Autonomous tool loop + verification gate + edit salvage (~84% cached prefix reuse) |
+| `aider` | 85.7% (18/21) | 20.9 s | Lower per-turn prompt tokens; Aider's CLI token count is rounded and not cache-aware |
 
-Extended multi-model and Polyglot/DeepSWE harness runs are tracked in [bench/README.md](bench/README.md).
+Methodology, per-run breakdowns, and reproduction commands live in [bench/README.md](bench/README.md).
 
 ## Optional integrations
 

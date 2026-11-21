@@ -697,6 +697,10 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         "git_tools_enabled": "false",
         "lsp_auto_diagnostics": False,
         "lsp_auto_warm_on_write": False,
+        # HEADLESS-PIN (2026-11-21): automated benchmark runs have no interactive
+        # UI to answer destructive_gate or ask_user cards; fail-closed fast-deny
+        # prevents 600s pause hangs and top-run-lock cascades across cells.
+        "headless": True,
     }
     if duo:
         body["duo_agentic_mode"] = True
@@ -1567,6 +1571,35 @@ async def _preflight(cfg: Config, conditions: list[str]) -> str:
     return ""
 
 
+async def _warmup_llama(cfg: Config, conditions: list[str]) -> None:
+    """Send a 1-token ping to llama-server before cell #1 so mmap/CUDA warmup
+    does not skew the first benchmark condition's latency."""
+    if _aider_remote_base() and set(conditions) == {"aider"}:
+        return
+    base = _active_llama_url(cfg.llama_url)
+    if not base:
+        return
+    t0 = time.monotonic()
+    print("[bench] warming up llama-server (1-token ping)...", end=" ", flush=True)
+    payload = {
+        "model": cfg.model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=5.0)) as client:
+            r = await client.post(f"{base}/v1/chat/completions", json=payload)
+            if r.status_code == 200:
+                print(f"OK ({time.monotonic() - t0:.1f}s)", flush=True)
+            else:
+                print(f"skipped (HTTP {r.status_code})", flush=True)
+    except (httpx.HTTPError, OSError) as exc:
+        print(f"skipped ({exc})", flush=True)
+
+
 async def _run_cell_with_heartbeat(
     coro,
     *,
@@ -1728,6 +1761,7 @@ def main() -> int:
     if _pf:
         print(f"preflight failed: {_pf}", file=sys.stderr)
         return 3
+    asyncio.run(_warmup_llama(cfg, conditions))
 
     work_root = (Path(__file__).parent / ".work" / stamp) if cfg.keep_work else None
     if work_root is not None:

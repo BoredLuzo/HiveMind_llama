@@ -458,6 +458,8 @@ SUITES = [
     ("settings_ui_schema",         "tests/test_settings_ui_schema.py",         45),
     ("ui_advanced_and_profiles",   "tests/test_ui_advanced_and_profiles.py",   45),
     ("project_rules_and_venv_guard", "tests/test_project_rules_and_venv_guard.py", 30),
+    ("gemma4_and_direct_pin",        "tests/test_gemma4_and_direct_pin.py",        30),
+    ("headless_gate_and_abort_wake", "tests/test_headless_gate_and_abort_wake.py", 30),
 
 ]
 

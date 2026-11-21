@@ -164,11 +164,45 @@ async def wait_for_resume(run_id: str, timeout_s: int = 600) -> str:
     event = _pause_events.get(run_id)
     if not event:
         return "[ask_user ERROR: no pause event]"
-    try:
-        await asyncio.wait_for(event.wait(), timeout=timeout_s)
-    except asyncio.TimeoutError:
+    # ABORT-WAKE (2026-11-21): watch the run's abort event alongside the pause
+    # event so POST /abort?chat_id=... or POST /abort/{run_id} wakes
+    # _destructive_gate and ask_user immediately instead of holding the top
+    # run lock until timeout_s (600s) expires.
+    abort_ev = _run_abort_registry.get(run_id)
+    if abort_ev is not None and abort_ev.is_set():
         cleanup_pause(run_id)
-        return f"[ask_user TIMEOUT: no response after {timeout_s}s]"
+        return "[ask_user ABORTED: run aborted]"
+    if abort_ev is not None:
+        pause_task = asyncio.create_task(event.wait())
+        abort_task = asyncio.create_task(abort_ev.wait())
+        try:
+            done, pending = await asyncio.wait(
+                {pause_task, abort_task},
+                timeout=timeout_s,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            pause_task.cancel()
+            abort_task.cancel()
+            await asyncio.gather(pause_task, abort_task, return_exceptions=True)
+            cleanup_pause(run_id)
+            raise
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if not done:
+            cleanup_pause(run_id)
+            return f"[ask_user TIMEOUT: no response after {timeout_s}s]"
+        if abort_task in done and pause_task not in done:
+            cleanup_pause(run_id)
+            return "[ask_user ABORTED: run aborted]"
+    else:
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            cleanup_pause(run_id)
+            return f"[ask_user TIMEOUT: no response after {timeout_s}s]"
     answer = _user_answers.pop(run_id, "")
     # STALE-PAUSE-CLEANUP (2026-09-19): a resolved pause must leave the
     # registry. Until now only the timeout branch (and the approval gate's

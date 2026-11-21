@@ -517,6 +517,12 @@ _phone_source_run: _contextvars.ContextVar[bool] = \
 _run_settings_snapshot: _contextvars.ContextVar[dict | None] = \
     _contextvars.ContextVar("run_settings_snapshot", default=None)
 
+
+def _is_headless_run() -> bool:
+    """True when the active /stream request explicitly opted into headless mode."""
+    _snap = _run_settings_snapshot.get(None)
+    return bool(isinstance(_snap, dict) and _snap.get("headless"))
+
 # The safe set for restricted runs (keep in sync with
 # definitions._READ_ONLY_INLINE_TOOL_NAMES + web + dialog):
 _PHONE_SAFE_TOOLS = frozenset({
@@ -1218,6 +1224,12 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
             "ASK_USER_NO_RUN_ID",
             "no run_id in context — ask_user requires an active run context.",
             tool="ask_user" )
+    if _is_headless_run():
+        _note_tool_use(run_id, "ask_user", "headless_skipped")
+        return (
+            "[ask_user: non-interactive (headless) run — no user available; "
+            "proceed with best judgment]"
+        )
     _emit = _tool_loop_emit.get(None)
     from infra import run_control
     from settings import load_settings as _gov_load_settings
@@ -1653,6 +1665,19 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
             tool=name, details={"reason": _reason, "cmd": _details},
         )
 
+    if _is_headless_run():
+        import logging as _dgl_hl
+        _note_tool_use(run_id, "destructive_gate", "headless_denied")
+        _dgl_hl.getLogger("hivemind.tools").warning(
+            "[GATE] Destructive action NOT EXECUTED (headless): %s — cmd=%s",
+            name, _details,
+        )
+        return (
+            f"[DESTRUCTIVE GATE: DECLINED] Non-interactive (headless) run — "
+            f"no user is available to confirm ({_reason}). The command was NOT "
+            f"executed. Try a less destructive alternative."
+        )
+
     from infra import run_control
     _emit = _tool_loop_emit.get(None)
     _question = (
@@ -1684,8 +1709,10 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
         "question": str(_question),
         "decision_id": run_control.get_decision_id(run_id),
     }
-    _answer = await run_control.wait_for_resume(run_id, timeout_s=_timeout)
-    _pending_approvals.pop(str(run_id), None)
+    try:
+        _answer = await run_control.wait_for_resume(run_id, timeout_s=_timeout)
+    finally:
+        _pending_approvals.pop(str(run_id), None)
 
     if _emit:
         try:
@@ -1713,6 +1740,9 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
     _log_level = _dgl_gate.INFO
     if not isinstance(_answer, str) or not _answer.strip():
         _reason_kind = "empty_answer"
+        _log_level = _dgl_gate.WARNING
+    elif _answer_lower.startswith("[ask_user aborted"):
+        _reason_kind = "aborted"
         _log_level = _dgl_gate.WARNING
     elif _answer_lower.startswith("[ask_user timeout"):
         _reason_kind = "timeout"

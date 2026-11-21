@@ -1281,6 +1281,12 @@ async def stream(req: Request):
             body.get("lsp_auto_warm_on_write"))
     if "smoke_test" in body:
         _model_overrides["smoke_test"] = _as_bool(body.get("smoke_test"))
+    # HEADLESS-RUN-PIN (2026-11-21): automated/benchmark callers have no UI
+    # to answer destructive_gate or ask_user cards. Marking the run headless
+    # makes destructive_gate fail-closed immediately (0s wait) and ask_user
+    # fall back without blocking the top-level run lock for 600s.
+    if "headless" in body:
+        _model_overrides["headless"] = _as_bool(body.get("headless"))
 
     # G1 (full audit 2026-10-05): the Telegram gateway sends
     # duo_action_approval_enabled=true with its runs so the documented

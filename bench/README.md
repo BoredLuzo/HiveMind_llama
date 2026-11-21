@@ -103,7 +103,30 @@ green after it:
 - **multi-file:** `multi_move`, `multi_wire`, `multi_config`, `multi_shape`
 - **hard:** `hard_cycle_detect`, `hard_lru_cache`
 
-External suites are also wired under `bench/tasks_polyglot/` (10 Exercism tasks via `bench/import_polyglot.py`) and `bench/external/` (`deepswe_hivemind.py`, `swebench_hivemind.py`).
+External suites are also wired under `bench/tasks_polyglot/` (10 bundled Exercism tasks; expandable to the full 34-task Python Aider Polyglot set via `bench/import_polyglot.py`) and `bench/external/` (`deepswe_hivemind.py`, `swebench_hivemind.py`).
+
+## Measured results
+
+### Aider Polyglot — 34 Python tasks × 3 runs (`qwen3.6:35b-a3b-mtp`, `120k` ctx, A100 40 GB, HiveMind `v1.6.4`)
+
+510 total cells (`102` per harness, 300 s agent timeout, hidden tests installed only at check time; merged archive: `bench/results/polyglot_35b_mtp_120k_3runs.json`):
+
+| Condition | `pass@1` | 95% Wilson CI | `pass@3` | Run 1 / 2 / 3 | Median s (Pass) | Total Time | Net Tokens | KV Cache | Timeouts |
+|---|---|---|---|---|---|---|---|---|---|
+| **`hivemind_duo`** | **60/102 (58.8%)** | `[49.1%, 67.9%]` | **27/34 (79.4%)** | `22 · 20 · 18` | **26.9 s** (`23.7 s`) | 99.2 m | 1.70 M | **93.2%** | **2** |
+| `hermes` | 57/102 (55.9%) | `[46.2%, 65.1%]` | 24/34 (70.6%) | `19 · 20 · 18` | 71.8 s (`43.6 s`) | 206.1 m | 3.41 M | 80.7% | 17 |
+| `aider` | 54/102 (52.9%) | `[43.3%, 62.3%]` | 23/34 (67.6%) | `20 · 17 · 17` | 41.1 s (`31.8 s`) | **88.8 m** | **0.91 M**\* | —\* | 4 |
+| `hivemind_duo_lean` | 53/102 (52.0%) | `[42.4%, 61.4%]` | 26/34 (76.5%) | `17 · 18 · 18` | 29.5 s (`20.9 s`) | 103.2 m | 1.63 M | 92.7% | 6 |
+| `pi` | 52/102 (51.0%) | `[41.4%, 60.5%]` | 22/34 (64.7%) | `17 · 18 · 17` | 31.6 s (`20.1 s`) | 96.2 m | 1.28 M | 90.1% | 4 |
+
+\* Aider reports rounded token totals with no cache breakdown. `pass@1` 95% CIs overlap at `N = 102` (paired McNemar `hivemind_duo` vs `hermes` `p = 0.66`, vs `aider` `p = 0.39`, vs `pi` `p = 0.17`). Across all three runs `hivemind_duo` finished #1 (or tied #1) in every run, achieved the highest `pass@3` (`27/34`), lowest median wall time (`26.9 s`), highest KV-cache reuse (`93.2%`), and fewest timeouts (`2/102`).
+
+### Local starter suite — 21 tasks (`qwen3.5:4b-mtp`)
+
+| Condition | Pass Rate | Median Wall Time | Notes |
+|---|---|---|---|
+| `hivemind_duo` (`duo_core`) | **95.2%** (20/21) | 27.7 s | Autonomous tool loop + verification gate + edit salvage (~84% cached prefix reuse) |
+| `aider` | 85.7% (18/21) | 20.9 s | Lower per-turn prompt tokens; Aider's CLI token count is rounded and not cache-aware |
 
 ## Notes and limits
 
