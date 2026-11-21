@@ -380,6 +380,10 @@ class RunBridge:
                 self._clear_run()
                 return await self._fail(f"🔌 HiveMind unreachable "
                                         f"(offline?): {exc}")
+            except TelegramApiError as exc:
+                self._clear_run()
+                self._log_note(f"Telegram delivery error during run: {exc}")
+                return f"❌ Telegram delivery error: {exc}"
 
     @staticmethod
     def _short_path(path: str) -> str:
@@ -396,7 +400,10 @@ class RunBridge:
         return path
 
     async def _fail(self, text: str) -> str:
-        await self.ms.send_message(text)
+        try:
+            await self.ms.send_message(text)
+        except TelegramApiError as exc:
+            self._log_note(f"failure notice could not be sent: {exc}")
         return text
 
     async def _progress_ok(self) -> bool:
@@ -2715,11 +2722,15 @@ class RunBridge:
             decision_id=m.get("approval_decision_id") or "",
             tool=m.get("approval_tool") or "")
         code = getattr(resp, "status_code", 500)
+        if code >= 300:
+            if code == 404:
+                m["approval_sig"] = None
+                m["approval_decision_id"] = ""
+                m["approval_card_did"] = ""
+            return f"not accepted (HTTP {code})"
         m["approval_sig"] = None
         m["approval_decision_id"] = ""
         m["approval_card_did"] = ""
-        if code >= 300:
-            return f"not accepted (HTTP {code})"
         return _fmt_routed(resp, dup_msg="already answered (UI) - nothing changed")
 
     async def mirror_send(self, text: str) -> str:
@@ -2754,10 +2765,16 @@ class RunBridge:
                     decision_id=_pending_did or m.get("approval_decision_id") or "",
                     tool=m.get("approval_tool") or "")
                 code = getattr(resp, "status_code", 500)
-                m["approval_sig"] = None
                 if code >= 300:
+                    if code == 404:
+                        m["approval_sig"] = None
+                        m["approval_decision_id"] = ""
+                        m["approval_card_did"] = ""
                     return (f"❌ Answer not accepted (HTTP {code}) - maybe "
                             "answered in the UI.")
+                m["approval_sig"] = None
+                m["approval_decision_id"] = ""
+                m["approval_card_did"] = ""
                 try:
                     _routed = str((resp.json() or {}).get("routed") or "")
                 except (ValueError, TypeError, AttributeError):
@@ -2775,10 +2792,16 @@ class RunBridge:
                     decision_id=m.get("approval_decision_id") or "",
                     tool=m.get("approval_tool") or "")
                 code = getattr(resp, "status_code", 500)
-                m["approval_sig"] = None
                 if code >= 300:
+                    if code == 404:
+                        m["approval_sig"] = None
+                        m["approval_decision_id"] = ""
+                        m["approval_card_did"] = ""
                     return (f"❌ Decision not accepted "
                             f"(HTTP {code}) - maybe answered in the UI.")
+                m["approval_sig"] = None
+                m["approval_decision_id"] = ""
+                m["approval_card_did"] = ""
                 try:
                     routed = str((resp.json() or {}).get("routed") or "")
                 except (ValueError, TypeError, AttributeError):
@@ -2933,7 +2956,14 @@ class RunBridge:
         if not _p.exists():
             return (f"❌ Path does not exist: {path}\n"
                     "/workspace needs an existing folder.")
-        if _p.parent == _p:
+        if not _p.is_dir():
+            return (f"❌ Path is not a folder: {path}\n"
+                    "/workspace needs an existing folder.")
+        try:
+            _p_res = _p.resolve()
+        except OSError:
+            _p_res = _p
+        if _p.parent == _p or _p_res.parent == _p_res:
             return (f"❌ Drive root ({path}) is deliberately not "
                     "allowed - please name a concrete folder.")
         mapping = await self._ensure_chat()

@@ -465,6 +465,7 @@ SUITES = [
     ("audit_wave1_quickwins",        "tests/test_audit_wave1_quickwins.py",        30),
     ("audit_wave2a_security_backend", "tests/test_audit_wave2a_security_backend.py", 45),
     ("audit_wave2b1_core_ui_tools",   "tests/test_audit_wave2b1_core_ui_tools.py",   45),
+    ("audit_wave2b2_server_gw_sched", "tests/test_audit_wave2b2_server_gw_sched.py", 45),
 
 ]
 

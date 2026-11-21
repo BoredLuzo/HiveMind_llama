@@ -1,6 +1,6 @@
 """Peer ratings and auto-adapt (extracted from server.py)."""
 
-import asyncio, json, logging, re, time
+import json, logging, re, time
 from pathlib import Path
 
 from core.state import registry_get
@@ -21,6 +21,13 @@ logger = logging.getLogger("hivemind.peer_ratings")
 THIS_FILE = Path(__file__).resolve().parent.parent / "server.py"
 
 _bg_rating_sem = None
+
+def _safe_num(val, cast, default):
+    try:
+        return cast(val)
+    except (TypeError, ValueError):
+        return default
+
 
 def _parse_rating_tune(text: str) -> dict:
     """TUNE-Format Parser: score=0.8 strengths=[S1;S2] weaknesses=[W1] temp_delta=0.05 tokens_delta=50 hint=leer reason=..."""
@@ -115,7 +122,7 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
                 else:
                     logger.warning("[PEER-DUO] No parseable score from rater: %r", raw[:160])
             if rating_data.get("score") is not None:
-                score = float(rating_data.get("score", 0.5))
+                score = _safe_num(rating_data.get("score"), float, 0.5)
                 append_learning_log(THIS_FILE, rated_model, {
                     "event":                "peer_rating",
                     "run_id":               run_id,
@@ -166,7 +173,7 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
             raw = "".join(parts).strip()
             rating_data = _parse_rating_tune(raw) if "score=" in raw else {}
             if rating_data.get("score") is not None:
-                score = float(rating_data["score"])
+                score = _safe_num(rating_data["score"], float, 0.5)
                 rated_model = registry_get("direct")
                 append_learning_log(THIS_FILE, rated_model, {
                     "event":                "peer_rating",
@@ -202,6 +209,8 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
             continue
 
         rater_model = registry_get(rater_key)
+        if not rater_model:
+            continue
         rating_input = (
             f"Context: {context}\n\n"
             f"Original question: {user_input}\n\n"
@@ -231,7 +240,7 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
                     rating_data = json.loads(match.group(0))
                 except json.JSONDecodeError:
                     continue
-            score       = float(rating_data.get("score", 0.5))
+            score       = _safe_num(rating_data.get("score"), float, 0.5)
             rated_model = registry_get(rated_key)
 
             append_learning_log(THIS_FILE, rated_model, {
@@ -274,7 +283,8 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
                 "run_count": run_count,
             })
             from learning.soul_evolution import _maybe_trigger_soul_evolution_forced
-            asyncio.create_task(_maybe_trigger_soul_evolution_forced(run_count))
+            from utils.bg_tasks import spawn
+            spawn(_maybe_trigger_soul_evolution_forced(run_count), name="soul-evolution-low-score")
 
 
 async def _maybe_adapt_config(model, agent_key, new_score, rating_data):
@@ -306,14 +316,14 @@ async def _maybe_adapt_config(model, agent_key, new_score, rating_data):
     change_log = []
 
     if is_poor or is_declining:
-        temp_delta = float(rating_data.get("suggested_temp_delta", 0))
+        temp_delta = _safe_num(rating_data.get("suggested_temp_delta", 0), float, 0.0)
         if abs(temp_delta) >= 0.03:
             new_temp = round(max(0.05, min(1.0, current_temp + temp_delta)), 2)
             if new_temp != current_temp:
                 changes["temperature"] = new_temp
                 change_log.append(f"temp {current_temp:.2f}->{new_temp:.2f}")
 
-        tok_delta = int(rating_data.get("suggested_tokens_delta", 0))
+        tok_delta = _safe_num(rating_data.get("suggested_tokens_delta", 0), int, 0)
         if abs(tok_delta) >= 50:
             new_tokens = max(100, min(4000, current_tokens + tok_delta))
             if new_tokens != current_tokens:

@@ -49,7 +49,7 @@ def _sync_runtime_flags(context_label: str) -> None:
 
 def _populate_default_agents(sa: dict) -> None:
     for _ak, _av in DEFAULT_AGENT_CFG.items():
-        sa.setdefault(_ak, _av)
+        sa.setdefault(_ak, copy.deepcopy(_av))
         if isinstance(sa[_ak], dict):
             sa[_ak].setdefault("model", _av.get("model", ""))
             sa[_ak].setdefault("temperature", _av.get("temperature", 0.3))

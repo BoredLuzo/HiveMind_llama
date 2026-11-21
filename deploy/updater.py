@@ -861,7 +861,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"         backup is in {bk}")
         shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
-    stage_new_bat(exroot, base)
     info("7 done: zip extracted.")
 
     # -- 8. Apply over this installation --------------------------------------
@@ -898,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
         # auto-restart a possibly mixed tree.
         return 1
     info("9 done: verify passed.")
+    stage_new_bat(exroot, base)
     write_build_info_fallback(base, newver, tagnum)
 
     # -- 9a. Prune files the PREVIOUS release dropped -------------------------

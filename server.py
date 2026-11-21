@@ -1423,24 +1423,6 @@ async def stream(req: Request):
                     ))
 
     async def _safe_stream_gen():
-        _ka_release = None
-        try:
-            from infra.keep_awake import acquire as _ka_acq, release as _ka_rel
-            _ka_acq()
-            _ka_release = _ka_rel
-        except Exception:
-            pass
-        try:
-            async for _chunk in _safe_stream_gen_inner():
-                yield _chunk
-        finally:
-            if _ka_release:
-                try:
-                    _ka_release()
-                except Exception:
-                    pass
-
-    async def _safe_stream_gen_inner():
         # DETACHED PRODUCER (2026-09-21): the run lives in its own task, the
         # SSE generator only bridges frames from a queue. A client disconnect
         # cancels the BRIDGE, not the run: an until_finished run keeps
@@ -1460,8 +1442,18 @@ async def stream(req: Request):
                                 if _state["jr_id"]:
                                     _state["jr_reg"] = _run_journal_touch(_state["jr_id"])
                                     _state["jr_reg"]["chat_id"] = _journal_chat_id
-                                    _state["jr_reg"]["frames"].extend(_state["jr_pending"])
-                                    _state["jr_pending"] = []
+                                    if _state["jr_pending"]:
+                                        _pend = _state["jr_pending"]
+                                        _state["jr_reg"]["frames"].extend(_pend)
+                                        _state["jr_reg"]["bytes"] = (
+                                            int(_state["jr_reg"].get("bytes") or 0)
+                                            + sum(len(_pf) for _pf in _pend)
+                                        )
+                                        _state["jr_reg"]["n_total"] = (
+                                            int(_state["jr_reg"].get("n_total") or 0)
+                                            + len(_pend)
+                                        )
+                                        _state["jr_pending"] = []
                         except Exception:
                             pass
                     if _state["jr_reg"] is not None:
@@ -1489,6 +1481,15 @@ async def stream(req: Request):
                 pass
 
         async def _produce():
+            # Keep system awake for the full lifetime of the producer (even when
+            # the SSE client disconnects and the run continues detached).
+            _ka_release = None
+            try:
+                from infra.keep_awake import acquire as _ka_acq, release as _ka_rel
+                _ka_acq()
+                _ka_release = _ka_rel
+            except (ImportError, OSError, RuntimeError):
+                pass
             try:
                 async for _chunk in _stream_gen:
                     _state["events"] += 1
@@ -1551,6 +1552,11 @@ async def stream(req: Request):
             else:
                 await _q.put(("done", None))
             finally:
+                if _ka_release:
+                    try:
+                        _ka_release()
+                    except (OSError, RuntimeError):
+                        pass
                 # H-audit: run-scoped ContextVars die with the TASK context -
                 # reset them anyway so any future host that reuses a task
                 # never inherits the previous run's gate/restriction flags.
@@ -1563,7 +1569,7 @@ async def stream(req: Request):
                 except (ImportError, AttributeError):
                     pass
 
-        _producer = asyncio.create_task(_produce())
+        _producer = spawn(_produce(), name=f"stream-producer-{chat_id or mode}")
         try:
             while True:
                 _kind, _payload = await _q.get()
@@ -1599,14 +1605,8 @@ async def stream(req: Request):
         finally:
             # DETACH: never cancel the producer here. If the client is gone,
             # the run drains to completion detached and the journal keeps
-            # recording; a reload reattaches to it via /run/journal.
+            # recording; spawn() keeps the strong task ref and logs errors.
             if not _producer.done():
-                _pr = _producer
-                def _log_detach(_t):
-                    _exc = _t.exception()
-                    if _exc and not isinstance(_exc, (GeneratorExit, asyncio.CancelledError)):
-                        logger.warning("/stream detached producer ended with error: %s", _exc)
-                _pr.add_done_callback(_log_detach)
                 logger.info(
                     "/stream client gone — run continues detached (journal replay available) chat=%s events=%d",
                     chat_id, _state["events"],
@@ -1946,15 +1946,27 @@ async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_s
 @app.post("/v1/chat/completions")
 async def v1_chat_completions(req: Request):
     """OpenAI-kompatibler /v1/chat/completions Endpunkt."""
-    body      = await req.json()
-    raw_model = body.get("model", settings.get("agents", {}).get("direct", {}).get("model", "qwen3.5:9b-ud"))
-    msgs      = body.get("messages", [])
-    do_stream = body.get("stream", False)
-    max_tok   = int(body.get("max_tokens", 4096))
-    temp      = float(body.get("temperature", 0.2))
-
-    if not msgs:
+    body = await req.json()
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
+    _default_model = settings.get("agents", {}).get("direct", {}).get("model", "qwen3.5:9b-ud")
+    raw_model = str(body.get("model") or _default_model)
+    msgs = body.get("messages") or []
+    if not isinstance(msgs, list) or not msgs:
         return JSONResponse({"error": "messages missing"}, status_code=400)
+    do_stream = bool(body.get("stream", False))
+    _raw_max = body.get("max_tokens")
+    if _raw_max is None:
+        _raw_max = body.get("max_completion_tokens")
+    try:
+        max_tok = int(_raw_max) if _raw_max is not None else 4096
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "max_tokens must be an integer"}, status_code=400)
+    _raw_temp = body.get("temperature")
+    try:
+        temp = float(_raw_temp) if _raw_temp is not None else 0.2
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "temperature must be a number"}, status_code=400)
 
     chat_id = f"chatcmpl-{int(time.time())}"
     created = int(time.time())

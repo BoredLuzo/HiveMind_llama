@@ -242,7 +242,10 @@ async def _run_insight_extractor(
                     continue
                 _trigger_path = str(_ie.get("trigger_path", "")).strip()
                 _source = f"insight_extractor:{_ie.get('type', 'unknown')}"
-                _confidence = float(_ie.get("confidence", 0.5))
+                try:
+                    _confidence = float(_ie.get("confidence", 0.5))
+                except (TypeError, ValueError):
+                    _confidence = 0.5
 
                 # Only save insights with reasonable confidence.
                 # Threshold 0.5 matches the INSIGHT_EXTRACTOR prompt spec (0.5-1.0).
@@ -399,10 +402,18 @@ def _mark_insight_distilled(insight: dict, skill_name: str) -> None:
     try:
         if not _memory:
             return
-        insight["distilled_skill"] = skill_name
-        _persist = getattr(_memory, "_persist_insights", None)
-        if _persist:
-            _persist()
+        _lock = getattr(_memory, "_insight_lock", None)
+        if _lock is not None:
+            with _lock:
+                insight["distilled_skill"] = skill_name
+                _persist = getattr(_memory, "_persist_insights", None)
+                if _persist:
+                    _persist()
+        else:
+            insight["distilled_skill"] = skill_name
+            _persist = getattr(_memory, "_persist_insights", None)
+            if _persist:
+                _persist()
     except Exception:
         pass
 

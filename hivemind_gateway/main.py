@@ -339,6 +339,7 @@ class Gateway:
         # phone restriction (UI toggle): boot default = restricted
         # (safe by default); the first settings fetch corrects it.
         self.phone_restricted = True
+        self._bg_tasks: set[asyncio.Task] = set()
 
     # -- outbound (always via send()) ------------------------------------
 
@@ -1200,8 +1201,17 @@ class Gateway:
                 await self.reply(_chat_id, note,
                                  reply_to_message_id=p.message_id)
         _t = asyncio.create_task(_own_run_task())
-        _t.add_done_callback(lambda t: t.exception() and log.warning(
-            "[RUN] own run task failed: %s", t.exception()))
+        self._bg_tasks.add(_t)
+
+        def _on_own_run_done(t: asyncio.Task) -> None:
+            self._bg_tasks.discard(t)
+            if t.cancelled():
+                return
+            _exc = t.exception()
+            if _exc is not None:
+                log.warning("[RUN] own run task failed: %s", _exc)
+
+        _t.add_done_callback(_on_own_run_done)
 
     async def cmd_send_file(self, p: gw_auth.ParsedUpdate, arg: str) -> None:
         """/send <path> - deliver one workspace file to this chat.
@@ -1756,6 +1766,10 @@ async def run() -> int:
         log.warning("gateway stopped")
     finally:
         mirror_task.cancel()
+        _pending_bg = list(getattr(gw, "_bg_tasks", ()))
+        for _bt in _pending_bg:
+            _bt.cancel()
+        await asyncio.gather(mirror_task, *_pending_bg, return_exceptions=True)
         await api.close()
         await gw.hive.close()
     return 0

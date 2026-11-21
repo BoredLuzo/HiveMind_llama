@@ -74,6 +74,15 @@ if defined HM_NVIDIA (
     ) else (
         set "BACKEND=cpu"
     )
+) else if /i "%BACKEND%"=="rocm" (
+    choice /c RVC /m "Keep [R]OCm / [V]ulkan / [C]uda backend?"
+    if errorlevel 3 (
+        set "BACKEND=cuda"
+    ) else if errorlevel 2 (
+        set "BACKEND=vulkan"
+    ) else (
+        set "BACKEND=rocm"
+    )
 ) else (
     echo  No NVIDIA GPU detected - Vulkan recommended for AMD/Intel.
     choice /c VC /m "Update [V]ulkan (recommended) / [C]uda backend?"

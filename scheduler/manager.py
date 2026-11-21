@@ -106,6 +106,12 @@ class SchedulerManager:
     def lane_busy(self) -> bool:
         return bool(self._live_run_ids())
 
+    def _scheduler_busy(self) -> bool:
+        """True when either an engine run is live OR a fire task is active/queued."""
+        return (self.lane_busy()
+                or bool(self._in_flight_jobs)
+                or self._fire_lock.locked())
+
     # -- tick -------------------------------------------------------------
     async def tick(self, now: float | None = None) -> None:
         now = _now() if now is None else float(now)
@@ -113,7 +119,7 @@ class SchedulerManager:
         # A queued fire waits for the lane; one slot per job.
         pending = [j for j in jobs
                    if j.get("pending_fire") and j.get("enabled", True)]
-        if pending and not self.lane_busy() and not self._in_flight_jobs and not self._fire_lock.locked():
+        if pending and not self._scheduler_busy():
             job = min(pending, key=lambda j: float(
                 (j.get("pending_fire") or {}).get("due_ts") or 0))
             p = job.get("pending_fire") or {}
@@ -163,7 +169,7 @@ class SchedulerManager:
                 self.store.append_history({
                     "job_id": job.get("id"), "status": "missed", "ts": now})
                 continue
-            if self.lane_busy():
+            if self._scheduler_busy():
                 policy = str(job.get("policy") or "skip")
                 if policy == "queue" and not job.get("pending_fire"):
                     self.store.update(job.get("id"), {
@@ -188,7 +194,7 @@ class SchedulerManager:
         job = self.store.get(job_id)
         if job is None:
             return False, "not found"
-        if self.lane_busy() or self._in_flight_jobs or self._fire_lock.locked():
+        if self._scheduler_busy():
             return False, "busy: another run is active"
         self._in_flight_jobs.add(str(job_id))
         # SPAWN-HELPER (2026-11-05 audit): raw create_task loses the only

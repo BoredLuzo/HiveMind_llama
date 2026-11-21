@@ -214,8 +214,10 @@ async def update_automation(job_id: str, req: Request):
     job["last_fired_ts"] = current.get("last_fired_ts")
     job["last_status"] = current.get("last_status") or ""
     job["last_duration_s"] = current.get("last_duration_s")
-    if current.get("pending_fire"):
+    if current.get("pending_fire") and job.get("enabled", True):
         job["pending_fire"] = current["pending_fire"]
+    else:
+        job["pending_fire"] = None
     updated = mgr.store.update(job_id, job)
     return updated if updated is not None else _err("Not found", 404)
 
@@ -247,10 +249,19 @@ async def toggle_automation(job_id: str):
     job = mgr.store.get(job_id)
     if job is None:
         return _err("Not found", 404)
-    # A queued fire on a now-disabled job must not run later.
-    updated = mgr.store.update(job_id, {
-        "enabled": not job.get("enabled", True),
-        "pending_fire": None})
+    # A queued fire on a now-disabled job must not run later; re-enabling a
+    # stale/missed job refreshes next_ts so it fires cleanly from now.
+    new_enabled = not job.get("enabled", True)
+    patch: dict = {"enabled": new_enabled, "pending_fire": None}
+    if new_enabled:
+        now = time.time()
+        if (job.get("next_ts") is None
+                or spec.classify_due(job.get("next_ts"), now, 600.0) == "missed"):
+            nxt = spec.next_fire_ts(job.get("schedule") or {}, now,
+                                    job.get("timezone") or "")
+            if nxt is not None:
+                patch["next_ts"] = nxt
+    updated = mgr.store.update(job_id, patch)
     return updated
 
 

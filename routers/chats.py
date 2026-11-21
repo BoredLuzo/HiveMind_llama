@@ -439,17 +439,16 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
 
         _msgs = stored.get("messages", [])
         _last = _msgs[-1].get("content", "") if (_msgs and isinstance(_msgs[-1], dict)) else ""
-        with _cache_lock:
-            _chats_cache[chat_id] = {
-                "id": stored.get("id", chat_id),
-                "title": stored.get("title", "Untitled"),
-                "created_at": stored.get("created_at", ""),
-                "updated_at": stored.get("updated_at", ""),
-                "_msg_count": _user_msg_count(_msgs),
-                "_tokens": _chat_tokens(_msgs),
-                "_preview": _last[:80] if isinstance(_last, str) else "",
-                "_file": _file,
-            }
+        _cache_entry = {
+            "id": stored.get("id", chat_id),
+            "title": stored.get("title", "Untitled"),
+            "created_at": stored.get("created_at", ""),
+            "updated_at": stored.get("updated_at", ""),
+            "_msg_count": _user_msg_count(_msgs),
+            "_tokens": _chat_tokens(_msgs),
+            "_preview": _last[:80] if isinstance(_last, str) else "",
+            "_file": _file,
+        }
 
         # Sanitize any client-injected invalid _ref payloads before blobification
         # or disk serialization so even an OSError in _store_blob cannot leave
@@ -476,6 +475,10 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
         _tmp = _p.with_suffix(".tmp")
         _tmp.write_text(_txt, encoding="utf-8")
         _replace_with_retry(_tmp, _p)
+        # Update cache ONLY after disk write succeeds so oversize/IO errors
+        # never poison _chats_cache with unwritten metadata.
+        with _cache_lock:
+            _chats_cache[chat_id] = _cache_entry
         return {"id": chat_id, "rev": _new_rev, "ts": stored.get("updated_at", ""),
                 "conflict": False}
 
