@@ -881,6 +881,7 @@ async def _run_direct_inner(ctx):
         # frontend has an S.curAgent bubble (appendToken drops tokens when
         # curAgent is null) → the answer was lost, the bubble stayed empty, and
         # the run ended "without error".
+        t = time.time()
         yield await ctx.emit({"type": "agent", "content": "Answer", "model": _direct_model})
         yield await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
         _ws_used = False
@@ -963,7 +964,7 @@ async def _run_direct_inner(ctx):
         # otherwise the answer is silently truncated (finish_reason=length).
         _direct_ctx_cap = ctx.get_num_ctx(_direct_model, "direct") or 8192
         _direct_tokens = min(int(_direct_tokens), max(256, int(_direct_ctx_cap)))
-        parts, t = [], time.time()
+        parts = []
         _pause_aborted = bool(_dt_result and _dt_result.pause_aborted)   # A1: an abort during the pause gate ends the run
         _direct_had_err = False
         if _direct_tools_active and (_tool_content or _pause_aborted):

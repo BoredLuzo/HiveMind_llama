@@ -2439,6 +2439,85 @@ function _answerTextOnly(bodyEl) {
   return String(txt).replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Non-answer UI chrome living inside .abody (tool chips, tool results, inline
+// reasoning, steer cards, status/pruned notices). Excluded from persisted
+// chat history (`content`) so follow-up turns never feed DOM chrome back into
+// the LLM as few-shot assistant text. Code blocks (<pre>/<code>) stay intact
+// here (unlike TTS _ANSWER_CHROME_SEL) because code is real answer content.
+var _HISTORY_CHROME_SEL = [
+  '.tool-call-chip', '.tool-call-row', '.tool-result-block', '.tool-result-pre',
+  '.tool-act', '.tc-extra', '.tc-extra-pre', '.tc-pruned-notice', '.tg-card',
+  '.think-block', '.think-body', '.planner-think-block', '.pre-call-reasoning',
+  '.amsg-foot', '.msg-speak', '.duo-verdict', '.critic-box', '.img-desc-box',
+  '.budget-bar', '.ctx-cut', '.files-summary', '.status-txt', '.pload',
+  '.steer-note', '.fc-preview', '.repair-badge', 'details'
+].join(',');
+
+function _historyTextOnly(bodyEl) {
+  if (!bodyEl) return '';
+  var clone = bodyEl.cloneNode(true);
+  try {
+    clone.querySelectorAll(_HISTORY_CHROME_SEL).forEach(function (n) { n.remove(); });
+  } catch (e) { /* fall through with untouched clone */ }
+  var out = [];
+  var BLOCK = {
+    P: 1, DIV: 1, LI: 1, BLOCKQUOTE: 1,
+    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1,
+    UL: 1, OL: 1, TABLE: 1, SECTION: 1, ARTICLE: 1
+  };
+  function pushNl() {
+    if (!out.length) return;
+    var last = out[out.length - 1];
+    if (last && last.charAt(last.length - 1) !== '\n') out.push('\n');
+  }
+  function walk(node) {
+    if (!node) return;
+    if (node.nodeType === 3) {
+      out.push(node.nodeValue || '');
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    var tag = String(node.tagName || '').toUpperCase();
+    if (tag === 'BR') { out.push('\n'); return; }
+    if (tag === 'HR') { pushNl(); out.push('---\n'); return; }
+    if (tag === 'PRE') {
+      var cls = String(node.className || '');
+      var m = cls.match(/\blang-([a-zA-Z0-9_+#.-]+)\b/);
+      var lang = m ? m[1] : '';
+      var code = String(node.textContent || '').replace(/\r\n/g, '\n').replace(/\n$/, '');
+      pushNl();
+      out.push('```' + lang + '\n' + code + '\n```\n');
+      return;
+    }
+    if (tag === 'TR') {
+      var cells = [];
+      for (var c = 0; c < node.childNodes.length; c++) {
+        var ch = node.childNodes[c];
+        if (ch.nodeType === 1) {
+          var ct = String(ch.tagName || '').toUpperCase();
+          if (ct === 'TD' || ct === 'TH') {
+            cells.push(String(ch.textContent || '').replace(/\s+/g, ' ').trim());
+          }
+        }
+      }
+      if (cells.length) { pushNl(); out.push(cells.join(' | ') + '\n'); }
+      return;
+    }
+    var isBlock = !!BLOCK[tag];
+    if (isBlock) pushNl();
+    for (var i = 0; i < node.childNodes.length; i++) {
+      walk(node.childNodes[i]);
+    }
+    if (isBlock) pushNl();
+  }
+  walk(clone);
+  return out.join('')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 
 // Clamp TTS speed to backend bounds [0.8, 1.5] (1.08 default).
 function _clampTtsSpeed(raw) {
@@ -6259,7 +6338,9 @@ function doneAgent(elapsed) {
   if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons(S.curAgent.body.closest('.ablock'));
   const t = document.getElementById(S.curAgent.tid);
   if (t) {
-    var _tokRate = Number(S.perfTokRate || 0);
+    // Prefer server-reported decode_tps (usage_meta arrives before agent_done);
+    // S.perfTokRate is only a rough client token-arrival EMA until `done`.
+    var _tokRate = (S.perfDecodeEma > 0) ? Number(S.perfDecodeEma) : Number(S.perfTokRate || 0);
     t.textContent = elapsed + 's' + (_tokRate > 0 ? ' \u00b7 ' + _tokRate.toFixed(1) + ' t/s' : '');
   }
   const name = (S.curAgent.name || '').toLowerCase();
@@ -12878,13 +12959,20 @@ function _autosaveChatMessage() {
       const aname = el.querySelector('.aname');
       // abody can be directly or in a duo-coder/duo-critic wrapper
       const abody = el.querySelector('.abody') || el.querySelector('.duo-coder .abody') || el.querySelector('.duo-critic .abody');
-      if (aname && abody && abody.textContent.trim()) {
+      var _cleanContent = abody ? _historyTextOnly(abody) : '';
+      if (aname && abody && (_cleanContent || abody.textContent.trim())) {
         // CHAT-STRUCTURE-FIX (2026-08-07): also save the rendered structure (markdown blocks,
         // code snippets, tool chips), otherwise the live structure is lost
         // and the chat is shown as flat text on load.
+        // HISTORY-CHROME-FIX (2026-11-21): store ONLY the clean answer text in
+        // `content` (stripped of tool chips, [UNTRUSTED CONTENT] tool results,
+        // and inline think blocks). Saving raw `abody.textContent` poisoned
+        // follow-up turns into imitating DOM tool chips as plain text and
+        // truncated the actual answer past `assistant_cap`. `html` still keeps
+        // the full visual DOM for reload.
         // CP SNAPSHOT (2026-10-03): persist the code-panel state (diffs per
         // path) so tool chips stay clickable in the LOADED chat too.
-        var _stMsg = {role: 'assistant', agent: aname.textContent, content: abody.textContent,
+        var _stMsg = {role: 'assistant', agent: aname.textContent, content: _cleanContent,
                       html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()};
         // AUDIT (2026-10-24): re-read the structured stats from the footer
         // (dataset stash) — every persist must carry the stats line, not

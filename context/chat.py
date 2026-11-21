@@ -1,6 +1,7 @@
 """Chat-Context-Persistenz (aus server.py extrahiert)."""
 from __future__ import annotations
-import json, logging, threading, time
+from html.parser import HTMLParser
+import json, logging, os, re, threading, time
 from pathlib import Path
 from typing import Callable
 from utils.file import write_json_atomic as _write_json_atomic
@@ -111,13 +112,247 @@ def get_chat_workspace(chat_id: str) -> str:
     return str((data or {}).get("workspace") or "")
 
 
+_BLOB_MAGIC = b"HIVEBLOB1\n"
+_BLOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
+
+_HTML_CHROME_CLASSES = frozenset({
+    "tool-call-chip", "tool-call-row", "tool-result-block", "tool-result-pre",
+    "tool-act", "tc-extra", "tc-extra-pre", "tc-pruned-notice", "tg-card",
+    "think-block", "think-body", "planner-think-block", "pre-call-reasoning",
+    "amsg-foot", "msg-speak", "duo-verdict", "critic-box", "img-desc-box",
+    "budget-bar", "ctx-cut", "files-summary", "status-txt", "pload",
+    "steer-note", "fc-preview", "repair-badge",
+})
+_HTML_SKIP_TAGS = frozenset({"details", "script", "style"})
+_HTML_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+_HTML_BLOCK_TAGS = frozenset({
+    "p", "div", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6",
+    "ul", "ol", "table", "section", "article",
+})
+_LANG_CLASS_RE = re.compile(r"\blang-([a-zA-Z0-9_+#.-]+)\b")
+_DOM_TOOL_CHIP_RE = re.compile(
+    r"[\U0001F300-\U0001FAFF\u2600-\u27BF]"
+    r"(?:web_search|web_fetch|read_file|write_file|write_file_append|"
+    r"edit_file|patch_file|replace_lines|edit_ast|run_bash|run_tests|"
+    r"run_python|install_package|find_files|find_references|search_code|"
+    r"get_signatures|list_dir|git_commit|git_status|task_complete|"
+    r"start_background|get_background_output|stop_background|"
+    r"mcp_[a-zA-Z0-9_]+)\s*\u00b7\s*"
+)
+_UNTRUSTED_BLOCK_RE = re.compile(
+    r"\[UNTRUSTED CONTENT - source:[^\]]*\][\s\S]*?\[END UNTRUSTED CONTENT\]"
+)
+
+
+class _AnswerHtmlExtractor(HTMLParser):
+    """Extract clean assistant answer text from saved `.abody` HTML, skipping UI chrome."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._in_pre = False
+        self._pre_lang = ""
+        self._pre_buf: list[str] = []
+        self._in_tr = False
+        self._in_cell = False
+        self._tr_cells: list[str] = []
+        self._cell_buf: list[str] = []
+        self._out: list[str] = []
+
+    def _push_nl(self) -> None:
+        if self._out and not self._out[-1].endswith("\n"):
+            self._out.append("\n")
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        t = tag.lower()
+        if t in _HTML_VOID_TAGS:
+            if self._skip_depth == 0:
+                if self._in_pre:
+                    if t == "br":
+                        self._pre_buf.append("\n")
+                elif self._in_cell:
+                    if t == "br":
+                        self._cell_buf.append(" ")
+                elif t == "br":
+                    self._out.append("\n")
+                elif t == "hr":
+                    self._push_nl()
+                    self._out.append("---\n")
+            return
+        if self._skip_depth > 0:
+            self._skip_depth += 1
+            return
+        attr_map = dict(attrs)
+        cls_raw = str(attr_map.get("class") or "")
+        cls_set = set(cls_raw.split()) if cls_raw else set()
+        if t in _HTML_SKIP_TAGS or (cls_set & _HTML_CHROME_CLASSES):
+            self._skip_depth = 1
+            return
+        if t == "pre":
+            self._in_pre = True
+            m = _LANG_CLASS_RE.search(cls_raw)
+            self._pre_lang = m.group(1) if m else ""
+            self._pre_buf = []
+            return
+        if self._in_pre:
+            return
+        if t == "tr":
+            self._in_tr = True
+            self._tr_cells = []
+            return
+        if self._in_tr and t in ("td", "th"):
+            self._in_cell = True
+            self._cell_buf = []
+            return
+        if t in _HTML_BLOCK_TAGS:
+            self._push_nl()
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        t = tag.lower()
+        if self._skip_depth > 0:
+            return
+        if t == "br":
+            if self._in_pre:
+                self._pre_buf.append("\n")
+            elif self._in_cell:
+                self._cell_buf.append(" ")
+            else:
+                self._out.append("\n")
+        elif t == "hr" and not self._in_pre and not self._in_cell:
+            self._push_nl()
+            self._out.append("---\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        t = tag.lower()
+        if t in _HTML_VOID_TAGS:
+            return
+        if self._skip_depth > 0:
+            self._skip_depth -= 1
+            return
+        if t == "pre" and self._in_pre:
+            code = "".join(self._pre_buf).replace("\r\n", "\n").rstrip("\n")
+            self._push_nl()
+            self._out.append(f"```{self._pre_lang}\n{code}\n```\n")
+            self._in_pre = False
+            self._pre_lang = ""
+            self._pre_buf = []
+            return
+        if self._in_pre:
+            return
+        if t in ("td", "th") and self._in_cell:
+            cell_txt = re.sub(r"\s+", " ", "".join(self._cell_buf)).strip()
+            self._tr_cells.append(cell_txt)
+            self._in_cell = False
+            self._cell_buf = []
+            return
+        if t == "tr" and self._in_tr:
+            if self._tr_cells:
+                self._push_nl()
+                self._out.append(" | ".join(self._tr_cells) + "\n")
+            self._in_tr = False
+            self._tr_cells = []
+            return
+        if t in _HTML_BLOCK_TAGS:
+            self._push_nl()
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth > 0 or not data:
+            return
+        if self._in_pre:
+            self._pre_buf.append(data)
+        elif self._in_cell:
+            self._cell_buf.append(data)
+        else:
+            self._out.append(data)
+
+    def get_text(self) -> str:
+        raw = "".join(self._out).replace("\r\n", "\n")
+        raw = re.sub(r"[ \t]+\n", "\n", raw)
+        raw = re.sub(r"\n{3,}", "\n\n", raw)
+        return raw.strip()
+
+
+def _extract_answer_from_html(html_str: str) -> str:
+    parser = _AnswerHtmlExtractor()
+    parser.feed(html_str)
+    parser.close()
+    return parser.get_text()
+
+
+def _read_html_blob(chat_id: str, blob_ref: object) -> str | None:
+    if not _SESSIONS_DIR or not isinstance(blob_ref, str) or not _BLOB_ID_RE.fullmatch(blob_ref):
+        return None
+    try:
+        sessions_root = _SESSIONS_DIR.resolve()
+        bdir = (_SESSIONS_DIR / f"{chat_id}.blobs").resolve()
+        if len(bdir.relative_to(sessions_root).parts) != 1:
+            return None
+        target = (bdir / blob_ref).resolve()
+        if not target.relative_to(bdir).parts or target == bdir:
+            return None
+        raw = target.read_bytes()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if raw.startswith(_BLOB_MAGIC):
+        return raw[len(_BLOB_MAGIC):].decode("utf-8", errors="replace")
+    if os.name == "nt":
+        return raw.replace(b"\r\n", b"\n").decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
+def _looks_like_dom_scraped_tool_chrome(text: str) -> bool:
+    """Detect legacy assistant `content` scraped from raw `.abody.textContent`."""
+    if not text:
+        return False
+    if "[UNTRUSTED CONTENT - source:" in text and "[END UNTRUSTED CONTENT]" in text:
+        return True
+    if _DOM_TOOL_CHIP_RE.search(text):
+        return True
+    if "\U0001F9E0 Thinking" in text and "\u25B2" in text:
+        return True
+    if "\U0001F4AD\u25B8Reasoning" in text:
+        return True
+    return False
+
+
+def _sanitize_assistant_transcript(chat_id: str, msg: dict, content: str) -> str:
+    """Strip DOM-scraped tool/think chrome from legacy saved assistant turns.
+
+    Older frontend builds saved `abody.textContent` directly into `content`,
+    mixing tool chips (`web_search · ...`), `[UNTRUSTED CONTENT]` dumps and
+    inline reasoning ahead of the real answer. That poisoned follow-up turns
+    into imitating DOM chrome as plain text and pushed the real answer past
+    `assistant_cap`. When chrome markers are present, recover the clean prose
+    + code from saved `html` (inline or blob); fall back to stripping raw
+    untrusted blocks when no HTML is available.
+    """
+    if not _looks_like_dom_scraped_tool_chrome(content):
+        return content
+    raw_html = msg.get("html")
+    html_str: str | None = None
+    if isinstance(raw_html, str) and raw_html.strip():
+        html_str = raw_html
+    elif isinstance(raw_html, dict) and "_ref" in raw_html:
+        html_str = _read_html_blob(chat_id, raw_html.get("_ref"))
+    if html_str:
+        return _extract_answer_from_html(html_str)
+    cleaned = _UNTRUSTED_BLOCK_RE.sub("", content)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
 def load_chat_transcript(chat_id: str, limit: int = 40) -> list:
     """USER-VISIBLE transcript as THE model history source (2026-10-03).
 
     Reads the newest `limit` user/assistant text messages straight from the
-    chat json in sessions/. Message-level content is never blobified, so no
-    ref restoration is needed here. The sidecar "session" key demotes to a
-    fallback for chats without a json (or run-state-only sidecars)."""
+    chat json in sessions/. Legacy assistant turns whose `content` was
+    DOM-scraped from `.abody.textContent` are cleaned via their saved HTML
+    (inline or blob) so tool chips and `[UNTRUSTED CONTENT]` dumps never
+    poison follow-up turns. The sidecar "session" key demotes to a fallback
+    for chats without a json (or run-state-only sidecars)."""
     data = _read_chat_json(chat_id)
     if not data:
         return []
@@ -133,6 +368,10 @@ def load_chat_transcript(chat_id: str, limit: int = 40) -> list:
         if m.get("part"):
             continue
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            if role == "assistant":
+                content = _sanitize_assistant_transcript(chat_id, m, content)
+                if not content.strip():
+                    continue
             out.append({"role": role, "content": content})
     return out[-limit:]
 
