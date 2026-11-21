@@ -770,33 +770,39 @@ async def warm_workers_after_run(slots: list, coder_mdl: str,
 
 
 async def unpin_duo_models(ctx, pinned: list, ka: str) -> None:
-    # REPIN RACE FIX (2026-11-01): this loop re-LOADS every pinned model
-    # (keep_alive=ka, num_ctx=profile) - including a coder that
-    # `duo_coder_after_run=evict` had just deliberately evicted 1 s earlier.
-    # Live: run ends -> coder evicted -> unpin reloads groot@131072 (profile
-    # ctx) -> preflight BLOCK -> the user's follow-up run then timed out
-    # against that half-initialized 131k server (hard_stop). Unpinning a
-    # model that is no longer loaded is a no-op by definition - skip it.
+    # REPIN RACE FIX (2026-11-01): unpinning a model that is no longer loaded
+    # (e.g. evicted by duo_coder_after_run=evict) must be a no-op, and active
+    # models must be unpinned in place rather than re-loaded via _bk_load at
+    # profile default ctx (which caused a redundant kill+reload when the coder
+    # ran with a smaller or different ctx).
     try:
         from backend.llama_server_manager import manager as _lsm_unpin
-        _loaded = {str(getattr(_s, "model", "") or "").strip()
-                   for _s in (getattr(_lsm_unpin, "_slots", None) or [])
-                   if getattr(_s, "is_running", False)}
-    except Exception:
-        _loaded = None   # manager unavailable: keep the old behavior
+        from backend.llama_compat import _parse_keep_alive
+    except ImportError:
+        _lsm_unpin = None
+        _parse_keep_alive = None
+    _use_in_place = (
+        _lsm_unpin is not None
+        and hasattr(_lsm_unpin, "unpin")
+        and hasattr(_lsm_unpin, "get_port_for")
+        and _parse_keep_alive is not None
+    )
+    _ka_secs = _parse_keep_alive(ka) if _use_in_place else 0.0
     for _um in pinned:
         try:
-            if _loaded is not None and str(_um).strip() not in _loaded:
-                logger.debug(
-                    "[DUO] unpin skipped for %s - not loaded anymore "
-                    "(evicted after run)", _um)
-                continue
-            _unpin_ctx = ctx.get_num_ctx(_um)
-            _unpin_payload: dict = {"model": _um, "keep_alive": ka, "stream": False}
-            # rnj-1:8b default=32768 → ~2GB extra KV-Cache → VRAM-Spike auf 8GB GPU
-            if _unpin_ctx:
-                _unpin_payload["options"] = {"num_ctx": _unpin_ctx, "num_predict": 0}
-            await _bk_load(_um, keep_alive=ka, num_ctx=_unpin_ctx)
+            if _use_in_place:
+                if _lsm_unpin.get_port_for(_um) is None:
+                    logger.debug(
+                        "[DUO] unpin skipped for %s - not loaded anymore "
+                        "(evicted after run)", _um)
+                    continue
+                if _ka_secs == 0:
+                    await _lsm_unpin.evict(_um)
+                elif _ka_secs > 0:
+                    await _lsm_unpin.unpin(_um, keep_alive_seconds=_ka_secs)
+                # _ka_secs < 0 means permanent keep-alive ("-1"): leave pinned in place.
+            else:
+                await _bk_load(_um, keep_alive=ka, num_ctx=ctx.get_num_ctx(_um))
         except Exception as _err:
             if isinstance(_err, (
                 GeneratorExit,

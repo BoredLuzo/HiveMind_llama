@@ -945,7 +945,7 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
     # and returned False on every eviction. Can't-measure -> don't block:
     # report OK once; a real OOM surfaces visibly at the llama-server load.
     try:
-        if get_live_gpu_free_mib() is None:
+        if await _asyncio.to_thread(get_live_gpu_free_mib) is None:
             _logger.info(
                 "[VRAM-RECLAIM] no live VRAM source — skipping wait (target: %d MiB)",
                 target_mib,
@@ -958,7 +958,7 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
     _best_free: float | None = None
     while _time.time() - start < timeout_sec:
         try:
-            free_mib = get_live_gpu_free_mib()
+            free_mib = await _asyncio.to_thread(get_live_gpu_free_mib)
             if _first_free is None and free_mib is not None:
                 _first_free = free_mib
                 _best_free = free_mib
@@ -989,7 +989,7 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
             return False
         await _asyncio.sleep(poll_interval)
     try:
-        free_mib = get_live_gpu_free_mib()
+        free_mib = await _asyncio.to_thread(get_live_gpu_free_mib)
     except Exception:
         free_mib = -1
     _logger.warning(

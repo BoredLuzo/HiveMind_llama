@@ -872,12 +872,11 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
                     _pe_evicted += 1
                 except Exception:
                     pass
-        # Phase 3: AMD/Vulkan VRAM-Settle + Gate
-        await asyncio.sleep(3.0)
+        # Phase 3: Check immediately whether slots drained before settling VRAM.
         _pe_deadline = time.time() + 10.0
         _pe_still_loaded = await _lsm_post_explore.list_loaded()
         while _pe_still_loaded and time.time() < _pe_deadline:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
             _pe_still_loaded = await _lsm_post_explore.list_loaded()
         if _pe_still_loaded:
             _pe_names = [m.get("name", "?") for m in _pe_still_loaded]
@@ -887,23 +886,34 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
         logger.info(f"[UNIFIED-EVICT] {_pe_evicted} model(s) unloaded - VRAM free for planner/coder")
         yield await ctx.emit({"type": "status",
             "content": f"🗑️ {_pe_evicted} model(s) unloaded — VRAM free for coder/planner"})
-        try:
-            from backend.llama_compat import force_kill_all
-            await force_kill_all()
-            _kill_deadline = time.time() + 8.0
-            while time.time() < _kill_deadline:
-                _still_loaded = await _lsm_post_explore.list_loaded()
-                if not _still_loaded:
-                    break
-                await asyncio.sleep(0.5)
-            else:
-                logger.warning("[EVICT] force_kill_all() timeout — VRAM may not be fully released")
-            yield await ctx.emit({"type": "status",
-                "content": "🗑️ VRAM cleared — fresh start for the planner"})
-        except Exception:
-            pass
+        _pe_force_killed = False
+        if _pe_still_loaded:
+            try:
+                from backend.llama_compat import force_kill_all
+                await force_kill_all()
+                _pe_force_killed = True
+                _kill_deadline = time.time() + 8.0
+                while time.time() < _kill_deadline:
+                    _still_loaded = await _lsm_post_explore.list_loaded()
+                    if not _still_loaded:
+                        break
+                    await asyncio.sleep(0.25)
+                else:
+                    logger.warning("[EVICT] force_kill_all() timeout — VRAM may not be fully released")
+                yield await ctx.emit({"type": "status",
+                    "content": "🗑️ VRAM cleared — fresh start for the planner"})
+            except (ImportError, OSError, RuntimeError) as _fka_err:
+                logger.debug("[EVICT] force_kill_all skipped/failed: %s", _fka_err)
 
-        await asyncio.sleep(2.5)  # Vulkan-Reclaim
+        if _pe_evicted > 0 or _pe_force_killed:
+            try:
+                from backend.llama_config import GPU_BACKEND as _pe_gpu_backend
+            except ImportError:
+                _pe_gpu_backend = "vulkan"
+            if _pe_gpu_backend == "vulkan":
+                await asyncio.sleep(1.5)  # Single Vulkan driver VRAM reclaim settle
+            elif _pe_force_killed:
+                await asyncio.sleep(0.2)
     except Exception as _pe_evict_err:
         logger.debug(f"[UNIFIED-EVICT] Failed (not critical): {_pe_evict_err}")
 

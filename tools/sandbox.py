@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import logging
 import os
@@ -209,7 +210,7 @@ async def kill_tree_and_reap(proc, taskkill_timeout: int = 5) -> None:
     wrapper is dead but must be waited on, or the event loop's child
     watcher keeps it as a zombie. THE shared timeout-kill path (test
     runner, sandbox) — do not hand-roll copies."""
-    kill_tree(proc, taskkill_timeout=taskkill_timeout)
+    await asyncio.to_thread(kill_tree, proc, taskkill_timeout=taskkill_timeout)
     try:
         await proc.wait()
     except Exception:

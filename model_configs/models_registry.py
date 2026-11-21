@@ -58,6 +58,9 @@ _UNDERSCORE_PLACEHOLDER = ":"
 _profile_cache: dict[str, dict] = {}     # canonical/base → merged config
 _shipped_cache: dict[str, dict] = {}     # canonical/base → shipped config
 _user_cache: dict[str, dict] = {}        # canonical/base → user override config
+_resolved_profile_cache: dict[str, dict] = {}
+_resolved_shipped_ref: dict | None = None
+_resolved_user_ref: dict | None = None
 _profile_mtimes: dict[str, float] = {}
 _cache_ts: float = 0.0
 _CACHE_TTL: float = 30.0
@@ -138,10 +141,13 @@ def _scan() -> dict[str, dict]:
 
 def refresh() -> None:
     """Discard the cache — the next access rescans both shipped and user dirs."""
-    global _profile_cache, _shipped_cache, _user_cache, _cache_ts
+    global _profile_cache, _shipped_cache, _user_cache, _resolved_shipped_ref, _resolved_user_ref, _cache_ts
     _profile_cache = {}
     _shipped_cache = {}
     _user_cache = {}
+    _resolved_profile_cache.clear()
+    _resolved_shipped_ref = None
+    _resolved_user_ref = None
     _profile_mtimes.clear()
     _FILE_CACHE.clear()
     _FILE_MTIMES.clear()
@@ -150,7 +156,7 @@ def refresh() -> None:
 
 
 def _ensure_cache() -> dict[str, dict]:
-    global _profile_cache, _shipped_cache, _user_cache, _cache_ts
+    global _profile_cache, _shipped_cache, _user_cache, _resolved_shipped_ref, _resolved_user_ref, _cache_ts
     now = time.time()
     if not _profile_cache or (now - _cache_ts) > _CACHE_TTL:
         shipped_files = _scan_dir(_MODELS_DIR, "shipped")
@@ -179,6 +185,9 @@ def _ensure_cache() -> dict[str, dict]:
         _shipped_cache = shipped_tmp
         _user_cache = user_tmp
         _profile_cache = merged_tmp
+        _resolved_profile_cache.clear()
+        _resolved_shipped_ref = _shipped_cache
+        _resolved_user_ref = _user_cache
         _cache_ts = now
     return _profile_cache
 
@@ -292,23 +301,54 @@ def _resolve_layer(reg: dict[str, dict], canonical: str, base: str) -> tuple[dic
     return {}, False
 
 
-def get_profile(model_name: str) -> dict:
-    """Return merged config for a model (user > shipped > base > {})."""
+def _get_profile_readonly(model_name: str) -> dict:
+    """Return cached merged profile dict for read-only internal accessors."""
+    global _resolved_shipped_ref, _resolved_user_ref
     canonical, base = _normalize_model_key(model_name)
     if not canonical:
         return {}
 
     _ensure_cache()
+    if _shipped_cache is not _resolved_shipped_ref or _user_cache is not _resolved_user_ref:
+        _resolved_profile_cache.clear()
+        _resolved_shipped_ref = _shipped_cache
+        _resolved_user_ref = _user_cache
+
+    ckey = canonical.casefold()
+    cached = _resolved_profile_cache.get(ckey)
+    if cached is not None:
+        return cached
+
     shipped_prof, has_shipped = _resolve_layer(_shipped_cache, canonical, base)
     user_prof, has_user = _resolve_layer(_user_cache, canonical, base)
 
     if has_user and has_shipped:
-        return copy.deepcopy(_merge(shipped_prof, user_prof))
-    if has_user:
-        return copy.deepcopy(user_prof)
-    if has_shipped:
-        return copy.deepcopy(shipped_prof)
-    return {}
+        merged = _merge(shipped_prof, user_prof)
+    elif has_user:
+        merged = user_prof
+    elif has_shipped:
+        merged = shipped_prof
+    else:
+        merged = {}
+
+    _resolved_profile_cache[ckey] = merged
+    return merged
+
+
+def get_profile(model_name: str) -> dict:
+    """Return merged config for a model (user > shipped > base > {})."""
+    prof = _get_profile_readonly(model_name)
+    return copy.deepcopy(prof) if prof else {}
+
+
+_ORIG_GET_PROFILE = get_profile
+
+
+def _read_profile(model_name: str) -> dict:
+    """Return cached read-only view, or delegate to `get_profile` if monkeypatched."""
+    if get_profile is not _ORIG_GET_PROFILE:
+        return get_profile(model_name) or {}
+    return _get_profile_readonly(model_name)
 
 
 def get_profile_source(model_name: str) -> str:
@@ -360,7 +400,7 @@ def load_arch_compat() -> dict:
 # ── Accessors ──────────────────────────────────────────────────────────────────
 
 def get_capabilities(model_name: str) -> dict | None:
-    caps = get_profile(model_name).get("capabilities")
+    caps = _read_profile(model_name).get("capabilities")
     if isinstance(caps, dict):
         return {
             "thinking": bool(caps.get("thinking")),
@@ -371,12 +411,12 @@ def get_capabilities(model_name: str) -> dict | None:
 
 
 def is_vision_preprocessing(model_name: str) -> bool | None:
-    v = get_profile(model_name).get("vision_preprocessing")
+    v = _read_profile(model_name).get("vision_preprocessing")
     return bool(v) if v is not None else None
 
 
 def get_num_ctx(model_name: str, agent_role: str | None = None) -> int | None:
-    prof = get_profile(model_name)
+    prof = _read_profile(model_name)
     if agent_role == "analyst":
         v = prof.get("num_ctx_analyst")
         if v:
@@ -396,29 +436,29 @@ def get_num_ctx(model_name: str, agent_role: str | None = None) -> int | None:
 
 
 def get_chat_template(model_name: str) -> str | None:
-    v = get_profile(model_name).get("chat_template")
+    v = _read_profile(model_name).get("chat_template")
     return str(v).strip() if v else None
 
 
 def is_jinja(model_name: str) -> bool | None:
-    v = get_profile(model_name).get("jinja")
+    v = _read_profile(model_name).get("jinja")
     return bool(v) if v is not None else None
 
 
 def get_reasoning(model_name: str) -> str | None:
-    v = get_profile(model_name).get("reasoning")
+    v = _read_profile(model_name).get("reasoning")
     if v in ("on", "off"):
         return v
     return None
 
 
 def is_distilled(model_name: str) -> bool | None:
-    v = get_profile(model_name).get("distilled")
+    v = _read_profile(model_name).get("distilled")
     return bool(v) if v is not None else None
 
 
 def get_moe_cpu_experts(model_name: str) -> int | None:
-    prof = get_profile(model_name)
+    prof = _read_profile(model_name)
     v = prof.get("moe_cpu_experts")
     if v is None:
         return None
@@ -434,17 +474,17 @@ def get_moe_cpu_experts(model_name: str) -> int | None:
 
 
 def is_mtp(model_name: str) -> bool | None:
-    v = get_profile(model_name).get("mtp")
+    v = _read_profile(model_name).get("mtp")
     return bool(v) if v is not None else None
 
 
 def _get_str_key(model_name: str, key: str) -> str | None:
-    v = get_profile(model_name).get(key)
+    v = _read_profile(model_name).get(key)
     return str(v).strip() if v else None
 
 
 def _get_pos_int_key(model_name: str, key: str) -> int | None:
-    v = get_profile(model_name).get(key)
+    v = _read_profile(model_name).get(key)
     if v is None:
         return None
     try:
@@ -469,7 +509,7 @@ def get_dflash_draft(model_name: str) -> str | None:
 
 def get_dflash_draft_alternates(model_name: str) -> list[str]:
     """Optional fallback filenames when multiple quantised DFlash drafters exist."""
-    v = get_profile(model_name).get("dflash_draft_alternates")
+    v = _read_profile(model_name).get("dflash_draft_alternates")
     if isinstance(v, list):
         return [str(tok).strip() for tok in v if str(tok).strip()]
     return []
@@ -482,7 +522,7 @@ def get_mtp_draft(model_name: str) -> str | None:
 
 def get_flash_attn(model_name: str) -> bool | None:
     """Optional per-model --flash-attn override (True='on', False='off', None=default on)."""
-    v = get_profile(model_name).get("flash_attn")
+    v = _read_profile(model_name).get("flash_attn")
     if isinstance(v, bool):
         return v
     if isinstance(v, str):
@@ -501,7 +541,7 @@ def get_dflash_draft_n_max(model_name: str) -> int | None:
 
 def get_dflash_draft_p_min(model_name: str) -> float | None:
     """Per-model minimum draft probability for DFlash. None = use engine default."""
-    v = get_profile(model_name).get("dflash_draft_p_min")
+    v = _read_profile(model_name).get("dflash_draft_p_min")
     if v is None:
         return None
     try:
@@ -513,7 +553,7 @@ def get_dflash_draft_p_min(model_name: str) -> float | None:
 
 def get_draft_overhead_mib(model_name: str) -> float | None:
     """Calibrated external drafter VRAM overhead (MiB) for models without vram_gb_override."""
-    v = get_profile(model_name).get("draft_overhead_mib")
+    v = _read_profile(model_name).get("draft_overhead_mib")
     if v is None:
         return None
     try:
@@ -538,7 +578,7 @@ def get_moe_pin(model_name: str) -> bool | None:
     """MOE-PIN (2026-10-14): explicit "moe": true/false from the model's own
     profile — the user's answer to "is this a MoE?" — or None when unset
     (name heuristics decide, e.g. the 30B+ autodetect)."""
-    v = get_profile(model_name).get("moe")
+    v = _read_profile(model_name).get("moe")
     return bool(v) if v is not None else None
 
 
@@ -616,7 +656,7 @@ def set_profile_key(model_name: str, key: str, value) -> Path | None:
 
 
 def get_gpu_layers(model_name: str) -> int | None:
-    v = get_profile(model_name).get("gpu_layers")
+    v = _read_profile(model_name).get("gpu_layers")
     if v is not None:
         try:
             return int(v)
@@ -626,13 +666,13 @@ def get_gpu_layers(model_name: str) -> int | None:
 
 
 def get_kv_cache_type(model_name: str) -> str | None:
-    v = get_profile(model_name).get("kv_cache_type")
+    v = _read_profile(model_name).get("kv_cache_type")
     s = str(v).strip().lower() if v else ""
     return s or None
 
 
 def get_extra_args(model_name: str) -> list[str]:
-    v = get_profile(model_name).get("extra_args")
+    v = _read_profile(model_name).get("extra_args")
     if isinstance(v, str):
         return [tok for tok in v.split() if tok]
     if isinstance(v, list):
@@ -653,7 +693,7 @@ def get_ubatch(model_name: str) -> int | None:
     loader's [64, 4096] band; invalid values are ignored (None), never an
     abort.
     """
-    v = get_profile(model_name).get("ubatch")
+    v = _read_profile(model_name).get("ubatch")
     if v is None:
         return None
     try:
@@ -666,12 +706,12 @@ def get_ubatch(model_name: str) -> int | None:
 
 
 def get_mmproj_filename(model_name: str) -> str | None:
-    v = get_profile(model_name).get("mmproj_filename")
+    v = _read_profile(model_name).get("mmproj_filename")
     return str(v).strip() if v else None
 
 
 def get_vram_gb_override(model_name: str) -> float | None:
-    v = get_profile(model_name).get("vram_gb_override")
+    v = _read_profile(model_name).get("vram_gb_override")
     if v:
         try:
             return float(v)
@@ -683,19 +723,19 @@ def get_vram_gb_override(model_name: str) -> float | None:
 def get_sampling(model_name: str) -> dict:
     """Per-model sampling overrides from the config file (mode key such as
     "thinking" / "non_thinking" -> llama.cpp sampling dict)."""
-    v = get_profile(model_name).get("sampling")
-    return dict(v) if isinstance(v, dict) and v else {}
+    v = _read_profile(model_name).get("sampling")
+    return copy.deepcopy(v) if isinstance(v, dict) and v else {}
 
 
 def get_load_mode(model_name: str) -> str | None:
     """Per-model load_mode override ("none" | "mmap" | "mmap+mlock"). None = auto."""
-    v = get_profile(model_name).get("load_mode")
+    v = _read_profile(model_name).get("load_mode")
     return str(v).strip().lower() if v else None
 
 
 def get_thinking_budget(model_name: str) -> int | None:
     """Per-model thinking budget (from profile top-level or sampling sub-block)."""
-    prof = get_profile(model_name)
+    prof = _read_profile(model_name)
     v = prof.get("thinking_budget")
     if v is not None:
         try:

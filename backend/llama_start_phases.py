@@ -195,14 +195,14 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
                     # VRAM reclaim wait: port dead != VRAM free (Vulkan is async)
                     _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB), timeout_sec=45, stall_abort_s=12.0)
                     if not _reclaimed:
-                        _free_now = get_live_gpu_free_mib()
+                        _free_now = await asyncio.to_thread(get_live_gpu_free_mib)
                         logger.warning(
                             "Vulkan: VRAM reclaim timeout after eviction — "
                             "pre-flight could still block (only %.0fMiB free)",
                             _free_now if _free_now is not None else -1,
                         )
         else:
-            _live_free = get_live_gpu_free_mib()
+            _live_free = await asyncio.to_thread(get_live_gpu_free_mib)
             # STALL-FIX (2026-09-07): reclaim target with REDUCED margin —
             # the 768 value was structurally unreachable under external GPU load
             # (guaranteed 45s wait, e.g. target 5775 with only ~5.06 GB free).
@@ -260,7 +260,7 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
                     await asyncio.sleep(0.5)
                     _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45, stall_abort_s=12.0)
                     if not _reclaimed:
-                        _free_now = get_live_gpu_free_mib()
+                        _free_now = await asyncio.to_thread(get_live_gpu_free_mib)
                         logger.warning(
                             "Vulkan: VRAM reclaim timeout after eviction — "
                             "pre-flight could still block (only %.0fMiB free)",
@@ -1873,7 +1873,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         #      they fail clearly (VRAMPreFlightError, min-ctx floor).
         _downgraded = False
         if not _fixed_dominant:
-            _free_res = get_live_gpu_free_mib()
+            _free_res = await asyncio.to_thread(get_live_gpu_free_mib)
             if _free_res is None:
                 _free_res = _fit.free_mib
             _eff_margin = (
@@ -2336,7 +2336,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         slot.last_warning = ""
         try:
             from .llama_vram_table import get_live_gpu_free_mib as _free_mib
-            _head = _free_mib()
+            _head = await asyncio.to_thread(_free_mib)
             if _head is not None and _head < 700:
                 logger.warning(
                     "[VRAM-TIGHT] %s @ctx=%s leaves only %d MiB free after load "

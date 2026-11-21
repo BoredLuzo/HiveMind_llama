@@ -137,7 +137,7 @@ class LlamaEvictMixin:
             _committed_gb = sum(
                 vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
                 + (slot_mmproj_vram_mib(s.model, bool(getattr(s, "_vision", False))) / 1024.0)
-                for s in self._slots
+                for s in list(self._slots)
                 if s.model and (exclude_slot_id is None or s.slot_id != exclude_slot_id)
             )
             free_mib = round((VRAM_BUDGET_GB - _committed_gb) * 1024, 1)
@@ -162,18 +162,28 @@ class LlamaEvictMixin:
         # carried --moe-cache-mib -> VRAM overflow crash.
 
         _t0 = time.time()
-        _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id,
-                            safety_margin_mib=safety_margin_mib,
-                            extra_needed_mib=extra_needed_mib)
+        _fit = await asyncio.to_thread(
+            self.can_fit,
+            model_name,
+            num_ctx,
+            exclude_slot_id=slot.slot_id,
+            safety_margin_mib=safety_margin_mib,
+            extra_needed_mib=extra_needed_mib,
+        )
         _deadline = _t0 + grace_s
         _first_free: float | None = _fit.free_mib
         _best_free: float | None = _first_free
         _aborted = False
         while not _fit.ok and time.time() < _deadline:
             await asyncio.sleep(poll_interval)
-            _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id,
-                                safety_margin_mib=safety_margin_mib,
-                                extra_needed_mib=extra_needed_mib)
+            _fit = await asyncio.to_thread(
+                self.can_fit,
+                model_name,
+                num_ctx,
+                exclude_slot_id=slot.slot_id,
+                safety_margin_mib=safety_margin_mib,
+                extra_needed_mib=extra_needed_mib,
+            )
             if _fit.ok:
                 logger.info(
                     "[PRE-FLIGHT-GRACE] %s @ctx=%d free after %.0fs (%.0fMiB, margin %dMiB) — continuing",

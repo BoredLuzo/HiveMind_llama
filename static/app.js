@@ -6208,7 +6208,7 @@ function _tokenFlushLoop() {
             tktEl.textContent = ' · ' + visibleThink.length + ' chars';
           }
         }
-        if (_chatFollow) thinkBodyEl.scrollTop = thinkBodyEl.scrollHeight;
+        if (_chatFollow) _scrollElToBottomSoon(thinkBodyEl);
       }
       if (combined.indexOf('</think>') >= 0) {
         S.curAgent._inThink = false;
@@ -6936,6 +6936,14 @@ function scrollBtmIfNearBottom(thresholdPx) {
       });
     });
   }
+}
+
+function _scrollElToBottomSoon(el) {
+  if (!el || el._scrollRaf) return;
+  el._scrollRaf = requestAnimationFrame(function() {
+    el._scrollRaf = null;
+    if (_chatFollow && el.isConnected) el.scrollTop = el.scrollHeight;
+  });
 }
 
 function rmEl(id) {
@@ -8591,7 +8599,7 @@ function handleEvent(d) {
           _thbEl._tktAt = _nowTk;
           _tktEl.textContent = ' \u00b7 ' + _tn.length + ' chars';
         }
-        if (_chatFollow) _thbEl.scrollTop = _thbEl.scrollHeight;
+        if (_chatFollow) _scrollElToBottomSoon(_thbEl);
       }
       scrollBtmIfNearBottom(120);
     }
@@ -13030,7 +13038,7 @@ function _autosaveChatMessage() {
         // CP SNAPSHOT (2026-10-03): persist the code-panel state (diffs per
         // path) so tool chips stay clickable in the LOADED chat too.
         var _stMsg = {role: 'assistant', agent: aname.textContent, content: _cleanContent,
-                      html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()};
+                      html: abody.innerHTML, ts: Date.now()};
         // AUDIT (2026-10-24): re-read the structured stats from the footer
         // (dataset stash) — every persist must carry the stats line, not
         // only the first one after the run ended.
@@ -13081,6 +13089,16 @@ function _autosaveChatMessage() {
       if (msgs[_i].role === 'assistant' && !msgs[_i].part) {
         msgs[_i].stats = S._lastRunStats;
         S._lastRunStats._saved = true;
+        break;
+      }
+    }
+  }
+  // CODE-PANEL-SNAPSHOT: store cumulative code-panel state once on the last
+  // assistant turn instead of cloning _cpFiles into every bubble (O(N*M) bloat).
+  if (Object.keys(_cpFiles || {}).length > 0) {
+    for (var _ci = msgs.length - 1; _ci >= 0; _ci--) {
+      if (msgs[_ci].role === 'assistant' && !msgs[_ci].part) {
+        msgs[_ci].cp = _cpSnapshot();
         break;
       }
     }
@@ -13788,6 +13806,14 @@ async function loadChat(chatId) {
 
     // Restore chat DOM from saved messages
     _cpReset();  // PANEL-SCOPE (2026-10-03): snapshots must not merge across chats
+    // CHAT RESTORE: restore cumulative code-panel snapshot once from the last
+    // message carrying `.cp` rather than re-replaying every bubble's snapshot.
+    var _lastCp = null;
+    for (var _mi = (chat.messages || []).length - 1; _mi >= 0; _mi--) {
+      var _mm = chat.messages[_mi];
+      if (_mm && _mm.cp) { _lastCp = _mm.cp; break; }
+    }
+    if (_lastCp) _cpRestoreSnapshot(_lastCp);
     (chat.messages || []).forEach(function(msg) {
       if (msg.role === 'user') {
         addUserMsg(msg.content, (msg.images || []).map(function(i) { return { preview: i.preview }; }));
@@ -13810,10 +13836,7 @@ async function loadChat(chatId) {
           abody.style.whiteSpace = 'pre-wrap';
           abody.textContent = msg.content || '';
         }
-        // CHAT RESTORE (2026-10-03): replay the code-panel snapshot so the
-        // tool chips in the LOADED chat open their diffs like live ones,
-        // and wire the restored chips (saved HTML has no handlers).
-        if (msg.cp) _cpRestoreSnapshot(msg.cp);
+        // Wire the restored tool chips to the restored code-panel diffs.
         _wireSavedChips(abody);
         wrap.appendChild(hdr);
         wrap.appendChild(abody);
@@ -15780,7 +15803,11 @@ async function loadGitConfig(s) {
   if (supStart || supStop) {
     gatewaySupervisorTick();
     if (window._tgSupIv) { clearInterval(window._tgSupIv); window._tgSupIv = null; }
-    window._tgSupIv = setInterval(function() { if (!document.hidden) gatewaySupervisorTick(); }, 5000);
+    window._tgSupIv = setInterval(function() {
+      if (document.hidden) return;
+      var _stEl = document.getElementById('tg-sup-status');
+      if (_stEl && _stEl.offsetParent !== null) gatewaySupervisorTick();
+    }, 5000);
   }
   var emailInp = document.getElementById('git-email');
   if (emailInp) emailInp.value = s.git_email || '';

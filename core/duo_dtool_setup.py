@@ -42,6 +42,42 @@ def _normalize_path_set(paths, workspace: str) -> set[str]:
     }
 
 
+def _dedup_additional_explore_history(
+    explore_history_full: list,
+    included_msgs: list,
+    touched_paths: set,
+) -> list:
+    """Filter out explore messages already present in native history or `_touched_block`."""
+    included_ids = {id(m) for m in (included_msgs or ())}
+    out: list = []
+    pending_touched = False
+    touched_call_ids: set[str] = set()
+    for m in (explore_history_full or ()):
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            pending_touched = False
+            for tc in (m.get("tool_calls") or ()):
+                args = _parse_tool_args((tc.get("function") or {}).get("arguments", {}))
+                tp = str(args.get("path", "") or "").replace("\\", "/").lower()
+                if touched_paths and tp and any(str(t) in tp or tp in str(t) for t in touched_paths):
+                    pending_touched = True
+                    tc_id = tc.get("id")
+                    if tc_id:
+                        touched_call_ids.add(str(tc_id))
+        if id(m) in included_ids:
+            if m.get("role") == "tool" and m.get("name") == "read_file":
+                pending_touched = False
+            continue
+        if touched_paths and m.get("role") == "tool" and m.get("name") == "read_file":
+            tc_id = str(m.get("tool_call_id") or "")
+            if (tc_id and tc_id in touched_call_ids) or pending_touched:
+                pending_touched = False
+                continue
+        out.append(m)
+    return out
+
+
 async def _duo_dtool_setup(ctx, ps):
     _di = ps._di
     coder_mdl = ps.carry["coder_mdl"]
@@ -241,20 +277,29 @@ async def _duo_dtool_setup(ctx, ps):
         )
         if _pass_mode in ("all", "true", "1") and len(_pre_explore_msgs) > 2:
             _ALL_BUDGET = 16000
-            _all_block = ""
+            _touched_block = ""
             if _touched_paths:
                 _touched_block = _build_touched_context(_pre_explore_msgs[2:], _touched_paths)
-                if _touched_block:
-                    _all_block = _touched_block + "\n\n## Additional Pre-Explore History\n\n"
+            _all_block = _touched_block
+            _extra_hist = _dedup_additional_explore_history(
+                _explore_history_full,
+                _explore_history,
+                _touched_paths if _touched_block else set(),
+            )
             _remain_budget = _ALL_BUDGET - len(_all_block)
-            if _remain_budget > 0:
-                _hist_text = "\n".join(
-                    json.dumps(m, ensure_ascii=False) for m in _explore_history_full
-                )
-                if len(_hist_text) > _remain_budget:
-                    _hist_text = _hist_text[:_remain_budget].rsplit("\n", 1)[0] + "\n[... truncated]"
-                _all_block += _hist_text
-            _bridge_msg["content"] += "\n\n" + _all_block
+            if _extra_hist and _remain_budget > 0:
+                if _all_block:
+                    _all_block += "\n\n## Additional Pre-Explore History\n\n"
+                    _remain_budget = _ALL_BUDGET - len(_all_block)
+                if _remain_budget > 0:
+                    _hist_text = "\n".join(
+                        json.dumps(m, ensure_ascii=False) for m in _extra_hist
+                    )
+                    if len(_hist_text) > _remain_budget:
+                        _hist_text = _hist_text[:_remain_budget].rsplit("\n", 1)[0] + "\n[... truncated]"
+                    _all_block += _hist_text
+            if _all_block:
+                _bridge_msg["content"] += "\n\n" + _all_block
             _dtool_msgs = _dtool_base
         elif _pass_mode == "touched" and _touched_paths and len(_pre_explore_msgs) > 2:
             _touched_block = _build_touched_context(_pre_explore_msgs[2:], _touched_paths)

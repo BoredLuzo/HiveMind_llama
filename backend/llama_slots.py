@@ -244,7 +244,13 @@ class ModelSlot:
         c = http_client
         _owns_client = False
         if c is None:
-            c = httpx.AsyncClient(timeout=2.0)
+            # Skip OS CA-store SSLContext init (~0.7-1.3s sync block on Windows)
+            # and proxy env lookups for plain loopback http:// health probes.
+            c = httpx.AsyncClient(
+                timeout=2.0,
+                verify=not self.url.startswith("http://"),
+                trust_env=False,
+            )
             _owns_client = True
         try:
             while time.time() < deadline:
