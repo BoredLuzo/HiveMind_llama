@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from utils.bg_tasks import spawn  # noqa: E402
 import time
+
+_pipe_log = logging.getLogger("hivemind.pipeline_runner")
 from vision.preprocess import _VISION_POISON_MARKERS
 
 
@@ -131,6 +134,19 @@ async def run_pipeline(ctx):
                     pass
 
     try:
+        # Release any stale pinned Direct model that is not part of this pipeline
+        # so its 30-minute pin cannot block pipeline VRAM eviction.
+        try:
+            from core import direct_runner as _dr
+            _prev_dp = getattr(_dr, "_LAST_DIRECT_PINNED_MODEL", "")
+            _pipe_models = {
+                ctx.registry_get(k) for k in ("analyst", "refiner", "critic", "synthesizer")
+                if k not in ctx.skip_agents
+            }
+            if _prev_dp and _prev_dp not in _pipe_models:
+                await _dr.unpin_previous_direct_model("", evict=True)
+        except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as _dp_err:
+            _pipe_log.debug("[Pipeline] release previous direct pin skipped: %s", _dp_err)
         await _pin_pipeline_models(ctx, _pinned_models)
         previous    = ""
         analyst_out = ""

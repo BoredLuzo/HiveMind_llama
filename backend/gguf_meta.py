@@ -47,6 +47,8 @@ _WANT_SUFFIXES = frozenset({
     ".attention.key_length",
     ".attention.value_length",
     ".attention.sliding_window",
+    ".attention.sliding_window_pattern",
+    ".attention.shared_kv_layers",
     ".expert_count",
     ".expert_used_count",
     ".full_attention_interval",
@@ -167,7 +169,10 @@ def _read_value(f: BinaryIO, vtype: int, key: str) -> Any:
             raise ValueError(f"GGUF array exceeds guard ({count})")
         if key == "tokenizer.ggml.tokens" and etype == 8:
             return _scan_tokens_for_think(f, count)
-        if key.endswith(".attention.head_count_kv") and etype in _FIXED_FMTS and count <= 512:
+        if (
+            key.endswith(".attention.head_count_kv")
+            or key.endswith(".attention.sliding_window_pattern")
+        ) and etype in _FIXED_FMTS and count <= 512:
             fmt, sz = _FIXED_FMTS[etype]
             vals = [struct.unpack(fmt, _read_exact(f, sz))[0] for _ in range(count)]
             return vals
@@ -304,6 +309,8 @@ def _derive_kv_bytes(
     key_length: int | None,
     value_length: int | None,
     full_attention_interval: int | None,
+    sliding_window_pattern: list[Any] | None = None,
+    shared_kv_layers: int | None = None,
 ) -> tuple[int | None, int | None]:
     if not block_count or not head_count_kv:
         return None, None
@@ -314,12 +321,23 @@ def _derive_kv_bytes(
         (embedding_length // head_count) if (embedding_length and head_count) else 128
     )
     v_dim = value_length or k_dim
-    # Hybrid linear/full attention architectures (e.g. Qwen3.5) store growing KV only on full layers.
-    attn_layers = (
-        max(1, block_count // full_attention_interval)
-        if (full_attention_interval and full_attention_interval > 1)
+    # Architectures with KV sharing (e.g. Gemma-4 shared_kv_layers) only allocate
+    # unique KV buffers on the leading non-shared layers.
+    own_layers = (
+        max(1, block_count - int(shared_kv_layers))
+        if (isinstance(shared_kv_layers, int) and 0 < shared_kv_layers < block_count)
         else block_count
     )
+    # Sliding-window attention layers use a small fixed ring buffer that does not
+    # grow with num_ctx; only non-SWA full-attention layers scale linearly with ctx.
+    if isinstance(sliding_window_pattern, list) and sliding_window_pattern:
+        full_layers = sum(1 for is_swa in sliding_window_pattern[:own_layers] if not bool(is_swa))
+        attn_layers = full_layers if full_layers > 0 else own_layers
+    elif full_attention_interval and full_attention_interval > 1:
+        # Hybrid linear/full attention architectures (e.g. Qwen3.5) store growing KV only on full layers.
+        attn_layers = max(1, own_layers // full_attention_interval)
+    else:
+        attn_layers = own_layers
     elems_per_tok = attn_layers * kv_heads * (k_dim + v_dim)
     return round(elems_per_tok * (18.0 / 32.0)), round(elems_per_tok * 2.0)
 
@@ -372,6 +390,9 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
     k_len = _arch_get(".attention.key_length")
     v_len = _arch_get(".attention.value_length")
     full_attn_int = _arch_get(".full_attention_interval")
+    swa_pattern = _arch_get(".attention.sliding_window_pattern")
+    shared_kv_raw = _arch_get(".attention.shared_kv_layers")
+    shared_kv_layers = int(shared_kv_raw) if isinstance(shared_kv_raw, int) and shared_kv_raw > 0 else None
     expert_count = int(_arch_get(".expert_count") or 0)
     expert_used = int(_arch_get(".expert_used_count") or 0)
     vision_blocks = next(
@@ -392,7 +413,9 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
     has_embedded_vision = vision_blocks > 0
     has_vision = bool(has_embedded_vision or siblings.get("mmproj"))
     kv_q4, kv_f16 = _derive_kv_bytes(
-        block_count, head_count, head_kv, emb_len, k_len, v_len, full_attn_int
+        block_count, head_count, head_kv, emb_len, k_len, v_len, full_attn_int,
+        sliding_window_pattern=swa_pattern if isinstance(swa_pattern, list) else None,
+        shared_kv_layers=shared_kv_layers,
     )
     return {
         "path": str(path),

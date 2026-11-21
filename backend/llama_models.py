@@ -161,6 +161,7 @@ _BUILTIN_FILENAME_TAGS: dict[str, str] = {
     "gemma-4-e4b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e4b-it-qat",
     "gemma-4-e2b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e2b-it-qat",
     "gemma-4-e4b-uncensored-hauhaucs-aggressive-q4_k_p.gguf": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+    "gemma-4-e4b-it-obliterated-q5_k_m.gguf": "gemma-4:e4b-it-obliterated",
     "sharp-minicpm5-2b-q6_k_xl.gguf": "minicpm5:2b-sharp",
     "lfm3-1.7b-qad-q4_0.gguf": "lfm3:1.7b-qad",
     "lfm3-1.7b-uncensored-ad-q6_k.gguf": "lfm3:1.7b-uncensored-ad",

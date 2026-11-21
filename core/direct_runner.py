@@ -35,6 +35,76 @@ from utils.messages import normalize_system_messages
 
 _direct_log = logging.getLogger("hivemind.direct_runner")
 
+# Tracks the model last pinned by `pin_direct_after_response` so switching to a
+# different Direct model releases the old 30-minute pin before loading.
+_LAST_DIRECT_PINNED_MODEL: str = ""
+
+
+async def _release_direct_pinned_slot(
+    mgr,
+    model: str,
+    *,
+    evict: bool,
+    require_pinned: bool = True,
+) -> bool:
+    """Unpin a Direct model slot and, when `evict=True`, unload it if idle."""
+    find_sync = getattr(mgr, "_find_loaded_sync", None)
+    slot = None
+    if callable(find_sync):
+        try:
+            slot = find_sync(model)
+        except (AttributeError, TypeError, ValueError):
+            slot = None
+
+    can_evict = False
+    if evict and hasattr(mgr, "evict"):
+        if callable(find_sync):
+            pinned_ok = (not require_pinned) or bool(getattr(slot, "pinned", False))
+            can_evict = bool(
+                slot is not None
+                and getattr(slot, "is_running", False)
+                and pinned_ok
+                and not int(getattr(slot, "in_flight", 0) or 0)
+                and not getattr(slot, "_loading", False)
+            )
+        else:
+            can_evict = True
+
+    await mgr.unpin(model)
+    if can_evict:
+        await mgr.evict(model)
+        try:
+            from routers import vram as _vram_router
+            _vram_router._vram_status_cache["ts"] = 0.0
+        except (ImportError, AttributeError, KeyError, TypeError) as _ce:
+            _direct_log.debug("[Direct] vram status cache invalidate skipped: %s", _ce)
+        return True
+    return False
+
+
+async def unpin_previous_direct_model(next_model: str = "", *, evict: bool = True) -> bool:
+    """Release (and optionally unload) the previous auto-pinned Direct model on switch."""
+    global _LAST_DIRECT_PINNED_MODEL
+    prev = _LAST_DIRECT_PINNED_MODEL
+    next_clean = str(next_model or "").strip()
+    if not prev or (next_clean and prev == next_clean):
+        return False
+    _LAST_DIRECT_PINNED_MODEL = ""
+    try:
+        from backend.llama_client import manager as _mgr
+        evicted = await _release_direct_pinned_slot(
+            _mgr, prev, evict=evict, require_pinned=False,
+        )
+        _direct_log.info(
+            "[Direct] %s previous direct model %r before switch to %r",
+            "unloaded" if evicted else "unpinned",
+            prev, next_clean or "<none>",
+        )
+        return True
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as _ue:
+        _direct_log.debug("[Direct] unpin previous direct model %r skipped: %s", prev, _ue)
+        return False
+
 # A2 (2026-11-11): a steer that arrives DURING a pure direct answer gets a
 # bounded continuation round (1 initial answer + N continuations = the round
 # cap). Anything queued later delivers after the run (frontend queue) as
@@ -646,6 +716,11 @@ async def _run_direct_inner(ctx):
                                              "one in the UI."})
             return
 
+        # DIRECT-PIN-HANDOFF (2026-11-20): release any previously auto-pinned
+        # Direct model before loading a different Direct model; otherwise its
+        # 30-minute pin blocks VRAM eviction and causes PRE-FLIGHT-REFUSE.
+        await unpin_previous_direct_model(_direct_model)
+
         _preload_ev = await ctx.maybe_preload(_direct_model)
         if _preload_ev:
             yield _preload_ev
@@ -1046,7 +1121,7 @@ async def _run_direct_inner(ctx):
                         _stream_msgs.append({"role": "assistant", "content": _round_text})
             except Exception as _direct_err:
                 _direct_had_err = True
-                _err_tok = f"[Direct error: {str(_direct_err)[:120]}]"
+                _err_tok = f"[Direct error: {str(_direct_err)[:300]}]"
                 parts.append(_err_tok)
                 yield await ctx.emit({"type": "token", "content": _err_tok})
             # RUN-STATS (2026-10-23): real usage for the per-answer stats line —
@@ -1120,12 +1195,30 @@ async def _run_direct_inner(ctx):
                 })
         yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), _direct_stop_reason, **ctx.collect_done_metrics()))
         spawn(_refresh_judge_keepalive())
-        if ctx.settings.get("pin_direct_after_response", False):
+        if (ctx.settings.get("pin_direct_after_response", False)
+                and _direct_stop_reason == "completed"
+                and not _direct_had_err):
             async def _pin_direct_bg():
+                global _LAST_DIRECT_PINNED_MODEL
                 try:
-                    await _bk_pin(_direct_model, num_ctx=ctx.get_num_ctx(_direct_model, "direct"))
-                except Exception:
-                    pass
+                    await unpin_previous_direct_model(_direct_model)
+                    # Reuse the slot's active ctx when already running (e.g.
+                    # after PRE-FLIGHT-CTX-DOWN) so pinning flips the flag in
+                    # place instead of triggering a doomed ctx-upgrade reload.
+                    _pin_ctx = ctx.get_num_ctx(_direct_model, "direct")
+                    try:
+                        from backend.llama_client import manager as _pin_mgr
+                        _loaded_slot = _pin_mgr._find_loaded_sync(_direct_model)
+                        if _loaded_slot is not None and getattr(_loaded_slot, "is_running", False):
+                            _active_ctx = int(getattr(_loaded_slot, "_num_ctx", 0) or 0)
+                            if _active_ctx > 0:
+                                _pin_ctx = _active_ctx
+                    except (ImportError, AttributeError, TypeError, ValueError) as _ctx_err:
+                        _direct_log.debug("[Direct] active-slot ctx lookup skipped for %r: %s", _direct_model, _ctx_err)
+                    await _bk_pin(_direct_model, num_ctx=_pin_ctx)
+                    _LAST_DIRECT_PINNED_MODEL = _direct_model
+                except Exception as _pin_exc:
+                    _direct_log.debug("[Direct] post-response pin failed for %r: %s", _direct_model, _pin_exc)
             spawn(_pin_direct_bg())
         run_count = ctx.increment_run_counter()
         def _observed(t):

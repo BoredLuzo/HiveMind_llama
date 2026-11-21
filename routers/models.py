@@ -313,12 +313,22 @@ async def get_models():
             _tb = _gtb(_mname)
             p["thinking_budget"] = _tb if _tb is not None else _reg_prof.get("thinking_budget")
             p["source"] = _gps(_mname)
+            _kv_bpt = _reg_prof.get("kv_bytes_per_token")
+            if not _kv_bpt:
+                try:
+                    _gmeta = _gguf_meta.read_gguf_metadata(_mname) or {}
+                    _fa_off = _reg_prof.get("flash_attn") is False
+                    _kv_bpt = _gmeta.get("kv_bytes_per_token_f16" if _fa_off else "kv_bytes_per_token_q4")
+                except (ImportError, OSError, ValueError, TypeError, AttributeError):
+                    _kv_bpt = None
+            p["kv_bytes_per_token"] = int(_kv_bpt) if _kv_bpt else None
         except (ImportError, AttributeError, KeyError, TypeError, ValueError, OSError) as _prof_err:
             logging.getLogger(__name__).debug("model profile enrichment failed for %s: %s", _mname, _prof_err)
             p.setdefault("mtp", False)
             p.setdefault("load_mode", "auto")
             p.setdefault("thinking_budget", None)
             p.setdefault("source", "generic")
+            p.setdefault("kv_bytes_per_token", None)
     return {
         "models": models,
         "profiles": prof_list,

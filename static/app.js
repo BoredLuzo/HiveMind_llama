@@ -3268,17 +3268,10 @@ function renderAgentCards(agents) {
     // Shows what the model can do (multimodal/thinking) and whether it works
     // directly on images or a vision agent/preprocessing is needed.
     try {
-      const prof2 = S.modelProfiles[activeModel] || S.modelProfiles[(activeModel||'').split(':')[0]] || {};
-      const _isVis = !!(prof2.vision);
-      const _isThk = !!(prof2.thinking);
-      var _expl = [];
-      if (_isVis) _expl.push('<span style="color:#8858c0">🖼 processes images directly</span>');
-      else _expl.push('<span style="color:var(--tx3)">no vision — images via vision-agent/prepro</span>');
-      if (_isThk) _expl.push('<span style="color:#4878c0">🧠 can think (Thinking toggle)</span>');
-      else _expl.push('<span style="color:var(--tx3)">without thinking</span>');
       const expl = document.createElement('div');
+      expl.dataset.agentExplain = key;
       expl.style.cssText = 'font-family:IBM Plex Mono,monospace;font-size:8.5px;color:var(--tx3);margin:2px 0 4px;line-height:1.6';
-      expl.innerHTML = _expl.join(' · ');
+      expl.innerHTML = _agentExplainHtml(activeModel);
       div.appendChild(expl);
     } catch(e) {}
 
@@ -3408,9 +3401,10 @@ function renderAgentCards(agents) {
     ctxCell.className = 'acard-cell';
     const ctxLbl = document.createElement('div');
     ctxLbl.className = 'fl';
+    const _initKvTxt = _agentKvLabel(activeModel, ctxOverride || effCtxDefault);
     ctxLbl.innerHTML = 'Context <span id="' + ctxId + '">' + (ctxOverride ? ctxOverride : 'Auto') + '</span>'
       + '<span class="ctx-eff">' + (ctxOverride ? '' : '= ' + effCtxDefault) + '</span>'
-      + '<span style="font-size:8px;color:var(--tx3);margin-left:auto">KV: ~' + (ctxOverride ? (ctxOverride/8192).toFixed(1) : (effCtxDefault/8192).toFixed(1)) + 'GB</span>';
+      + '<span id="' + ctxId + '-hdr-kv" style="font-size:8px;color:var(--tx3);margin-left:auto">' + _initKvTxt + '</span>';
     ctxCell.appendChild(ctxLbl);
     const ctxRow = document.createElement('div');
     ctxRow.className = 'sl-row';
@@ -3418,29 +3412,34 @@ function renderAgentCards(agents) {
     ctxSlider.type = 'range'; ctxSlider.min = '0'; ctxSlider.max = '131072'; ctxSlider.step = '1024';
     ctxSlider.value = ctxOverride;
     ctxSlider.dataset.ctx = key;
-    ctxSlider.addEventListener('input', (function(id, refresh) {
+    ctxSlider.addEventListener('input', (function(id, refresh, selEl, defCtx) {
       return function() {
         const el = document.getElementById(id);
         const v = parseInt(this.value);
         if (el) el.textContent = v ? v : 'Auto';
+        const curMdl = (selEl && selEl.value) ? selEl.value : activeModel;
+        const kvTxt = _agentKvLabel(curMdl, v || defCtx);
         const kv = document.getElementById(id + '-kv');
-        if (kv) kv.textContent = 'KV: ~' + (v ? (v/8192).toFixed(1) : ((effCtxDefault/8192).toFixed(1))) + 'GB';
+        if (kv) kv.textContent = kvTxt;
+        const hkv = document.getElementById(id + '-hdr-kv');
+        if (hkv) hkv.textContent = kvTxt;
         refresh();
       };
-    })(ctxId, refreshBudget));
+    })(ctxId, refreshBudget, sel, effCtxDefault));
     // CTX-FIT-WARN (2026-10-23): on commit (change, not every input tick) the
-    // v/8192 heuristic is replaced by the real /vram/estimate for THIS model,
+    // heuristic is replaced by the real /vram/estimate for THIS model,
     // marked red when it exceeds the budget. Warning only — never blocks.
-    ctxSlider.addEventListener('change', (function(id, mdl) {
+    ctxSlider.addEventListener('change', (function(id, selEl) {
       return function() {
         var v = parseInt(this.value);
+        var mdl = (selEl && selEl.value) ? selEl.value : activeModel;
         if (v && mdl && typeof _vramEstimate === 'function') _vramEstimate(mdl, v, id + '-kv', true);
       };
-    })(ctxId, activeModel));
+    })(ctxId, sel));
     const ctxVal = document.createElement('div');
     ctxVal.className = 'sl-val';
     ctxVal.id = ctxId + '-kv';
-    ctxVal.textContent = 'KV: ~' + (ctxOverride ? (ctxOverride/8192).toFixed(1) : (effCtxDefault/8192).toFixed(1)) + 'GB';
+    ctxVal.textContent = _initKvTxt;
     ctxRow.appendChild(ctxSlider);
     ctxRow.appendChild(ctxVal);
     ctxCell.appendChild(ctxRow);
@@ -3555,12 +3554,43 @@ function renderAgentCards(agents) {
   if (_critCardAfterRender) _critCardAfterRender.style.display = (S.mode === 'code_duo' && S.duoAgenticMode) ? 'none' : '';
 }
 
+function _agentExplainHtml(modelName) {
+  const prof2 = (S.modelProfiles && (S.modelProfiles[modelName] || S.modelProfiles[(modelName || '').split(':')[0]])) || {};
+  const _isVis = !!(prof2.vision);
+  const _isThk = !!(prof2.thinking);
+  var _expl = [];
+  if (_isVis) _expl.push('<span style="color:#8858c0">🖼 processes images directly</span>');
+  else _expl.push('<span style="color:var(--tx3)">no vision — images via vision-agent/prepro</span>');
+  if (_isThk) _expl.push('<span style="color:#4878c0">🧠 can think (Thinking toggle)</span>');
+  else _expl.push('<span style="color:var(--tx3)">without thinking</span>');
+  return _expl.join(' · ');
+}
+
+function _agentKvLabel(modelName, ctxTokens) {
+  const ctx = parseInt(ctxTokens || 0) || 8192;
+  const prof = (S.modelProfiles && (S.modelProfiles[modelName] || S.modelProfiles[(modelName || '').split(':')[0]])) || {};
+  const bpt = Number(prof.kv_bytes_per_token || 0);
+  const gb = bpt > 0 ? ((ctx * bpt) / 1073741824) : (ctx / 8192);
+  return 'KV: ~' + gb.toFixed(1) + 'GB';
+}
+
 function _syncAgentModelState(key, model, sel) {
   if (sel) sel.dataset.cur = model;
   if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
   S.currentAssignments[key].model = model;
   if (S.agentsCfg && S.agentsCfg[key]) S.agentsCfg[key].model = model;
   if (key === 'direct') S._lastDirectRunModel = '';
+  try {
+    const _explEl = document.querySelector('[data-agent-explain="' + key + '"]');
+    if (_explEl) _explEl.innerHTML = _agentExplainHtml(model);
+    const _ctxSlider = document.querySelector('input[type=range][data-ctx="' + key + '"]');
+    const _curCtx = (_ctxSlider && parseInt(_ctxSlider.value)) || parseInt((S.ctxDefaults || {})[key] || 0) || 8192;
+    const _kvTxt = _agentKvLabel(model, _curCtx);
+    const _kvEl = document.getElementById('ctx-' + key + '-kv');
+    if (_kvEl) _kvEl.textContent = _kvTxt;
+    const _hkvEl = document.getElementById('ctx-' + key + '-hdr-kv');
+    if (_hkvEl) _hkvEl.textContent = _kvTxt;
+  } catch(e) {}
   if (['direct', 'duo_planner', 'duo_coder', 'analyst', 'refiner', 'critic', 'synthesizer'].indexOf(key) >= 0) {
     if (typeof updateDuoImageUI === 'function') { try { updateDuoImageUI(); } catch(e) {} }
   }

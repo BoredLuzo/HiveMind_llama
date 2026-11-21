@@ -866,6 +866,9 @@ async def post_settings(req: Request):
                 "error": f"Workspace path does not exist: {_ws_raw}",
             }, status_code=400)
         data["workspace"] = _ws_raw  # trim durchreichen (leer = Env/Default)
+    _prev_direct_model = str(
+        ((settings.get("agents") or {}).get("direct") or {}).get("model") or ""
+    ).strip()
     _model_changed_roles: list[str] = []  # set inside the agents block below
     if "agents" in data:
         _incoming_agents = data.pop("agents")
@@ -970,6 +973,17 @@ async def post_settings(req: Request):
         _sync_recommended_sampling(settings, _model_changed_roles)
     _refresh_safe_profile_policy()
     apply_settings_to_pipeline(settings)
+    if "direct" in _model_changed_roles:
+        _new_direct_model = str(
+            ((settings.get("agents") or {}).get("direct") or {}).get("model") or ""
+        ).strip()
+        await _unpin_old_direct_model_if_changed(_prev_direct_model, _new_direct_model)
+    elif data.get("pin_direct_after_response") is False:
+        try:
+            from core.direct_runner import unpin_previous_direct_model as _unpin_prev_direct
+            await _unpin_prev_direct("", evict=False)
+        except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as _e:
+            logger.debug("[settings] direct pin release on toggle off skipped: %s", _e)
     if _state._WEBSEARCH_AVAILABLE and any(k in data for k in (
             "duo_websearch_enabled", "pipeline_websearch_enabled",
             "searxng_host", "searxng_engines", "searxng_language")):
@@ -1008,6 +1022,36 @@ async def post_settings(req: Request):
             "stripped": _stripped_keys}
 
 
+async def _unpin_old_direct_model_if_changed(old_model: str, new_model: str) -> None:
+    """Release and unload a pinned previous Direct model when the user switches Direct models."""
+    old_clean = str(old_model or "").strip()
+    new_clean = str(new_model or "").strip()
+    if not old_clean or old_clean == new_clean:
+        return
+    try:
+        _judge_mdl = str((registry_all() or {}).get("judge") or "").strip()
+    except (TypeError, AttributeError):
+        _judge_mdl = ""
+    if _judge_mdl and old_clean == _judge_mdl:
+        return
+    try:
+        from core import direct_runner as _dr
+        if getattr(_dr, "_LAST_DIRECT_PINNED_MODEL", "") == old_clean:
+            await _dr.unpin_previous_direct_model(new_clean, evict=True)
+            return
+        from backend.llama_client import manager as _mgr
+        evicted = await _dr._release_direct_pinned_slot(
+            _mgr, old_clean, evict=True, require_pinned=False,
+        )
+        logger.info(
+            "[settings] %s previous direct model %r after switch to %r",
+            "unloaded" if evicted else "unpinned",
+            old_clean, new_clean,
+        )
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError) as _e:
+        logger.debug("[settings] unpin previous direct model %r skipped: %s", old_clean, _e)
+
+
 @router.post("/settings/agent")
 async def set_agent(req: Request):
     d = await req.json()
@@ -1015,6 +1059,11 @@ async def set_agent(req: Request):
     if not _state.pipeline or key not in _state.pipeline.agents:
         return JSONResponse({"error": f"Unknown: {key}"}, status_code=400)
     _model = d.get("model") or ""
+    _prev_direct_model = (
+        str(((settings.get("agents") or {}).get("direct") or {}).get("model") or "").strip()
+        if key == "direct"
+        else ""
+    )
     try:
         if _model:
             registry_set(key, _model)
@@ -1087,6 +1136,8 @@ async def set_agent(req: Request):
     # NO model load on save (user decision 2026-08-19): only change the
     # settings, do not load. The model is loaded lazily on first real use
     # (pipeline/duo runners call ensure_loaded).
+    if key == "direct" and _model:
+        await _unpin_old_direct_model_if_changed(_prev_direct_model, _model)
     try:
         await asyncio.to_thread(save_settings, copy.deepcopy(settings))
     except Exception as e:
