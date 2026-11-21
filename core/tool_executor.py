@@ -522,6 +522,20 @@ def _compact_stale_edit_payloads(
     return saved
 
 
+def _pair_unexecuted_tool_calls(
+    dtool_msgs: list[dict], tool_calls: list[dict], start_idx: int, reason: str,
+) -> None:
+    """Emit paired role='tool' responses for skipped trailing tool calls."""
+    for _rem_tc in tool_calls[start_idx:]:
+        _rem_name = (_rem_tc.get("function") or {}).get("name", "?")
+        dtool_msgs.append({
+            "role": "tool",
+            "tool_call_id": _rem_tc.get("id", _rem_name),
+            "name": _rem_name,
+            "content": reason,
+        })
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════════════════
@@ -615,11 +629,16 @@ async def execute_tool_round(
         # P3 (audit 2026-11-03): same truthiness guard as the prefetch above —
         # an unset 0.0 deadline is not "already over".
         if trs.duo_deadline_at and time.monotonic() >= trs.duo_deadline_at:
+            _dl_name = _dtc_call.get("function", {}).get("name", "?")
             result.duo_timed_out = True
-            _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
+            _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dl_name)
             result.loop_detected = True
             _logger.warning("[EXEC-LOOP-DIAG] loop_detected via deadline (tool=%s)",
-                            _dtc_call.get("function", {}).get("name", "?"))
+                            _dl_name)
+            _pair_unexecuted_tool_calls(
+                dtool_msgs, tool_calls, _i,
+                _SYS_PREFIX + "[TIMEOUT] Tool round exceeded deadline — tool call was NOT executed and must be retried.",
+            )
             _remaining = [_tc.get("function", {}).get("name", "?") for _tc in tool_calls[_i + 1:]]
             if _remaining:
                 _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
@@ -1268,6 +1287,9 @@ async def execute_tool_round(
                         "[WEDGE] %s wedged on %s (streak=%d) — handoff signal",
                         _dname, _focus_path,
                         _wedge.streak_of(_wedge_ws, _focus_path))
+                    _pair_unexecuted_tool_calls(
+                        dtool_msgs, tool_calls, _i + 1, "[skipped: round stopped early]"
+                    )
                     break
             if _total_tool_errors[0] >= _err_cap:
                 if not _recovery_saturated(dtool_msgs):
@@ -1279,6 +1301,9 @@ async def execute_tool_round(
                     ))
                 _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
                 result.loop_detected = True
+                _pair_unexecuted_tool_calls(
+                    dtool_msgs, tool_calls, _i + 1, "[skipped: round stopped early]"
+                )
                 break
 
         # READ-BEFORE-EDIT (2026-09-22): register reads, and nudge ONCE per
@@ -1494,6 +1519,9 @@ async def execute_tool_round(
                 _menu = _render_tool_menu(
                     tool_mode, duo_ws, compact=True, include_git=include_git)
                 await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — re-injecting all tools]\n"})
+                _pair_unexecuted_tool_calls(
+                    dtool_msgs, tool_calls, _i + 1, "[loop-detection: skipped]"
+                )
                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                     f"[LOOP DETECTED] run_bash was called repeatedly with the same or "
                     f"equivalent command ({_loop_label}). The result will not change, so "
@@ -1506,8 +1534,10 @@ async def execute_tool_round(
                 trs.call_sigs.clear()
                 break
             await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — aborted]\n"})
-            dtool_msgs.append({"role": "tool", "content": "[loop-detection: aborted]",
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+            _append_tool_footer(dtool_msgs, "[loop-detection: aborted]")
+            _pair_unexecuted_tool_calls(
+                dtool_msgs, tool_calls, _i + 1, "[loop-detection: aborted]"
+            )
             _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
             result.loop_detected = True
             break

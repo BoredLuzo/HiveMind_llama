@@ -206,19 +206,24 @@ async def _await_with_hb(
     _t0 = time.monotonic()
     try:
         while True:
-            _el = int(time.monotonic() - _t0)
+            _elapsed = time.monotonic() - _t0
+            _el = int(_elapsed)
             try:
                 await emit_fn({"type": "status", "content": f"⏳ {label} … ({_el}s)"})
             except Exception:
                 pass
-            if _el >= timeout:
+            _rem = timeout - _elapsed
+            if _rem <= 0:
                 raise asyncio.TimeoutError()
-            _done, _pending = await asyncio.wait({_task}, timeout=interval)
+            _done, _pending = await asyncio.wait(
+                {_task}, timeout=min(interval, _rem)
+            )
             if _done:
                 return _task.result()
     finally:
         if not _task.done():
             _task.cancel()
+            await asyncio.gather(_task, return_exceptions=True)
 
 
 def _park_on_disconnect(

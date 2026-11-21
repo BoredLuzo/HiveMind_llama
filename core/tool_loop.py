@@ -319,6 +319,7 @@ class ToolLoop:
         self._usage_cached = 0
         self._usage_gen_ms = 0.0
         self._usage_decode_tps = 0.0
+        self._last_compressed_messages: list[dict] | None = None
 
     async def run(self, messages: list[dict]) -> AsyncIterator[dict]:
         """Run the tool-calling loop, yielding events."""
@@ -332,6 +333,7 @@ class ToolLoop:
         self._usage_cached = 0
         self._usage_gen_ms = 0.0
         self._usage_decode_tps = 0.0
+        self._last_compressed_messages: list[dict] | None = None
         if self._run_id:
             _current_run_id.set(self._run_id)
 
@@ -469,6 +471,7 @@ class ToolLoop:
                           self.cfg.model, _round, _count_image_parts(_tool_messages))
 
             # ── POST + parse with retry ──
+            self._last_compressed_messages = None
             _msg = _content_text = None
             _tool_calls = []
             if self.cfg.stream:
@@ -484,6 +487,9 @@ class ToolLoop:
                 _msg, _content_text, _tool_calls, _events = await self._post_with_retry(_payload)
                 for _ev in _events:
                     yield _ev
+            if getattr(self, "_last_compressed_messages", None) is not None:
+                _tool_messages = self._last_compressed_messages
+                self._last_compressed_messages = None
 
             if not _msg:
                 continue
@@ -543,6 +549,7 @@ class ToolLoop:
             _tool_messages.append(_msg)
             _known_tool_names = {t.get("function", {}).get("name", "") for t in self.cfg.tools}
             _unknown_tool_abort = False
+            _pending_parse_error = False
             for _tc_idx, _tc in enumerate(_tool_calls):
                 _fn = _tc.get("function", {})
                 _name = _fn.get("name", "")
@@ -583,13 +590,7 @@ class ToolLoop:
                 _args = _parse_tool_args(_raw_args)
                 if (isinstance(_raw_args, str) and _args == {}
                         and _raw_args.strip() not in ("", "{}", "null", "none")):
-                    if _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
-                        _inject_retry_feedback(
-                            _tool_messages, error_type="parse_error",
-                            bad_content=_name,
-                            model=getattr(self.cfg, "model", ""),
-                        )
-                        _feedback_injected_count += 1
+                    _pending_parse_error = True
                     state.tool_errors += 1
                     _tool_messages.append({
                         "role": "tool",
@@ -658,6 +659,14 @@ class ToolLoop:
             # ── K2: abort round after unknown tool ──
             if _unknown_tool_abort:
                 continue
+
+            if _pending_parse_error and _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
+                _inject_retry_feedback(
+                    _tool_messages, error_type="parse_error",
+                    bad_content="",
+                    model=getattr(self.cfg, "model", ""),
+                )
+                _feedback_injected_count += 1
 
             # ── MID-RUN STEER (tool-call boundary, 2026-09-29): messages the
             # user typed while this round ran land here as user messages —

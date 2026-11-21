@@ -1051,7 +1051,11 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
                 "Create one first via run_bash: 'python -m venv .venv', then retry "
                 "install_package (it will use .venv automatically).",
                 tool="install_package")
-        _cmd = f'"{_venv_py}" -m pip install --prefer-binary {packages}'
+        if _run_bash_shell_mode() == "powershell":
+            _q_py = "'" + str(_venv_py).replace("'", "''") + "'"
+            _cmd = f"& {_q_py} -m pip install --prefer-binary {packages}"
+        else:
+            _cmd = f'"{_venv_py}" -m pip install --prefer-binary {packages}'
     else:
         _cmd = _INSTALL_CMDS[manager].format(pkgs=packages)
     if dev and manager == "npm":

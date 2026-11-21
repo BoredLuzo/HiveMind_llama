@@ -1697,7 +1697,12 @@ async def run_inloop_planner(
     _plan_resp = None
     _plan_err_last = None
 
+    if aborted_fn and aborted_fn():
+        return "", "", True
+
     for _plan_attempt in range(2):
+        if aborted_fn and aborted_fn():
+            return "", "", True
         try:
             async with httpx.AsyncClient(
                 limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
@@ -1712,11 +1717,19 @@ async def run_inloop_planner(
                 )
                 _inloop_hb_elapsed = 0
                 while not _inloop_post_task.done():
+                    if aborted_fn and aborted_fn():
+                        _inloop_post_task.cancel()
+                        await asyncio.gather(_inloop_post_task, return_exceptions=True)
+                        return "", "", True
                     try:
                         await asyncio.wait_for(
                             asyncio.shield(_inloop_post_task), timeout=1.0
                         )
                     except asyncio.TimeoutError:
+                        if aborted_fn and aborted_fn():
+                            _inloop_post_task.cancel()
+                            await asyncio.gather(_inloop_post_task, return_exceptions=True)
+                            return "", "", True
                         _inloop_hb_elapsed += 1
                         if emit_fn:
                             try:
@@ -1731,6 +1744,8 @@ async def run_inloop_planner(
             break
         except Exception as _plan_post_err:
             _plan_err_last = _plan_post_err
+            if aborted_fn and aborted_fn():
+                return "", "", True
             if _plan_attempt == 0:
                 if emit_fn:
                     try:
@@ -1743,6 +1758,8 @@ async def run_inloop_planner(
                     except Exception:
                         pass
                 await asyncio.sleep(1.5)
+                if aborted_fn and aborted_fn():
+                    return "", "", True
                 continue
             raise
 

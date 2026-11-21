@@ -960,7 +960,10 @@ async def _inline_tool_lsp_format(args: dict, workspace: Path,
                                              workspace_lock)
     if early is not None:
         return early
-    edits = await mgr.format(p)
+    try:
+        edits = await mgr.format(p)
+    except _lsp.LspError as exc:
+        return _err_failed(tool, exc)
     if edits is None:
         return (f"(the {language} server does not offer formatting for "
                 f"{_rel(workspace, p)} - nothing was changed)")
@@ -968,8 +971,14 @@ async def _inline_tool_lsp_format(args: dict, workspace: Path,
         return (f"Formatted {_rel(workspace, p)}: the server returned no "
                 f"edits - the file already matches the server's format.")
     try:
-        original = p.read_text(encoding="utf-8", errors="replace")
-        formatted = _apply_text_edits(original, edits)
+        original = p.read_text(encoding="utf-8", errors="replace", newline="")
+        _crlf_n = original.count("\r\n")
+        _lf_n = original.replace("\r\n", "").count("\n")
+        _had_crlf = _crlf_n > _lf_n
+        _orig_lf = original.replace("\r\n", "\n")
+        _fmt_lf = _apply_text_edits(_orig_lf, edits)
+        formatted = (_fmt_lf.replace("\r\n", "\n").replace("\n", "\r\n")
+                     if _had_crlf else _fmt_lf.replace("\r\n", "\n"))
         if formatted == original:
             return (f"Formatted {_rel(workspace, p)}: {len(edits)} edit(s) "
                     f"changed nothing - already formatted.")

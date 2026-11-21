@@ -3621,8 +3621,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _loop_detected, _last_write_round, _round_wrote_file = _ld, _lwr, _rwf
                         return _handled
                     # ── Coder live streaming (2026-08-18) ──────────────────────
-                    # never blocks (queue never fills up). Pattern like the planner bridge.
-                    _coder_event_q: asyncio.Queue = asyncio.Queue(maxsize=20)
+                    # Unbounded queue so token/status bursts never silently drop
+                    # SSE events during long tool rounds.
+                    _coder_event_q: asyncio.Queue = asyncio.Queue(maxsize=0)
                     _coder_real_prompt_tokens: list = [0]
                     # est of the messages that produced the last real value
                     # (calibration basis for the chars/4 estimate)
@@ -4081,15 +4082,60 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # runner relays the streamed events in order and owns
                         # the final break / continue / return.
                         _wait_ps = _DuoCoderPostWaitState()
-                        async for _pw_ev in _duo_coder_post_wait(
-                            ctx, _wait_ps,
-                            _duo_loop=_duo_loop, _tool_payload=_tool_payload,
-                            _dtool_msgs=_dtool_msgs, _parts=_parts,
-                            _coder_event_q=_coder_event_q, exec_mdl=exec_mdl,
-                            _dport=_dport, _hb_interval=_hb_interval,
-                            _duo_state=_duo_state, _ld_setter=_ld_setter,
-                        ):
-                            yield _pw_ev
+                        try:
+                            async for _pw_ev in _duo_coder_post_wait(
+                                ctx, _wait_ps,
+                                _duo_loop=_duo_loop, _tool_payload=_tool_payload,
+                                _dtool_msgs=_dtool_msgs, _parts=_parts,
+                                _coder_event_q=_coder_event_q, exec_mdl=exec_mdl,
+                                _dport=_dport, _hb_interval=_hb_interval,
+                                _duo_state=_duo_state, _ld_setter=_ld_setter,
+                            ):
+                                yield _pw_ev
+                        except (
+                            httpx.ReadError,
+                            httpx.RemoteProtocolError,
+                            httpx.ConnectError,
+                            httpx.ReadTimeout,
+                            httpx.TimeoutException,
+                        ) as _dce_in:
+                            if is_ctx_aborted(ctx):
+                                raise
+                            _connect_error_retries += 1
+                            if _connect_error_retries > 3:
+                                logger.error(
+                                    "[DUO] ConnectError retries exhausted (%d) — aborting tool loop",
+                                    _connect_error_retries,
+                                )
+                                for _sse in _drain_thinking_rescue(_duo_loop):
+                                    yield _sse
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"⛔ Connection error after {_connect_error_retries} retries — stopping."})
+                                _ld_setter(3601); _loop_detected = True
+                                break
+                            _dce_in_type = type(_dce_in).__name__
+                            yield await ctx.emit({"type": "status",
+                                "content": f"⚠️ Server connection error ({_dce_in_type}) — waiting and retrying ({_connect_error_retries}/3)…"})
+                            await asyncio.sleep(3.0)
+                            from backend.llama_server_manager import manager as _lsm_retry
+                            # Invalidate stale cached port before evict/reload so the retry
+                            # never falls back to a dead port.
+                            _cached_coder_port = None
+                            _cached_coder_port_ctx = None
+                            _duo_state.cached_port = None
+                            _duo_state.current_port = None
+                            await _lsm_retry.evict(exec_mdl)
+                            _dport = await _lsm_retry.ensure_loaded(
+                                exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
+                                n_parallel=1, ctx_graceful=False, pin=True,
+                                vision=bool(_dtool_opts.get("vision", False)))
+                            _cached_coder_port = _dport
+                            _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
+                            _duo_state.cached_port = _dport
+                            _duo_state.current_port = _dport
+                            ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
+                            _dr -= 1
+                            continue
                         if _wait_ps.run_ended:
                             # TASK-DEATH: the helper already emitted the status
                             # + done events and ran the cleanup ladder.
@@ -4239,6 +4285,17 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             grace_round_used=_grace_round_used,
                             ld_setter=_ld_setter,
                         )
+                        if _gr.action in ("continue", "break"):
+                            # Every tool_call_id from _dr_msg must have a paired role="tool"
+                            # message before the user nudge (strict Jinja/API alternation).
+                            for _gr_tc in _dr_tcs:
+                                _gr_name = (_gr_tc.get("function") or {}).get("name", "")
+                                _dtool_msgs.append({
+                                    "role": "tool",
+                                    "tool_call_id": _gr_tc.get("id", _gr_name),
+                                    "name": _gr_name,
+                                    "content": "[GRACE ROUND] Rejected — call ONLY task_complete.",
+                                })
                         _dtool_msgs.extend(_gr.events)
                         _grace_round_used = _gr.grace_round_used
                         if _gr.chunk_budget_exhausted:
@@ -4600,52 +4657,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _dce, exc_info=True
                     )
                     _dce_type = type(_dce).__name__
-                    _dce_msg  = str(_dce) or "(no message)"
-                    if _dce_type in ("ReadError", "RemoteProtocolError", "ConnectError", "ReadTimeout", "TimeoutException") and not is_ctx_aborted(ctx):
-                        _connect_error_retries += 1
-                        if _connect_error_retries > 3:
-                            logger.error("[DUO] ConnectError retries exhausted (%d) — aborting tool loop", _connect_error_retries)
-                            for _sse in _drain_thinking_rescue(_duo_loop):
-                                yield _sse
-                            yield await ctx.emit({"type": "status",
-                                "content": f"⛔ Connection error after {_connect_error_retries} retries — stopping."})
-                            _ld_setter(3601); _loop_detected = True
-                            break
-                        yield await ctx.emit({"type": "status",
-                            "content": f"⚠️ Server connection error ({_dce_type}) — waiting and retrying ({_connect_error_retries}/3)…"})
-                        await asyncio.sleep(3.0)
-                        try:
-                            from backend.llama_server_manager import manager as _lsm_retry
-                            # Invalidate stale cached port before evict/reload so the retry
-                            # never falls back to a dead port.
-                            _cached_coder_port = None
-                            _cached_coder_port_ctx = None
-                            _duo_state.cached_port = None
-                            _duo_state.current_port = None
-                            await _lsm_retry.evict(exec_mdl)
-                            _dport = await _lsm_retry.ensure_loaded(
-                                exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
-                                n_parallel=1, ctx_graceful=False, pin=True,
-                                vision=bool(_dtool_opts.get("vision", False)))
-                            _cached_coder_port = _dport
-                            _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
-                            _duo_state.cached_port = _dport
-                            _duo_state.current_port = _dport
-                            ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
-                            continue
-                        except Exception as _retry_err:
-                            if isinstance(_retry_err, (
-                                GeneratorExit,
-                                asyncio.CancelledError,
-                                KeyboardInterrupt,
-                                SystemExit,
-                            )):
-                                raise
-                            logger.debug(
-                                "[DUO] Suppressed error at coder dce retry inner: %s",
-                                _retry_err, exc_info=True
-                            )
-                            _dce_msg = f"{_dce_msg} | retry failed: {str(_retry_err)[:60]}"
+                    _dce_msg = str(_dce) or "(no message)"
                     _err = f"[Tool round error ({_dce_type}): {_dce_msg[:120]}]"
                     _parts.append(_err)
                     for _sse in _drain_thinking_rescue(_duo_loop):

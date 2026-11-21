@@ -11,6 +11,7 @@ import httpx
 
 from core import state as _state
 from core.duo_helpers import RE_THINK_CLEANUP as _re_think_cleanup
+from core.llm_transport import get_port_lock
 
 logger = logging.getLogger("hivemind.vision")
 
@@ -258,45 +259,53 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
     _vp_reason: list[str] = []
     try:
         _vp_read_s = float(settings.get("duo_llm_slow_timeout_s", 300))
-        async with httpx.AsyncClient(timeout=httpx.Timeout(
-                connect=10.0, read=_vp_read_s, write=10.0, pool=5.0)) as _vc:
-            async with _vc.stream(
-                "POST",
-                f"http://127.0.0.1:{_vp_port}/v1/chat/completions",
-                json={
-                    "model":    model,
-                    "messages": [
-                        {"role": "system", "content": VISION_PREPROCESS_PROMPT},
-                        {"role": "user",   "content": _vp_content},
-                    ],
-                    "stream":         True,
-                    "temperature":    0.1,
-                    "max_tokens":     800,
-                    "repeat_penalty": 1.35,
-                    "repeat_last_n":  64,
-                    "stop":           ["<|im_end|>", "<|endoftext|>", "\n\n\n"],
-                    "cache_prompt":   False,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            ) as _vp_resp:
-                async for _vp_line in _vp_resp.aiter_lines():
-                    if not _vp_line or not _vp_line.startswith("data:"):
-                        continue
-                    _vp_raw = _vp_line[6:].strip()
-                    if _vp_raw == "[DONE]":
-                        break
-                    try:
-                        _vp_d   = json.loads(_vp_raw)
-                        _vp_ch  = (_vp_d.get("choices", [{}])[0]
-                                       .get("delta", {}))
-                        _vp_tok = _vp_ch.get("content", "") or ""
-                        if _vp_tok:
-                            parts.append(_vp_tok)
-                        _vp_rsn = _vp_ch.get("reasoning_content") or ""
-                        if _vp_rsn:
-                            _vp_reason.append(_vp_rsn)
-                    except Exception:
-                        continue
+        async with get_port_lock(_vp_port):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(
+                    connect=10.0, read=_vp_read_s, write=10.0, pool=5.0)) as _vc:
+                async with _vc.stream(
+                    "POST",
+                    f"http://127.0.0.1:{_vp_port}/v1/chat/completions",
+                    json={
+                        "model":    model,
+                        "messages": [
+                            {"role": "system", "content": VISION_PREPROCESS_PROMPT},
+                            {"role": "user",   "content": _vp_content},
+                        ],
+                        "stream":         True,
+                        "temperature":    0.1,
+                        "max_tokens":     800,
+                        "repeat_penalty": 1.35,
+                        "repeat_last_n":  64,
+                        "stop":           ["<|im_end|>", "<|endoftext|>", "\n\n\n"],
+                        "cache_prompt":   False,
+                        "chat_template_kwargs": {"enable_thinking": False},
+                    },
+                ) as _vp_resp:
+                    if _vp_resp.status_code != 200:
+                        _err_body = (await _vp_resp.aread()).decode("utf-8", errors="replace").strip()[:240]
+                        logger.error(
+                            "[Vision-Prepro] HTTP %d from port %d: %s",
+                            _vp_resp.status_code, _vp_port, _err_body,
+                        )
+                        return f"[Vision-Preprocessing-Error (HTTP {_vp_resp.status_code}): {_err_body or 'server error'}]"
+                    async for _vp_line in _vp_resp.aiter_lines():
+                        if not _vp_line or not _vp_line.startswith("data:"):
+                            continue
+                        _vp_raw = _vp_line[6:].strip()
+                        if _vp_raw == "[DONE]":
+                            break
+                        try:
+                            _vp_d   = json.loads(_vp_raw)
+                            _vp_ch  = (_vp_d.get("choices", [{}])[0]
+                                           .get("delta", {}))
+                            _vp_tok = _vp_ch.get("content", "") or ""
+                            if _vp_tok:
+                                parts.append(_vp_tok)
+                            _vp_rsn = _vp_ch.get("reasoning_content") or ""
+                            if _vp_rsn:
+                                _vp_reason.append(_vp_rsn)
+                        except Exception:
+                            continue
     except Exception as _ve:
         _err_cls = type(_ve).__name__
         _err_txt = repr(_ve)

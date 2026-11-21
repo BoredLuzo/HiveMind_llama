@@ -28,18 +28,20 @@ async def _git_run(workspace: str, *cmd: str,
         text=True, encoding="utf-8", errors="replace", timeout=timeout)
 
 
-async def _paths_on_disk_or_head(workspace: str, files: list[str]) -> list[str]:
+async def _paths_on_disk_or_head(
+    workspace: str, files: list[str], *, ref: str = "HEAD",
+) -> list[str]:
     """Scope filter shared by commit / checkpoint / squash (GIT-AUDIT P1
     logic, unified 2026-11-03): a path qualifies when it exists on disk OR in
-    HEAD — a file the run DELETED is only at HEAD, and filtering it out
-    silently restored the base version instead of committing the deletion.
-    The caller has already contained the paths to the workspace; unknown
-    paths (neither on disk nor in HEAD) are dropped."""
+    ``ref`` (default HEAD) — a file the run DELETED is only at the base ref,
+    and filtering it out silently restored the base version instead of
+    committing the deletion. The caller has already contained the paths to
+    the workspace; unknown paths (neither on disk nor in ``ref``) are dropped."""
     out: list[str] = []
     for f in files:
         if (Path(workspace) / f).exists():
             out.append(f)
-        elif (await _git_run(workspace, "git", "cat-file", "-e", f"HEAD:{f}")
+        elif (await _git_run(workspace, "git", "cat-file", "-e", f"{ref}:{f}")
                 ).returncode == 0:
             out.append(f)   # deleted file: still part of the commit
     return out
@@ -416,46 +418,40 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
     if base is None:
         root = await _git_run(workspace, "git", "rev-list", "--max-parents=0", "HEAD")
         roots = root.stdout.strip().splitlines()
-        if not roots:
+        if not roots or cp_count <= 1:
             return ""
-        if cp_count <= 1:
-            return ""
-        reset = await _git_run(workspace, "git", "reset", "--soft", roots[-1].strip())
+        target_base = roots[-1].strip()
     else:
-        reset = await _git_run(workspace, "git", "reset", "--soft", base)
+        target_base = base
 
-    if reset.returncode != 0:
-        return f"❌ squash: git reset failed: {reset.stderr.strip()}"
-
-    # GIT-AUDIT P1-2 (2026-11-01): the soft-reset folds every change since
-    # the base into the index — an unscoped `git add` then swept FOREIGN
-    # uncommitted work into the folded commit (probed). The scope is now the
-    # caller's file list, or for a checkpoint-only consolidation the files
-    # the checkpoint commits themselves touched (B4, 2026-11-03). The
-    # disk-or-HEAD filter (unified 2026-11-03, was two identical inline
-    # loops) keeps run-DELETED paths in the scope — P1 (deep audit
-    # 2026-11-03): a path deleted in a checkpoint is in
-    # `git show --name-only` but not on disk; filtering by exists() dropped
-    # it from the pathspec and the base version was silently restored.
-    #
-    # EOD-GIT-AUDIT (2026-11-01): three holes closed at once.
-    #   A) the fold commit was BARE — a foreign already-STAGED file survived
-    #      the scoped add but was still committed by `git commit -m`. The
-    #      commit is now pathspec-scoped to the run files too.
-    #   B) files=None kept `git add -A` for consolidate-only; the checkpoint
-    #      file set above replaces it, so no branch sweeps the index.
-    #   C) the empty-staged fallback was `git reset --hard HEAD` — it
-    #      silently wiped foreign UNSTAGED modifications. Now a safe
-    #      `git reset` (mixed: index back to HEAD, worktree untouched).
-    _scope = await _paths_on_disk_or_head(workspace, list(files or []))
-
+    # Validate arguments and non-empty scope against target_base BEFORE running
+    # `git reset --soft` — otherwise an empty/invalid scope leaves HEAD
+    # permanently reset and destroys checkpoints.
     if consolidate_only:
-        _fold_scope = (await _paths_on_disk_or_head(workspace, list(files))
-                       if files else
-                       await _paths_on_disk_or_head(workspace, sorted(_cp_files)))
+        _candidates = list(files) if files else sorted(_cp_files)
+        _fold_scope = await _paths_on_disk_or_head(
+            workspace, _candidates, ref=target_base
+        )
         if not _fold_scope:
             return ("ℹ️ squash-consolidate: none of the checkpoint/run files "
                     "exist — nothing to fold.")
+        _scope = _fold_scope
+    else:
+        if not files:
+            return ("ℹ️ squash: no run file list — refusing to fold the whole "
+                    "index (2026-10-14 policy).")
+        _scope = await _paths_on_disk_or_head(
+            workspace, list(files), ref=target_base
+        )
+        if not _scope:
+            return "ℹ️ squash: none of the run files exist — nothing to fold."
+        _fold_scope = _scope
+
+    reset = await _git_run(workspace, "git", "reset", "--soft", target_base)
+    if reset.returncode != 0:
+        return f"❌ squash: git reset failed: {reset.stderr.strip()}"
+
+    if consolidate_only:
         msg = f"{_checkpoint_marker()} session consolidated ({cp_count} checkpoints)"
         # Deletions are already staged by the soft reset; `git add` on a
         # missing path is a pathspec error, so only existing files are added.
@@ -473,11 +469,6 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
             return f"❌ squash-consolidate failed: {cc.stderr.strip()}"
         return f"✅ {cp_count} Checkpoints konsolidiert"
 
-    if not files:
-        return ("ℹ️ squash: no run file list — refusing to fold the whole "
-                "index (2026-10-14 policy).")
-    if not _scope:
-        return "ℹ️ squash: none of the run files exist — nothing to fold."
     _add_list = [f for f in _scope if (Path(workspace) / f).exists()]
     if _add_list:
         add = await _git_run(workspace, "git", "add", "-A", "--", *_add_list)

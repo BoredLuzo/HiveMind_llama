@@ -638,9 +638,29 @@ async def _handle_tool_loop_http_error(
     if resp.status_code == 400 and attempt < cfg.max_post_attempts - 1:
         low = err_body.lower()
         if cfg.retry_on_context_overflow and any(k in low for k in ("exceed", "context", "token", "prompt")):
-            events_out.append({"type": "status", "content": "⚠ Context overflow — compress and retry…"})
-            events_out.append({"type": "ctx_overflow", "content": "compress"})
-            return "retry", payload
+            on_compress = getattr(loop_obj, "_on_compress", None)
+            if callable(on_compress):
+                cur_msgs = list(payload.get("messages") or [])
+                prev_chars = sum(len(str(m.get("content") or "")) for m in cur_msgs)
+                new_msgs = await on_compress(cur_msgs, -1)
+                new_chars = (
+                    sum(len(str(m.get("content") or "")) for m in new_msgs)
+                    if isinstance(new_msgs, list) and new_msgs
+                    else prev_chars
+                )
+                if (
+                    isinstance(new_msgs, list)
+                    and new_msgs
+                    and (len(new_msgs) < len(cur_msgs) or new_chars < prev_chars)
+                ):
+                    cleaned = dict(payload)
+                    cleaned["messages"] = new_msgs
+                    if hasattr(loop_obj, "__dict__"):
+                        loop_obj._last_compressed_messages = new_msgs
+                    events_out.append({"type": "status", "content": "⚠ Context overflow — compressed and retrying…"})
+                    events_out.append({"type": "ctx_overflow", "content": "compress"})
+                    return "retry", cleaned
+            raise RuntimeError(f"Tool-POST HTTP 400 (context overflow): {err_body}")
         if payload.get("grammar") and "grammar" in low:
             cleaned = dict(payload)
             cleaned.pop("grammar", None)

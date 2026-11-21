@@ -1655,15 +1655,22 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
 let _settingsPatchQueue = {};
 let _settingsPostTimer = null;
 let _settingsPostWaiters = [];
+let _settingsFlushInFlight = false;
+let _settingsFlushPending = false;
 
 async function _flushQueuedSettings() {
-  var _payload = _settingsPatchQueue;
-  _settingsPatchQueue = {};
-  if (!_payload || !Object.keys(_payload).length) {
-    var _emptyWaiters = _settingsPostWaiters.splice(0);
-    _emptyWaiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
+  if (_settingsFlushInFlight) {
+    _settingsFlushPending = true;
     return;
   }
+  var _payload = _settingsPatchQueue;
+  _settingsPatchQueue = {};
+  var _waiters = _settingsPostWaiters.splice(0);
+  if (!_payload || !Object.keys(_payload).length) {
+    _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
+    return;
+  }
+  _settingsFlushInFlight = true;
   // UI-REV (2026-09-09): tag the patch with the loaded settings revision —
   // the server strips protected keys from stale revisions (old tabs).
   if (S.settingsRev > 0) _payload.ui_rev = S.settingsRev;
@@ -1690,9 +1697,14 @@ async function _flushQueuedSettings() {
   } catch(e) {
     console.warn('postSettings flush failed:', e);
     try { showInfo('⚠ Settings change could NOT be saved (' + (e && e.message || e) + ').'); } catch (_se) {}
+  } finally {
+    _settingsFlushInFlight = false;
   }
-  var _waiters = _settingsPostWaiters.splice(0);
   _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
+  if (_settingsFlushPending || (!_settingsPostTimer && Object.keys(_settingsPatchQueue).length)) {
+    _settingsFlushPending = false;
+    await _flushQueuedSettings();
+  }
 }
 
 function postSettings(patch) {
@@ -2182,9 +2194,17 @@ var _micChunks = [];
 // engine (WSOLA), and played once - never autoplayed.
 var _ttsAudio = null;
 
+function _revokeAudioUrl(el) {
+  if (el && el._blobUrl) {
+    try { URL.revokeObjectURL(el._blobUrl); } catch (e) {}
+    el._blobUrl = null;
+  }
+}
+
 function _voiceStopAudio() {
   if (_ttsAudio) {
     try { _ttsAudio.pause(); } catch (e) { /* already stopped */ }
+    _revokeAudioUrl(_ttsAudio);
     _ttsAudio = null;
   }
   try {
@@ -2541,6 +2561,11 @@ function _ttsApplyVolume(raw) {
 // every path (read aloud, the per-answer speaker, the sample button).
 function _ttsAudioFromBlob(blob) {
   var el = new Audio(URL.createObjectURL(blob));
+  el._blobUrl = el.src;
+  if (typeof el.addEventListener === 'function') {
+    el.addEventListener('ended', function () { _revokeAudioUrl(el); });
+    el.addEventListener('error', function () { _revokeAudioUrl(el); });
+  }
   var v = (S && typeof S.ttsVolume === 'number') ? S.ttsVolume : 1.0;
   el.volume = Math.max(0, Math.min(1, v));
   return el;
@@ -4160,6 +4185,7 @@ function _pruneToolCallRows(body, maxRows) {
 
 // -- New Chat ---------------------------------------------------
 async function newChat() {
+  var _epoch = (S._chatSwitchEpoch = (S._chatSwitchEpoch || 0) + 1);
   // READ-ALOUD (2026-10-18): starting a new chat silenced nothing - the previous
   // answer kept playing while the new chat was already empty. Stop the clip, the
   // queue and the prefetched request here.
@@ -4169,8 +4195,10 @@ async function newChat() {
   if (!_skipPhClear && !S.workspace && !S.currentChatWorkspace) {
     try {
       var _phRes = await fetch('/workspace/placeholder');
+      if (S._chatSwitchEpoch !== _epoch) return;
       if (_phRes && _phRes.ok) {
         var _phData = await _phRes.json();
+        if (S._chatSwitchEpoch !== _epoch) return;
         if (_phData && _phData.count > 0) {
           var _phFiles = Array.isArray(_phData.files) ? _phData.files : [];
           var _phList = _phFiles.slice(0, 8).map(function(f) { return '• ' + f; }).join('\n');
@@ -4179,6 +4207,7 @@ async function newChat() {
             return;
           }
           await fetch('/workspace/placeholder/clear', {method:'POST'});
+          if (S._chatSwitchEpoch !== _epoch) return;
         }
       }
     } catch (_phErr) {
@@ -4186,6 +4215,7 @@ async function newChat() {
     }
   }
   await fetch('/memory/clear_session', {method:'POST'});
+  if (S._chatSwitchEpoch !== _epoch) return;
   _cleanupLoadTimers();
   if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
   if (_tokenRafId) { cancelAnimationFrame(_tokenRafId); _tokenRafId = null; }
@@ -7678,6 +7708,11 @@ async function sendMsg() {
         duo_critic_ctx: (function(){var e=document.getElementById('duo-ctx-critic'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
       })
     });
+    if (!res.ok) {
+      var _httpErr = '';
+      try { _httpErr = (await res.text()).slice(0, 200); } catch (_re) {}
+      throw new Error('HTTP ' + res.status + (_httpErr ? ': ' + _httpErr : ''));
+    }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     S._sseBuf = '';
@@ -7687,7 +7722,12 @@ async function sendMsg() {
     try {
       while (true) {
         const chunk = await reader.read();
-        if (chunk.done) break;
+        if (chunk.done) {
+          var _tail = dec.decode();
+          if (_tail) _sseFeedLines(_tail);
+          if (S._sseBuf && S._sseBuf.indexOf('data:') === 0) _sseFeedLines('\n');
+          break;
+        }
         _sseFeedLines(dec.decode(chunk.value, {stream:true}));
       }
     } finally {
@@ -7761,56 +7801,68 @@ async function sendMsg() {
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch
-    _toolGenDone();
-    document.querySelectorAll('#chat .abody.live').forEach(function (b) { b.classList.remove('live'); });
-    if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons();
-    // READ ALOUD at run end: direct reads the whole answer, an agentic run reads
-    // the coder's final answer (the plan was already spoken when it appeared).
-    try {
-      var _bodies = document.querySelectorAll('#chat .abody');
-      var _lastBody = _bodies.length ? _bodies[_bodies.length - 1] : null;
-      var _answerTxt = _lastBody ? _answerTextOnly(_lastBody) : '';
-      if (_answerTxt && _answerTxt.indexOf('[Run aborted]') !== 0) {
-        var _isDuo = S._routeMultiAgent === true
-          || S._runIsDuo === true
-          || ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
-        _readAloud(_isDuo ? 'fazit' : 'direct', _answerTxt);
-      }
-    } catch (e) { /* never break the run for speech */ }
-    S.streaming = false;
-    _cleanupLoadTimers();
-    S.currentRunId = null;
-    try { sessionStorage.removeItem('hm_run_id'); } catch (e) {}
-    document.getElementById('send').disabled = false;
-    _updateSendState();
-    document.getElementById('h-dot').className = 'on';
-    const stopBtnEnd = document.getElementById('stop-btn');
-    if (stopBtnEnd) stopBtnEnd.classList.remove('visible');
-    setPauseBtnState('idle');
-    setStopBtnState('idle');
-    stopAskUserCountdown();
-    S.agentPaused = false;
-    S.agentQuestion = null;
-    const inpEnd = document.getElementById('input');
-    if (inpEnd) inpEnd.placeholder = 'Message...';
-    _drainFollowUpQueue();
-        const skipBtnEnd = document.getElementById('skip-btn');
-  if (skipBtnEnd) skipBtnEnd.style.display = 'none';
-    // refresh VRAM after pipeline/stream — only if the panel is open
-    if (!_vramPending && _vramOpen) refreshVram();
-    // update prefetch avgs (backend has recalculated the lead)
-    if (S.smartPreload) setTimeout(loadPrefetchAvgs, 800);
-    // always hide the task-type badge after the stream
-    const taskBadgeEnd = document.getElementById('h-tasktype');
-    if (taskBadgeEnd) taskBadgeEnd.style.display = 'none';
-    rmEl('status-el');
-    loadMemory();
-    // Auto-save chat message (on by default; covers stream end, errors, stop and abort)
-    if (S.chatAutosave && !S._chatPersistBusy) {
-      S._chatPersistBusy = true;
-      persistCurrentChat(true).then(function() { S._chatPersistBusy = false; })
-        .catch(function() { S._chatPersistBusy = false; });
+    // If journal reattach took over after a stream EOF without done, leave the
+    // live UI state intact; _journalStopTail() will run _finalizeStreamUi().
+    if (!S._journalTailing) {
+      _finalizeStreamUi();
     }
+  }
+}
+
+function _finalizeStreamUi() {
+  if (typeof _toolGenDone === 'function') _toolGenDone();
+  try {
+    document.querySelectorAll('#chat .abody.live').forEach(function (b) { b.classList.remove('live'); });
+  } catch (e) {}
+  if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons();
+  // READ ALOUD at run end: direct reads the whole answer, an agentic run reads
+  // the coder's final answer (the plan was already spoken when it appeared).
+  try {
+    var _bodies = document.querySelectorAll('#chat .abody');
+    var _lastBody = _bodies.length ? _bodies[_bodies.length - 1] : null;
+    var _answerTxt = _lastBody ? _answerTextOnly(_lastBody) : '';
+    if (_answerTxt && _answerTxt.indexOf('[Run aborted]') !== 0) {
+      var _isDuo = S._routeMultiAgent === true
+        || S._runIsDuo === true
+        || ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
+      _readAloud(_isDuo ? 'fazit' : 'direct', _answerTxt);
+    }
+  } catch (e) { /* never break the run for speech */ }
+  S.streaming = false;
+  if (typeof _cleanupLoadTimers === 'function') _cleanupLoadTimers();
+  S.currentRunId = null;
+  try { sessionStorage.removeItem('hm_run_id'); } catch (e) {}
+  var _sendBtn = document.getElementById('send');
+  if (_sendBtn) _sendBtn.disabled = false;
+  if (typeof _updateSendState === 'function') _updateSendState();
+  var _hdot = document.getElementById('h-dot');
+  if (_hdot) _hdot.className = 'on';
+  const stopBtnEnd = document.getElementById('stop-btn');
+  if (stopBtnEnd) stopBtnEnd.classList.remove('visible');
+  if (typeof setPauseBtnState === 'function') setPauseBtnState('idle');
+  if (typeof setStopBtnState === 'function') setStopBtnState('idle');
+  if (typeof stopAskUserCountdown === 'function') stopAskUserCountdown();
+  S.agentPaused = false;
+  S.agentQuestion = null;
+  const inpEnd = document.getElementById('input');
+  if (inpEnd) inpEnd.placeholder = 'Message...';
+  if (typeof _drainFollowUpQueue === 'function') _drainFollowUpQueue();
+  const skipBtnEnd = document.getElementById('skip-btn');
+  if (skipBtnEnd) skipBtnEnd.style.display = 'none';
+  // refresh VRAM after pipeline/stream — only if the panel is open
+  if (!_vramPending && _vramOpen && typeof refreshVram === 'function') refreshVram();
+  // update prefetch avgs (backend has recalculated the lead)
+  if (S.smartPreload && typeof loadPrefetchAvgs === 'function') setTimeout(loadPrefetchAvgs, 800);
+  // always hide the task-type badge after the stream
+  const taskBadgeEnd = document.getElementById('h-tasktype');
+  if (taskBadgeEnd) taskBadgeEnd.style.display = 'none';
+  if (typeof rmEl === 'function') rmEl('status-el');
+  if (typeof loadMemory === 'function') loadMemory();
+  // Auto-save chat message (on by default; covers stream end, errors, stop and abort)
+  if (S.chatAutosave && !S._chatPersistBusy && typeof persistCurrentChat === 'function') {
+    S._chatPersistBusy = true;
+    persistCurrentChat(true).then(function() { S._chatPersistBusy = false; })
+      .catch(function() { S._chatPersistBusy = false; });
   }
 }
 
@@ -7878,9 +7930,12 @@ function _journalStopTail() {
   // STREAMING-RELEASE (audit 2026-11-03): attaching to a live run set
   // S.streaming=true; nothing cleared it on done/abort, so the composer
   // queued forever. Only clear it when this tail owned the state.
-  if (S._journalTailing) S.streaming = false;
+  var _wasTailing = Boolean(S._journalTailing);
   S._journalTailing = null;
   if (window._journalTailIv) { clearInterval(window._journalTailIv); window._journalTailIv = null; }
+  if (_wasTailing) {
+    _finalizeStreamUi();
+  }
 }
 
 function _journalStartTail(runId) {
@@ -13704,10 +13759,15 @@ async function automationShowRuns(jobId) {
 
 async function loadChat(chatId) {
   if (S.streaming) { showStatus('Please wait until the current stream has finished.'); return; }
+  var _epoch = (S._chatSwitchEpoch = (S._chatSwitchEpoch || 0) + 1);
   try {
-    const chat = await (await fetch('/chats/' + chatId)).json();
+    const _chatRes = await fetch('/chats/' + chatId);
+    if (S._chatSwitchEpoch !== _epoch) return;
+    const chat = await _chatRes.json();
+    if (S._chatSwitchEpoch !== _epoch) return;
     // Clear session and reload
     await fetch('/memory/clear_session', {method:'POST'});
+    if (S._chatSwitchEpoch !== _epoch) return;
     document.getElementById('chat').innerHTML = '';
 
     S.currentChatId = chatId;
@@ -13782,7 +13842,9 @@ async function loadChat(chatId) {
     loadChatHistory();  // refresh active state
     try {
       var _psResp = await fetch('/pause-state/' + chatId);
+      if (S._chatSwitchEpoch !== _epoch) return;
       var _psData = await _psResp.json();
+      if (S._chatSwitchEpoch !== _epoch) return;
       if (_psData.active && _psData.run_id) {
         S.currentRunId = _psData.run_id;
         S.streaming = true;

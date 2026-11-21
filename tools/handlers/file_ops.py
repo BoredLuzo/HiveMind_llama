@@ -66,12 +66,13 @@ def _atomic_write(path, data: str) -> None:
 
 
 async def _checked_atomic_write(path, data: str, workspace_lock, tool: str):
-    """Containment re-check BEFORE any byte is written (T6), then the
-    atomic write off the event loop. Returns the error response when the
-    re-check fails, else None."""
+    """Containment re-check BEFORE any byte is written (T6), then snapshot
+    the pre-write state for undo/rollback, then atomic write off-loop.
+    Returns the error response when the re-check fails, else None."""
     _chk = _recheck_workspace_before_replace(path, workspace_lock, tool)
     if _chk:
         return _chk
+    get_transaction().capture_before(path)
     await asyncio.to_thread(_atomic_write, path, data)
     return None
 
@@ -367,7 +368,6 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
             f"write_file_append target '{p}' is a directory, not a file.",
             tool="write_file_append")
     content = str(args.get("content", ""))
-    get_transaction().capture_before(p)
 
     if not str(content or ""):
         return _tool_error_response(
@@ -387,6 +387,7 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     # succeeded and duplicate the content (live: _split_discard_note NameError
     # in e14f64f). _auto_lint_result is internally guarded and never raises.
     _boundary = {"note": ""}
+    _tx = get_transaction()
     try:
         def _append_and_size() -> int:
             # T6-APPEND (audit 2026-11-03): append bypassed the containment
@@ -398,6 +399,7 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                 raise PermissionError("workspace containment re-check failed")
             if not p.is_file():
                 raise FileNotFoundError(f"write_file_append target '{p}' is missing or not a file")
+            _tx.capture_before(p)
             _head = ""
             if p.stat().st_size:
                 with open(p, "r", encoding="utf-8", errors="replace", newline="") as _rf:
@@ -428,7 +430,6 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
         return err
     old_str = args.get("old_str", "")
     new_str = args.get("new_str", "")
-    get_transaction().capture_before(p)
     if not old_str:
         return _tool_error_response(
             "PATCH_FILE_EMPTY_OLD_STR",
@@ -641,7 +642,6 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             tool="write_file")
 
     existed = p.exists()
-    get_transaction().capture_before(p)
     _had_crlf = False
     _old_n = 0
     if existed:
@@ -714,6 +714,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
 
         return _chk  # T6: containment re-check BEFORE any byte is written
 
+    get_transaction().capture_before(p)
     try:
         await asyncio.to_thread(_atomic_write, p, content)
     except OSError as _werr:
@@ -951,7 +952,6 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             "tool call. The file was NOT modified. read_file the current state "
             "and resend with the correct old_text/new_text.",
             tool="edit_file")
-    get_transaction().capture_before(p)
     if not old_text.strip():
         return _tool_error_response(
             "EDIT_FILE_EMPTY_OLD_TEXT",
@@ -1136,7 +1136,6 @@ async def _inline_tool_edit_file_batch(args: dict, p: Path, workspace: Path,
             _batch_err + " The file was NOT modified.",
             tool="edit_file")
     parsed = _batch_err
-    get_transaction().capture_before(p)
     try:
         content = await asyncio.to_thread(
             p.read_text, encoding="utf-8", errors="replace", newline="")
