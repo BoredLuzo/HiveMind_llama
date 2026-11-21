@@ -124,10 +124,10 @@ async def _duo_coder_round_input(ctx, ps):
                 _explore_rule = (
                     "STATIC SYMBOL INDEX ONLY — the list below contains file paths, symbols, and imports, "
                     "NOT the files' contents.\n"
-                    "Existing files may contain code you have not seen. BEFORE changing any listed existing file:\n"
-                    "  → call read_file on it first.\n"
-                    "write_file with full content is ONLY for NEW files. For existing files use "
-                    "edit_file(old_text, new_text) AFTER reading the current content.\n\n"
+                    "Unless a file's complete content is already pre-seeded in your messages, "
+                    "call read_file on an existing file BEFORE changing it.\n"
+                    "Use edit_file(old_text, new_text) for targeted edits, or write_file for "
+                    "new files and full rewrites.\n\n"
                 )
             _MAX_EXPLORE_INJECT = _coder_caps.explore_inject
             _explore_inject = _explore_ctx

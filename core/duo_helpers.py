@@ -40,7 +40,8 @@ def _duo_context_budget_chars() -> int:
 
 def build_preseed_context(workspace: str, ctx_tokens: int = 0,
                           max_files: int = 4, query: str = "",
-                          budget_chars: int | None = None) -> tuple[str, list[str]]:
+                          budget_chars: int | None = None,
+                          header: str | None = None) -> tuple[str, list[str]]:
     """Return (prompt_block, relative_paths) for a tiny workspace.
 
     Empty block/paths when the workspace has no top-level code files, or the
@@ -103,16 +104,52 @@ def build_preseed_context(workspace: str, ctx_tokens: int = 0,
             parts.append(f"### FILE: {path.name}\n```{lang}\n{body.rstrip()}\n```")
         if not parts:
             return "", []
-        block = (
-            "[PRE-SEEDED WORKSPACE FILES — already read, do not call read_file "
-            "for them]\n"
-            "These are the complete current contents. Edit directly with "
-            "edit_file/write_file; preserve all existing top-level symbols.\n\n"
-            + "\n\n".join(parts)
+        _hdr = (
+            header
+            if header is not None
+            else (
+                "[PRE-SEEDED WORKSPACE FILES — already read, do not call read_file "
+                "for them]\n"
+                "These are the complete current contents. Edit directly with "
+                "edit_file/write_file; preserve all existing top-level symbols."
+            )
         )
+        block = _hdr + "\n\n" + "\n\n".join(parts)
         return block, names
     except (OSError, ValueError, TypeError):
         return "", []
+
+
+_PLANNER_PRESEED_HEADER = (
+    "[WORKSPACE FILES — current contents of existing files]\n"
+    "Base your plan directly on this code; do not guess existing logic, "
+    "signatures, or error messages."
+)
+
+
+def append_planner_preseed(
+    planner_ctx: str,
+    workspace: str,
+    ctx_tokens: int = 0,
+    query: str = "",
+    *,
+    has_explore_contracts: bool = False,
+) -> tuple[str, list[str]]:
+    """Inline small workspace files for the planner when pre-explore did not run.
+
+    Reuses `build_preseed_context` (bounded to <=4 small top-level files or top-4
+    query-ranked files under `duo_context_budget_chars`) so the planner sees
+    existing starter/bugfix code instead of planning blind from symbol names.
+    """
+    if has_explore_contracts or not str(workspace or "").strip():
+        return planner_ctx, []
+    block, names = build_preseed_context(
+        workspace, ctx_tokens, query=query, header=_PLANNER_PRESEED_HEADER,
+    )
+    if not block or not names:
+        return planner_ctx, []
+    merged = (planner_ctx + "\n\n" + block) if planner_ctx else block
+    return merged, names
 
 
 def _duo_deep_retrieval_cfg(settings_dict: dict | None = None) -> tuple:

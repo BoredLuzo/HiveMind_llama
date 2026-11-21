@@ -59,7 +59,7 @@ from bench.relative import build_relative, print_relative  # noqa: E402
 # raw_files  = one prompt, full corrected files (diagnostic only, opt-in:
 #              small models often fail on diff syntax, not on the fix itself)
 # The score-bearing comparison is HiveMind vs aider on the same server.
-CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_full", "hivemind_duo_lean", "aider", "hermes", "pi")
+CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "hivemind_duo_plan", "hivemind_duo_full", "hivemind_duo_lean", "aider", "hermes", "pi")
 DEFAULT_CONDITIONS = ("hivemind_direct", "hivemind_duo", "aider")
 
 
@@ -670,7 +670,8 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
 
 def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
                    *, duo_planner: bool = True, duo_tier: str = "core",
-                   ctx_tokens: int = 32768) -> dict:
+                   ctx_tokens: int = 32768,
+                   duo_agentic_thinking: bool = False) -> dict:
     """Request body for the two HiveMind conditions.
 
     MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
@@ -711,7 +712,7 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         body["duo_pre_explore"] = False
         body["duo_parallel_preexplore"] = False
         body["duo_git_autocommit"] = False
-        body["duo_agentic_thinking"] = False
+        body["duo_agentic_thinking"] = bool(duo_agentic_thinking)
         body["duo_thinking_per_chunk"] = False
         body["duo_coder_tool_thinking"] = False
         body["duo_coder_tool_thinking_auto_mode"] = "off"
@@ -796,10 +797,14 @@ def _accumulate_hivemind_sse(lines) -> dict:
 
 
 async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool,
-                        *, duo_tier: str = "core") -> dict:
+                        *, duo_tier: str = "core",
+                        duo_planner_override: bool | None = None,
+                        duo_agentic_thinking: bool = False) -> dict:
+    eff_planner = cfg.duo_planner if duo_planner_override is None else bool(duo_planner_override)
     body = _hivemind_body(task, work, duo, cfg.model,
-                          duo_planner=cfg.duo_planner, duo_tier=duo_tier,
-                          ctx_tokens=cfg.ctx_tokens)
+                          duo_planner=eff_planner, duo_tier=duo_tier,
+                          ctx_tokens=cfg.ctx_tokens,
+                          duo_agentic_thinking=duo_agentic_thinking)
     sse_lines: list[str] = []
     _agent_to = _agent_timeout_s(task, cfg)
     _chat_id = str(body.get("chat_id") or "")
@@ -1292,6 +1297,13 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
             extra = await _run_hivemind(task, work, cfg, duo=False)
         elif cond == "hivemind_duo":
             extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="core")
+        elif cond == "hivemind_duo_plan":
+            # A/B condition: 1-shot thinking planner -> fast no-think coder
+            # (forces planner+thinking ON even when --no-duo-planner is set for hivemind_duo).
+            extra = await _run_hivemind(
+                task, work, cfg, duo=True, duo_tier="core",
+                duo_planner_override=True, duo_agentic_thinking=True,
+            )
         elif cond == "hivemind_duo_full":
             extra = await _run_hivemind(task, work, cfg, duo=True, duo_tier="full")
         elif cond == "hivemind_duo_lean":

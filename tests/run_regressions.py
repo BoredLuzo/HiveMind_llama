@@ -460,6 +460,7 @@ SUITES = [
     ("project_rules_and_venv_guard", "tests/test_project_rules_and_venv_guard.py", 30),
     ("gemma4_and_direct_pin",        "tests/test_gemma4_and_direct_pin.py",        30),
     ("headless_gate_and_abort_wake", "tests/test_headless_gate_and_abort_wake.py", 30),
+    ("planner_preseed_and_briefing", "tests/test_planner_preseed_and_briefing.py", 30),
 
 ]
 

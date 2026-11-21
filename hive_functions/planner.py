@@ -112,7 +112,7 @@ A shape that works well for the coder and the UI:
 ...
 
 ### Completed Tasks
-- [x] [What gets done in this run]
+- [x] [Already completed work, or leave empty if none]
 
 ### Summary
 [Max 3 sentences: what the coder should do, order, key constraints]
@@ -187,20 +187,28 @@ def make_planner_analysis_sys(model_name: str = "") -> str:
     if is_small_model:
         return (
             "Produce a concise implementation briefing for the coding agent.\n"
-            "Describe: key components, implementation order, shared interfaces.\n"
-            "Free-form text — paragraphs, bullets, whatever is clearest.\n"
+            "Cover: concrete code changes, key edge cases / exact error messages, "
+            "and specific verification checks to run.\n"
+            "Put every concrete change, edge-case constraint, and verification "
+            "check into the numbered items under ### Open Tasks (referencing the "
+            "target file in each item) so the coder executes all of them.\n"
             + _STRUCT_OUTPUT
         )
     else:
         return (
-            "You are an architecture analyst. Produce an IMPLEMENTATION BRIEFING.\n"
-            "The coder will use this as context to implement the task directly.\n\n"
-            "Describe:\n"
-            "- COMPONENTS: Key parts of the system and how they connect\n"
-            "- ORDER: What to build first and why (foundation before surface)\n"
-            "- CONTRACTS: Interfaces, types, schemas that cross boundaries\n"
-            "- DECISIONS: Key architectural choices and their rationale\n\n"
-            "Format as free-form text under the required section headers below.\n"
+            "You are an architecture and specification analyst. Produce a "
+            "concrete IMPLEMENTATION BRIEFING for the coding agent.\n\n"
+            "Cover:\n"
+            "- COMPONENTS & ORDER: What to change/build and in what order\n"
+            "- CONTRACTS: Exact public APIs, signatures, types, and exception "
+            "types/messages required by the task\n"
+            "- EDGE CASES & INVARIANTS: Boundary inputs (empty/0/1, duplicates, "
+            "order dependence, state resets/collisions) that could silently fail\n"
+            "- VERIFICATION: Concrete assertions/checks the coder should run "
+            "(covering both happy paths and every listed edge case)\n\n"
+            "Put every concrete change, edge-case constraint, and verification "
+            "check into the numbered items under ### Open Tasks (referencing the "
+            "target file in each item) so the coder executes all of them.\n"
             + _STRUCT_OUTPUT
         )
 

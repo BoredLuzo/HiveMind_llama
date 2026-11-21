@@ -136,7 +136,7 @@ Same-model, same-`llama-server` comparisons (every harness hits the identical lo
 | `hivemind_duo_lean` (`duo_lean`) | 52.0% (53/102, `[42.4%, 61.4%]`) | 76.5% (26/34) | 29.5 s | 1.63 M | 92.7% | 6 |
 | `pi` | 51.0% (52/102, `[41.4%, 60.5%]`) | 64.7% (22/34) | 31.6 s | 1.28 M | 90.1% | 4 |
 
-\* Aider's CLI reports rounded token totals with no prompt-cache split. Pass-rate 95% Wilson CIs overlap at `N = 102`; `hivemind_duo` ranked #1 (or tied #1) in all three runs while running **2.7× faster in median wall time**, spending **50% fewer net tokens**, and hitting **8.5× fewer timeouts** than the closest competitor (`hermes`).
+\* Aider's CLI reports rounded token totals with no prompt-cache split. Pass-rate 95% Wilson CIs overlap at `N = 102`; `hivemind_duo` ranked #1 (or tied #1) in all three runs while running **2.7× faster in median wall time**, spending **50% fewer net tokens**, and hitting **8.5× fewer timeouts** than the closest competitor (`hermes`). Note on thinking mode: `llama-server` ran with Qwen3.6's default `--reasoning on`; `hivemind_duo` / `hivemind_duo_lean` disable tool-round thinking by default (`enable_thinking=false`), whereas `aider`, `hermes`, and `pi` inherit the server default.
 
 ### Local 4B starter suite (21 tasks, `qwen3.5:4b-mtp`)
 

@@ -13,6 +13,7 @@ token cost reported together.
 |---|---|
 | `hivemind_direct` | HiveMind `/stream`, `mode=simple`, direct tools tier `full`. |
 | `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`, `duo_core` tier (`18` desktop + `+Subagent` = 19). |
+| `hivemind_duo_plan` | Opt-in A/B variant of `hivemind_duo`: forces Thinking-Planner (`duo_planner=true`, `duo_agentic_thinking=true`) feeding a fast non-thinking coder (`duo_coder_tool_thinking=false`), even when `--no-duo-planner` is active for `hivemind_duo`. |
 | `hivemind_duo_lean` | Same, `duo_lean` minimal orthogonal tier (8 tools). |
 | `hivemind_duo_full` | Same, `duo_coder_tool_tier=full` (git/web/MCP/browser/LSP extras). |
 | `aider` | Aider CLI against the same OpenAI-compatible llama-server. |
@@ -119,7 +120,7 @@ External suites are also wired under `bench/tasks_polyglot/` (10 bundled Exercis
 | `hivemind_duo_lean` | 53/102 (52.0%) | `[42.4%, 61.4%]` | 26/34 (76.5%) | `17 · 18 · 18` | 29.5 s (`20.9 s`) | 103.2 m | 1.63 M | 92.7% | 6 |
 | `pi` | 52/102 (51.0%) | `[41.4%, 60.5%]` | 22/34 (64.7%) | `17 · 18 · 17` | 31.6 s (`20.1 s`) | 96.2 m | 1.28 M | 90.1% | 4 |
 
-\* Aider reports rounded token totals with no cache breakdown. `pass@1` 95% CIs overlap at `N = 102` (paired McNemar `hivemind_duo` vs `hermes` `p = 0.66`, vs `aider` `p = 0.39`, vs `pi` `p = 0.17`). Across all three runs `hivemind_duo` finished #1 (or tied #1) in every run, achieved the highest `pass@3` (`27/34`), lowest median wall time (`26.9 s`), highest KV-cache reuse (`93.2%`), and fewest timeouts (`2/102`).
+\* Aider reports rounded token totals with no cache breakdown. `pass@1` 95% CIs overlap at `N = 102` (paired McNemar `hivemind_duo` vs `hermes` `p = 0.66`, vs `aider` `p = 0.39`, vs `pi` `p = 0.17`). Across all three runs `hivemind_duo` finished #1 (or tied #1) in every run, achieved the highest `pass@3` (`27/34`), lowest median wall time (`26.9 s`), highest KV-cache reuse (`93.2%`), and fewest timeouts (`2/102`). Note on thinking mode: `llama-server` ran with Qwen3.6's default `--reasoning on`; `hivemind_duo` / `hivemind_duo_lean` disable tool-round thinking by default (`enable_thinking=false`), whereas `aider`, `hermes`, and `pi` inherit the server default.
 
 ### Local starter suite — 21 tasks (`qwen3.5:4b-mtp`)
 

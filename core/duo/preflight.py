@@ -443,6 +443,15 @@ def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_
         return False
     if plan_result is None:
         return False
+    # PLAN-DEDUP (2026-11-21): non-chunked thinking-planner runs already embed
+    # the distilled execution plan inside `_coder_input` via
+    # `core/duo_round_input.py`. Do not append a second duplicate user message.
+    if any(
+        isinstance(m, dict) and "[YOUR EXECUTION PLAN" in str(m.get("content") or "")
+        for m in (dtool_msgs or [])
+    ):
+        logger.info("[PLAN-INJECT] skipped: execution plan already present in messages")
+        return False
     _body = _distilled_execution_steps(
         getattr(plan_result, "subtasks", None),
         getattr(plan_result, "plan_content", "") or "",

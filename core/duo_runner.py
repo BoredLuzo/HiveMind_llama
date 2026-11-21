@@ -763,6 +763,24 @@ async def _duo_planner_phase(
 
         # Planner gets structured architecture (NOT raw TOML)
         _planner_ctx = explore_to_planner_ctx(_explore_ctx, task=ctx.user_input, budget=_ctx_budget)
+        # PLANNER-PRESEED (2026-11-21): when pre-explore did not supply file
+        # contents, inline tiny/small workspace files so the planner sees the
+        # actual starter or buggy code instead of guessing from symbol names.
+        if not _contracts_raw and _ws_str:
+            from core.duo_helpers import append_planner_preseed as _append_planner_preseed
+            _planner_ctx, _pp_names = await asyncio.to_thread(
+                _append_planner_preseed,
+                _planner_ctx,
+                _ws_str,
+                int(_plan_ctx_final or 0),
+                str(ctx.user_input or ""),
+                has_explore_contracts=bool(_contracts_raw),
+            )
+            if _pp_names:
+                logger.info(
+                    "[PLANNER-PRESEED] %d small file(s) inlined: %s",
+                    len(_pp_names), ", ".join(_pp_names),
+                )
 
         _planner_task = ctx.user_input + build_image_desc_block(getattr(ctx, "image_description", None))
         if _fup_task_ctx:
