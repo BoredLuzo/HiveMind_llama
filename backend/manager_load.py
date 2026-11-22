@@ -1229,6 +1229,7 @@ class LlamaLoadMixin:
                             _cache_live = int(getattr(_lc_retry, "MOE_CACHE_MIB", 0) or 0)
                         except (ImportError, AttributeError, TypeError, ValueError):
                             _cache_live = 0
+                        _cache_live = int(getattr(slot, "_moe_cache_mib", 0) or 0) or _cache_live
                         # ONLY the flag on the failed command matters (audit
                         # 2026-11-03): re-deriving MoE-ness from registry/table
                         # missed a UI-forced moe_cpu_experts override and skipped

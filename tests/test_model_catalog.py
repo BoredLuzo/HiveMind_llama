@@ -299,9 +299,11 @@ if q36_mtp:
 
     _ud_prof = _json_q36.loads((ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-ud.json").read_text(encoding="utf-8"))
     _mtp_prof = _json_q36.loads((ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-mtp.json").read_text(encoding="utf-8"))
-    check("qwen3.6_35b-a3b-mtp.json enables mtp + 35 CPU experts + ubatch 1024",
+    check("qwen3.6_35b-a3b-mtp.json enables mtp + 40 CPU experts + 2560 cache (0.95 share) + ubatch 1024",
           _mtp_prof.get("mtp") is True
-          and int(_mtp_prof.get("moe_cpu_experts") or 0) == 35
+          and int(_mtp_prof.get("moe_cpu_experts") or 0) == 40
+          and int(_mtp_prof.get("moe_cache_mib") or 0) == 2560
+          and float(_mtp_prof.get("moe_cache_cpu_share") or 0.0) == 0.95
           and int(_mtp_prof.get("ubatch") or 0) == 1024)
     check("qwen3.6_35b-a3b-ud.json keeps mtp disabled",
           _ud_prof.get("mtp") is False)

@@ -129,9 +129,9 @@ async def _test_phase_moe_looped() -> None:
         )
     check("_phase_moe emits --override-tensor instead of --n-cpu-moe for looped MoE",
           "--override-tensor" in res.cmd and _ot14 in res.cmd and "--n-cpu-moe" not in res.cmd, repr(res.cmd))
-    check("_phase_moe emits --moe-cache-cpu-share 0.5 alongside --moe-cache-mib",
+    check("_phase_moe emits --moe-cache-cpu-share 0.9 alongside --moe-cache-mib",
           "--moe-cache-mib" in res.cmd and "--moe-cache-cpu-share" in res.cmd
-          and res.cmd[res.cmd.index("--moe-cache-cpu-share") + 1] == "0.5",
+          and res.cmd[res.cmd.index("--moe-cache-cpu-share") + 1] == "0.9",
           repr(res.cmd))
 
 
@@ -177,6 +177,95 @@ with mock.patch("backend.gguf_meta.read_gguf_metadata", return_value=_step_meta)
           _f_full.ok and _cand_full == 24 and _full_cmd == ["--n-cpu-moe", "24"],
           repr(_full_cmd))
 
+import model_configs.models_registry as MR  # noqa: E402
+
+check("models_registry exposes moe_cache_mib=2560 and share=0.95 for qwen3.6:35b-a3b-mtp-ud",
+      MR.get_moe_cache_mib("qwen3.6:35b-a3b-mtp-ud") == 2560
+      and MR.get_moe_cache_cpu_share("qwen3.6:35b-a3b-mtp-ud") == 0.95)
+check("models_registry exposes moe_cache_mib=0 and share=None for inkling-2-mini",
+      MR.get_moe_cache_mib("inkling-2-mini") == 0
+      and MR.get_moe_cache_cpu_share("inkling-2-mini") is None)
+
+
+async def _test_profile_moe_cache() -> None:
+    _mgr = _DummyMgr()
+    _slot = SimpleNamespace(slot_id=0, model=None, _moe_cache_used=False, _moe_cache_mib=0)
+
+    async def _help_both(flag: str) -> bool:
+        return flag in ("--moe-cache-mib", "--moe-cache-cpu-share")
+
+    async def _help_no_cs(flag: str) -> bool:
+        return flag == "--moe-cache-mib"
+
+    with mock.patch.object(ML, "_help_supports", new=_help_both), \
+         mock.patch("backend.gguf_meta.read_gguf_metadata", return_value={}), \
+         mock.patch.object(LSP, "_should_lift_moe_to_all_gpu", new=mock.AsyncMock(return_value=(False, 0.0, "no"))), \
+         mock.patch.object(LSP._llama_cfg, "MOE_CPU_EXPERTS", {}), \
+         mock.patch.object(LSP._llama_cfg, "MOE_CACHE_MIB", 0):
+        res_prof = await LSP._phase_moe(
+            _mgr, _slot, ["--fit", "on", "--threads", "16", "--threads-batch", "16"],
+            "qwen3.6:35b-a3b-mtp", 16384, True, 16, 16, gguf_path=None,
+        )
+    check("_phase_moe emits profile ncmoe=40, cache=2560, share=0.95 when global MOE_CACHE_MIB==0",
+          "--n-cpu-moe" in res_prof.cmd
+          and res_prof.cmd[res_prof.cmd.index("--n-cpu-moe") + 1] == "40"
+          and "--moe-cache-mib" in res_prof.cmd
+          and res_prof.cmd[res_prof.cmd.index("--moe-cache-mib") + 1] == "2560"
+          and "--moe-cache-cpu-share" in res_prof.cmd
+          and res_prof.cmd[res_prof.cmd.index("--moe-cache-cpu-share") + 1] == "0.95"
+          and getattr(_slot, "_moe_cache_mib", 0) == 2560,
+          repr(res_prof.cmd))
+
+    _slot2 = SimpleNamespace(slot_id=0, model=None, _moe_cache_used=False, _moe_cache_mib=0)
+    with mock.patch.object(ML, "_help_supports", new=_help_no_cs), \
+         mock.patch("backend.gguf_meta.read_gguf_metadata", return_value={}), \
+         mock.patch.object(LSP, "_should_lift_moe_to_all_gpu", new=mock.AsyncMock(return_value=(False, 0.0, "no"))), \
+         mock.patch.object(LSP._llama_cfg, "MOE_CPU_EXPERTS", {}), \
+         mock.patch.object(LSP._llama_cfg, "MOE_CACHE_MIB", 0):
+        res_noshare = await LSP._phase_moe(
+            _mgr, _slot2, ["--fit", "on", "--threads", "16", "--threads-batch", "16"],
+            "qwen3.6:35b-a3b-mtp", 16384, True, 16, 16, gguf_path=None,
+        )
+    check("_phase_moe skips profile --moe-cache-mib when binary lacks --moe-cache-cpu-share",
+          "--moe-cache-mib" not in res_noshare.cmd and res_noshare.moe_cache_used == 0
+          and getattr(_slot2, "_moe_cache_mib", 0) == 0,
+          repr(res_noshare.cmd))
+
+
+asyncio.run(_test_profile_moe_cache())
+
+
+class _TrimMgr:
+    def __init__(self, max_extra_mib: float):
+        self.max_extra_mib = float(max_extra_mib)
+
+    def can_fit(self, model, num_ctx, **kwargs):
+        extra = float(kwargs.get("extra_needed_mib") or 0.0)
+        ok = extra <= self.max_extra_mib
+        return SimpleNamespace(ok=ok, needed_mib=5000.0 + extra, free_mib=5000.0 + self.max_extra_mib, margin_mib=768)
+
+
+_trim_slot = SimpleNamespace(slot_id=0, _moe_cache_used=True, _moe_cache_mib=2560)
+_trim_cmd = ["--n-cpu-moe", "40", "--moe-cache-mib", "2560", "--moe-cache-cpu-share", "0.95"]
+_trim_init = SimpleNamespace(ok=False, needed_mib=7760.0, free_mib=6700.0, margin_mib=768)
+_f_trim, _new_extra = LSP._try_trim_moe_cache_mib(
+    _TrimMgr(1736.0), _trim_slot, _trim_cmd, "qwen3.6:35b-a3b-mtp", 16384, _trim_init, 2760.0,
+)
+check("_try_trim_moe_cache_mib trims 2560 -> 1536 preserving other_extra",
+      _f_trim.ok and _trim_cmd[3] == "1536" and "--moe-cache-cpu-share" in _trim_cmd
+      and _new_extra == 1736.0 and _trim_slot._moe_cache_mib == 1536,
+      repr((_trim_cmd, _new_extra, _trim_slot._moe_cache_mib)))
+
+_drop_slot = SimpleNamespace(slot_id=0, _moe_cache_used=True, _moe_cache_mib=1024)
+_drop_cmd = ["--n-cpu-moe", "40", "--moe-cache-mib", "1024", "--moe-cache-cpu-share", "0.95"]
+_f_drop, _drop_extra = LSP._try_trim_moe_cache_mib(
+    _TrimMgr(300.0), _drop_slot, _drop_cmd, "qwen3.6:35b-a3b-mtp", 16384, _trim_init, 1224.0,
+)
+check("_try_trim_moe_cache_mib strips cache & cpu-share cleanly when dropping to 0",
+      _f_drop.ok and _drop_cmd == ["--n-cpu-moe", "40"]
+      and _drop_extra == 200.0 and _drop_slot._moe_cache_used is False and _drop_slot._moe_cache_mib == 0,
+      repr((_drop_cmd, _drop_extra, _drop_slot)))
+
 
 # ── Step 4: reasoning_effort="none" propagation ────────────────────────
 print("-- Step 4: reasoning_effort propagation --")
@@ -198,27 +287,31 @@ check("strip_payload_extras strips reasoning_effort",
 
 # ── Step 5: Model profiles & arch_compat ───────────────────────────────
 print("-- Step 5: Shipped Inkling & Qwen3.6 configs --")
-import model_configs.models_registry as MR  # noqa: E402
-
 _ink_prof = MR.get_profile("inkling-2-mini") or {}
-check("inkling-2-mini profile shipped with moe_cpu_experts=14, ubatch=256, kv=9216",
+check("inkling-2-mini profile shipped with moe_cpu_experts=14, moe_cache_mib=0, ubatch=256, kv=9216",
       MR.get_profile_source("inkling-2-mini") == "shipped"
       and _ink_prof.get("moe_cpu_experts") == 14
+      and _ink_prof.get("moe_cache_mib") == 0
+      and _ink_prof.get("load_mode") == "none"
       and _ink_prof.get("ubatch") == 256
       and _ink_prof.get("kv_bytes_per_token") == 9216
       and _ink_prof.get("mmproj_filename") == "mmproj-Inkling-2-Mini-F16.gguf",
       repr(_ink_prof))
 
 _ac = json.loads((_ROOT / "model_configs" / "arch_compat.json").read_text(encoding="utf-8"))
-check("arch_compat registers inkling-2-mini in moe_expert_counts, moe_table, and model_profiles",
+check("arch_compat registers inkling-2-mini and calibrates qwen3.6-mtp at ncmoe=40",
       _ac["moe_expert_counts"].get("inkling-2-mini") == 14
       and _ac["moe_table"].get("inkling-2-mini", {}).get("calibrated_n_cpu_moe") == 14
-      and _ac["model_profiles"].get("inkling-2-mini", {}).get("vision") is True)
+      and _ac["model_profiles"].get("inkling-2-mini", {}).get("vision") is True
+      and _ac["moe_expert_counts"].get("qwen3.6:35b-a3b-mtp") == 40
+      and _ac["moe_table"].get("qwen3.6:35b-a3b-mtp", {}).get("calibrated_n_cpu_moe") == 40)
 
 _q36_mtp = json.loads((_ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-mtp.json").read_text(encoding="utf-8"))
 _q36_ud = json.loads((_ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-ud.json").read_text(encoding="utf-8"))
-check("qwen3.6_35b-a3b-mtp preserves mtp=True, ncmoe=35, ub=1024 and adds _notes",
-      _q36_mtp.get("mtp") is True and _q36_mtp.get("moe_cpu_experts") == 35
+check("qwen3.6_35b-a3b-mtp enables mtp=True, ncmoe=40, cache=2560 (0.95 share), ub=1024",
+      _q36_mtp.get("mtp") is True and _q36_mtp.get("moe_cpu_experts") == 40
+      and _q36_mtp.get("moe_cache_mib") == 2560
+      and _q36_mtp.get("moe_cache_cpu_share") == 0.95
       and _q36_mtp.get("ubatch") == 1024 and "_notes" in _q36_mtp)
 check("qwen3.6_35b-a3b-ud aligns mmap, kv=6272 and preserves ubatch=512, mtp=False",
       _q36_ud.get("mtp") is False and _q36_ud.get("ubatch") == 512

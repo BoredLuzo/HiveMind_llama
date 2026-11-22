@@ -28,7 +28,7 @@
   "moe_expert_counts": {
     "qwen3.6:35b-a3b": 35,
     "qwen3.6:35b-a3b-ud": 35,
-    "qwen3.6:35b-a3b-mtp": 35,
+    "qwen3.6:35b-a3b-mtp": 40,
     "qwen3.6:35b-a3b-uncensored": 35,
     "cyber-tiel-coder:35b-a3b": 35,
     "cyber-tiel-coder:35b-a3b-mtp-ud": 35,
@@ -104,9 +104,9 @@
       "calibrated_n_cpu_moe": 35
     },
     "qwen3.6:35b-a3b-mtp": {
-      "active_gpu_gb": 4.66,
+      "active_gpu_gb": 3.7,
       "measured_bytes_per_token": 6272,
-      "calibrated_n_cpu_moe": 35
+      "calibrated_n_cpu_moe": 40
     },
     "qwen3.6:35b-a3b-uncensored": {
       "active_gpu_gb": 4.66,

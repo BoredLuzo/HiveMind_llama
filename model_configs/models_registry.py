@@ -579,6 +579,30 @@ def get_cache_ram_mib(model_name: str) -> int | None:
     return min(32768, v) if v is not None else None
 
 
+def get_moe_cache_mib(model_name: str) -> int | None:
+    """Optional per-model --moe-cache-mib override (0 = explicitly disabled)."""
+    v = _read_profile(model_name).get("moe_cache_mib")
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(16384, n))
+
+
+def get_moe_cache_cpu_share(model_name: str) -> float | None:
+    """Optional per-model --moe-cache-cpu-share override in [0.0, 1.0]."""
+    v = _read_profile(model_name).get("moe_cache_cpu_share")
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, f))
+
+
 def get_lazy_mode(model_name: str) -> str | None:
     v = (_get_str_key(model_name, "lazy_mode") or "").lower()
     return v if v in ("on", "off", "auto") else None

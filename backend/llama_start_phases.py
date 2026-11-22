@@ -108,6 +108,7 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
     # MoE section must not leave a previous load's True behind - the
     # retry would drop a flag the failed command never carried.
     slot._moe_cache_used = False
+    slot._moe_cache_mib = 0
     slot._moe_all_gpu_vram_gb = 0.0
     if slot.is_running:
         await _kill_slot_async(slot)
@@ -1386,16 +1387,39 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
 
     # ── MoE-Offloading ────────────────────────────────────────────────────
     _moe_cache_mib = 0
+    _moe_cache_from_profile = False
+    _moe_cache_cpu_share = 0.90
     try:
         from . import llama_config as _lc_cache
         _moe_cache_mib = int(getattr(_lc_cache, "MOE_CACHE_MIB", 0) or 0)
     except (ImportError, AttributeError, TypeError, ValueError):
         _moe_cache_mib = 0
+    try:
+        from model_configs.models_registry import (
+            get_moe_cache_cpu_share as _get_prof_mc_share,
+            get_moe_cache_mib as _get_prof_mc_mib,
+        )
+        if _moe_cache_mib <= 0:
+            for _cand in _moe_cands:
+                _prof_mc = _get_prof_mc_mib(_cand)
+                if _prof_mc is not None:
+                    if _prof_mc > 0:
+                        _moe_cache_mib = int(_prof_mc)
+                        _moe_cache_from_profile = True
+                    break
+        for _cand in _moe_cands:
+            _prof_cs = _get_prof_mc_share(_cand)
+            if _prof_cs is not None:
+                _moe_cache_cpu_share = float(_prof_cs)
+                break
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError) as _mc_err:
+        logger.debug("[MOE-CACHE] profile lookup skipped: %s", _mc_err)
     _moe_cache_used = 0
     try:
         slot._moe_cache_used = False
-    except AttributeError:
-        pass
+        slot._moe_cache_mib = 0
+    except AttributeError as _mc_attr_err:
+        logger.debug("[MOE-CACHE] slot reset skipped: %s", _mc_attr_err)
     if _moe_count > 0 and GPU_BACKEND != "cpu":
         if type(self)._moe_flag_supported:
             # --fit aborts in llama.cpp whenever tensor_buft_overrides /
@@ -1484,9 +1508,16 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                     "(half of %d logical CPUs; experts on CPU)",
                     _def_threads, _target, _batch_target, _logical,
                 )
-            # EXPERT-CACHE (2026-11-03): opt-in --moe-cache-mib.
+            # EXPERT-CACHE (2026-11-03): opt-in or profile --moe-cache-mib.
             if moe_cache and _moe_cache_mib > 0:
-                if await _help_supports("--moe-cache-mib"):
+                _has_mc = await _help_supports("--moe-cache-mib")
+                _has_cs = (await _help_supports("--moe-cache-cpu-share")) if _has_mc else False
+                if _has_mc and _moe_cache_from_profile and not _has_cs:
+                    logger.info(
+                        "MoE expert cache from profile (%d MiB) skipped: "
+                        "%s lacks --moe-cache-cpu-share",
+                        _moe_cache_mib, LLAMA_BIN.name)
+                elif _has_mc:
                     if GPU_BACKEND == "vulkan":
                         logger.warning(
                             "MoE expert cache on Vulkan: llama.cpp #30697 "
@@ -1496,15 +1527,18 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                     _moe_cache_used = int(_moe_cache_mib)
                     try:
                         slot._moe_cache_used = True
-                    except AttributeError:
-                        pass
+                        slot._moe_cache_mib = int(_moe_cache_mib)
+                    except AttributeError as _mc_set_err:
+                        logger.debug("[MOE-CACHE] slot flag skipped: %s", _mc_set_err)
                     logger.info(
                         "MoE expert cache: %d MiB (--moe-cache-mib)",
                         _moe_cache_mib)
-                    if await _help_supports("--moe-cache-cpu-share"):
-                        cmd += ["--moe-cache-cpu-share", "0.5"]
+                    if _has_cs:
+                        _cs_str = f"{_moe_cache_cpu_share:.2f}".rstrip("0").rstrip(".") or "0"
+                        cmd += ["--moe-cache-cpu-share", _cs_str]
                         logger.info(
-                            "MoE expert cache CPU share: 0.5 (--moe-cache-cpu-share)")
+                            "MoE expert cache CPU share: %s (--moe-cache-cpu-share)",
+                            _cs_str)
                 else:
                     logger.warning(
                         "--moe-cache-mib is not supported by %s - ignored",
@@ -1745,6 +1779,76 @@ class _SpawnPhase:
     CTX-FLOOR guard inside the pre-flight; everything else lands on the
     slot directly (as before)."""
     num_ctx: int = 0
+
+
+_MOE_CACHE_VALUE_FLAGS = frozenset({"--moe-cache-mib", "--moe-cache-cpu-share"})
+
+
+def _clear_moe_cache_flags(cmd: list[str], slot) -> None:
+    """Remove MoE expert cache CLI flags and reset slot cache tracking."""
+    cmd[:] = _strip_flag_pairs(cmd, _MOE_CACHE_VALUE_FLAGS)
+    try:
+        slot._moe_cache_used = False
+        slot._moe_cache_mib = 0
+    except AttributeError as _err:
+        logger.debug("[MOE-CACHE-TRIM] slot reset skipped: %s", _err)
+
+
+def _try_trim_moe_cache_mib(
+    mgr,
+    slot,
+    cmd: list[str],
+    model: str,
+    num_ctx: int,
+    fit: CanFitResult,
+    moe_cache_used: float,
+) -> tuple[CanFitResult, float]:
+    """Trim --moe-cache-mib down in 256 MiB steps (or drop it) when live VRAM is tight."""
+    if fit.ok or "--moe-cache-mib" not in cmd:
+        return fit, float(moe_cache_used)
+    try:
+        idx = cmd.index("--moe-cache-mib")
+        cur_mib = int(cmd[idx + 1])
+    except (ValueError, IndexError, TypeError):
+        return fit, float(moe_cache_used)
+    if cur_mib <= 0:
+        return fit, float(moe_cache_used)
+    other_extra = max(0.0, float(moe_cache_used) - float(cur_mib))
+    candidates = [m for m in range(((cur_mib - 1) // 256) * 256, 511, -256)] + [0]
+    last_fit = fit
+    for cand_mib in candidates:
+        cand_fit = mgr.can_fit(
+            model, num_ctx,
+            exclude_slot_id=slot.slot_id,
+            extra_needed_mib=other_extra + float(cand_mib),
+        )
+        last_fit = cand_fit
+        if not cand_fit.ok:
+            continue
+        if cand_mib > 0:
+            cmd[idx + 1] = str(cand_mib)
+            try:
+                slot._moe_cache_mib = cand_mib
+            except AttributeError as _err:
+                logger.debug("[MOE-CACHE-TRIM] slot update skipped: %s", _err)
+            logger.warning(
+                "[MOE-CACHE-TRIM] %s @ctx=%d does not fit with cache=%d MiB "
+                "(needed=%.0fMiB, free=%.0fMiB) — trimming --moe-cache-mib=%d MiB",
+                model, num_ctx, cur_mib, fit.needed_mib, fit.free_mib, cand_mib,
+            )
+            return cand_fit, other_extra + float(cand_mib)
+        _clear_moe_cache_flags(cmd, slot)
+        logger.warning(
+            "[MOE-CACHE-TRIM] %s @ctx=%d does not fit with cache=%d MiB — dropping expert cache",
+            model, num_ctx, cur_mib,
+        )
+        return cand_fit, other_extra
+    _clear_moe_cache_flags(cmd, slot)
+    logger.warning(
+        "[MOE-CACHE-TRIM] %s @ctx=%d still short at cache=0 — dropping before fallback",
+        model, num_ctx,
+    )
+    return last_fit, other_extra
 
 
 def _auto_step_moe_cpu_offload(
@@ -2050,6 +2154,11 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     if not _fit.ok:
         _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
                             extra_needed_mib=_moe_cache_used)
+    if (not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE
+            and "--moe-cache-mib" in cmd):
+        _fit, _moe_cache_used = _try_trim_moe_cache_mib(
+            self, slot, cmd, model, num_ctx, _fit, _moe_cache_used,
+        )
     if (not _fit.ok and ub_delta_mib > 0 and ub_eff > ub_base
             and _llama_cfg.VRAM_PREFLIGHT_GATE):
         _fit_base = self.can_fit(

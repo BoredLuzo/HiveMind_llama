@@ -15,7 +15,9 @@
   "reasoning": "on",
   "distilled": false,
   "moe": true,
-  "moe_cpu_experts": 35,
+  "moe_cpu_experts": 40,
+  "moe_cache_mib": 2560,
+  "moe_cache_cpu_share": 0.95,
   "ubatch": 1024,
   "load_mode": "mmap",
   "cache_ram_mib": 2048,
@@ -74,5 +76,5 @@
       "cache_prompt": true
     }
   },
-  "_notes": "Qwen3.6-35B-A3B-MTP (UD-IQ4_XS, 16.96 GiB, qwen35moe with nextn MTP). RX 6600 Vulkan (b12631, @16k q4_0 KV, ubatch=1024, n_cpu_moe=35, draft-mtp nmax=2): load 8.68s, VRAM delta 5181 MiB (852 MiB free), Q_CODE 18.63 t/s (89.0% MTP accept), Q_TEXT 19.41 t/s (+30.6% vs b12001). Expert cache (--moe-cache-mib) degrades throughput on 8 GB VRAM (-25% to -55%), so moe_cache_mib stays 0."
+  "_notes": "Qwen3.6-35B-A3B-MTP (UD-IQ4_XS, 16.96 GiB, qwen35moe with nextn MTP). Clean-VRAM RX 6600 Vulkan (b12631, @16k q4_0 KV, ubatch=1024, n_cpu_moe=40, moe_cache_mib=2560, moe_cache_cpu_share=0.95, draft-mtp nmax=2): load 3.81s, VRAM 6945/277 MiB ded/shd (0 spill), WARM 26.50 t/s, CODE 31.52 t/s (79.7% MTP), TEXT 25.94 t/s (vs nc34/nc35 without cache: 25.28/21.76 and 25.09/21.80 t/s). Pre-flight auto-trims --moe-cache-mib down (e.g. 1536 MiB -> 26.96/23.50 t/s, or 0) when desktop VRAM is tight to prevent shared-RAM spillover."
 }
