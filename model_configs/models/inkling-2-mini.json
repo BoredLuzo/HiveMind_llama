@@ -36,6 +36,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "reasoning_effort": "none",
       "cache_prompt": true
     },
     "sampling_thinking_text": {
@@ -45,6 +46,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "reasoning_effort": "medium",
       "preserve_thinking": true,
       "cache_prompt": true
     },
@@ -55,6 +57,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "reasoning_effort": "medium",
       "preserve_thinking": true,
       "cache_prompt": true
     },
@@ -65,6 +68,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "reasoning_effort": "medium",
       "preserve_thinking": true,
       "cache_prompt": true
     },
@@ -75,6 +79,7 @@
       "min_p": 0.0,
       "presence_penalty": 0.0,
       "repetition_penalty": 1.0,
+      "reasoning_effort": "none",
       "cache_prompt": true
     }
   },

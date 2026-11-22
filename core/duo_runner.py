@@ -4088,9 +4088,10 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # re-enable happens payload-side — mutating system
                             # messages instead killed the whole prefix cache.
                             _tool_payload["chat_template_kwargs"] = {"enable_thinking": False}
+                            _tool_payload["reasoning_effort"] = "none"
                         _tool_payload = _apply_thinking_kwargs(
                             _tool_payload, _profile, _thinking,
-                            _thinking,
+                            _thinking, settings=(ctx.settings if _thinking else None),
                         )
                         # delta.thinking/reasoning_content → ctx.emit as thinking_token + accumulate.
                         # AgenticToolLoop: POST+retry+SSE parse. Shares _duo_state in-place.
@@ -4732,6 +4733,10 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _plain_coder_smp = get_sampling_profile(
                             coder_mdl, _plain_think_on, ctx.settings, mode="sampling_thinking_code",
                         )
+                        from core.model_sampling import resolve_reasoning_effort as _res_re_plain
+                        _plain_eff = _res_re_plain(ctx.settings, _plain_coder_smp, thinking=_plain_think_on)
+                        if _plain_eff:
+                            _plain_coder_smp["reasoning_effort"] = _plain_eff
                         _plain_coder_smp["presence_penalty"] = resolve_presence_penalty(
                             _plain_coder_smp, coder_mdl, _plain_think_on, ctx.settings,
                             mode="sampling_thinking_code",

@@ -473,6 +473,7 @@ SUITES = [
     ("b12631_inkling_loop_and_qwen36", "tests/test_b12631_inkling_loop_and_qwen36.py", 45),
     ("live_pip_think_codepanel_fixes", "tests/test_live_pip_think_codepanel_fixes.py", 45),
     ("notify_chats_speed_and_think_order", "tests/test_notify_chats_speed_and_think_order.py", 45),
+    ("reasoning_effort_and_pip_pipe", "tests/test_reasoning_effort_and_pip_pipe.py", 45),
 
 ]
 

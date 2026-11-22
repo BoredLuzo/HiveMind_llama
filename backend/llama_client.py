@@ -569,6 +569,8 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
     # Explicit cache_prompt=False (e.g. no_cache=True) must never be clobbered by profile defaults.
     if not cache_prompt:
         payload["cache_prompt"] = False
+    if str(payload.get("reasoning_effort") or "").strip().lower() in ("", "auto"):
+        payload.pop("reasoning_effort", None)
     if "preserve_thinking" in payload:
         _pt_val = payload.pop("preserve_thinking")
         if _pt_val is not None:
@@ -579,6 +581,8 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
         if not thinking:
             payload["thinking_budget"] = 0
             payload["reasoning_effort"] = "none"
+        elif payload.get("reasoning_effort") == "none":
+            payload.pop("reasoning_effort", None)
     if thinking_budget is not None:
         payload["thinking_budget"] = thinking_budget
     return payload

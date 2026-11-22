@@ -446,8 +446,17 @@ def _calculate_thinking_tokens(
     agent_name: str = "",
 ) -> int:
     _s = settings_dict or {}
+    from core.model_sampling import (
+        REASONING_EFFORT_BUDGETS as _RE_BUDGETS,
+        normalize_reasoning_effort as _norm_re,
+    )
+    _user_eff = _norm_re(_s.get("reasoning_effort"))
+    if _user_eff == "none":
+        return 0
     base_budget = None
-    if agent_name:
+    if _user_eff in ("low", "medium", "high", "max"):
+        base_budget = _RE_BUDGETS[_user_eff]
+    elif agent_name:
         agent_cfg = _s.get("agents", {}).get(agent_name, {})
         if "thinking_budget" in agent_cfg:
             tb = agent_cfg.get("thinking_budget")
@@ -479,17 +488,24 @@ def _calculate_thinking_tokens(
     return min(max(64, int(adaptive_budget)), _max_thinking_share)
 
 
-def _apply_thinking_fields(payload: dict, thinking_on: bool, thinking_budget: int) -> dict:
-
-
+def _apply_thinking_fields(
+    payload: dict,
+    thinking_on: bool,
+    thinking_budget: int,
+    reasoning_effort: str = "",
+) -> dict:
+    """Apply top-level thinking, thinking_budget, chat_template_kwargs, and reasoning_effort."""
     if thinking_on:
         payload["thinking"] = True
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = True
         if thinking_budget > 0:
             payload["thinking_budget"] = max(64, thinking_budget)
+        if reasoning_effort in ("low", "medium", "high", "max"):
+            payload["reasoning_effort"] = reasoning_effort
     else:
         payload["thinking"] = False
         payload["thinking_budget"] = 0
+        payload["reasoning_effort"] = "none"
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
     return payload
 

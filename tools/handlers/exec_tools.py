@@ -209,6 +209,7 @@ _PKG_RE = re.compile(r"[A-Za-z0-9@/._~+=,\- ]+")  # H-audit: < > are PowerShell 
 _PIP_SOURCE_BUILD_MARKERS = (
     "Building wheel for", "Preparing metadata", "config_win.py",
     "Getting requirements to build wheel", "Installing build dependencies",
+    "Failed building wheel", "pyproject_hooks",
     "metadata-generation-failed", "subprocess-exited-with-error",
     "Microsoft Visual C++", "error: command", "No module named 'setuptools'",
 )
@@ -831,7 +832,16 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             if _pkgs and any(_p in _err for _p in _PIP_SOURCE_BUILD_MARKERS):
                 _err += _pip_source_build_hint(_pkgs)
             return _err
-        return f"[run_bash: exit 0]\n{result}" if result else "[run_bash: exit 0 — no output]"
+        _out_ok = f"[run_bash: exit 0]\n{result}" if result else "[run_bash: exit 0 — no output]"
+        _pkgs_ok = _pip_packages_from_cmd(str(cmd))
+        _low_ok = result.lower()
+        if (
+            _pkgs_ok
+            and any(_p in result for _p in _PIP_SOURCE_BUILD_MARKERS)
+            and any(_em in _low_ok for _em in ("error", "exit code:", "failed", "did not run successfully", "traceback"))
+        ):
+            _out_ok += _pip_source_build_hint(_pkgs_ok)
+        return _out_ok
     except Exception as e:
         return _tool_error_response(
             "RUN_BASH_EXEC_ERROR",

@@ -20,7 +20,12 @@ from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, build_steer_user_message as _build_steer_user_message
 
 _log = logging.getLogger("hivemind.tool_loop")
-from core.model_sampling import get_sampling_profile, resolve_presence_penalty
+from core.model_sampling import (
+    REASONING_EFFORT_BUDGETS as _RE_BUDGETS,
+    get_sampling_profile,
+    resolve_presence_penalty,
+    resolve_reasoning_effort,
+)
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 
 # ── A4: round-limit truth ──────────────────────────────────────────────
@@ -443,16 +448,22 @@ class ToolLoop:
                 "repetition_penalty": float(_smp.get("repetition_penalty", _smp.get("repeat_penalty", 1.0))),
                 "max_tokens": self.cfg.max_tokens,
             }
-            if self.cfg.thinking:
+            _eff = resolve_reasoning_effort(
+                self.cfg.settings, _smp, thinking=bool(self.cfg.thinking),
+            )
+            if _eff == "none" or (not self.cfg.thinking and not _eff):
+                _payload["thinking"] = False
+                _payload["thinking_budget"] = 0
+                _payload["reasoning_effort"] = "none"
+                _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+            else:
                 _payload["thinking"] = True
-                _payload["thinking_budget"] = self.cfg.thinking_budget
+                _payload["thinking_budget"] = self.cfg.thinking_budget or _RE_BUDGETS.get(_eff, 0)
                 _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = True
                 if _smp.get("preserve_thinking"):
                     _payload["chat_template_kwargs"]["preserve_thinking"] = True
-            else:
-                _payload["thinking"] = False
-                _payload["thinking_budget"] = 0
-                _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+                if _eff:
+                    _payload["reasoning_effort"] = _eff
             if _overrides:
                 _payload.update(_overrides)
 

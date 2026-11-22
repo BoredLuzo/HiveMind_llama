@@ -556,13 +556,27 @@ def _strip_stale_ctx_notices(msgs: list) -> list:
     ]
 
 
-def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think):
-
-
-    if profile.get("preserve_thinking") and thinking:
+def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think, settings=None):
+    """Apply preserve_thinking, enable_thinking, and reasoning_effort kwargs to payload."""
+    from core.model_sampling import resolve_reasoning_effort
+    _eff = resolve_reasoning_effort(
+        settings, profile, thinking=bool(thinking and coder_tool_think),
+    )
+    if _eff == "none":
+        payload["thinking"] = False
+        payload["thinking_budget"] = 0
+        payload["reasoning_effort"] = "none"
+        ctk = payload.setdefault("chat_template_kwargs", {})
+        ctk["enable_thinking"] = False
+        ctk.pop("preserve_thinking", None)
+        return payload
+    if _eff:
+        payload["reasoning_effort"] = _eff
+    if (profile or {}).get("preserve_thinking") and thinking:
         payload.setdefault("chat_template_kwargs", {})["preserve_thinking"] = True
     if not coder_tool_think:
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+        payload.setdefault("reasoning_effort", "none")
     return payload
 
 

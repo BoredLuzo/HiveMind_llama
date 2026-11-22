@@ -321,11 +321,25 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 .pitem .rm{position:absolute;top:-4px;right:-4px;background:var(--red);border:none;border-radius:50%;
   width:15px;height:15px;font-size:9px;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center}
 #input-row{display:flex;gap:7px;align-items:flex-end}
-#input{flex:1;background:var(--bg2);border:1px solid var(--b2);border-radius:7px;padding:9px 12px;
+#input-box{flex:1;display:flex;align-items:flex-end;gap:6px;background:var(--bg2);border:1px solid var(--b2);
+  border-radius:7px;padding-right:6px;transition:border-color .15s;min-width:0}
+#input-box:focus-within{border-color:var(--amber2)}
+#input{flex:1;min-width:0;background:transparent;border:none;padding:9px 12px;
   color:var(--txh);font-family:'IBM Plex Mono',monospace;font-size:12px;
-  resize:none;min-height:40px;max-height:140px;outline:none;line-height:1.5;transition:border-color .15s}
-#input:focus{border-color:var(--amber2)}
+  resize:none;min-height:40px;max-height:140px;outline:none;line-height:1.5}
 #input::placeholder{color:var(--tx2)}
+.effort-bar{display:inline-flex;align-items:center;gap:2px;flex-shrink:0;margin:6px 0;padding:2px;
+  background:var(--bg3);border:1px solid var(--b);border-radius:5px}
+.effort-btn{background:transparent;border:none;border-radius:4px;padding:3px 6px;cursor:pointer;
+  font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.2;color:var(--tx2);
+  transition:all .12s;white-space:nowrap}
+.effort-btn:hover{color:var(--txh);background:rgba(255,255,255,.04)}
+.effort-btn.active{background:rgba(240,168,64,.16);color:var(--amber);font-weight:600}
+.effort-btn[data-effort="none"].active{background:rgba(128,140,160,.18);color:var(--txh)}
+.effort-btn[data-effort="low"].active{background:rgba(32,176,160,.16);color:#42d4c2}
+.effort-btn[data-effort="medium"].active{background:rgba(72,120,192,.2);color:#78a8f0}
+.effort-btn[data-effort="high"].active{background:rgba(240,168,64,.18);color:var(--amber)}
+.effort-btn[data-effort="max"].active{background:rgba(192,100,220,.2);color:#d88aff}
 .ibtn{background:var(--bg3);border:1px solid var(--b2);border-radius:7px;width:40px;height:40px;
   color:var(--tx2);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;
   transition:all .15s;flex-shrink:0}
@@ -1144,6 +1158,8 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
   .chat-col{grid-column:1;grid-row:2;margin:0;border-left:none;border-right:none;border-radius:0;box-shadow:none}
   #sidebar{grid-column:1;grid-row:3;margin:0;border-left:none;border-right:none;border-bottom:none;border-radius:0;box-shadow:none}
   .panel{padding:12px 12px 20px}
+  #input-box{flex-direction:column;align-items:stretch;padding-right:0}
+  .effort-bar{align-self:flex-end;margin:0 6px 6px}
 }
 
 /* ── Tool-Call Chips ─────────────────────────────────────────────────────── */

@@ -138,6 +138,7 @@ let S = {
 
   duoCoderToolThinking: false,
   duoCoderToolThinkingAutoMode: 'on_fail',
+  reasoningEffort: 'auto',
   duoUntilFinished: false,    // true=coder runs until tests pass (budget 300)
   _askUserCountdownInterval: null,
   _runAbortCtrl: null,
@@ -340,6 +341,41 @@ function onDuoToolThinkingModeChange(v) {
     duo_coder_tool_thinking: S.duoToolThinkingAlways || S.duoToolThinkingEnabled,
     duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : S.duoToolThinkingMode,
   });
+}
+
+function _normalizeReasoningEffort(v) {
+  var eff = String(v || 'auto').trim().toLowerCase();
+  if (eff === 'off' || eff === 'disabled' || eff === 'false' || eff === '0') return 'none';
+  if (eff === 'med') return 'medium';
+  if (eff === 'xhigh' || eff === 'maximum') return 'max';
+  if (eff === 'minimal') return 'low';
+  return (eff === 'auto' || eff === 'none' || eff === 'low' || eff === 'medium' || eff === 'high' || eff === 'max')
+    ? eff
+    : 'auto';
+}
+
+function _renderReasoningEffortUI(v) {
+  var eff = _normalizeReasoningEffort(v);
+  var bar = document.getElementById('effort-bar');
+  if (!bar) return;
+  var btns = bar.querySelectorAll('.effort-btn');
+  for (var i = 0; i < btns.length; i++) {
+    var b = btns[i];
+    var on = (b.getAttribute('data-effort') === eff);
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+}
+
+function setReasoningEffort(level) {
+  var eff = _normalizeReasoningEffort(level);
+  S.reasoningEffort = eff;
+  _renderReasoningEffortUI(eff);
+  if (typeof _postSettingsFF === 'function') {
+    _postSettingsFF({ reasoning_effort: eff }, 'Reasoning effort');
+  } else if (typeof postSettings === 'function') {
+    postSettings({ reasoning_effort: eff });
+  }
 }
 
 // removed: updateToolThinkingModeVis — segmented control is always visible
@@ -1195,6 +1231,8 @@ async function loadSettings() {
   if (_ttTog) _ttTog.checked = S.duoToolThinkingAlways;
   var _ttmRb = document.getElementById('ttm_' + S.duoToolThinkingMode);
   if (_ttmRb) _ttmRb.checked = true;
+  S.reasoningEffort = _normalizeReasoningEffort(s.reasoning_effort || 'auto');
+  _renderReasoningEffortUI(S.reasoningEffort);
     // UNTIL-FINISHED ON BY DEFAULT (2026-10-27, owner): a coding run should
     // finish the job. An explicit false from settings still wins.
     S.duoUntilFinished = s.until_finished !== false;
@@ -7775,6 +7813,7 @@ async function sendMsg() {
                 // Tool-Thinking: Toggle=always → auto_mode=always, sonst segmented control
                 duo_coder_tool_thinking: S.duoToolThinkingAlways || S.duoToolThinkingEnabled,
                 duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : (S.duoToolThinkingMode || 'off'),
+                reasoning_effort: S.reasoningEffort || 'auto',
                 chat_id: S.currentChatId || undefined,
         until_finished: !!S.duoUntilFinished,
         // CTX-WITH-RUN: send the currently chosen context so the run uses it

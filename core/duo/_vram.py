@@ -266,7 +266,24 @@ async def _phase_vram(ctx, state: dict):
         _effective_tool_think_toggle
         and _exec_supports_thinking
     )
-    if ctx.duo_config.coder_tool_thinking_explicit and _coder_tool_think:
+    from core.model_sampling import normalize_reasoning_effort as _norm_re_vram
+    _user_eff = _norm_re_vram((ctx.settings or {}).get("reasoning_effort"))
+    if _user_eff == "none":
+        _effective_tool_think_toggle = False
+        _tool_think_auto_mode = "off"
+        _coder_tool_think = False
+    elif _user_eff in ("low", "medium", "high", "max"):
+        _effective_tool_think_toggle = True
+        _exec_supports_thinking = True
+        _exec_has_thinking = True
+        _coder_tool_think = True
+        yield await ctx.emit({
+            "type": "status",
+            "content": f"🧠 Reasoning effort: {_user_eff}",
+        })
+    if _user_eff != "auto":
+        pass
+    elif ctx.duo_config.coder_tool_thinking_explicit and _coder_tool_think:
         if _tool_think_auto_mode == "always":
             yield await ctx.emit({
                 "type": "status",
@@ -340,7 +357,11 @@ async def _phase_vram(ctx, state: dict):
     # Always set (or reset to None) to prevent stale override leaking into next run.
     # Scoped per model: the flag belongs to the tool-round server, not whichever model loads first.
     from backend.llama_server_manager import manager as _lsm_ro
-    _lsm_ro._reasoning_override = {exec_mdl: _coder_tool_think} if ctx.duo_config.coder_tool_thinking_explicit else None
+    _lsm_ro._reasoning_override = (
+        {exec_mdl: _coder_tool_think}
+        if (ctx.duo_config.coder_tool_thinking_explicit or _user_eff in ("low", "medium", "high", "max"))
+        else None
+    )
 
     # ── State population ──
     state.update({

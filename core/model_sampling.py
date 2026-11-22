@@ -42,6 +42,47 @@ _FLAT_SAMPLING_KEYS = (
     "presence_penalty", "repeat_penalty", "repetition_penalty", "seed",
 )
 
+VALID_REASONING_EFFORTS = ("auto", "none", "low", "medium", "high", "max")
+REASONING_EFFORT_BUDGETS: dict[str, int] = {
+    "none": 0,
+    "low": 1024,
+    "medium": 3072,
+    "high": 8192,
+    "max": 16384,
+}
+_EFFORT_USER_ROLES = frozenset({"direct", "duo_coder", "duo_planner", "synthesizer"})
+
+
+def normalize_reasoning_effort(raw: object) -> str:
+    """Normalize user or profile reasoning_effort strings to VALID_REASONING_EFFORTS."""
+    val = str(raw or "").strip().lower()
+    if val in ("off", "disabled", "false", "0"):
+        return "none"
+    if val == "med":
+        return "medium"
+    if val in ("xhigh", "maximum"):
+        return "max"
+    if val == "minimal":
+        return "low"
+    return val if val in VALID_REASONING_EFFORTS else "auto"
+
+
+def resolve_reasoning_effort(
+    settings: dict | None = None,
+    profile: dict | None = None,
+    thinking: bool | None = None,
+) -> str:
+    """Resolve effective reasoning_effort ('none'|'low'|'medium'|'high'|'max' or '')."""
+    user_eff = normalize_reasoning_effort((settings or {}).get("reasoning_effort"))
+    if user_eff != "auto":
+        return user_eff
+    if thinking is False:
+        return "none"
+    prof_eff = normalize_reasoning_effort((profile or {}).get("reasoning_effort"))
+    if prof_eff != "auto":
+        return prof_eff
+    return ""
+
 
 def _sync_repeat_penalty(target: dict, source: dict) -> None:
     """Keep repeat_penalty / repetition_penalty aligned across layers."""
@@ -278,7 +319,21 @@ def resolve_agent_sampling(
     except (TypeError, ValueError):
         eff_budget = 0
 
+    _effort_settings = settings if role in _EFFORT_USER_ROLES else None
+    _user_eff = normalize_reasoning_effort((_effort_settings or {}).get("reasoning_effort"))
+    if _user_eff == "none":
+        eff_think = False
+        eff_budget = 0
+    elif _user_eff in ("low", "medium", "high", "max"):
+        eff_think = True
+        eff_budget = REASONING_EFFORT_BUDGETS[_user_eff]
+
     smp = get_sampling_profile(model_name, thinking=eff_think, settings=settings, mode=mode)
+    _resolved_eff = resolve_reasoning_effort(_effort_settings, smp, thinking=eff_think)
+    if _resolved_eff:
+        smp["reasoning_effort"] = _resolved_eff
+    else:
+        smp.pop("reasoning_effort", None)
     smp["presence_penalty"] = resolve_presence_penalty(
         smp, model_name, thinking=eff_think, settings=settings, mode=mode, default_cap=default_cap,
     )

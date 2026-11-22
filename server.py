@@ -1346,6 +1346,9 @@ async def stream(req: Request):
     _duo_coder_tool_thinking_explicit = "duo_coder_tool_thinking" in body
     duo_coder_tool_thinking = _as_bool(_body_or_settings("duo_coder_tool_thinking", default=False))
     duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="off")).strip().lower()
+    if "reasoning_effort" in body:
+        from core.model_sampling import normalize_reasoning_effort as _norm_re
+        _model_overrides["reasoning_effort"] = _norm_re(body.get("reasoning_effort"))
     chat_id                = body.get("chat_id") or None
     # B1 (audit 2026-11-03): the same shape check routers/chats.py applies.
     # A garbage id fed the adoption glob (*_{id}.json) and the sessions path

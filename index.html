@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261122-03">
+  <link rel="stylesheet" href="/static/style.css?v=20261122-04">
 </head>
 <body>
 <header>
@@ -41,7 +41,17 @@
     <div id="input-row">
       <button class="ibtn" onclick="document.getElementById('file-in').click()" title="Image">&#128444;</button>
       <input type="file" id="file-in" accept="image/*" multiple style="display:none" onchange="handleImgs(this)">
-      <textarea id="input" placeholder="Message..." rows="1"></textarea>
+      <div id="input-box">
+        <textarea id="input" placeholder="Message..." rows="1"></textarea>
+        <div id="effort-bar" class="effort-bar" role="group" aria-label="Reasoning effort" title="Reasoning effort (Auto uses agent/model profile)">
+          <button type="button" class="effort-btn active" data-effort="auto" onclick="setReasoningEffort('auto')" title="Auto: inherit agent and model profile default">Auto</button>
+          <button type="button" class="effort-btn" data-effort="none" onclick="setReasoningEffort('none')" title="None: disable thinking">None</button>
+          <button type="button" class="effort-btn" data-effort="low" onclick="setReasoningEffort('low')" title="Low reasoning effort">Low</button>
+          <button type="button" class="effort-btn" data-effort="medium" onclick="setReasoningEffort('medium')" title="Medium reasoning effort">Med</button>
+          <button type="button" class="effort-btn" data-effort="high" onclick="setReasoningEffort('high')" title="High reasoning effort">High</button>
+          <button type="button" class="effort-btn" data-effort="max" onclick="setReasoningEffort('max')" title="Max reasoning effort">Max</button>
+        </div>
+      </div>
       <button id="pause-btn" onclick="handlePauseClick()" title="Pause"></button>
       <button id="stop-btn" onclick="handleStopClick()" title="Abort run">&#9632;</button>
       <!-- VOICE (1.4): left of send, only rendered when Speech to text is on.
@@ -2787,6 +2797,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261122-04"></script>
+        <script src="/static/app.js?v=20261122-05"></script>
 </body>
 </html>

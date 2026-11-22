@@ -738,6 +738,7 @@ async def _refresh_load_mode_on_draft_drop(
         profile_lm=str(load_mode_cfg.get("profile_lm") or ""),
         free_ram_gb=_free_ram_gb(),
         large_moe=large_moe,
+        moe_cpu_offload=bool(load_mode_cfg.get("moe_cpu_offload")),
     )
     cmd[:] = _strip_flag_pairs(cmd, _LOAD_MODE_VALUE_FLAGS) + ["--load-mode", new_lm]
     lazy_mode = str(load_mode_cfg.get("lazy_mode") or "")

@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**309 settings keys.**
+**310 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -241,6 +241,7 @@ its comment) in either file, then re-run the generator.
 | `prefetch_lead_seconds` | float | `8.0` | yes |  |
 | `preload_workers_after_run` | bool | `False` | yes |  |
 | `read_guard_enabled` | bool | `True` | yes |  |
+| `reasoning_effort` | str | `auto` | yes | REASONING-EFFORT : composer toggle for reasoning-effort models (Inkling-2-Mini, DeepSeek V4.1, etc.) and budget-scaled thinking on others. "auto" inherits per-agent thinking + model profile defaults. |
 | `routing_decider` | str | `off` | yes | ── ROUTING : two independent deciders, each switchable ── The LLM judge costs a model load into VRAM (60 s + eviction) and returns text that has to be parsed. The decider is an encoder (GLiNER2.5, CPU, ~0.5-1.2 s, no VRAM) and is optional (pip install… |
 | `routing_decider_model` | str | `fastino/GLiNER2.5-Decide` | yes |  |
 | `routing_decider_threshold` | float | `0.55` | yes | Below this confidence the decision is marked uncertain (and goes to the judge when active). Calibrated on the multi-label action labels: hits were 0.49-0.92 (median 0.72) - 0.85 would have escalated almost everything. |

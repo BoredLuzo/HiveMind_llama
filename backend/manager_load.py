@@ -342,7 +342,8 @@ def _archive_old_slot_logs(log_dir, port: int, keep: int = 10) -> None:
 
 def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
                        profile_lm: str, free_ram_gb: float,
-                       large_moe: bool = False) -> str:
+                       large_moe: bool = False,
+                       moe_cpu_offload: bool = False) -> str:
     """The one load-mode decision (pure; unit-tested in
     tests/test_load_mode_ram_guard.py).
 
@@ -350,12 +351,16 @@ def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
     - Large-MoE (>= LARGE_MOE_MLOCK_SKIP_GB) with speculation: plain mmap avoids
       both locking 14-17 GiB in RAM (40+ GB commit) and load-mode none (13+ GiB
       shared-VRAM mapping). Explicit profile "mmap+mlock" still wins.
+    - Explicit profile "none" on MoE CPU-offload models beats global mlock when
+      speculation is off and RAM guard allows it.
     - Non-large-MoE with speculation or mlock intent keeps mmap+mlock.
     - Valid profile override > RAM guard (mmap vs none).
     """
     profile = profile_lm if profile_lm in _LOAD_MODES else ""
     if spec_planned and large_moe:
         return profile if profile == "mmap+mlock" else "mmap"
+    if (not spec_planned and moe_cpu_offload and profile == "none"):
+        return "mmap" if _ram_guard_blocks(model, free_ram_gb) else "none"
     if spec_planned or (mlock_now and not large_moe):
         return "mmap+mlock"
     if profile and not (profile == "none"
@@ -1797,10 +1802,23 @@ class LlamaLoadMixin:
             # RESOLVER-ONE (2026-10-28): the full decision (SPEC+NONE guard,
             # mlock intent, profile override, RAM-GUARD) lives in the pure
             # module function - unit-tested, one place for both load paths.
+            _moe_cpu_offload = False
+            try:
+                from .llama_config import (
+                    detect_moe_count as _detect_moe_lm,
+                    is_moe_model as _moe_model_flag,
+                )
+                _moe_cpu_offload = (
+                    _moe_model_flag(model)
+                    and int(_detect_moe_lm(model) or 0) > 0
+                    and _mlock_skip_large_moe_enabled()
+                )
+            except (ImportError, AttributeError, TypeError, ValueError, OSError):
+                _moe_cpu_offload = False
             _load_mode = _resolve_load_mode(
                 model, spec_planned=_spec_planned, mlock_now=_mlock_now,
                 profile_lm=_profile_lm, free_ram_gb=_free_ram_gb(),
-                large_moe=_large_moe)
+                large_moe=_large_moe, moe_cpu_offload=_moe_cpu_offload)
             if _load_mode == _profile_lm and _profile_lm:
                 # LOAD-MODE-OVERRIDE (2026-10-28, speed bench): mmap costs 4.7x
                 # decode on the 35B (llama-bench tg128: 2.92 t/s with mmap+mlock
@@ -1886,6 +1904,7 @@ class LlamaLoadMixin:
                 "profile_lm": _profile_lm,
                 "mlock_now": bool(_mlock_now),
                 "large_moe": bool(_large_moe),
+                "moe_cpu_offload": bool(_moe_cpu_offload),
                 "mtp_planned": self._speculation_planned(model, include_external=False),
                 "lazy_mode": _lazy_mode,
             }
