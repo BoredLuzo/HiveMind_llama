@@ -280,15 +280,20 @@ _js = (_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 _css = (_ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
 check(
-    "index.html & style.css & app.js expose #effort-bar and pin reasoning_effort in /stream",
-    'id="effort-bar"' in _idx
+    "index.html & style.css & app.js expose #effort-trigger/#effort-menu and override badges",
+    'id="effort-trigger"' in _idx
+    and 'id="effort-menu"' in _idx
+    and 'id="effort-bar"' not in _idx
     and 'data-effort="auto"' in _idx
     and 'data-effort="none"' in _idx
     and 'data-effort="low"' in _idx
     and 'data-effort="medium"' in _idx
     and 'data-effort="high"' in _idx
     and 'data-effort="max"' in _idx
-    and ".effort-btn.active" in _css
+    and "reasoning-override-slot" in _idx
+    and ".effort-menu" in _css
+    and ".reasoning-override-badge" in _css
+    and ".effort-btn.active" not in _css
     and "reasoning_effort: S.reasoningEffort || 'auto'" in _js,
 )
 
@@ -296,13 +301,13 @@ _node_eff = r"""
 const fs = require('fs');
 const vm = require('vm');
 const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
-const s = appSrc.indexOf('function _normalizeReasoningEffort(v)');
-const e = appSrc.indexOf('\nfunction _duoCtxPayload', s);
+const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
+const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
 const fnSrc = appSrc.slice(s, e);
-const buttons = ['auto', 'none', 'low', 'medium', 'high', 'max'].map(lvl => ({
+const options = ['auto', 'none', 'low', 'medium', 'high', 'max'].map(lvl => ({
   _lvl: lvl,
-  _cls: new Set(lvl === 'auto' ? ['effort-btn', 'active'] : ['effort-btn']),
-  _attrs: { 'data-effort': lvl, 'aria-pressed': lvl === 'auto' ? 'true' : 'false' },
+  _cls: new Set(lvl === 'auto' ? ['effort-opt', 'active'] : ['effort-opt']),
+  _attrs: { 'data-effort': lvl, 'aria-selected': lvl === 'auto' ? 'true' : 'false' },
   getAttribute(k) { return this._attrs[k] || null; },
   setAttribute(k, v) { this._attrs[k] = String(v); },
   classList: {
@@ -310,46 +315,432 @@ const buttons = ['auto', 'none', 'low', 'medium', 'high', 'max'].map(lvl => ({
     contains(c) { return this._s.has(c); },
   },
 }));
-for (const b of buttons) b.classList._s = b._cls;
+for (const b of options) b.classList._s = b._cls;
+const trigAttrs = { 'data-effort': 'auto', 'aria-expanded': 'false' };
+const trig = {
+  setAttribute(k, v) { trigAttrs[k] = String(v); },
+  getAttribute(k) { return trigAttrs[k] || null; },
+};
+const lblEl = { textContent: 'Auto' };
+const ctxEl = { textContent: '' };
+const menu = {
+  hidden: true,
+  querySelectorAll(sel) { return sel === '.effort-opt' ? options : []; },
+};
+function makeSlot() {
+  return {
+    _children: [],
+    _html: '',
+    get innerHTML() { return this._html; },
+    set innerHTML(v) { this._html = String(v); if (!v) this._children = []; },
+    querySelector(sel) {
+      return sel === '.reasoning-override-badge' ? (this._children[0] || null) : null;
+    },
+    appendChild(ch) { this._children.push(ch); },
+  };
+}
+const badgeSlots = [makeSlot(), makeSlot()];
 const saved = [];
 const ctx = {
-  S: { reasoningEffort: 'auto' },
+  S: {
+    reasoningEffort: 'auto',
+    mode: 'code_duo',
+    duoCoderModel: 'inkling-2-mini-ud',
+    modelProfiles: {
+      'inkling-2-mini-ud': { thinking: true, reasoning_effort: 'medium' },
+      'lfm2.5:24b': { thinking: false, reasoning_effort: null },
+    },
+    currentAssignments: {},
+    agentsCfg: {},
+  },
   document: {
+    createElement(tag) {
+      return { tag, type: '', className: '', title: '', textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+    },
     getElementById(id) {
-      if (id !== 'effort-bar') return null;
-      return { querySelectorAll: () => buttons };
+      if (id === 'effort-trigger') return trig;
+      if (id === 'effort-trig-lbl') return lblEl;
+      if (id === 'effort-menu-ctx') return ctxEl;
+      if (id === 'effort-menu') return menu;
+      return null;
+    },
+    querySelectorAll(sel) {
+      return sel === '.reasoning-override-slot' ? badgeSlots : [];
     },
   },
+  _shortModel: (m) => m,
   _postSettingsFF: (patch, lbl) => { saved.push({ patch, lbl }); },
 };
 vm.createContext(ctx);
 vm.runInContext(fnSrc, ctx);
+ctx.toggleReasoningEffortMenu({ stopPropagation() {} });
+const afterOpen = {
+  menuHidden: menu.hidden,
+  expanded: trig.getAttribute('aria-expanded'),
+  ctxText: ctxEl.textContent,
+};
 ctx.setReasoningEffort('med');
 const afterMed = {
+  menuHidden: menu.hidden,
+  expanded: trig.getAttribute('aria-expanded'),
   state: ctx.S.reasoningEffort,
-  active: buttons.filter(b => b._cls.has('active')).map(b => b._lvl),
-  pressed: buttons.find(b => b._lvl === 'medium')._attrs['aria-pressed'],
+  label: lblEl.textContent,
+  trigEffort: trig.getAttribute('data-effort'),
+  active: options.filter(b => b._cls.has('active')).map(b => b._lvl),
+  selected: options.find(b => b._lvl === 'medium')._attrs['aria-selected'],
+  badgeText: badgeSlots.map(s => s._children[0] && s._children[0].textContent),
   saved,
 };
+ctx.S.mode = 'auto';
+ctx.S.currentAssignments = { direct: { model: 'lfm2.5:24b' } };
 ctx.setReasoningEffort('xhigh');
-const afterMax = {
+const afterMaxNonThink = {
   state: ctx.S.reasoningEffort,
-  active: buttons.filter(b => b._cls.has('active')).map(b => b._lvl),
+  label: lblEl.textContent,
+  ctxText: ctxEl.textContent,
+  badgeText: badgeSlots.map(s => s._children[0] && s._children[0].textContent),
 };
-console.log(JSON.stringify({ afterMed, afterMax }));
+ctx.setReasoningEffort('auto');
+const afterAuto = {
+  state: ctx.S.reasoningEffort,
+  label: lblEl.textContent,
+  badgeCounts: badgeSlots.map(s => s._children.length),
+};
+console.log(JSON.stringify({ afterOpen, afterMed, afterMaxNonThink, afterAuto }));
 """
 _ne = subprocess.run(["node", "-e", _node_eff], cwd=_ROOT, capture_output=True, text=True)
 _ne_ok = _ne.returncode == 0
 if _ne_ok:
     _nej = json.loads(_ne.stdout.strip())
     _ne_ok = (
-        _nej["afterMed"]["state"] == "medium"
+        _nej["afterOpen"]["menuHidden"] is False
+        and _nej["afterOpen"]["expanded"] == "true"
+        and "default: medium" in _nej["afterOpen"]["ctxText"]
+        and _nej["afterMed"]["menuHidden"] is True
+        and _nej["afterMed"]["expanded"] == "false"
+        and _nej["afterMed"]["state"] == "medium"
+        and _nej["afterMed"]["label"] == "Medium"
+        and _nej["afterMed"]["trigEffort"] == "medium"
         and _nej["afterMed"]["active"] == ["medium"]
-        and _nej["afterMed"]["pressed"] == "true"
+        and _nej["afterMed"]["selected"] == "true"
+        and _nej["afterMed"]["badgeText"] == ["Composer: Medium \u00d7", "Composer: Medium \u00d7"]
         and _nej["afterMed"]["saved"][0]["patch"] == {"reasoning_effort": "medium"}
-        and _nej["afterMax"]["state"] == "max"
-        and _nej["afterMax"]["active"] == ["max"]
+        and _nej["afterMaxNonThink"]["state"] == "max"
+        and _nej["afterMaxNonThink"]["label"] == "Max"
+        and "no native reasoning" in _nej["afterMaxNonThink"]["ctxText"]
+        and _nej["afterMaxNonThink"]["badgeText"] == ["Composer: Max \u00d7", "Composer: Max \u00d7"]
+        and _nej["afterAuto"]["state"] == "auto"
+        and _nej["afterAuto"]["label"] == "Auto"
+        and _nej["afterAuto"]["badgeCounts"] == [0, 0]
     )
-check("Node VM confirms setReasoningEffort updates state, ARIA, active pill, and persists", _ne_ok, _ne.stdout.strip() or _ne.stderr.strip())
+check("Node VM confirms dropdown menu, live ctx, override badges, and persistence", _ne_ok, _ne.stdout.strip() or _ne.stderr.strip())
+
+# ── 6. Clash 1: Non-reasoning model guard ("lfm2.5:24b") ──────────────────────
+from types import SimpleNamespace as _SN  # noqa: E402
+_nr_temp, _nr_th_hi, _nr_b_hi, _nr_s_hi = MS.resolve_agent_sampling(
+    "lfm2.5:24b", settings={"reasoning_effort": "high"}, role="direct",
+)
+_nr_temp2, _nr_th_none, _nr_b_none, _nr_s_none = MS.resolve_agent_sampling(
+    "lfm2.5:24b", settings={"reasoning_effort": "none"}, role="direct",
+)
+_nr_tok_hi = _calculate_thinking_tokens(
+    "lfm2.5:24b", {"reasoning_effort": "high"},
+    input_tokens=500, available_ctx=65000, agent_name="duo_coder",
+)
+check(
+    "Non-reasoning model guard blocks High/Max forcing while preserving explicit None",
+    MS.model_supports_thinking("lfm2.5:24b") is False
+    and MS.model_supports_thinking("inkling-2-mini-ud") is True
+    and _nr_th_hi is False
+    and _nr_b_hi == 0
+    and "reasoning_effort" not in _nr_s_hi
+    and _nr_th_none is False
+    and _nr_b_none == 0
+    and _nr_s_none.get("reasoning_effort") == "none"
+    and _nr_tok_hi == 0,
+    repr((_nr_th_hi, _nr_b_hi, _nr_s_hi.get("reasoning_effort"), _nr_s_none.get("reasoning_effort"), _nr_tok_hi)),
+)
+
+_nr_tl_payloads: list[dict] = []
+
+
+class _NrFakeClient:
+    def stream(self, _method: str, _url: str, json: dict | None = None, timeout=None):  # noqa: A002
+        _nr_tl_payloads.append(dict(json or {}))
+        return _FakeStreamCtx(_FakeResp({"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}}))
+
+    async def post(self, url, json=None, **kw):
+        _nr_tl_payloads.append(dict(json or {}))
+        return _FakeResp({"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}})
+
+
+async def _run_nr_tl():
+    _nr_tl = ToolLoop(
+        config=ToolLoopConfig(
+            stream=False, max_rounds=1, model="lfm2.5:24b",
+            max_tokens=1200, thinking=False, settings={"reasoning_effort": "high"},
+            tools=[], require_tool_call=False,
+        ),
+        http_client=_NrFakeClient(),
+        port=18080,
+    )
+    async for _ev in _nr_tl.run([{"role": "user", "content": "hi"}]):
+        pass
+
+
+asyncio.run(_run_nr_tl())
+
+_nr_tl_p = _nr_tl_payloads[0] if _nr_tl_payloads else {}
+check(
+    "ToolLoop never enables thinking or reasoning_effort='high' on non-reasoning lfm2.5:24b",
+    _nr_tl_p.get("thinking") is False
+    and _nr_tl_p.get("thinking_budget") == 0
+    and "reasoning_effort" not in _nr_tl_p
+    and (_nr_tl_p.get("chat_template_kwargs") or {}).get("enable_thinking") is False,
+    repr(_nr_tl_p),
+)
+
+# ── 7. Clash 2: Planner propagation in hive_functions/planner.py ──────────────
+import hive_functions.planner as _pl_mod  # noqa: E402
+
+_, _ps_hi = _pl_mod._resolve_planner_sampling(
+    "inkling-2-mini-ud", True, {"reasoning_effort": "high"}, fallback_temp=0.2,
+)
+_, _ps_nr = _pl_mod._resolve_planner_sampling(
+    "lfm2.5:24b", False, {"reasoning_effort": "high"}, fallback_temp=0.2,
+)
+
+_pl_stream_payloads: list[dict] = []
+_pl_post_payloads: list[dict] = []
+
+
+class _PlFakeStreamResp:
+    status_code = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def aiter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"- [ ] Step 1"}}]}'
+        yield "data: [DONE]"
+
+
+class _PlFakeClient:
+    def __init__(self, *a, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    def stream(self, method, url, json=None, **kw):
+        _pl_stream_payloads.append(dict(json or {}))
+        return _PlFakeStreamResp()
+
+    async def post(self, url, json=None, **kw):
+        _pl_post_payloads.append(dict(json or {}))
+        return _SN(
+            status_code=200,
+            json=lambda: {"choices": [{"message": {"content": "## Plan:\n- [ ] Step 1", "reasoning_content": ""}}]},
+        )
+
+
+_orig_pl_httpx = _pl_mod.httpx
+_pl_mod.httpx = _SN(
+    AsyncClient=_PlFakeClient,
+    Limits=_orig_pl_httpx.Limits,
+    Timeout=_orig_pl_httpx.Timeout,
+    HTTPError=_orig_pl_httpx.HTTPError,
+    ConnectError=_orig_pl_httpx.ConnectError,
+)
+try:
+    _pl_stream_payloads.clear()
+    _res_hi = asyncio.run(_pl_mod.run_planner(
+        task="Implement widget", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=False, thinking_budget=0,
+        settings={"reasoning_effort": "high"},
+    ))
+    _pl_hi = dict(_pl_stream_payloads[0])
+
+    _pl_stream_payloads.clear()
+    _res_none = asyncio.run(_pl_mod.run_planner(
+        task="Implement widget", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=True, thinking_budget=0,
+        settings={"reasoning_effort": "none"},
+    ))
+    _pl_none = dict(_pl_stream_payloads[0])
+
+    _pl_stream_payloads.clear()
+    _res_nr = asyncio.run(_pl_mod.run_planner(
+        task="Implement widget", explore_ctx="ctx", planner_model="lfm2.5:24b",
+        planner_port=18081, use_thinking=False, thinking_budget=0,
+        settings={"reasoning_effort": "high"},
+    ))
+    _pl_nr = dict(_pl_stream_payloads[0])
+
+    _pl_post_payloads.clear()
+    asyncio.run(_pl_mod.run_inloop_planner(
+        task="Follow-up", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=False, thinking_budget=0,
+        settings={"reasoning_effort": "low"},
+    ))
+    _inloop_low = dict(_pl_post_payloads[0])
+finally:
+    _pl_mod.httpx = _orig_pl_httpx
+
+check(
+    "Planner run_planner & run_inloop_planner propagate reasoning_effort safely",
+    _ps_hi.get("reasoning_effort") == "high"
+    and "reasoning_effort" not in _ps_nr
+    and _res_hi.used_thinking is True
+    and _pl_hi.get("thinking") is True
+    and _pl_hi.get("thinking_budget") == MS.REASONING_EFFORT_BUDGETS["high"]
+    and _pl_hi.get("reasoning_effort") == "high"
+    and _res_none.used_thinking is False
+    and _pl_none.get("thinking") is False
+    and _pl_none.get("reasoning_effort") == "none"
+    and _res_nr.used_thinking is False
+    and _pl_nr.get("thinking") is False
+    and _pl_nr.get("reasoning_effort") != "high"
+    and _inloop_low.get("thinking") is True
+    and _inloop_low.get("thinking_budget") == MS.REASONING_EFFORT_BUDGETS["low"]
+    and _inloop_low.get("reasoning_effort") == "low",
+    repr((_ps_hi.get("reasoning_effort"), _ps_nr.get("reasoning_effort"), _pl_hi.get("thinking_budget"), _pl_none.get("reasoning_effort"), _pl_nr.get("reasoning_effort"), _inloop_low.get("thinking_budget"))),
+)
+
+# ── 8. Clash 3: duo_tool_thinking_budget_cap auto-gate + 70% clamp ───────────
+_dr_src = (_ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+check(
+    "duo_runner gates duo_tool_thinking_budget_cap on auto and clamps to 70% of max_tokens_round",
+    '_coder_user_eff == "auto" and _think_cap > 0 and _tool_thinking_budget > _think_cap' in _dr_src
+    and '_budget_70_cap = max(1, int(_max_tokens_round * 0.70))' in _dr_src
+    and _dr_src.index('_budget_70_cap') < _dr_src.index('_tool_payload = {'),
+)
+
+# ── 9. Clash 4: slot._reasoning_on + --reasoning off -> on reload ───────────
+import asyncio as _aio  # noqa: E402
+from types import SimpleNamespace as _SN  # noqa: E402
+from backend.llama_slots import ModelSlot  # noqa: E402
+import backend.manager_load as _ml_mod  # noqa: E402
+
+_sl_check = ModelSlot(0)
+_init_none = _sl_check._reasoning_on is None
+_sl_check._reasoning_on = False
+_sl_check.model = "inkling-2-mini-ud"
+_sl_check.process = _SN(pid=99998, poll=lambda: None, terminate=lambda: None, wait=lambda **k: 0)
+_sl_check.kill()
+_kill_reset = _sl_check._reasoning_on is None
+
+
+class _ReasoningReloadMgr(_ml_mod.LlamaLoadMixin):
+    def __init__(self, slot):
+        self._slots = [slot]
+        self._lock = _aio.Lock()
+        self._load_seq = 0
+        self._last_orphan_scan_ts = 1e12
+        self.start_count = 0
+        self.kill_count = 0
+
+    def _metric_inc(self, *_a, **_k):
+        pass
+
+    async def _find_loaded(self, model, **_kw):
+        for sl in self._slots:
+            if _ml_mod._nm(sl.model) == _ml_mod._nm(model) and (sl.is_running or sl._loading):
+                return sl
+        return None
+
+    async def _find_free_slot(self):
+        for sl in self._slots:
+            if not sl.is_running and not sl._loading:
+                return sl
+        return None
+
+    async def _kill_claimed_slot(self, sl):
+        self.kill_count += 1
+        sl.model = None
+        sl._loading = False
+        sl.process = None
+        sl._reasoning_on = None
+
+    async def _enforce_vram_budget(self, _slot):
+        pass
+
+    async def _port_alive(self, _port):
+        return True
+
+    async def _start_process(self, sl, model, num_ctx, vision=False, n_parallel=1, ctx_graceful=True, **_kw):
+        self.start_count += 1
+        sl.process = _SN(pid=222, poll=lambda: None)
+        sl.model = model
+        sl._num_ctx = num_ctx
+        sl._vision = vision
+        sl._jinja = True
+        sl._n_parallel = n_parallel
+        sl._reasoning_on = _ml_mod._wants_reasoning_on(self, model)
+        sl._loading = False
+        sl._ready_event.set()
+
+
+async def _run_reload_tests():
+    # Case A: --reasoning off -> on triggers clean reload when not busy
+    s1 = ModelSlot(0)
+    s1.model = "inkling-2-mini-ud"
+    s1.process = _SN(pid=101, poll=lambda: None)
+    s1._num_ctx = 16384
+    s1._jinja = True
+    s1._reasoning_on = False
+    m1 = _ReasoningReloadMgr(s1)
+    m1._reasoning_override = {"inkling-2-mini-ud": True}
+    await m1.ensure_loaded("inkling-2-mini-ud", num_ctx=16384)
+
+    # Case B: Busy slot (in_flight=1) must NOT be killed mid-request
+    s2 = ModelSlot(0)
+    s2.model = "inkling-2-mini-ud"
+    s2.process = _SN(pid=102, poll=lambda: None)
+    s2._num_ctx = 16384
+    s2._jinja = True
+    s2._reasoning_on = False
+    s2.mark_in_flight()
+    m2 = _ReasoningReloadMgr(s2)
+    m2._reasoning_override = {"inkling-2-mini-ud": True}
+    await m2.ensure_loaded("inkling-2-mini-ud", num_ctx=16384)
+
+    # Case C: Already --reasoning on does NOT reload
+    s3 = ModelSlot(0)
+    s3.model = "inkling-2-mini-ud"
+    s3.process = _SN(pid=103, poll=lambda: None)
+    s3._num_ctx = 16384
+    s3._jinja = True
+    s3._reasoning_on = True
+    m3 = _ReasoningReloadMgr(s3)
+    await m3.ensure_loaded("inkling-2-mini-ud", num_ctx=16384)
+
+    return (m1.kill_count, m1.start_count, s1._reasoning_on), (m2.kill_count, m2.start_count), (m3.kill_count, m3.start_count)
+
+
+_r_a, _r_b, _r_c = _aio.run(_run_reload_tests())
+check(
+    "ModelSlot._reasoning_on and ensure_loaded reload on --reasoning off -> on (respecting busy guard)",
+    _init_none and _kill_reset and _r_a == (1, 1, True) and _r_b == (0, 0) and _r_c == (0, 0),
+    repr((_init_none, _kill_reset, _r_a, _r_b, _r_c)),
+)
+
+# ── 10. /models profile exposure of reasoning_effort ─────────────────────────
+from routers.models import _build_models_profiles  # noqa: E402
+
+_mp_list = _build_models_profiles(["inkling-2-mini-ud", "lfm2.5:24b"])
+_mp_by_name = {p["name"]: p for p in _mp_list}
+check(
+    "_build_models_profiles exposes reasoning_effort='medium' for Inkling and None for non-reasoning LFM",
+    _mp_by_name.get("inkling-2-mini-ud", {}).get("reasoning_effort") == "medium"
+    and _mp_by_name.get("lfm2.5:24b", {}).get("reasoning_effort") is None,
+    repr(_mp_by_name),
+)
 
 sys.exit(h.finish("reasoning_effort_and_pip_pipe"))

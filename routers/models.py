@@ -290,6 +290,23 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
             p["load_mode"] = _glm(_mname) or _reg_prof.get("load_mode") or "auto"
             _tb = _gtb(_mname)
             p["thinking_budget"] = _tb if _tb is not None else _reg_prof.get("thinking_budget")
+            _samp = _reg_prof.get("sampling")
+            _samp = _samp if isinstance(_samp, dict) else {}
+            _re_val = ""
+            if p.get("thinking"):
+                for _cand_blk in (
+                    _reg_prof,
+                    _samp.get("sampling_thinking_code"),
+                    _samp.get("sampling_thinking_text"),
+                    _samp.get("thinking"),
+                    _reg_prof.get("sampling_thinking_code"),
+                    _reg_prof.get("sampling_thinking"),
+                ):
+                    if isinstance(_cand_blk, dict) and _cand_blk.get("reasoning_effort"):
+                        _re_val = str(_cand_blk.get("reasoning_effort") or "")
+                        break
+            _re_norm = _re_val.strip().lower()
+            p["reasoning_effort"] = _re_norm if _re_norm and _re_norm != "auto" else None
             p["source"] = _gps(_mname)
             _kv_bpt = _reg_prof.get("kv_bytes_per_token")
             if not _kv_bpt:
@@ -305,6 +322,7 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
             p.setdefault("mtp", False)
             p.setdefault("load_mode", "auto")
             p.setdefault("thinking_budget", None)
+            p.setdefault("reasoning_effort", None)
             p.setdefault("source", "generic")
             p.setdefault("kv_bytes_per_token", None)
     return prof_list

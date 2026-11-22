@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261122-04">
+  <link rel="stylesheet" href="/static/style.css?v=20261122-05">
 </head>
 <body>
 <header>
@@ -43,13 +43,63 @@
       <input type="file" id="file-in" accept="image/*" multiple style="display:none" onchange="handleImgs(this)">
       <div id="input-box">
         <textarea id="input" placeholder="Message..." rows="1"></textarea>
-        <div id="effort-bar" class="effort-bar" role="group" aria-label="Reasoning effort" title="Reasoning effort (Auto uses agent/model profile)">
-          <button type="button" class="effort-btn active" data-effort="auto" onclick="setReasoningEffort('auto')" title="Auto: inherit agent and model profile default">Auto</button>
-          <button type="button" class="effort-btn" data-effort="none" onclick="setReasoningEffort('none')" title="None: disable thinking">None</button>
-          <button type="button" class="effort-btn" data-effort="low" onclick="setReasoningEffort('low')" title="Low reasoning effort">Low</button>
-          <button type="button" class="effort-btn" data-effort="medium" onclick="setReasoningEffort('medium')" title="Medium reasoning effort">Med</button>
-          <button type="button" class="effort-btn" data-effort="high" onclick="setReasoningEffort('high')" title="High reasoning effort">High</button>
-          <button type="button" class="effort-btn" data-effort="max" onclick="setReasoningEffort('max')" title="Max reasoning effort">Max</button>
+        <div id="effort-wrap" class="effort-wrap">
+          <button type="button" id="effort-trigger" class="effort-trigger" data-effort="auto" aria-haspopup="listbox" aria-expanded="false" onclick="toggleReasoningEffortMenu(event)" title="Thinking effort (Auto inherits agent &amp; model profile)">
+            <span class="effort-trig-ico" aria-hidden="true">&#129504;</span>
+            <span class="effort-trig-lbl" id="effort-trig-lbl">Auto</span>
+            <span class="effort-trig-caret" aria-hidden="true">&#9662;</span>
+          </button>
+          <div id="effort-menu" class="effort-menu" role="listbox" aria-label="Thinking effort" hidden>
+            <div class="effort-menu-hdr">
+              <div class="effort-menu-title-row">
+                <span class="effort-menu-title">Thinking effort</span>
+                <span class="effort-menu-info" title="Auto uses agent card toggle + model profile default (e.g. Inkling: medium). Non-reasoning models ignore effort > None.">&#9432;</span>
+              </div>
+              <div id="effort-menu-ctx" class="effort-menu-ctx">Inherits agent &amp; model default</div>
+            </div>
+            <button type="button" class="effort-opt active" data-effort="auto" role="option" aria-selected="true" onclick="setReasoningEffort('auto')">
+              <span class="effort-opt-main">
+                <span class="effort-opt-name">Auto</span>
+                <span class="effort-opt-desc">Inherits agent &amp; model default</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="none" role="option" aria-selected="false" onclick="setReasoningEffort('none')">
+              <span class="effort-opt-main">
+                <span class="effort-opt-name">None</span>
+                <span class="effort-opt-desc">Disable thinking tokens</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="low" role="option" aria-selected="false" onclick="setReasoningEffort('low')">
+              <span class="effort-opt-main">
+                <span class="effort-opt-name">Low</span>
+                <span class="effort-opt-desc">Light · ~1K thinking tokens</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="medium" role="option" aria-selected="false" onclick="setReasoningEffort('medium')">
+              <span class="effort-opt-main">
+                <span class="effort-opt-name">Medium</span>
+                <span class="effort-opt-desc">Balanced · ~3K thinking tokens</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="high" role="option" aria-selected="false" onclick="setReasoningEffort('high')">
+              <span class="effort-opt-main">
+                <span class="effort-opt-name">High</span>
+                <span class="effort-opt-desc">Deep reasoning · ~8K tokens</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="max" role="option" aria-selected="false" onclick="setReasoningEffort('max')">
+              <span class="effort-opt-main">
+                <span class="effort-opt-name">Max</span>
+                <span class="effort-opt-desc">Maximum · ~16K tokens</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+          </div>
         </div>
       </div>
       <button id="pause-btn" onclick="handlePauseClick()" title="Pause"></button>
@@ -650,7 +700,7 @@
 
         <div class="opt-row">
           <div class="opt-row-left">
-            <span class="opt-name">Planner Thinking</span>
+            <span class="opt-name">Planner Thinking <span class="reasoning-override-slot"></span></span>
             <span class="opt-hint">Planner thinks through the task before output</span>
           </div>
           <label class="cfl-sw" style="margin:0">
@@ -684,7 +734,7 @@
         <div style="margin-top:4px" id="duo-coder-tool-thinking-wrap">
           <div class="opt-row">
             <div class="opt-row-left">
-              <span class="opt-name">Thinking with tool use</span>
+              <span class="opt-name">Thinking with tool use <span class="reasoning-override-slot"></span></span>
               <span class="opt-hint">Always think on tool calls</span>
             </div>
             <label class="cfl-sw" style="margin:0">
@@ -2797,6 +2847,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261122-05"></script>
+        <script src="/static/app.js?v=20261122-06"></script>
 </body>
 </html>

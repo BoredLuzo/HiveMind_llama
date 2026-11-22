@@ -219,6 +219,21 @@ async def _phase_vram(ctx, state: dict):
                 _pc_ctx = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), _pm, "coder")
             else:
                 _pc_ctx = resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), _pm, "critic")
+            from core.model_sampling import (
+                model_supports_thinking as _pin_mst,
+                normalize_reasoning_effort as _pin_norm_re,
+            )
+            _pin_eff = _pin_norm_re((ctx.settings or {}).get("reasoning_effort"))
+            if (
+                _pm in (coder_mdl, exec_mdl)
+                and _pin_eff in ("low", "medium", "high", "max")
+                and _pin_mst(_pm)
+            ):
+                try:
+                    from backend.llama_server_manager import manager as _lsm_pin_ro
+                    _lsm_pin_ro._reasoning_override = {_pm: True}
+                except (ImportError, AttributeError):
+                    pass
             await _bk_load(_pm, keep_alive="-1", num_ctx=_pc_ctx or None)
             _duo_pinned.add(_pm)
         _pinned_names = " + ".join(m.split(":")[0] for m in _duo_pinned) or exec_mdl.split(":")[0]
@@ -266,21 +281,31 @@ async def _phase_vram(ctx, state: dict):
         _effective_tool_think_toggle
         and _exec_supports_thinking
     )
-    from core.model_sampling import normalize_reasoning_effort as _norm_re_vram
+    from core.model_sampling import (
+        model_supports_thinking as _mst_vram,
+        normalize_reasoning_effort as _norm_re_vram,
+    )
     _user_eff = _norm_re_vram((ctx.settings or {}).get("reasoning_effort"))
+    _exec_native_think = _model_hint_thinking or _mst_vram(exec_mdl)
     if _user_eff == "none":
         _effective_tool_think_toggle = False
         _tool_think_auto_mode = "off"
         _coder_tool_think = False
     elif _user_eff in ("low", "medium", "high", "max"):
-        _effective_tool_think_toggle = True
-        _exec_supports_thinking = True
-        _exec_has_thinking = True
-        _coder_tool_think = True
-        yield await ctx.emit({
-            "type": "status",
-            "content": f"🧠 Reasoning effort: {_user_eff}",
-        })
+        if _exec_native_think:
+            _effective_tool_think_toggle = True
+            _exec_supports_thinking = True
+            _exec_has_thinking = True
+            _coder_tool_think = True
+            yield await ctx.emit({
+                "type": "status",
+                "content": f"🧠 Reasoning effort: {_user_eff}",
+            })
+        else:
+            yield await ctx.emit({
+                "type": "status",
+                "content": f"ℹ️ Reasoning effort ({_user_eff}) skipped — {exec_mdl} does not support reasoning",
+            })
     if _user_eff != "auto":
         pass
     elif ctx.duo_config.coder_tool_thinking_explicit and _coder_tool_think:
@@ -359,7 +384,7 @@ async def _phase_vram(ctx, state: dict):
     from backend.llama_server_manager import manager as _lsm_ro
     _lsm_ro._reasoning_override = (
         {exec_mdl: _coder_tool_think}
-        if (ctx.duo_config.coder_tool_thinking_explicit or _user_eff in ("low", "medium", "high", "max"))
+        if (ctx.duo_config.coder_tool_thinking_explicit or (_user_eff in ("low", "medium", "high", "max") and _exec_native_think))
         else None
     )
 

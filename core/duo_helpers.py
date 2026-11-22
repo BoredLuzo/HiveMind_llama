@@ -448,13 +448,17 @@ def _calculate_thinking_tokens(
     _s = settings_dict or {}
     from core.model_sampling import (
         REASONING_EFFORT_BUDGETS as _RE_BUDGETS,
+        model_supports_thinking as _mst_dh,
         normalize_reasoning_effort as _norm_re,
     )
     _user_eff = _norm_re(_s.get("reasoning_effort"))
     if _user_eff == "none":
         return 0
+    profile = _get_thinking_profile(model_name, _s)
     base_budget = None
     if _user_eff in ("low", "medium", "high", "max"):
+        if not (profile.get("thinking_enabled") or _mst_dh(model_name)):
+            return 0
         base_budget = _RE_BUDGETS[_user_eff]
     elif agent_name:
         agent_cfg = _s.get("agents", {}).get(agent_name, {})
@@ -468,7 +472,6 @@ def _calculate_thinking_tokens(
                 except (ValueError, TypeError):
                     pass
 
-    profile = _get_thinking_profile(model_name, _s)
     if base_budget is None:
         if not profile.get("thinking_enabled"):
             return 0

@@ -561,6 +561,7 @@ def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think, setting
     from core.model_sampling import resolve_reasoning_effort
     _eff = resolve_reasoning_effort(
         settings, profile, thinking=bool(thinking and coder_tool_think),
+        model_name=str(payload.get("model") or ""),
     )
     if _eff == "none":
         payload["thinking"] = False

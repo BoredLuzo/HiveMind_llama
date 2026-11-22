@@ -23,6 +23,7 @@ _log = logging.getLogger("hivemind.tool_loop")
 from core.model_sampling import (
     REASONING_EFFORT_BUDGETS as _RE_BUDGETS,
     get_sampling_profile,
+    model_supports_thinking,
     resolve_presence_penalty,
     resolve_reasoning_effort,
 )
@@ -450,11 +451,16 @@ class ToolLoop:
             }
             _eff = resolve_reasoning_effort(
                 self.cfg.settings, _smp, thinking=bool(self.cfg.thinking),
+                model_name=self.cfg.model,
             )
-            if _eff == "none" or (not self.cfg.thinking and not _eff):
+            _can_think = model_supports_thinking(self.cfg.model) or bool(self.cfg.thinking)
+            if _eff == "none" or (not self.cfg.thinking and not _eff) or not _can_think:
                 _payload["thinking"] = False
                 _payload["thinking_budget"] = 0
-                _payload["reasoning_effort"] = "none"
+                if _eff == "none" or bool(self.cfg.thinking):
+                    _payload["reasoning_effort"] = "none"
+                else:
+                    _payload.pop("reasoning_effort", None)
                 _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
             else:
                 _payload["thinking"] = True

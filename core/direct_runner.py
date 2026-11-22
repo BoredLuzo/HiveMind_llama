@@ -285,14 +285,21 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         # (2026-10-06, live 11:45): ctx.effective_images was emptied by the
         # gate for the registry model while the msgs still carried raw parts
         # for the P9-override model → projector-less slot → POST 500.
-        _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
-                                         vision=vision)
         _agent = ctx.pipeline.agents["direct"]
-        from core.model_sampling import resolve_agent_sampling as _resolve_dt_smp
+        from core.model_sampling import (
+            model_supports_thinking as _dt_mst,
+            normalize_reasoning_effort as _dt_norm_re,
+            resolve_agent_sampling as _resolve_dt_smp,
+        )
         _, _think, _resolved_budget, _ = _resolve_dt_smp(
             model, agent=_agent, settings=_settings_dict, role="direct",
         )
-        _budget = int(getattr(_agent, "thinking_budget", 0) or _resolved_budget or 0)
+        _dt_user_eff = _dt_norm_re(_settings_dict.get("reasoning_effort"))
+        if _think and _dt_user_eff in ("low", "medium", "high", "max") and _dt_mst(model):
+            _mgr._reasoning_override = {model: True}
+        _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
+                                         vision=vision)
+        _budget = int(_resolved_budget or 0)
         _base_tok = int(getattr(_agent, "max_tokens", 600) or 600)
         _max_tokens = _base_tok + (_budget if _think and _budget > 0 else 0)
         _max_tokens = min(int(_max_tokens), max(256, int(_num_ctx) - 512))
@@ -971,6 +978,17 @@ async def _run_direct_inner(ctx):
             # ToolLoop already streamed the answer live (or aborted in pause) — skip fallback stream.
             parts = [_tool_content] if _tool_content else []
         else:
+            from core.model_sampling import (
+                model_supports_thinking as _dir_mst,
+                normalize_reasoning_effort as _dir_norm_re,
+            )
+            _dir_user_eff = _dir_norm_re((ctx.settings or {}).get("reasoning_effort"))
+            if _direct_think and _dir_user_eff in ("low", "medium", "high", "max") and _dir_mst(_direct_model):
+                try:
+                    from backend.llama_client import manager as _dir_mgr
+                    _dir_mgr._reasoning_override = {_direct_model: True}
+                except (ImportError, AttributeError):
+                    pass
             _d_ct_sum = _d_pt_sum = _d_ca_sum = 0
             _d_gen_ms_sum = 0.0
             _d_pred_tps = 0.0

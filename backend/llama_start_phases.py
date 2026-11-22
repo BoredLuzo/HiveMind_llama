@@ -1670,8 +1670,16 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     # specific server instance, so it must only fire for the model it was
     # set for — a plain consume-once flag landed on whichever model loaded
     # first (e.g. the planner) and left the coder server at template default.
-    _ro_for_model = (type(self)._reasoning_override or {}).pop(model, None)
-    if type(self)._reasoning_override is not None and not type(self)._reasoning_override:
+    _inst_ro = getattr(self, "__dict__", {}).get("_reasoning_override")
+    _cls_ro = getattr(type(self), "_reasoning_override", None)
+    _ro_for_model = None
+    if isinstance(_inst_ro, dict) and model in _inst_ro:
+        _ro_for_model = _inst_ro.pop(model, None)
+    elif isinstance(_cls_ro, dict) and model in _cls_ro:
+        _ro_for_model = _cls_ro.pop(model, None)
+    if isinstance(_inst_ro, dict) and not _inst_ro:
+        self._reasoning_override = None
+    if isinstance(_cls_ro, dict) and not _cls_ro:
         type(self)._reasoning_override = None
     if _ro_for_model is not None:
         cmd += ["--reasoning", "on" if _ro_for_model else "off"]
@@ -2552,6 +2560,21 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             slot._num_ctx   = num_ctx
             slot._n_parallel = n_parallel
             slot._jinja      = "--jinja" in cmd
+            _r_flag_val = None
+            for _ci in range(len(cmd) - 2, -1, -1):
+                if cmd[_ci] == "--reasoning":
+                    _rv = str(cmd[_ci + 1]).strip().lower()
+                    if _rv in ("on", "true", "1", "auto"):
+                        _r_flag_val = True
+                    elif _rv in ("off", "false", "0"):
+                        _r_flag_val = False
+                    break
+            if _r_flag_val is None:
+                for _ci in range(len(cmd) - 2, -1, -1):
+                    if cmd[_ci] == "--reasoning-budget" and str(cmd[_ci + 1]).strip() == "0":
+                        _r_flag_val = False
+                        break
+            slot._reasoning_on = _r_flag_val
 
             _wait_done = False
             try:

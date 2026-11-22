@@ -343,6 +343,15 @@ function onDuoToolThinkingModeChange(v) {
   });
 }
 
+var _REASONING_EFFORT_LABELS = {
+  auto: 'Auto',
+  none: 'None',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  max: 'Max',
+};
+
 function _normalizeReasoningEffort(v) {
   var eff = String(v || 'auto').trim().toLowerCase();
   if (eff === 'off' || eff === 'disabled' || eff === 'false' || eff === '0') return 'none';
@@ -354,28 +363,127 @@ function _normalizeReasoningEffort(v) {
     : 'auto';
 }
 
+function _getActiveEffortContext() {
+  var mode = S.mode || 'auto';
+  var m = '';
+  if (mode === 'code_duo') {
+    m = S.duoCoderModel || ((S.agentsCfg && S.agentsCfg.duo_coder && S.agentsCfg.duo_coder.model) || '');
+  } else if (mode === 'pipeline') {
+    m = (S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.model) || '';
+  } else {
+    m = S._lastDirectRunModel
+      || (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model)
+      || (S.agentsCfg && S.agentsCfg.direct && S.agentsCfg.direct.model)
+      || '';
+  }
+  if (!m) return 'Inherits active agent & model default';
+  var shortM = typeof _shortModel === 'function' ? _shortModel(m) : m;
+  var prof = (S.modelProfiles && (S.modelProfiles[m] || S.modelProfiles[String(m).split(':')[0]])) || null;
+  if (!prof) return shortM + ' \u00b7 agent & model default';
+  if (!prof.thinking) return shortM + ' \u00b7 no native reasoning (unchanged)';
+  var profEff = prof.reasoning_effort
+    || (prof.sampling_thinking_code && prof.sampling_thinking_code.reasoning_effort)
+    || (prof.sampling_thinking && prof.sampling_thinking.reasoning_effort)
+    || '';
+  if (profEff) return shortM + ' \u00b7 default: ' + profEff;
+  return shortM + ' \u00b7 reasoning capable';
+}
+
+function _syncReasoningOverrideBadges() {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  var eff = _normalizeReasoningEffort(S.reasoningEffort);
+  var active = eff !== 'auto';
+  var lbl = 'Composer: ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ' \u00d7';
+  var slots = document.querySelectorAll('.reasoning-override-slot');
+  for (var i = 0; i < slots.length; i++) {
+    var slot = slots[i];
+    if (!active) {
+      slot.innerHTML = '';
+      continue;
+    }
+    var btn = slot.querySelector('.reasoning-override-badge');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'reasoning-override-badge';
+      btn.title = 'Overridden by composer Thinking effort \u2014 click to reset to Auto';
+      btn.setAttribute('onclick', "setReasoningEffort('auto')");
+      slot.innerHTML = '';
+      slot.appendChild(btn);
+    }
+    btn.textContent = lbl;
+  }
+}
+
+function closeReasoningEffortMenu() {
+  if (typeof document === 'undefined') return;
+  var menu = document.getElementById('effort-menu');
+  var trig = document.getElementById('effort-trigger');
+  if (menu) menu.hidden = true;
+  if (trig) trig.setAttribute('aria-expanded', 'false');
+}
+
+function toggleReasoningEffortMenu(ev) {
+  if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+  if (typeof document === 'undefined') return;
+  var menu = document.getElementById('effort-menu');
+  var trig = document.getElementById('effort-trigger');
+  if (!menu || !trig) return;
+  var willOpen = Boolean(menu.hidden);
+  menu.hidden = !willOpen;
+  trig.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  if (willOpen) {
+    var ctxEl = document.getElementById('effort-menu-ctx');
+    if (ctxEl) ctxEl.textContent = _getActiveEffortContext();
+  }
+}
+
 function _renderReasoningEffortUI(v) {
   var eff = _normalizeReasoningEffort(v);
-  var bar = document.getElementById('effort-bar');
-  if (!bar) return;
-  var btns = bar.querySelectorAll('.effort-btn');
-  for (var i = 0; i < btns.length; i++) {
-    var b = btns[i];
-    var on = (b.getAttribute('data-effort') === eff);
-    b.classList.toggle('active', on);
-    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  if (typeof document !== 'undefined') {
+    var trig = document.getElementById('effort-trigger');
+    if (trig) trig.setAttribute('data-effort', eff);
+    var lblEl = document.getElementById('effort-trig-lbl');
+    if (lblEl) lblEl.textContent = _REASONING_EFFORT_LABELS[eff] || 'Auto';
+    var ctxEl = document.getElementById('effort-menu-ctx');
+    if (ctxEl) ctxEl.textContent = _getActiveEffortContext();
+    var menu = document.getElementById('effort-menu');
+    if (menu && menu.querySelectorAll) {
+      var opts = menu.querySelectorAll('.effort-opt');
+      for (var i = 0; i < opts.length; i++) {
+        var b = opts[i];
+        var on = (b.getAttribute('data-effort') === eff);
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      }
+    }
   }
+  _syncReasoningOverrideBadges();
 }
 
 function setReasoningEffort(level) {
   var eff = _normalizeReasoningEffort(level);
   S.reasoningEffort = eff;
+  closeReasoningEffortMenu();
   _renderReasoningEffortUI(eff);
   if (typeof _postSettingsFF === 'function') {
     _postSettingsFF({ reasoning_effort: eff }, 'Reasoning effort');
   } else if (typeof postSettings === 'function') {
     postSettings({ reasoning_effort: eff });
   }
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('click', function(ev) {
+    var wrap = document.getElementById('effort-wrap');
+    if (!wrap) return;
+    if (!ev || !ev.target || (typeof wrap.contains === 'function' && !wrap.contains(ev.target))) {
+      closeReasoningEffortMenu();
+    }
+  });
+  document.addEventListener('keydown', function(ev) {
+    if (ev && ev.key === 'Escape') closeReasoningEffortMenu();
+  });
 }
 
 // removed: updateToolThinkingModeVis — segmented control is always visible
@@ -968,6 +1076,7 @@ async function loadModels() {
       if (d.profiles && d.profiles.length) {
         S.modelProfiles = {};
         d.profiles.forEach(function(p) { if (p.name) S.modelProfiles[p.name] = p; });
+        if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
       }
       if (d.vision_preprocessing_allowlist) {
         S.visionAllowlist = new Set(d.vision_preprocessing_allowlist);
@@ -1974,6 +2083,7 @@ function _applyDuoModelChange(agentKey, stateField, settingKey, model, extraPatc
   updateDuoPairHint();
   updateDuoImageUI();
   if (agentKey === 'duo_coder') updateMoeVisibility();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
   if (typeof updateModelsChip === 'function') updateModelsChip();
 }
@@ -3187,6 +3297,7 @@ function setModeUI(mode) {
   updateModeDesc();
   updateComplexityVisibility();
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 }
 
 function setIters(val) {
@@ -3610,7 +3721,10 @@ function renderAgentCards(agents) {
       + (think ? ' checked' : '') + ' style="margin-left:6px;accent-color:#8858c0">'
       + '<span class="thk-badge" style="font-size:8px;padding:1px 4px;border-radius:2px;'
       + 'background:rgba(136,88,192,.15);color:#8858c0;border:1px solid rgba(136,88,192,.3);'
-      + 'margin-left:8px">\uD83E\uDDE0</span>';
+      + 'margin-left:8px">\uD83E\uDDE0</span>'
+      + ((key === 'direct' || key === 'duo_coder' || key === 'synthesizer')
+        ? '<span class="reasoning-override-slot" data-agent-override="' + key + '"></span>'
+        : '');
     thkCell.appendChild(thinkRow);
 
     const thkBudgetId = 'tkb-' + key;
@@ -3693,6 +3807,7 @@ function renderAgentCards(agents) {
     div.appendChild(btn);
 
     c.appendChild(div);
+    if (typeof _syncReasoningOverrideBadges === 'function') _syncReasoningOverrideBadges();
     } catch(cardErr) { console.error('[renderAgentCards] error for agent', entries[i] && entries[i][0], cardErr); }
   }
   // fill all selects with the current models (if S.models is already filled)
@@ -3752,6 +3867,7 @@ function _syncAgentModelState(key, model, sel) {
     updateDuoPairHint();
     updateMoeVisibility();
   }
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   if (key === 'duo_critic') {
     S.duoCriticModel = model || '';
     var _dcrm = document.getElementById('duo-critic-model-sel');

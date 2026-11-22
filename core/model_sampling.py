@@ -71,10 +71,15 @@ def resolve_reasoning_effort(
     settings: dict | None = None,
     profile: dict | None = None,
     thinking: bool | None = None,
+    model_name: str = "",
 ) -> str:
     """Resolve effective reasoning_effort ('none'|'low'|'medium'|'high'|'max' or '')."""
     user_eff = normalize_reasoning_effort((settings or {}).get("reasoning_effort"))
+    if user_eff == "none":
+        return "none"
     if user_eff != "auto":
+        if model_name and not model_supports_thinking(model_name):
+            return ""
         return user_eff
     if thinking is False:
         return "none"
@@ -287,6 +292,11 @@ def _model_thinking_default(model_name: str) -> bool:
     return False
 
 
+def model_supports_thinking(model_name: str) -> bool:
+    """Return True when model_name natively supports thinking/reasoning."""
+    return _model_thinking_default(model_name)
+
+
 def resolve_agent_sampling(
     model_name: str,
     *,
@@ -309,7 +319,8 @@ def resolve_agent_sampling(
     raw_think = thinking_override
     if raw_think is None and agent is not None:
         raw_think = getattr(agent, "thinking", None)
-    eff_think = _model_thinking_default(model_name) if raw_think is None else bool(raw_think)
+    _supports_think = model_supports_thinking(model_name)
+    eff_think = _supports_think if raw_think is None else bool(raw_think)
 
     raw_budget = thinking_budget_override
     if raw_budget is None and agent is not None:
@@ -324,12 +335,14 @@ def resolve_agent_sampling(
     if _user_eff == "none":
         eff_think = False
         eff_budget = 0
-    elif _user_eff in ("low", "medium", "high", "max"):
+    elif _user_eff in ("low", "medium", "high", "max") and _supports_think:
         eff_think = True
         eff_budget = REASONING_EFFORT_BUDGETS[_user_eff]
 
     smp = get_sampling_profile(model_name, thinking=eff_think, settings=settings, mode=mode)
-    _resolved_eff = resolve_reasoning_effort(_effort_settings, smp, thinking=eff_think)
+    _resolved_eff = resolve_reasoning_effort(
+        _effort_settings, smp, thinking=eff_think, model_name=model_name,
+    )
     if _resolved_eff:
         smp["reasoning_effort"] = _resolved_eff
     else:

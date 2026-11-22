@@ -900,7 +900,10 @@ async def _llm_stream(
         "max_tokens": max_tokens,
     }
     _apply_sampler_to_payload(payload, sampler)
-    _apply_thinking_fields(payload, use_thinking, thinking_budget)
+    _apply_thinking_fields(
+        payload, use_thinking, thinking_budget,
+        reasoning_effort=str((sampler or {}).get("reasoning_effort") or ""),
+    )
 
     # DEBUG-THINKING: Log actual payload sent to llama.cpp
     # IMAGES-IN-REQUEST (2026-10-04): count parts actually on the
@@ -1259,7 +1262,10 @@ def _apply_sampler_to_payload(payload: dict, sampler: dict | None) -> None:
     """Copy resolved sampling params (excluding temperature, set by caller) into payload."""
     if not sampler or not isinstance(sampler, dict):
         return
-    for _k in ("top_p", "top_k", "min_p", "presence_penalty", "repeat_penalty", "repetition_penalty", "cache_prompt"):
+    for _k in (
+        "top_p", "top_k", "min_p", "presence_penalty",
+        "repeat_penalty", "repetition_penalty", "cache_prompt", "reasoning_effort",
+    ):
         if _k in sampler and sampler[_k] is not None:
             payload[_k] = sampler[_k]
     if sampler.get("seed") is not None:
@@ -1277,6 +1283,7 @@ def _resolve_planner_sampling(
     from core.model_sampling import (
         get_sampling_profile,
         resolve_presence_penalty,
+        resolve_reasoning_effort,
         _registry_sampling,
         _settings_sampling_override,
         _select_override_mode_dict,
@@ -1286,6 +1293,13 @@ def _resolve_planner_sampling(
     smp["presence_penalty"] = resolve_presence_penalty(
         smp, model_name, thinking=use_thinking, settings=settings, mode=_mode,
     )
+    _resolved_eff = resolve_reasoning_effort(
+        settings, smp, thinking=use_thinking, model_name=model_name,
+    )
+    if _resolved_eff:
+        smp["reasoning_effort"] = _resolved_eff
+    else:
+        smp.pop("reasoning_effort", None)
     has_explicit_temp = False
     for layer in (_settings_sampling_override(model_name, settings), _registry_sampling(model_name)):
         sub = _select_override_mode_dict(layer, _mode, use_thinking)
@@ -1339,6 +1353,16 @@ async def run_planner(
 
 
     settings = settings or {}
+    from core.model_sampling import (
+        REASONING_EFFORT_BUDGETS as _PLAN_RE_BUDGETS,
+        model_supports_thinking as _plan_mst,
+        normalize_reasoning_effort as _norm_plan_re,
+    )
+    _p_user_eff = _norm_plan_re(settings.get("reasoning_effort"))
+    if _p_user_eff == "none":
+        use_thinking = False
+    elif _p_user_eff in ("low", "medium", "high", "max") and _plan_mst(planner_model):
+        use_thinking = True
     result = PlannerResult(
         planner_model=planner_model,
         used_thinking=use_thinking,
@@ -1422,7 +1446,12 @@ async def run_planner(
                 _budget_setting = int(settings.get("duo_planner_thinking_budget", 0) or 0)
             except (TypeError, ValueError):
                 _budget_setting = 0
-            _eff_think_budget = thinking_budget if thinking_budget > 0 else max(0, _budget_setting)
+            if thinking_budget > 0:
+                _eff_think_budget = thinking_budget
+            elif _p_user_eff in ("low", "medium", "high", "max") and _plan_mst(planner_model):
+                _eff_think_budget = _PLAN_RE_BUDGETS[_p_user_eff]
+            else:
+                _eff_think_budget = max(0, _budget_setting)
             _p_temp, _p_smp = _resolve_planner_sampling(
                 planner_model, True, settings, fallback_temp=0.2,
             )
@@ -1643,6 +1672,16 @@ async def run_inloop_planner(
     """
     _inloop_max_tokens = _resolve_planner_max_tokens(settings, planner_ctx)
     settings = settings or {}
+    from core.model_sampling import (
+        REASONING_EFFORT_BUDGETS as _INLOOP_RE_BUDGETS,
+        model_supports_thinking as _inloop_mst,
+        normalize_reasoning_effort as _norm_inloop_re,
+    )
+    _inloop_user_eff = _norm_inloop_re(settings.get("reasoning_effort"))
+    if _inloop_user_eff == "none":
+        use_thinking = False
+    elif _inloop_user_eff in ("low", "medium", "high", "max") and _inloop_mst(planner_model):
+        use_thinking = True
 
     _plan_user_msg = build_planner_user_prompt(
         task,
@@ -1666,7 +1705,14 @@ async def run_inloop_planner(
         _inloop_budget_setting = int(settings.get("duo_planner_thinking_budget", 0) or 0)
     except (TypeError, ValueError):
         _inloop_budget_setting = 0
-    _inloop_eff_budget = thinking_budget if thinking_budget > 0 else max(0, _inloop_budget_setting)
+    if not use_thinking:
+        _inloop_eff_budget = 0
+    elif thinking_budget > 0:
+        _inloop_eff_budget = thinking_budget
+    elif _inloop_user_eff in ("low", "medium", "high", "max") and _inloop_mst(planner_model):
+        _inloop_eff_budget = _INLOOP_RE_BUDGETS[_inloop_user_eff]
+    else:
+        _inloop_eff_budget = max(0, _inloop_budget_setting)
     _inloop_temp, _inloop_smp = _resolve_planner_sampling(
         planner_model, use_thinking, settings, fallback_temp=0.3,
     )
@@ -1681,7 +1727,10 @@ async def run_inloop_planner(
         "max_tokens":      min(max_output_tokens + _inloop_eff_budget, _inloop_max_tokens),
     }
     _apply_sampler_to_payload(_plan_payload, _inloop_smp)
-    _apply_thinking_fields(_plan_payload, use_thinking, _inloop_eff_budget)
+    _apply_thinking_fields(
+        _plan_payload, use_thinking, _inloop_eff_budget,
+        reasoning_effort=str(_inloop_smp.get("reasoning_effort") or ""),
+    )
 
     # DEBUG-DUMP (task: dump instrumentation): the in-loop planner request,
     # gated by Setting debug_dump_request (role "planner" in the filename).

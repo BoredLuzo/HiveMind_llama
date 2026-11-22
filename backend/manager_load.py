@@ -88,6 +88,16 @@ def _wants_jinja(model: str, model_base: str) -> bool:
         return False
 
 
+def _wants_reasoning_on(mgr: object, model: str) -> bool:
+    """Return True when the user/run explicitly requested --reasoning on for model."""
+    _inst_ro = getattr(mgr, "__dict__", {}).get("_reasoning_override")
+    _cls_ro = getattr(type(mgr), "_reasoning_override", None)
+    for _ro in (_inst_ro, _cls_ro):
+        if isinstance(_ro, dict) and _ro.get(model) is True:
+            return True
+    return False
+
+
 def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
     """TEST SWITCH (2026-10-04): HIVEMIND_TEST_OMIT_MMPROJ omits
     --mmproj at server start so ONLY the post-load /props vision gate can
@@ -1101,6 +1111,19 @@ class LlamaLoadMixin:
                                     slot._loading = True
                                     slot.model = None
                                     _kill_before_retry = slot
+                                elif (
+                                    _wants_reasoning_on(self, model)
+                                    and getattr(slot, "_reasoning_on", None) is False
+                                    and not _busy
+                                ):
+                                    logger.info(
+                                        f"ensure_loaded: {model} reasoning mismatch (--reasoning off -> on) — reload."
+                                    )
+                                    self._metric_inc("evictions_total")
+                                    slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                    slot._loading = True
+                                    slot.model = None
+                                    _kill_before_retry = slot
                                 else:
                                     _probe_port_slot = (slot, getattr(slot, "_lifecycle_gen", None))
                 if _kill_before_retry is not None:
@@ -1457,6 +1480,11 @@ class LlamaLoadMixin:
                                 not _busy
                                 and getattr(slot, "_n_parallel", 1) > 0
                                 and n_parallel > getattr(slot, "_n_parallel", 1)
+                            )
+                            or (
+                                not _busy
+                                and _wants_reasoning_on(self, model)
+                                and getattr(slot, "_reasoning_on", None) is False
                             )
                         )
                         if _mismatch:

@@ -376,6 +376,11 @@ async def _duo_planner_phase(
     _duo_timed_out = ps.duo_timed_out
     _plan_tracker = ps.plan_tracker
     try:
+        from core.model_sampling import (
+            model_supports_thinking as _mst_plan,
+            normalize_reasoning_effort as _norm_re_plan,
+        )
+        _plan_user_eff = _norm_re_plan((ctx.settings or {}).get("reasoning_effort"))
         _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
         _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
         _explicit_planner_think = "duo_agentic_thinking" in (ctx.settings or {})
@@ -386,6 +391,8 @@ async def _duo_planner_phase(
                 or (not _explicit_planner_think and _planner_default_thinking and ctx.duo_config.coding_mode)
             ))
         )
+        if _plan_user_eff == "none":
+            _use_thinking_planner = False
         _planner_use_exec_model = bool(ctx.settings.get("duo_planner_use_exec_model", True))
         _planner_model = exec_mdl if (_use_thinking_planner or _planner_use_exec_model) else coder_mdl
         if bool(ctx.settings.get("duo_planner_use_coder_ctx", True)):
@@ -403,8 +410,14 @@ async def _duo_planner_phase(
             _rm_models["critic"] = critic_mdl
         yield await ctx.emit({"type": "run_meta", "models": _rm_models})
         _planner_profile = ctx.model_profile(_planner_model)
-        _planner_supports_thinking = bool(_planner_profile.get("thinking", False))
-        _planner_effective_thinking = bool(_use_thinking_planner)
+        _planner_supports_thinking = bool(
+            _planner_profile.get("thinking", False) or _mst_plan(_planner_model)
+        )
+        _planner_effective_thinking = (
+            True
+            if (_plan_user_eff in ("low", "medium", "high", "max") and _planner_supports_thinking)
+            else (False if _plan_user_eff == "none" else bool(_use_thinking_planner))
+        )
 
         _planner_ctx_cap_cfg = int(ctx.settings.get("duo_planner_ctx_cap", 0) or 0)
         _planner_ctx_target = int(ctx.settings.get("duo_planner_ctx_target", 0) or 0)
@@ -493,6 +506,8 @@ async def _duo_planner_phase(
                 except Exception:
                     pass
             _lsm_plan_pre._planner_critical_phase = True
+            if _plan_user_eff in ("low", "medium", "high", "max") and _planner_supports_thinking:
+                _lsm_plan_pre._reasoning_override = {_planner_model: True}
             # PIN RESET AT RUN START (2026-10-02): stale pins from a
             # crashed previous run must not block eviction for this one.
             try:
@@ -3939,6 +3954,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # tool call costs ~15-25 s. Opt-in only: the
                             # default keeps the model's own budget so answer
                             # quality never degrades silently.
+                            from core.model_sampling import normalize_reasoning_effort as _norm_re_cap
+                            _coder_user_eff = _norm_re_cap((ctx.settings or {}).get("reasoning_effort"))
                             try:
                                 _think_cap = int(ctx.settings.get(
                                     "duo_tool_thinking_budget_cap", 0) or 0)
@@ -3952,7 +3969,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                     ctx.settings.get("duo_tool_thinking_budget_cap"),
                                 )
                                 _think_cap = 0
-                            if _think_cap > 0 and _tool_thinking_budget > _think_cap:
+                            if _coder_user_eff == "auto" and _think_cap > 0 and _tool_thinking_budget > _think_cap:
                                 logger.info(
                                     "[TOOL-THINK-CAP] %d -> %d tokens (duo_tool_thinking_budget_cap)",
                                     _tool_thinking_budget, _think_cap,
@@ -4048,6 +4065,15 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 )
                         except Exception as _san_err:
                             logger.debug("[TOOLCALL-REPAIR] skipped: %s", _san_err)
+                        if _tool_thinking_budget > 0 and _max_tokens_round > 0:
+                            _budget_70_cap = max(1, int(_max_tokens_round * 0.70))
+                            if _tool_thinking_budget > _budget_70_cap:
+                                logger.info(
+                                    "[TOOL-THINK-CLAMP] %d -> %d tokens (70%% of max_tokens=%d)",
+                                    _tool_thinking_budget, _budget_70_cap, _max_tokens_round,
+                                )
+                                _tool_thinking_budget = _budget_70_cap
+                        _thinking = bool(_tool_thinking_budget > 0)
                         _tool_payload = {
                             "model": exec_mdl, "messages": _dtool_msgs,
                             "tools": _active_tools, "stream": True,
