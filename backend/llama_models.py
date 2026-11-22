@@ -549,7 +549,7 @@ def _resolve_from_overrides(model_name: str, overrides: dict[str, str]) -> Path 
     return None
 
 
-def resolve_model_path(model_name: str) -> Path | None:
+def resolve_model_path(model_name: str, *, quiet: bool = False) -> Path | None:
 
 
     model = _strip_alias(model_name)
@@ -592,12 +592,18 @@ def resolve_model_path(model_name: str) -> Path | None:
         )
         return p
 
-    _logger.error(
-        f"Model '{model}' not found. "
-        f"Available models in the index: {sorted(index.keys())}"
-    )
-    if not Path(MODELS_DIR).exists():
+    if quiet:
+        _logger.debug(
+            f"Model '{model}' not found. "
+            f"Available models in the index: {sorted(index.keys())}"
+        )
+    else:
         _logger.error(
+            f"Model '{model}' not found. "
+            f"Available models in the index: {sorted(index.keys())}"
+        )
+    if not Path(MODELS_DIR).exists():
+        (_logger.debug if quiet else _logger.error)(
             f"MODELS_DIR missing: {MODELS_DIR} — set HIVEMIND_MODELS_DIR "
             f"to your models folder or run setup_models.bat."
         )

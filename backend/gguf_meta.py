@@ -510,7 +510,10 @@ def read_gguf_metadata(path_or_model: str | Path) -> dict[str, Any]:
     if not p.is_file():
         try:
             from backend.llama_models import resolve_model_path
-            resolved = resolve_model_path(raw)
+            try:
+                resolved = resolve_model_path(raw, quiet=True)
+            except TypeError:
+                resolved = resolve_model_path(raw)
         except (ImportError, OSError, RuntimeError, ValueError) as exc:
             _logger.debug("[GGUF-META] model path lookup skipped for %r: %s", raw, exc)
             return {}

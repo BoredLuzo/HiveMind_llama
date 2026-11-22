@@ -1257,6 +1257,8 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 }
 .ctx-cut.err::before, .ctx-cut.err::after { background: rgba(200,80,80,.25); }
 .ctx-cut.err span { color: #c06060; }
+.ctx-cut.warn::before, .ctx-cut.warn::after { background: rgba(208,160,32,.3); }
+.ctx-cut.warn span { color: #d0a020; white-space: normal; text-align: center; }
 
 /* Extra info panel — shown on click */
 .tc-extra {

@@ -1518,7 +1518,7 @@ async def execute_tool_round(
                 # carries the full descriptions in its tool schema.
                 _menu = _render_tool_menu(
                     tool_mode, duo_ws, compact=True, include_git=include_git)
-                await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — re-injecting all tools]\n"})
+                await hooks.emit({"type": "status", "content": f"[Tool loop: {_loop_label} — re-injecting all tools]"})
                 _pair_unexecuted_tool_calls(
                     dtool_msgs, tool_calls, _i + 1, "[loop-detection: skipped]"
                 )
@@ -1533,7 +1533,7 @@ async def execute_tool_round(
                 )})
                 trs.call_sigs.clear()
                 break
-            await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — aborted]\n"})
+            await hooks.emit({"type": "status", "content": f"[Tool loop: {_loop_label} — aborted]"})
             _append_tool_footer(dtool_msgs, "[loop-detection: aborted]")
             _pair_unexecuted_tool_calls(
                 dtool_msgs, tool_calls, _i + 1, "[loop-detection: aborted]"

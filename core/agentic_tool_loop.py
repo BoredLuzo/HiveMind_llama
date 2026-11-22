@@ -727,9 +727,15 @@ class AgenticToolLoop(ToolLoop):
                                 getattr(self, '_diag_chunk_n', -1),
                                 _dr_usage_final is not None, _dr_finish_reason)
                     if _emitted_tool_gen and _dr_finish_reason in ("length", "drift"):
+                        _rst_names = [
+                            str(((result["dr_tool_calls_acc"][k].get("function")) or {}).get("name") or "")
+                            for k in sorted(result["dr_tool_calls_acc"].keys())
+                        ]
+                        _rst_tool = next((n for n in _rst_names if n), "")
                         await self._emit({
                             "type": "tool_gen_reset",
                             "reason": str(_dr_finish_reason),
+                            "tool": _rst_tool,
                         })
                     # send usage EXACTLY ONCE after the stream ends
                     if _dr_usage_final:

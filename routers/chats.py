@@ -98,6 +98,7 @@ def _store_blob(chat_id: str, data: str) -> str:
         # (the text-mode expansion \r*m+\n maps back to \r*(m-1)+\n).
         tmp.write_bytes(_BLOB_MAGIC + data.encode("utf-8"))
         os.replace(tmp, p)
+        _blob_size_cache.pop(str(d), None)
     return h
 
 
@@ -245,7 +246,7 @@ def _restore_messages(chat_id: str, messages) -> None:
                     im["preview"] = _txt if _txt is not None else _IMG_PLACEHOLDER
 
 
-def _sweep_orphan_blob_dirs() -> None:
+def _sweep_orphan_blob_dirs(existing_cids: set[str] | None = None) -> None:
     """GC (startup): blob dirs whose chat json no longer exists ON DISK.
 
     Filesystem check on purpose: deciding "orphan" from the in-memory
@@ -258,21 +259,63 @@ def _sweep_orphan_blob_dirs() -> None:
         _now = _time.time()
         for d in _state._SESSIONS_DIR.glob("*.blobs"):
             cid = d.name[:-len(".blobs")]
-            if any(_state._SESSIONS_DIR.glob(f"*_{cid}.json")):
+            if existing_cids is not None:
+                if cid in existing_cids:
+                    continue
+            elif any(_state._SESSIONS_DIR.glob(f"*_{cid}.json")):
                 continue
             if _now - d.stat().st_mtime < 3600:
                 continue
             shutil.rmtree(d, ignore_errors=True)
+            _blob_size_cache.pop(str(d), None)
             logger.info("[CHATS] removed orphan blob dir %s", d.name)
     except OSError as _sweep_err:
         logger.debug("[CHATS] blob dir sweep failed: %s", _sweep_err)
 
 _RE_CHAT_ID_PATTERN = re.compile(r"_([a-f0-9\-]{4,64})\.json$")
 _CHAT_JSON_LIMIT = 200 * 1024 * 1024  # 200 MB emergency brake per save
+_CHATS_INDEX_NAME = ".chats_index.cache"  # NOT .json: keeps session *.json globs clean
 _chat_save_locks: dict = {}
 _chat_save_locks_guard = threading.Lock()
+_blob_size_cache: dict[str, tuple[int, int]] = {}
+_ctx_interrupted_cache: dict[str, tuple[int, int, bool]] = {}
 _re_slug_special = re.compile(r"[^\w\s-]")
 _re_slug_space = re.compile(r"[\s_]+")
+
+
+def _load_chats_index(sessions_dir: Path) -> dict[str, dict]:
+    """Load persisted chat metadata index keyed by filename (empty dict on miss/corrupt)."""
+    idx_path = sessions_dir / _CHATS_INDEX_NAME
+    try:
+        if not idx_path.is_file():
+            return {}
+        raw = json.loads(idx_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("version") == 1 and isinstance(raw.get("entries"), dict):
+            return {
+                str(k): v
+                for k, v in raw["entries"].items()
+                if isinstance(v, dict)
+            }
+    except (OSError, ValueError, TypeError) as exc:
+        logger.debug("[CHATS] metadata index read skipped: %s", exc)
+    return {}
+
+
+def _save_chats_index(sessions_dir: Path, entries: dict[str, dict]) -> None:
+    """Persist chat metadata index atomically outside *.json globs."""
+    idx_path = sessions_dir / _CHATS_INDEX_NAME
+    tmp = sessions_dir / ".chats_index.tmp"
+    try:
+        payload = json.dumps({"version": 1, "entries": entries}, ensure_ascii=False)
+        tmp.write_text(payload, encoding="utf-8")
+        _replace_with_retry(tmp, idx_path)
+    except (OSError, ValueError, TypeError) as exc:
+        logger.debug("[CHATS] metadata index write skipped: %s", exc)
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def _user_msg_count(msgs) -> int:
@@ -299,29 +342,66 @@ def _ensure_cache():
             return
         _META = {"id", "title", "created_at", "updated_at"}
         result = {}
-        for entry in sorted(_state._SESSIONS_DIR.iterdir()):
-            if not entry.name.endswith(".json"):
-                continue
+        disk_cids: set[str] = set()
+        old_entries = _load_chats_index(_state._SESSIONS_DIR)
+        new_entries: dict[str, dict] = {}
+        index_dirty = False
+        try:
+            with os.scandir(_state._SESSIONS_DIR) as _it:
+                _entries = sorted(
+                    (
+                        e for e in _it
+                        if e.name.endswith(".json") and not e.name.endswith(".context.json")
+                    ),
+                    key=lambda e: e.name,
+                )
+        except OSError:
+            _entries = []
+        for entry in _entries:
             m = _RE_CHAT_ID_PATTERN.search(entry.name)
             if not m:
                 continue
             cid = m.group(1)
+            disk_cids.add(cid)
             try:
-                data = json.loads(entry.read_text(encoding="utf-8"))
+                st = entry.stat()
+                cached = old_entries.get(entry.name)
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("cid") == cid
+                    and cached.get("mtime_ns") == st.st_mtime_ns
+                    and cached.get("size") == st.st_size
+                    and isinstance(cached.get("meta"), dict)
+                ):
+                    meta = dict(cached["meta"])
+                    meta["_file"] = entry.path
+                    result[cid] = meta
+                    new_entries[entry.name] = cached
+                    continue
+                data = json.loads(Path(entry.path).read_text(encoding="utf-8"))
                 meta = {k: v for k, v in data.items() if k in _META}
-                meta["_file"] = str(entry)
                 _msgs = data.get("messages", [])
                 meta["_msg_count"] = _user_msg_count(_msgs)
                 meta["_tokens"] = _chat_tokens(_msgs)
                 _last = _msgs[-1].get("content", "") if _msgs else ""
                 meta["_preview"] = _last[:80] if isinstance(_last, str) else ""
+                new_entries[entry.name] = {
+                    "cid": cid,
+                    "mtime_ns": st.st_mtime_ns,
+                    "size": st.st_size,
+                    "meta": dict(meta),
+                }
+                meta["_file"] = entry.path
                 result[cid] = meta
+                index_dirty = True
             except Exception:
                 pass
+        if index_dirty or (old_entries and set(new_entries.keys()) != set(old_entries.keys())):
+            _save_chats_index(_state._SESSIONS_DIR, new_entries)
         _chats_cache.clear()
         _chats_cache.update(result)
         _cache_loaded = True
-        _sweep_orphan_blob_dirs()
+        _sweep_orphan_blob_dirs(disk_cids)
 
 
 def _load_chat_full(chat_id: str) -> dict | None:
@@ -557,9 +637,107 @@ async def list_chats():
             return False
 
     def _chat_disk_meta_all(pairs):
+        file_sizes: dict[str, int] = {}
+        blobs_by_name: dict[str, tuple[str, int]] = {}
+        legacy_blobs: list[tuple[str, str, int]] = []
+        ctx_stats: dict[str, tuple[str, int, int]] | None = None
+        if _state._SESSIONS_DIR is not None:
+            try:
+                with os.scandir(_state._SESSIONS_DIR) as _it:
+                    ctx_stats = {}
+                    for _e in _it:
+                        _nm = _e.name
+                        if _nm.endswith(".context.json"):
+                            _st = _e.stat()
+                            ctx_stats[_nm] = (_e.path, _st.st_mtime_ns, _st.st_size)
+                        elif _nm.endswith(".json"):
+                            file_sizes[_nm] = _e.stat().st_size
+                        elif _nm.endswith(".blobs") and _e.is_dir():
+                            _binfo = (_e.path, _e.stat().st_mtime_ns)
+                            blobs_by_name[_nm] = _binfo
+                            if "_" in _nm:
+                                legacy_blobs.append((_nm, _e.path, _binfo[1]))
+            except OSError:
+                ctx_stats = None
+
+        def _dir_bytes_cached(dir_path: str, mtime_ns: int) -> int:
+            cached = _blob_size_cache.get(dir_path)
+            if cached is not None and cached[0] == mtime_ns:
+                return cached[1]
+            sub = 0
+            try:
+                for root, _dirs, files in os.walk(dir_path):
+                    for f in files:
+                        try:
+                            sub += os.path.getsize(os.path.join(root, f))
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+            _blob_size_cache[dir_path] = (mtime_ns, sub)
+            return sub
+
+        def _fast_bytes(cid: str, meta_file: str) -> int:
+            if ctx_stats is None:
+                return _disk_bytes(cid, meta_file)
+            total = 0
+            if meta_file:
+                _mname = os.path.basename(meta_file)
+                if _mname in file_sizes:
+                    total += file_sizes[_mname]
+                else:
+                    try:
+                        if os.path.isfile(meta_file):
+                            total += os.path.getsize(meta_file)
+                    except OSError:
+                        pass
+            _direct_name = f"{cid}.blobs"
+            _direct_info = blobs_by_name.get(_direct_name)
+            _direct_path = ""
+            if _direct_info is not None:
+                _direct_path = _direct_info[0]
+                total += _dir_bytes_cached(_direct_path, _direct_info[1])
+            if legacy_blobs:
+                _lsuf = f"_{cid}.blobs"
+                for _lnm, _lpath, _lmtime in legacy_blobs:
+                    if _lnm.endswith(_lsuf) and _lpath != _direct_path:
+                        total += _dir_bytes_cached(_lpath, _lmtime)
+            return total
+
+        def _fast_interrupted(cid: str, meta_file: str) -> bool:
+            if ctx_stats is None:
+                return _is_interrupted(cid)
+            _cands: list[str] = []
+            if meta_file:
+                _cands.append(Path(meta_file).with_suffix(".context.json").name)
+            _sa = f"standalone_{cid}.context.json"
+            if _sa not in _cands:
+                _cands.append(_sa)
+            for _cname in _cands:
+                _cinfo = ctx_stats.get(_cname)
+                if _cinfo is None:
+                    continue
+                _cpath, _cmtime, _csize = _cinfo
+                _hit = _ctx_interrupted_cache.get(_cpath)
+                if _hit is not None and _hit[0] == _cmtime and _hit[1] == _csize:
+                    return _hit[2]
+                _flag = False
+                try:
+                    _ctx = json.loads(Path(_cpath).read_text(encoding="utf-8"))
+                    _flag = bool(
+                        isinstance(_ctx, dict)
+                        and isinstance(_ctx.get("last_run"), dict)
+                        and _ctx["last_run"].get("stop_reason") == "disconnect"
+                    )
+                except (OSError, ValueError, TypeError):
+                    _flag = False
+                _ctx_interrupted_cache[_cpath] = (_cmtime, _csize, _flag)
+                return _flag
+            return False
+
         return (
-            {cid: _disk_bytes(cid, f) for cid, f in pairs},
-            {cid: _is_interrupted(cid) for cid, _ in pairs},
+            {cid: _fast_bytes(cid, f) for cid, f in pairs},
+            {cid: _fast_interrupted(cid, f) for cid, f in pairs},
         )
 
     _bytes_map, _int_map = await asyncio.to_thread(
@@ -891,7 +1069,10 @@ async def delete_chat(chat_id: str):
                     ctx_p = p.with_suffix(".context.json")
                     if ctx_p.exists():
                         ctx_p.unlink()
-                shutil.rmtree(_blob_dir(chat_id), ignore_errors=True)
+                    _ctx_interrupted_cache.pop(str(ctx_p), None)
+                _bdir = _blob_dir(chat_id)
+                shutil.rmtree(_bdir, ignore_errors=True)
+                _blob_size_cache.pop(str(_bdir), None)
                 try:
                     from context.chat import clear_chat_images as _clear_imgs
                     _clear_imgs(chat_id)

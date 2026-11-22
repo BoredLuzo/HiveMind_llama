@@ -32,6 +32,7 @@ Set-Location $Repo
 
 $py = Join-Path $Repo ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { $py = "python" }
+$env:HIVEMIND_NO_NOTIFY = "1"
 
 $script:pass = 0
 $script:fail = 0

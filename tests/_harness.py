@@ -31,6 +31,10 @@ Constructor knobs reproduce the historical per-suite line formats:
               the results/summary styles append ", X skipped"
 """
 
+import os
+
+os.environ.setdefault("HIVEMIND_NO_NOTIFY", "1")
+
 
 class Harness:
     """Pass/fail counter + printer for one standalone suite."""

@@ -2,6 +2,7 @@
 
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -39,6 +40,8 @@ def notify(title: str, message: str, dedup_sig: str = "") -> bool:
     # OS-GUARD (2026-09-19): winotify ist Windows-only — auf POSIX stumm
     # aussteigen, statt pro Event eine ModuleNotFound-warning zu spammen.
     if sys.platform != "win32":
+        return False
+    if os.environ.get("HIVEMIND_NO_NOTIFY", "").strip().lower() in ("1", "true", "yes"):
         return False
     if not _notifications_enabled():
         return False

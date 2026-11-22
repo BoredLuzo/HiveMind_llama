@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -142,10 +143,12 @@ check(
     and "var _wasActive = (_cpActive === _k);" in _js
     and "job.plain && _cpFollowStream && document.body.classList.contains('code-panel-open')" in _js,
 )
+_m_css = re.search(r"/static/style\.css\?v=(\d{8})-(\d+)", _html)
+_m_js = re.search(r"/static/app\.js\?v=(\d{8})-(\d+)", _html)
 check(
     "index.html cache-busters bumped for style.css and app.js",
-    "/static/style.css?v=20261122-02" in _html
-    and "/static/app.js?v=20261122-02" in _html,
+    _m_css is not None and (int(_m_css.group(1)), int(_m_css.group(2))) >= (20261122, 2)
+    and _m_js is not None and (int(_m_js.group(1)), int(_m_js.group(2))) >= (20261122, 2),
 )
 
 # Run a real Node DOM test for _toggleThinkBlock + userToggled + _tgPendingRekey

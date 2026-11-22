@@ -734,6 +734,7 @@ async function init() {
     }
   }
 
+  _step('loadChatHistory', loadChatHistory);  // non-blocking: populate Saved Chats immediately alongside model/settings boot
   await _step('loadModels', loadModels);
   await _step('clear_session', () => fetch('/memory/clear_session', {method:'POST'}).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }));  // Seitenreload = neuer Chat
   await _step('loadAgentMap', loadAgentMap);
@@ -744,7 +745,6 @@ async function init() {
   await _step('loadVisionConfig', loadVisionConfig);
   await _step('loadSpecialAgentsConfig', loadSpecialAgentsConfig);
   _step('loadSoulStatus', loadSoulStatus);
-  _step('loadChatHistory', loadChatHistory);
   _step('buildAgentForceButtons', buildAgentForceButtons);
   try {
     document.getElementById('h-dot').className = 'on';
@@ -5318,7 +5318,7 @@ function _sanitizeRuntimeToken(t) {
   txt = txt.replace(/(?:^|\n)\[(?:⚠\s*)?write_file_append[^\]]*(?:zu groß|Split-Loop)[^\]]*\](?=\n|$)/gi, '');
   txt = txt.replace(/(?:^|\n)\[JSON parse error #[^\]]*\](?=\n|$)/gi, '');
   txt = txt.replace(/(?:^|\n)\[Duplicate [^\]]+\](?=\n|$)/g, '');
-  txt = txt.replace(/(?:^|\n)\[Tool-Loop: [^\]]+\](?=\n|$)/g, '');
+  txt = txt.replace(/(?:^|\n)\[Tool[- ]loop: [^\]]+\](?=\n|$)/gi, '');
   txt = txt.replace(/\n[ \t]+\n/g, '\n\n');
   txt = txt.replace(/(?:\n\s*){3,}/g, '\n\n');
   return txt;
@@ -6106,6 +6106,7 @@ function _toolGenStream(d) {
     if (!S.curAgent) return;
     var body = document.getElementById('ab-' + S.curAgent.tid);
     if (!body) return;
+    if (typeof rmEl === 'function') rmEl('status-el');
     if (S._thinkBlockId) {
       var _tkPre = document.getElementById(S._thinkBlockId);
       if (_tkPre) _tkPre.classList.remove('live');
@@ -7790,68 +7791,81 @@ async function sendMsg() {
     // RUN-JOURNAL (2026-09-20): a clean stream end WITHOUT a done event used
     // to leave the bubble on "⟳ Loading" forever. Reattach via the journal.
     if (!S._sawDoneEvent && S.currentRunId && !S._journalTailing) {
+      S._sseBuf = '';
+      S._attachedRunId = S.currentRunId;
       _journalNote('Connection lost - reattaching via the run journal ...');
       _journalStartTail(S.currentRunId);
     }
   } catch(e) {
-    if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
-    _cleanupLoadTimers();
-    _toolGenDone();
-    // STREAM-ERROR-UX (2026-09-04): "Error in input stream" ist ein
-    // Transportabbruch (Stop/Verbindung), kein Modell-Fehler - nicht als roten
-    // Fehler-Bubble ausgeben, sondern als neutralen/amber Hinweis.
+    // STREAM-ERROR-UX (2026-09-04): "Error in input stream" is a
+    // transport drop (stop/connection), not a model error - show as a
+    // neutral/amber notice instead of a red error bubble.
     const _errMsg = String((e && e.message) || e || '');
     const _isAbort = !!(e && e.name === 'AbortError');
-    const _isConnDrop = !_isAbort && /input stream|network|fetch failed|body stream/i.test(_errMsg);
-    const _hadBody = S.curAgent && S.curAgent.body && String(S.curAgent.body.textContent || '').trim();
-    if (S.curAgent) {
-      var _setNotice = function (el, msg, col) {
-        var sp = document.createElement('span');
-        sp.className = 'status-txt';
-        sp.style.color = col;
-        sp.textContent = msg;
-        el.textContent = '';
-        el.appendChild(sp);
-      };
-      if (!_hadBody && _isAbort) {
-        _setNotice(S.curAgent.body, '[Run aborted]', '#7a8fa8');
-      } else if (!_hadBody && _isConnDrop) {
-        _setNotice(S.curAgent.body, '[Connection lost - run may be parked]', '#7a8fa8');
-      } else if (!_hadBody && !_isAbort) {
-        _setNotice(S.curAgent.body, '[Error: ' + _errMsg + ']', '#b04040');
+    const _isConnDrop = !_isAbort && /input stream|network|fetch failed|failed to fetch|body stream|load failed|chunked/i.test(_errMsg);
+    if (_isConnDrop && !S._sawDoneEvent && S.currentRunId && !S._journalTailing) {
+      // RUN-JOURNAL-REATTACH-ON-DROP (2026-11-22): transport drop while
+      // run_id is live leaves the run running detached on the server. Keep
+      // S.curAgent/live state intact and tail from S._sseFrameSeq instead of
+      // tearing down and letting _journalInitAttach() replay from frame 0.
+      S._sseBuf = '';
+      S._attachedRunId = S.currentRunId;
+      _journalNote('Connection lost - reattaching via the run journal ...');
+      _journalStartTail(S.currentRunId);
+    } else {
+      if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
+      _cleanupLoadTimers();
+      _toolGenDone();
+      const _hadBody = S.curAgent && S.curAgent.body && String(S.curAgent.body.textContent || '').trim();
+      if (S.curAgent) {
+        var _setNotice = function (el, msg, col) {
+          var sp = document.createElement('span');
+          sp.className = 'status-txt';
+          sp.style.color = col;
+          sp.textContent = msg;
+          el.textContent = '';
+          el.appendChild(sp);
+        };
+        if (!_hadBody && _isAbort) {
+          _setNotice(S.curAgent.body, '[Run aborted]', '#7a8fa8');
+        } else if (!_hadBody && _isConnDrop) {
+          _setNotice(S.curAgent.body, '[Connection lost - run may be parked]', '#7a8fa8');
+        } else if (!_hadBody && !_isAbort) {
+          _setNotice(S.curAgent.body, '[Error: ' + _errMsg + ']', '#b04040');
+        }
+        S.curAgent.body.classList.remove('live');
+        S.curAgent = null;
       }
-      S.curAgent.body.classList.remove('live');
-      S.curAgent = null;
+      // SSE-DEATH-VISIBILITY (2026-09-15): the chat error line used to be
+      // suppressed when the agent card already had partial text (_hadBody) —
+      // a mid-run stream death then looked like a normal end. The line now
+      // ALWAYS appears.
+      if (!_isAbort) {
+        const errDiv = document.createElement('div');
+        errDiv.className = 'msg status-txt';
+        if (_isConnDrop) {
+          errDiv.style.cssText = 'color:#b08a40;font-size:10px;border:1px solid rgba(200,160,64,.25);padding:6px 8px;border-radius:4px';
+          errDiv.textContent = '\u26A0 Connection lost - the run may still be running or parked. Send a message to resume, or check the log.';
+        } else {
+          errDiv.style.cssText = 'color:#b04040;font-size:10px;border:1px solid rgba(200,64,64,.25);padding:6px 8px;border-radius:4px';
+          errDiv.textContent = '\u26A0 Stream error: ' + (e.message || e);
+        }
+        const chatEl = document.getElementById('chat');
+        if (chatEl) chatEl.appendChild(errDiv);
+        scrollBtmIfNearBottom(120);
+      }
+      document.querySelectorAll('.abody.live').forEach(function(b) {
+        if (!b.textContent.trim()) {
+          var sp = document.createElement('span');
+          sp.className = 'status-txt';
+          sp.style.color = '#7a8fa8';
+          sp.textContent = '[No output - stream aborted]';
+          b.appendChild(sp);
+        }
+        b.classList.remove('live');
+      });
+      showStatus(_isAbort ? 'Run stopped.' : (_isConnDrop ? 'Connection lost - check the log for status.' : '\u26A0 Stream error: ' + e.message));
     }
-    // SSE-DEATH-VISIBILITY (2026-09-15): the chat error line used to be
-    // suppressed when the agent card already had partial text (_hadBody) —
-    // a mid-run stream death then looked like a normal end. The line now
-    // ALWAYS appears.
-    if (!_isAbort) {
-      const errDiv = document.createElement('div');
-      errDiv.className = 'msg status-txt';
-      if (_isConnDrop) {
-        errDiv.style.cssText = 'color:#b08a40;font-size:10px;border:1px solid rgba(200,160,64,.25);padding:6px 8px;border-radius:4px';
-        errDiv.textContent = '\u26A0 Connection lost - the run may still be running or parked. Send a message to resume, or check the log.';
-      } else {
-        errDiv.style.cssText = 'color:#b04040;font-size:10px;border:1px solid rgba(200,64,64,.25);padding:6px 8px;border-radius:4px';
-        errDiv.textContent = '\u26A0 Stream error: ' + (e.message || e);
-      }
-      const chatEl = document.getElementById('chat');
-      if (chatEl) chatEl.appendChild(errDiv);
-      scrollBtmIfNearBottom(120);
-    }
-    document.querySelectorAll('.abody.live').forEach(function(b) {
-      if (!b.textContent.trim()) {
-        var sp = document.createElement('span');
-        sp.className = 'status-txt';
-        sp.style.color = '#7a8fa8';
-        sp.textContent = '[No output - stream aborted]';
-        b.appendChild(sp);
-      }
-      b.classList.remove('live');
-    });
-    showStatus(_isAbort ? 'Run stopped.' : (_isConnDrop ? 'Connection lost - check the log for status.' : '\u26A0 Stream error: ' + e.message));
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch
@@ -8004,6 +8018,7 @@ function _journalStartTail(runId) {
         if (!j || j.active === false) { _journalStopTail(); return; }
         if (j.frames && j.frames.length) {
           for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
+          if (typeof j.n === 'number') S._sseFrameSeq = Math.max(S._sseFrameSeq || 0, j.n);
         }
         if (S._sawDoneEvent || j.done || j.aborted) {
           _journalStopTail();
@@ -8075,6 +8090,7 @@ function handleEvent(d) {
   }
   if (d.type === 'run_id') {
     S.currentRunId = d.run_id;
+    S._attachedRunId = d.run_id;
   }
   else if (d.type === 'heartbeat') {
     var _hbEl = document.getElementById('status-el');
@@ -8149,13 +8165,21 @@ function handleEvent(d) {
   else if (d.type === 'status') {
       // F5: render system hints as colored dividers
       var _sc = String(d.content || '');
-      // COMPRESSION-CUT: render as a cut BETWEEN the tool calls in the coder bubble
-      if (_sc.indexOf('Context compressed') >= 0 || _sc.indexOf('Compression failed') >= 0) {
+      // COMPRESSION-CUT / TRUNCATION-CUT: render as an inline cut in the coder bubble
+      var _isCutComp = _sc.indexOf('Context compressed') >= 0 || _sc.indexOf('Compression failed') >= 0;
+      var _isCutWarn = _sc.indexOf('malformed/truncated') >= 0 || _sc.indexOf('repetition drift in tool-call arguments') >= 0 || _sc.indexOf('[Tool loop:') >= 0;
+      if (_isCutComp || _isCutWarn) {
         var _cutBody = null;
         if (S.curAgent) { _cutBody = document.getElementById('ab-' + S.curAgent.tid) || S.curAgent.body; }
         if (_cutBody) {
+          if (S._thinkBlockId) {
+            var _tkCut = document.getElementById(S._thinkBlockId);
+            if (_tkCut) _tkCut.classList.remove('live');
+            S._thinkBlockId = null;
+          }
+          if (typeof rmEl === 'function') rmEl('status-el');
           var _cutDiv = document.createElement('div');
-          _cutDiv.className = 'ctx-cut' + (_sc.indexOf('failed') >= 0 ? ' err' : '');
+          _cutDiv.className = 'ctx-cut' + (_sc.indexOf('failed') >= 0 ? ' err' : (_isCutWarn ? ' warn' : ''));
           _cutDiv.innerHTML = '<span>' + esc(_sc) + '</span>';
           _cutBody.appendChild(_cutDiv);
           _liveMdReset(_cutBody);
@@ -8572,6 +8596,11 @@ function handleEvent(d) {
   }
   else if (d.type === 'tool_gen_reset') {
     _toolGenDone();
+    if (S._thinkBlockId) {
+      var _tkRst = document.getElementById(S._thinkBlockId);
+      if (_tkRst) _tkRst.classList.remove('live');
+      S._thinkBlockId = null;
+    }
   }
   else if (d.type === 'complexity') {
     // ROUTE-FOR-SPEECH: "complex" (pipeline) and "code_duo" are multi-agent
@@ -8624,6 +8653,7 @@ function handleEvent(d) {
     _perfOnToken(d.content);
     if (Object.keys(_tgCards).length > 0) _toolGenDone();
     if (S.curAgent) {
+      if (typeof rmEl === 'function') rmEl('status-el');
       if (!S._thinkBlockId) {
         S._thinkBlockId = _createThinkBlock();
       }
@@ -9928,6 +9958,7 @@ function handleEvent(d) {
     // TOOL-GEN-DONE: the streaming card is replaced by this real chip
     _toolGenDone();
     if (!S.curAgent) return;
+    if (typeof rmEl === 'function') rmEl('status-el');
     // phase switch: first tool call → header changes from "Code" to "Execution"
     if (!S._coderHadToolCall) {
       S._coderHadToolCall = true;
@@ -10071,10 +10102,10 @@ function handleEvent(d) {
     _liveMdReset(_tcBody);
     _tcBody.appendChild(_preWrap);
     }
-    // Insert BEFORE open think-block: order = [Think] then [Tool], not reversed
+    // Insert AFTER current think-block so chronological order stays [Think] -> [Tool] -> [Result]
     var _tkCurrent = S._thinkBlockId ? document.getElementById(S._thinkBlockId) : null;
     if (_tkCurrent && _tkCurrent.parentNode === _tcBody) {
-      _tcBody.insertBefore(_tcRow, _tkCurrent);
+      _tcBody.insertBefore(_tcRow, _tkCurrent.nextSibling);
     } else {
       _tcBody.appendChild(_tcRow);
     }

@@ -472,6 +472,7 @@ SUITES = [
     ("audit_wave3c_deep_fixes",       "tests/test_audit_wave3c_deep_fixes.py",       45),
     ("b12631_inkling_loop_and_qwen36", "tests/test_b12631_inkling_loop_and_qwen36.py", 45),
     ("live_pip_think_codepanel_fixes", "tests/test_live_pip_think_codepanel_fixes.py", 45),
+    ("notify_chats_speed_and_think_order", "tests/test_notify_chats_speed_and_think_order.py", 45),
 
 ]
 
@@ -914,7 +915,11 @@ def main() -> int:
         t0 = time.time()
         # ENC-FIX (2026-10-15): force UTF-8 for every child, independent of
         # the invoking console's locale.
-        _suite_env = {**os.environ, "PYTHONIOENCODING": "utf-8:replace"}
+        _suite_env = {
+            **os.environ,
+            "PYTHONIOENCODING": "utf-8:replace",
+            "HIVEMIND_NO_NOTIFY": "1",
+        }
         try:
             r = subprocess.run(
                 [sys.executable, str(target)],
