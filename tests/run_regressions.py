@@ -468,6 +468,7 @@ SUITES = [
     ("audit_wave2b2_server_gw_sched", "tests/test_audit_wave2b2_server_gw_sched.py", 45),
     ("audit_wave3_perf_levers",       "tests/test_audit_wave3_perf_levers.py",       45),
     ("audit_wave3b_pyright_offline",  "tests/test_audit_wave3b_pyright_offline.py",  45),
+    ("hardware_autofit_and_moe_lift", "tests/test_hardware_autofit_and_moe_lift.py", 45),
 
 ]
 

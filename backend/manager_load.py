@@ -1900,14 +1900,18 @@ class LlamaLoadMixin:
         # OUTSOURCED (split 4.4): MoE expert offload + cache flags → _phase_moe().
         _moe = await _phase_moe(self, slot, cmd, model, num_ctx, moe_cache,
                                 _def_threads, _def_threads_batch,
-                                gpu_layers=_gpu_layers)
+                                gpu_layers=_gpu_layers, gguf_path=gguf_path)
         cmd = _moe.cmd
         _moe_cache_used = _moe.moe_cache_used
         # The MoE-UBATCH-RAISE compute-buffer surcharge rides into the same
         # pre-flight `extra_needed_mib` as the expert cache: can_fit already
         # adds ubatch_extra_mib(settings baseline), so only the DELTA to the
         # raised per-model ubatch is extra here.
-        _fit_extra_mib = float(_moe_cache_used) + float(_ub_extra_delta_mib)
+        _fit_extra_mib = (
+            float(_moe_cache_used)
+            + float(_ub_extra_delta_mib)
+            + float(getattr(_moe, "all_gpu_extra_mib", 0.0) or 0.0)
+        )
         # OUTSOURCED (split 4.5): MTP/registry-config/reasoning/mmproj/jinja flags →
         # _phase_model_flags().
         _mf = await _phase_model_flags(self, cmd, model, _model_base, gguf_path, vision)

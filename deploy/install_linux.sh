@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # HiveMind Linux installer: system deps + venv + llama.cpp + systemd service.
-# Usage: sudo deploy/install_linux.sh [--voice|--tts|--both]   (env: HIVEMIND_GPU_BACKEND=vulkan|cuda|rocm|cpu, HIVEMIND_VOICE=1, HIVEMIND_TTS=1)
+# Usage: sudo deploy/install_linux.sh [--autofit|--8gb] [--voice|--tts|--both]   (env: HIVEMIND_GPU_BACKEND=vulkan|cuda|rocm|cpu, HIVEMIND_PROFILE=autofit|8gb, HIVEMIND_VOICE=1, HIVEMIND_TTS=1)
 set -euo pipefail
 
 INSTALL_DIR="/opt/hivemind"
@@ -12,23 +12,49 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/../pyproject.toml" ] && [ ! -f "$SCRIPT_DIR/pyproject.toml" ]; then
   SCRIPT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
-LLAMA_BACKEND="${HIVEMIND_GPU_BACKEND:-vulkan}"
 # VOICE=1 (or --voice) also downloads the optional speech-to-text engine
 # + model (English, CPU only, ~420 MB). Default: skip.
 VOICE="${HIVEMIND_VOICE:-0}"
 TTS="${HIVEMIND_TTS:-0}"
+PROFILE="${HIVEMIND_PROFILE:-}"
+PROFILE_EXPLICIT=0
+if [ -n "$PROFILE" ]; then
+  PROFILE_EXPLICIT=1
+fi
 for _arg in "$@"; do
   case "$_arg" in
     --voice) VOICE=1 ;;
     --tts) TTS=1 ;;
     --both) VOICE=1; TTS=1 ;;
+    --autofit) PROFILE="autofit"; PROFILE_EXPLICIT=1 ;;
+    --8gb|--reference-8gb) PROFILE="8gb"; PROFILE_EXPLICIT=1 ;;
   esac
 done
+if [ -z "$PROFILE" ]; then
+  PROFILE="autofit"
+fi
+if [ "$PROFILE" = "reference" ] || [ "$PROFILE" = "reference-8gb" ]; then
+  PROFILE="8gb"
+fi
 
-echo "=== HiveMind Linux Installation (backend: $LLAMA_BACKEND) ==="
+if [ -n "${HIVEMIND_GPU_BACKEND:-}" ]; then
+  LLAMA_BACKEND="$HIVEMIND_GPU_BACKEND"
+elif command -v nvidia-smi >/dev/null 2>&1 \
+     && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -q '[[:alnum:]]'; then
+  LLAMA_BACKEND="cuda"
+else
+  LLAMA_BACKEND="vulkan"
+fi
+
+echo "=== HiveMind Linux Installation (backend: $LLAMA_BACKEND, profile: $PROFILE) ==="
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Error: run as root (sudo $0)"
+  exit 1
+fi
+
+if [ "$PROFILE" != "autofit" ] && [ "$PROFILE" != "8gb" ]; then
+  echo "Error: HIVEMIND_PROFILE must be autofit or 8gb (got: $PROFILE)"
   exit 1
 fi
 
@@ -200,6 +226,19 @@ if [ "$_uv_sync_ok" != "1" ]; then
     echo "Error: neither pyproject.toml nor requirements.txt found in $INSTALL_DIR"
     exit 1
   fi
+fi
+
+echo "[4b/8] Configuring hardware settings profile ($PROFILE)..."
+if [ ! -f "$INSTALL_DIR/settings.json" ] || [ "$PROFILE_EXPLICIT" = "1" ]; then
+  _af_args=(--profile "$PROFILE" --backend "$LLAMA_BACKEND" --settings "$INSTALL_DIR/settings.json")
+  if [ "$PROFILE_EXPLICIT" = "1" ]; then
+    _af_args+=(--force)
+  fi
+  if ! "$INSTALL_DIR/.venv/bin/python" "$INSTALL_DIR/deploy/hardware_autofit.py" "${_af_args[@]}"; then
+    echo "  [WARN] hardware autofit skipped - HiveMind will use defaults on first start" >&2
+  fi
+else
+  echo "  (existing $INSTALL_DIR/settings.json preserved; pass --autofit or --8gb to override)"
 fi
 
 echo "[5/8] Fetching llama.cpp (backend: $LLAMA_BACKEND)..."

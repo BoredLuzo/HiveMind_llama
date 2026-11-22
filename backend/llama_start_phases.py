@@ -63,6 +63,15 @@ _INIT_MTP_DRAFT_N_MAX = MTP_DRAFT_N_MAX
 _INIT_MTP_DRAFT_P_MIN = MTP_DRAFT_P_MIN
 _INIT_DFLASH_DRAFT_P_MIN = DFLASH_DRAFT_P_MIN
 _INIT_PREFLIGHT_MARGIN = VRAM_PRE_FLIGHT_MARGIN_MIB
+_INIT_VRAM_BUDGET_GB = VRAM_BUDGET_GB
+_INIT_GPU_BACKEND = GPU_BACKEND
+
+
+def _live_vram_budget_gb() -> float:
+    """Honor monkeypatches to this module's VRAM_BUDGET_GB, else read live utils."""
+    if VRAM_BUDGET_GB != _INIT_VRAM_BUDGET_GB:
+        return float(VRAM_BUDGET_GB)
+    return float(getattr(_llama_utils, "VRAM_BUDGET_GB", VRAM_BUDGET_GB))
 
 
 def _live_cfg(name: str, local_val, init_val):
@@ -1034,18 +1043,120 @@ async def _phase_capabilities(self, cmd, _all_flags_uncached: bool) -> _CapsPhas
 
 
 
+_MOE_ALL_GPU_MIN_BUDGET_GB: float = 16.0
+_MOE_ALL_GPU_EXTRA_CUSHION_MIB: float = 768.0
+
+
+def _moe_full_gpu_vram_mib(
+    model_key: str,
+    num_ctx: int,
+    *,
+    gguf_path: object = None,
+) -> tuple[float | None, float]:
+    """Estimate full-GPU MiB (no CPU expert offload) and calibrated MiB for `model_key`.
+
+    Returns (None, 0.0) when GGUF file size cannot be resolved (fail-closed).
+    """
+    file_gb = 0.0
+    try:
+        from backend.gguf_meta import _total_gguf_size_bytes, read_gguf_metadata as _read_gguf_meta
+
+        probe_target = str(gguf_path) if gguf_path else model_key
+        meta = _read_gguf_meta(probe_target) or {}
+        file_gb = float(meta.get("file_size_gb") or 0.0)
+        if file_gb <= 0.0 and gguf_path:
+            meta2 = _read_gguf_meta(model_key) or {}
+            file_gb = float(meta2.get("file_size_gb") or 0.0)
+        if file_gb <= 0.0 and gguf_path:
+            p = Path(str(gguf_path))
+            if p.is_file():
+                file_gb = float(_total_gguf_size_bytes(p, p.stat().st_size)) / (1024 ** 3)
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError):
+        return None, 0.0
+
+    if file_gb <= 0.0:
+        return None, 0.0
+
+    from .llama_vram_table import moe_cfg_for as _moe_cfg_for
+
+    cal_gb = float(vram_of_moe(model_key, num_ctx))
+    cal_4k_gb = float(vram_of_moe(model_key, 4096))
+    kv_gb = max(0.0, cal_gb - cal_4k_gb) if num_ctx > 4096 else 0.0
+    vram_zero_gb = (
+        float(vram_of_moe(model_key, num_ctx, n_cpu_moe=0))
+        if _moe_cfg_for(model_key)
+        else 0.0
+    )
+    full_gb = max(vram_zero_gb, file_gb * 1.08 + kv_gb)
+    return round(full_gb * 1024.0, 1), round(cal_gb * 1024.0, 1)
+
+
+async def _should_lift_moe_to_all_gpu(
+    self,
+    slot,
+    model_key: str,
+    num_ctx: int,
+    *,
+    gguf_path: object = None,
+) -> tuple[bool, float, str]:
+    """Return (should_lift, extra_needed_mib, reason) when a MoE fits 100% in GPU VRAM."""
+    if str(_live_cfg("GPU_BACKEND", GPU_BACKEND, _INIT_GPU_BACKEND) or "").strip().lower() == "cpu":
+        return False, 0.0, ""
+
+    from .llama_vram_table import _is_user_profile
+
+    if _is_user_profile(model_key):
+        return False, 0.0, ""
+
+    budget_gb = _live_vram_budget_gb()
+    if budget_gb < _MOE_ALL_GPU_MIN_BUDGET_GB:
+        return False, 0.0, ""
+
+    full_mib, cal_mib = _moe_full_gpu_vram_mib(model_key, num_ctx, gguf_path=gguf_path)
+    if full_mib is None:
+        return False, 0.0, ""
+
+    live_free = await asyncio.to_thread(get_live_gpu_free_mib)
+    budget_mib = budget_gb * 1024.0
+    if live_free is not None:
+        avail_mib = min(float(live_free), budget_mib)
+    else:
+        peer_committed_mib = sum(
+            float(vram_of_moe(_strip_alias(s.model), s._num_ctx if getattr(s, "_num_ctx", 0) > 0 else 4096)) * 1024.0
+            for s in list(getattr(self, "_slots", ()))
+            if getattr(s, "model", None) and getattr(s, "slot_id", None) != getattr(slot, "slot_id", None)
+        )
+        avail_mib = budget_mib - peer_committed_mib
+
+    ub_mib = float(ubatch_extra_mib(int(getattr(_llama_cfg, "LLAMA_UBATCH", 256) or 256)))
+    eff_margin = (
+        int(VRAM_PRE_FLIGHT_MARGIN_MIB)
+        if VRAM_PRE_FLIGHT_MARGIN_MIB != _INIT_PREFLIGHT_MARGIN
+        else int(getattr(_llama_utils, "VRAM_PRE_FLIGHT_MARGIN_MIB", VRAM_PRE_FLIGHT_MARGIN_MIB))
+    )
+    req_mib = full_mib + ub_mib + eff_margin + _MOE_ALL_GPU_EXTRA_CUSHION_MIB
+    if req_mib <= avail_mib:
+        extra_mib = max(0.0, round(full_mib - cal_mib, 1))
+        detail = f"full={full_mib:.0f}MiB + ub/margin={req_mib - full_mib:.0f}MiB <= avail={avail_mib:.0f}MiB"
+        return True, extra_mib, detail
+    return False, 0.0, ""
+
+
 @dataclasses.dataclass
 class _MoePhase:
     """Phase-4 outputs (split 4.4): the MoE-augmented cmd; the cache
     flag rides on the slot (as before)."""
     cmd: list = dataclasses.field(default_factory=list)
     moe_cache_used: int = 0
+    all_gpu_lifted: bool = False
+    all_gpu_extra_mib: float = 0.0
 
 
 async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                      moe_cache: bool, _def_threads,
                      _def_threads_batch: int | None = None, *,
-                     gpu_layers: object = None) -> _MoePhase:
+                     gpu_layers: object = None,
+                     gguf_path: object = None) -> _MoePhase:
     from backend.manager_load import _help_supports  # lazy: module cycle
     from . import llama_config as _llama_cfg
     _moe_model_key = _strip_alias(model)
@@ -1136,6 +1247,22 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     if _moe_pinned_off:
         _moe_count = 0
         _moe_src = "pinned-dense"
+    _all_gpu_lifted = False
+    _all_gpu_extra_mib = 0.0
+    if _moe_count > 0 and not _moe_explicit and not _moe_pinned_off:
+        _lift_ok, _lift_extra, _lift_detail = await _should_lift_moe_to_all_gpu(
+            self, slot, _moe_model_key, num_ctx, gguf_path=gguf_path,
+        )
+        if _lift_ok:
+            _orig_moe = _moe_count
+            _moe_count = 0
+            _moe_src = "auto-all-gpu"
+            _all_gpu_lifted = True
+            _all_gpu_extra_mib = _lift_extra
+            logger.info(
+                "[MOE-ALL-GPU] %s fits fully in GPU VRAM (%s) — lifting shipped --n-cpu-moe %d -> 0",
+                _moe_model_key, _lift_detail, _orig_moe,
+            )
     if _moe_count > 0:
         logger.info("MoE experts: %s -> %d (-n-cpu-moe, source=%s)",
                     _moe_model_key, _moe_count, _moe_src)
@@ -1150,7 +1277,12 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     # apart without a warning.
     from .llama_vram_table import moe_cfg_for as _moe_cfg_for
     _cal_cfg = _moe_cfg_for(_strip_alias(model).strip().lower())
-    if _cal_cfg and "calibrated_n_cpu_moe" in _cal_cfg and _cal_cfg["calibrated_n_cpu_moe"] != _moe_count:
+    if (
+        _moe_src != "auto-all-gpu"
+        and _cal_cfg
+        and "calibrated_n_cpu_moe" in _cal_cfg
+        and _cal_cfg["calibrated_n_cpu_moe"] != _moe_count
+    ):
         logger.warning(
             f"[VRAM-CALIBRATION] {model}: --n-cpu-moe={_moe_count} deviates from the calibrated value "
             f"{_cal_cfg['calibrated_n_cpu_moe']} — the VRAM estimate (vram_of_moe) may now "
@@ -1316,7 +1448,12 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     # is only the bool marker (used elsewhere as a flag). Returning
     # int(slot...) would collapse every cache size to 1 MiB and make the
     # VRAM pre-flight under-estimate by (MOE_CACHE_MIB - 1).
-    return _MoePhase(cmd=cmd, moe_cache_used=_moe_cache_used)
+    return _MoePhase(
+        cmd=cmd,
+        moe_cache_used=_moe_cache_used,
+        all_gpu_lifted=_all_gpu_lifted,
+        all_gpu_extra_mib=_all_gpu_extra_mib,
+    )
 
 
 

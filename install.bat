@@ -1,6 +1,12 @@
 @echo off
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
+set "HM_PROFILE=%HIVEMIND_PROFILE%"
+for %%A in (%*) do (
+    if /i "%%~A"=="--autofit" set "HM_PROFILE=autofit"
+    if /i "%%~A"=="--8gb" set "HM_PROFILE=8gb"
+    if /i "%%~A"=="--reference-8gb" set "HM_PROFILE=8gb"
+)
 
 echo.
 echo  +=============================================================+
@@ -322,6 +328,7 @@ REM I4 (audit r3): a REPAIR re-run must keep the values the user chose
 REM the first time - seed the shown defaults from the existing settings.
 set "VRAM="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.vram_budget_gb"`) do set "VRAM=%%V"
+if not defined VRAM if /i "%HM_PROFILE%"=="8gb" set "VRAM=7.5"
 if not defined VRAM for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "& $env:PY -c 'from deploy.fetch_models import probe_hardware; v = probe_hardware()[0] or 0; print(v if v >= 2 else str())'" 2^>nul`) do set "VRAM=%%V"
 if not defined VRAM set "VRAM=8.0"
 set "VRAM_IN="
@@ -358,6 +365,33 @@ if errorlevel 1 (
     echo.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
+echo.
+
+if /i "%HM_PROFILE%"=="reference" set "HM_PROFILE=8gb"
+if /i "%HM_PROFILE%"=="reference-8gb" set "HM_PROFILE=8gb"
+if not defined HM_PROFILE goto ask_hw_profile
+if /i "%HM_PROFILE%"=="8gb" goto apply_hw_profile_8gb
+if /i "%HM_PROFILE%"=="autofit" goto apply_hw_profile_autofit
+:ask_hw_profile
+echo   Settings profile for tuning parameters ^(ubatch, KV cache, concurrency^):
+echo     [A] Auto-fit to your GPU/RAM ^(recommended for 12GB+ / 24GB / A100^)
+echo     [8] Keep 8 GB reference defaults
+choice /c A8 /n /m "Choose settings profile [A or 8]: "
+if errorlevel 2 (
+    set "HM_PROFILE=8gb"
+    goto apply_hw_profile_8gb
+)
+set "HM_PROFILE=autofit"
+:apply_hw_profile_autofit
+if not exist deploy\hardware_autofit.py goto after_hw_profile
+"%PY%" deploy\hardware_autofit.py --profile autofit --backend "%HM_BACKEND%" --vram-gb "%HM_VRAM%" --keep-vram-budget --force
+if errorlevel 1 echo   [WARN] Hardware auto-fit skipped - using default tuning parameters.
+goto after_hw_profile
+:apply_hw_profile_8gb
+if not exist deploy\hardware_autofit.py goto after_hw_profile
+"%PY%" deploy\hardware_autofit.py --profile 8gb --backend "%HM_BACKEND%" --force
+if errorlevel 1 echo   [WARN] Reference 8 GB profile skipped - using default tuning parameters.
+:after_hw_profile
 echo.
 
 echo   [OK] step 2/9 GPU backend - done.
