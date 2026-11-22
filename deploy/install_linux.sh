@@ -39,9 +39,14 @@ fi
 
 if [ -n "${HIVEMIND_GPU_BACKEND:-}" ]; then
   LLAMA_BACKEND="$HIVEMIND_GPU_BACKEND"
-elif command -v nvidia-smi >/dev/null 2>&1 \
-     && nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -q '[[:alnum:]]'; then
-  LLAMA_BACKEND="cuda"
+elif command -v nvidia-smi >/dev/null 2>&1; then
+  _nv_gpus=""
+  if _nv_gpus="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null)" \
+     && [[ "$_nv_gpus" =~ [[:alnum:]] ]]; then
+    LLAMA_BACKEND="cuda"
+  else
+    LLAMA_BACKEND="vulkan"
+  fi
 else
   LLAMA_BACKEND="vulkan"
 fi
@@ -314,6 +319,21 @@ echo "[7/8] Installing systemd service..."
 cp "$INSTALL_DIR/deploy/hivemind.service" "$SERVICE_FILE"
 # Wire chosen backend & uv Python path directly into the installed unit file.
 sed -i -e "s|^#Environment=HIVEMIND_GPU_BACKEND=.*|Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND|" "$SERVICE_FILE"
+if [ -r /proc/meminfo ]; then
+  _mem_kb=""
+  while read -r _k _v _rest; do
+    if [ "$_k" = "MemTotal:" ]; then
+      _mem_kb="$_v"
+      break
+    fi
+  done < /proc/meminfo
+  if [ -n "$_mem_kb" ] && [ "$_mem_kb" -gt 67108864 ] 2>/dev/null; then
+    _mem_cap=$(( _mem_kb * 85 / 100 / 1048576 ))
+    if [ "$_mem_cap" -gt 48 ]; then
+      sed -i -e "s|^MemoryMax=.*|MemoryMax=${_mem_cap}G|" "$SERVICE_FILE"
+    fi
+  fi
+fi
 # NON-SYSTEMD (audit r4): in a container/WSL1 without a running systemd,
 # `systemctl` used to fail here via set -e AFTER everything else succeeded -
 # a complete install that reported itself broken. Detect instead of crash.

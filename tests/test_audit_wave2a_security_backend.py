@@ -205,8 +205,9 @@ def test_frontend_app_js_fixes() -> None:
     check("stray updateMoeVisibility() removed from partition chipRow",
           "updateMoeVisibility" not in chip_section)
     import re as _re_cb
+    _m_cb = _re_cb.search(r"/static/app\.js\?v=(\d{8}-\d{2})", html)
     check("index.html bumped app.js cache-buster to >= 20261121-03",
-          _re_cb.search(r"/static/app\.js\?v=20261121-(0[3-9]|[1-9]\d)", html) is not None)
+          bool(_m_cb and _m_cb.group(1) >= "20261121-03"))
 
 
 # ── 6. routers/vram.py debug gate, 304 cache hit & invalidation ─────────────

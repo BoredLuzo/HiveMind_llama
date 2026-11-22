@@ -620,6 +620,9 @@ async def exec_git_undo_file(workspace: str, abs_path: str) -> str:
 async def exec_git_reset(workspace: str, target: str = "HEAD", hard: bool = False) -> str:
     """Reset workspace to target commit/branch. If hard=True, discards all uncommitted changes.
     Use with caution — hard reset cannot be undone."""
+    target = str(target or "").strip()
+    if not target or target.startswith("-"):
+        return "❌ git_reset: invalid target ref."
     check = await _git_run(workspace, "git", "rev-parse", "--git-dir", timeout=30)
     if check.returncode != 0:
         return f"⚠️ git_reset: {workspace} is not a git repository."
@@ -633,6 +636,9 @@ async def exec_git_reset(workspace: str, target: str = "HEAD", hard: bool = Fals
 
 async def exec_git_checkout(workspace: str, target: str) -> str:
     """Checkout a branch or restore files. Supports branch switching and file restoration."""
+    target = str(target or "").strip()
+    if not target or target.startswith("-"):
+        return "❌ git_checkout: invalid target ref or path."
     check = await _git_run(workspace, "git", "rev-parse", "--git-dir", timeout=30)
     if check.returncode != 0:
         return f"⚠️ git_checkout: {workspace} is not a git repository."

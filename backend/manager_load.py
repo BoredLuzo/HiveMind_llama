@@ -45,7 +45,7 @@ from .llama_start_phases import (
 )
 from typing import TYPE_CHECKING, Optional
 from pathlib import Path
-from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
+from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, slot_effective_vram_gb, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
 from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
 import asyncio
 import contextlib
@@ -889,9 +889,12 @@ class LlamaLoadMixin:
 
         def _committed_gb() -> float:
             return sum(
-                vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
-                if moe_cfg_for(_strip_alias(s.model))
-                else _vram_of(s.model)
+                slot_effective_vram_gb(
+                    s,
+                    vram_fn=lambda m, c: (
+                        vram_of_moe(_strip_alias(m), c) if moe_cfg_for(_strip_alias(m)) else _vram_of(m)
+                    ),
+                )
                 for s in self._slots if s.model
             )
 
@@ -1737,9 +1740,9 @@ class LlamaLoadMixin:
             logger.info("Prompt cache reuse active: --cache-reuse %d", int(CACHE_REUSE))
 
         # ── HOST-RAM-CAP (2026-10-14): bound host RAM prompt cache & checkpoints.
-        if CACHE_RAM_MIB > 0:
+        if CACHE_RAM_MIB >= 0:
             cmd += ["--cache-ram", str(int(CACHE_RAM_MIB))]
-            if _eff_cache_ram != int(CACHE_RAM_MIB):
+            if CACHE_RAM_MIB > 0 and _eff_cache_ram != int(CACHE_RAM_MIB):
                 cmd[cmd.index("--cache-ram") + 1] = str(_eff_cache_ram)
                 logger.info("Profile prompt cache override: --cache-ram %d MiB (global %d MiB)",
                             _eff_cache_ram, int(CACHE_RAM_MIB))
@@ -1900,7 +1903,9 @@ class LlamaLoadMixin:
         # OUTSOURCED (split 4.4): MoE expert offload + cache flags → _phase_moe().
         _moe = await _phase_moe(self, slot, cmd, model, num_ctx, moe_cache,
                                 _def_threads, _def_threads_batch,
-                                gpu_layers=_gpu_layers, gguf_path=gguf_path)
+                                gpu_layers=_gpu_layers, gguf_path=gguf_path,
+                                extra_reserved_mib=_ub_extra_delta_mib,
+                                vision=vision)
         cmd = _moe.cmd
         _moe_cache_used = _moe.moe_cache_used
         # The MoE-UBATCH-RAISE compute-buffer surcharge rides into the same

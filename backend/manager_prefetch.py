@@ -98,13 +98,25 @@ class LlamaPrefetchMixin:
 
         PRE-EXPLORE-GUARD (Fix A):
         """
+        _start_gen = getattr(slot, "_lifecycle_gen", 0)
         try:
             await self._start_process(slot, model, num_ctx)
             logger.info(f"Prefetch finished: {model} on port {slot.port}")
         except asyncio.CancelledError:
             logger.info("Prefetch aborted: %s", model)
+            if getattr(slot, "_lifecycle_gen", 0) == _start_gen:
+                try:
+                    await asyncio.shield(_kill_slot_async(slot))
+                except (asyncio.CancelledError, OSError, RuntimeError):
+                    slot._loading = False
+                    slot.model = None
+                    old_ev = getattr(slot, "_ready_event", None)
+                    slot._ready_event = asyncio.Event()
+                    if old_ev is not None:
+                        old_ev.set()
             raise
         except Exception as e:
             logger.warning(f"Prefetch failed for {model}: {e}")
             self._metric_inc("prefetch_failures")
-            await _kill_slot_async(slot)
+            if getattr(slot, "_lifecycle_gen", 0) == _start_gen:
+                await _kill_slot_async(slot)

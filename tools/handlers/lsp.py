@@ -971,7 +971,8 @@ async def _inline_tool_lsp_format(args: dict, workspace: Path,
         return (f"Formatted {_rel(workspace, p)}: the server returned no "
                 f"edits - the file already matches the server's format.")
     try:
-        original = p.read_text(encoding="utf-8", errors="replace", newline="")
+        with open(p, encoding="utf-8", errors="replace", newline="") as _fh:
+            original = _fh.read()
         _crlf_n = original.count("\r\n")
         _lf_n = original.replace("\r\n", "").count("\n")
         _had_crlf = _crlf_n > _lf_n

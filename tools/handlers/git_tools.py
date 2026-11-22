@@ -66,16 +66,87 @@ async def _inline_tool_git_commit(args: dict, workspace: Path, _workspace_lock: 
             tool="git_commit")
     _paths = [str(x).strip() for x in _paths if str(x).strip()]
     # EOD-GIT-AUDIT: "." / ".." sweep the whole workspace through a scoped
-    # pathspec — reject them explicitly; a pathspec cannot start with "-"
-    # anyway (protected by the "--" separator on add AND commit).
-    _bad = [x for x in _paths if x in (".", "..") or x.startswith("../") or x.startswith("..\\")]
+    # pathspec — reject them explicitly alongside pathspec magic (":"),
+    # symlinks/junctions escaping the workspace, root aliases ("./", "sub/.."),
+    # and secret paths.
+    import os as _os
+    from utils.file import is_secret_path as _is_secret_path, _is_junction as _is_junction
+
+    ws_path = Path(ws)
+    try:
+        ws_res = ws_path.resolve()
+    except OSError as _ws_exc:
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            f"git_commit invalid workspace {ws}: {_ws_exc}",
+            tool="git_commit",
+        )
+
+    _clean_paths: list[str] = []
+    _bad: list[str] = []
+    for _raw in _paths:
+        if (
+            _raw in (".", "..")
+            or _raw.startswith("../")
+            or _raw.startswith("..\\")
+            or _raw.startswith(":")
+        ):
+            _bad.append(_raw)
+            continue
+        _cand_raw = Path(_raw)
+        _cand = _cand_raw if _cand_raw.is_absolute() else (ws_path / _cand_raw)
+        _escaped = False
+        try:
+            _rel_parts = Path(_os.path.normpath(str(_cand))).relative_to(
+                Path(_os.path.normpath(str(ws_path)))
+            ).parts
+            _cur = ws_path
+            for _part in _rel_parts:
+                _cur = _cur / _part
+                if _cur.is_symlink() or _is_junction(_cur):
+                    try:
+                        _cur_res = _cur.resolve()
+                    except OSError:
+                        _escaped = True
+                        break
+                    if not _cur_res.is_relative_to(ws_res) or (
+                        _is_junction(_cur) and _cur_res == _cur
+                    ):
+                        _escaped = True
+                        break
+        except (ValueError, OSError):
+            pass
+        if _escaped:
+            _bad.append(_raw)
+            continue
+        try:
+            _cand_res = _cand.resolve()
+        except OSError:
+            _bad.append(_raw)
+            continue
+        if (
+            not _cand_res.is_relative_to(ws_res)
+            or _cand_res == ws_res
+            or _is_secret_path(_cand_res, ws_res)
+            or _is_secret_path(_raw, ws_res)
+        ):
+            _bad.append(_raw)
+            continue
+        _clean_paths.append(_cand_res.relative_to(ws_res).as_posix())
+
     if _bad:
         return _tool_error_response(
             "INVALID_ARGUMENT",
             f"git_commit paths must stay inside the workspace and must not "
-            f"be '.'/'..' — got: {', '.join(_bad[:3])}",
+            f"target root, secrets, or pathspec magic — got: {', '.join(_bad[:3])}",
             tool="git_commit")
-    _paths = list(dict.fromkeys(_paths))
+    _paths = list(dict.fromkeys(_clean_paths))
+    if not _paths:
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            "git_commit requires at least one valid workspace-relative path",
+            tool="git_commit",
+        )
     try:
         # exec_git_commit is the single funnel; scoping to `_paths` is its
         # only staging strategy (the add -A escape hatch was removed with the

@@ -150,6 +150,23 @@ def stop_background(handle: str) -> bool:
     return True
 
 
+def stop_all_background() -> int:
+    """Terminate all active background processes on shutdown."""
+    with _LOCK:
+        entries = list(_REGISTRY.values())
+        _REGISTRY.clear()
+    stopped = 0
+    for entry in entries:
+        try:
+            _terminate(entry)
+            stopped += 1
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.debug("[BACKGROUND] error stopping entry: %s", exc)
+    if stopped:
+        logger.info("[BACKGROUND] stopped %d background process(es)", stopped)
+    return stopped
+
+
 def list_background() -> list[dict]:
     with _LOCK:
         out = []

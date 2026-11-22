@@ -644,8 +644,9 @@ def test_vision_preprocess_lock_and_status() -> None:
 
 def test_frontend_wave2b1_js_behavior() -> None:
     html = (ROOT / "index.html").read_text(encoding="utf-8")
+    _m_cb = re.search(r"/static/app\.js\?v=(\d{8}-\d{2})", html)
     check("index.html bumped app.js cache-buster to >= 20261121-04",
-          re.search(r"/static/app\.js\?v=20261121-(0[4-9]|[1-9]\d)", html) is not None)
+          bool(_m_cb and _m_cb.group(1) >= "20261121-04"))
 
     node = shutil.which("node")
     if not node:

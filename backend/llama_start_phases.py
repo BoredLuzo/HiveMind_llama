@@ -47,8 +47,8 @@ from .llama_manager_utils import (
 from .llama_models import _strip_alias, resolve_model_path
 from .llama_vram_table import (
     TOTAL_VRAM_MIB, _effective_total_vram_mib,
-    get_live_gpu_free_mib, mmproj_surcharge_mib, slot_mmproj_vram_mib,
-    vram_of_moe, wait_for_vram_reclaim,
+    get_live_gpu_free_mib, mmproj_surcharge_mib, slot_effective_vram_gb,
+    slot_mmproj_vram_mib, vram_of_moe, wait_for_vram_reclaim,
 )
 from .manager_process import _slot_in_flight
 
@@ -107,6 +107,7 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
     # MoE section must not leave a previous load's True behind - the
     # retry would drop a flag the failed command never carried.
     slot._moe_cache_used = False
+    slot._moe_all_gpu_vram_gb = 0.0
     if slot.is_running:
         await _kill_slot_async(slot)
         _evicted_here = True
@@ -157,7 +158,7 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
     # does not apply. Keep the peers.
     if running_slots and GPU_BACKEND != "cpu":
         current_vram = sum(
-            vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
+            slot_effective_vram_gb(s, vram_fn=lambda m, c: vram_of_moe(_strip_alias(m), c))
             for s in running_slots if s.model
         )
         new_vram = vram_of_moe(_strip_alias(model), num_ctx)
@@ -1098,15 +1099,26 @@ async def _should_lift_moe_to_all_gpu(
     num_ctx: int,
     *,
     gguf_path: object = None,
+    extra_reserved_mib: float = 0.0,
+    vision: bool = False,
 ) -> tuple[bool, float, str]:
     """Return (should_lift, extra_needed_mib, reason) when a MoE fits 100% in GPU VRAM."""
     if str(_live_cfg("GPU_BACKEND", GPU_BACKEND, _INIT_GPU_BACKEND) or "").strip().lower() == "cpu":
         return False, 0.0, ""
 
-    from .llama_vram_table import _is_user_profile
+    from . import llama_vram_table as _lvt
 
-    if _is_user_profile(model_key):
-        return False, 0.0, ""
+    if getattr(_lvt._is_user_profile, "__module__", "") != "backend.llama_vram_table":
+        if _lvt._is_user_profile(model_key):
+            return False, 0.0, ""
+    else:
+        try:
+            from model_configs.models_registry import has_user_profile_key as _has_user_key
+            if _has_user_key(model_key, "moe_cpu_experts"):
+                return False, 0.0, ""
+        except (ImportError, OSError, ValueError, TypeError, AttributeError):
+            if _lvt._is_user_profile(model_key):
+                return False, 0.0, ""
 
     budget_gb = _live_vram_budget_gb()
     if budget_gb < _MOE_ALL_GPU_MIN_BUDGET_GB:
@@ -1122,11 +1134,23 @@ async def _should_lift_moe_to_all_gpu(
         avail_mib = min(float(live_free), budget_mib)
     else:
         peer_committed_mib = sum(
-            float(vram_of_moe(_strip_alias(s.model), s._num_ctx if getattr(s, "_num_ctx", 0) > 0 else 4096)) * 1024.0
+            slot_effective_vram_gb(s, vram_fn=lambda m, c: vram_of_moe(_strip_alias(m), c)) * 1024.0
             for s in list(getattr(self, "_slots", ()))
             if getattr(s, "model", None) and getattr(s, "slot_id", None) != getattr(slot, "slot_id", None)
         )
         avail_mib = budget_mib - peer_committed_mib
+
+    mmproj_mib = 0.0
+    if _needs_mmproj(model_key, vision=vision):
+        try:
+            from .llama_models import resolve_mmproj_path as _resolve_mm
+            _mm_p = _resolve_mm(model_key)
+            if not _mm_p and gguf_path:
+                _mm_p = pick_mmproj_fallback(Path(str(gguf_path)).parent, model_key)
+            if _mm_p:
+                mmproj_mib = float(mmproj_surcharge_mib(_mm_p))
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError):
+            mmproj_mib = 0.0
 
     ub_mib = float(ubatch_extra_mib(int(getattr(_llama_cfg, "LLAMA_UBATCH", 256) or 256)))
     eff_margin = (
@@ -1134,10 +1158,11 @@ async def _should_lift_moe_to_all_gpu(
         if VRAM_PRE_FLIGHT_MARGIN_MIB != _INIT_PREFLIGHT_MARGIN
         else int(getattr(_llama_utils, "VRAM_PRE_FLIGHT_MARGIN_MIB", VRAM_PRE_FLIGHT_MARGIN_MIB))
     )
-    req_mib = full_mib + ub_mib + eff_margin + _MOE_ALL_GPU_EXTRA_CUSHION_MIB
+    overhead_mib = ub_mib + eff_margin + _MOE_ALL_GPU_EXTRA_CUSHION_MIB + float(extra_reserved_mib or 0.0) + mmproj_mib
+    req_mib = full_mib + overhead_mib
     if req_mib <= avail_mib:
         extra_mib = max(0.0, round(full_mib - cal_mib, 1))
-        detail = f"full={full_mib:.0f}MiB + ub/margin={req_mib - full_mib:.0f}MiB <= avail={avail_mib:.0f}MiB"
+        detail = f"full={full_mib:.0f}MiB + ub/margin={overhead_mib:.0f}MiB <= avail={avail_mib:.0f}MiB"
         return True, extra_mib, detail
     return False, 0.0, ""
 
@@ -1156,7 +1181,9 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                      moe_cache: bool, _def_threads,
                      _def_threads_batch: int | None = None, *,
                      gpu_layers: object = None,
-                     gguf_path: object = None) -> _MoePhase:
+                     gguf_path: object = None,
+                     extra_reserved_mib: float = 0.0,
+                     vision: bool = False) -> _MoePhase:
     from backend.manager_load import _help_supports  # lazy: module cycle
     from . import llama_config as _llama_cfg
     _moe_model_key = _strip_alias(model)
@@ -1251,7 +1278,8 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
     _all_gpu_extra_mib = 0.0
     if _moe_count > 0 and not _moe_explicit and not _moe_pinned_off:
         _lift_ok, _lift_extra, _lift_detail = await _should_lift_moe_to_all_gpu(
-            self, slot, _moe_model_key, num_ctx, gguf_path=gguf_path,
+            self, slot, _moe_model_key, num_ctx,
+            gguf_path=gguf_path, extra_reserved_mib=extra_reserved_mib, vision=vision,
         )
         if _lift_ok:
             _orig_moe = _moe_count
@@ -1259,6 +1287,11 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             _moe_src = "auto-all-gpu"
             _all_gpu_lifted = True
             _all_gpu_extra_mib = _lift_extra
+            _cal_mib_lift = float(vram_of_moe(_moe_model_key, num_ctx)) * 1024.0
+            try:
+                slot._moe_all_gpu_vram_gb = round(max(_cal_mib_lift, _cal_mib_lift + float(_lift_extra)) / 1024.0, 2)
+            except AttributeError:
+                pass
             logger.info(
                 "[MOE-ALL-GPU] %s fits fully in GPU VRAM (%s) — lifting shipped --n-cpu-moe %d -> 0",
                 _moe_model_key, _lift_detail, _orig_moe,
@@ -1981,7 +2014,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         # AUDIT-FIX 2026-08-03: Diagnose-Attribute + Zeitreihen-Log.
         # external_usage_est = Total - frei - eigene geladene Slots (Fremdbelegung).
         _current_own = sum(
-            vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096) * 1024
+            slot_effective_vram_gb(s, vram_fn=lambda m, c: vram_of_moe(_strip_alias(m), c)) * 1024
             + slot_mmproj_vram_mib(s.model, bool(getattr(s, "_vision", False)))
             for s in self._slots if s.is_running and s.model
         )

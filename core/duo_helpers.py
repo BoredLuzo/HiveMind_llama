@@ -56,15 +56,28 @@ def build_preseed_context(workspace: str, ctx_tokens: int = 0,
     behavior for big workspaces.
     """
     try:
+        from utils.file import is_secret_path, _is_junction
         root = Path(str(workspace or ""))
         if not root.is_dir():
             return "", []
-        files = [
-            p for p in sorted(root.iterdir(), key=lambda x: x.name.lower())
-            if p.is_file()
-            and p.suffix.lower() in _PRESEED_EXTS
-            and not p.name.startswith(".")
-        ]
+        root_res = root.resolve()
+        files = []
+        for p in sorted(root.iterdir(), key=lambda x: x.name.lower()):
+            if p.is_symlink() or _is_junction(p):
+                continue
+            try:
+                p_res = p.resolve()
+            except OSError:
+                continue
+            if not p_res.is_relative_to(root_res):
+                continue
+            if (
+                p.is_file()
+                and p.suffix.lower() in _PRESEED_EXTS
+                and not p.name.startswith(".")
+                and not is_secret_path(p_res, root_res)
+            ):
+                files.append(p)
         if not files:
             return "", []
         if len(files) > int(max_files):

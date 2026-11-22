@@ -46,6 +46,20 @@ _SECRET_PATH_RE = re.compile(
 )
 
 
+def _normalize_secret_part(part: str) -> str:
+    """Strip NTFS alternate data stream suffixes and trailing dots/spaces."""
+    s = str(part)
+    # Keep Windows drive designator ("C:") intact while stripping ":stream" ADS.
+    if len(s) >= 2 and s[1] == ":" and s[0].isalpha():
+        head, tail = s[:2], s[2:]
+        if ":" in tail:
+            tail = tail.split(":", 1)[0]
+        s = head + tail
+    elif ":" in s:
+        s = s.split(":", 1)[0]
+    return s.rstrip(". ")
+
+
 def is_secret_path(p: Path | str, workspace_lock: Path | str | None = None) -> bool:
     """Return True if *p* matches the secret/credential denylist (.env, keys, credentials, etc.)."""
     try:
@@ -58,12 +72,15 @@ def is_secret_path(p: Path | str, workspace_lock: Path | str | None = None) -> b
                 rel = path_obj.as_posix().replace("\\", "/")
     except (TypeError, ValueError):
         rel = str(p).replace("\\", "/")
-    _rel_parts = [part.lower() for part in Path(rel).parts]
+    _norm_parts = [_normalize_secret_part(part) for part in Path(rel).parts]
+    _rel_parts = [part.lower() for part in _norm_parts if part]
     if any(part in {"sessions", "chats"} for part in _rel_parts):
         return True
-    if _SECRET_PATH_RE.search(rel):
+    _norm_rel = "/".join(seg.strip("\\/") for seg in _norm_parts if seg and seg not in ("/", "\\"))
+    if _SECRET_PATH_RE.search(_norm_rel):
         return True
-    return bool(_SECRET_PATH_RE.search(Path(str(p)).name))
+    _norm_name = _normalize_secret_part(Path(str(p)).name)
+    return bool(_SECRET_PATH_RE.search(_norm_name))
 
 
 def filter_secret_search_rows(output: str) -> str:

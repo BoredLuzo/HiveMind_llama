@@ -351,6 +351,16 @@ def _read_profile(model_name: str) -> dict:
     return _get_profile_readonly(model_name)
 
 
+def has_user_profile_key(model_name: str, key: str) -> bool:
+    """Return True iff the user override layer explicitly sets `key` (non-None)."""
+    canonical, base = _normalize_model_key(model_name)
+    if not canonical or not key:
+        return False
+    _ensure_cache()
+    user_prof, has_user = _resolve_layer(_user_cache, canonical, base)
+    return bool(has_user and key in user_prof and user_prof[key] is not None)
+
+
 def get_profile_source(model_name: str) -> str:
     """Return profile resolution source: 'user', 'shipped', 'gguf_auto', or 'generic'."""
     canonical, base = _normalize_model_key(model_name)

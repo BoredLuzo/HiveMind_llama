@@ -53,6 +53,21 @@ DUO_COMPRESS_MODE: str = "auto"
 _VALID_DUO_COMPRESS_MODES = frozenset({"auto", "mask_only", "partial", "full"})
 
 
+def _append_or_merge_user_msg(msgs: list, text: str) -> None:
+    """Append a user message or merge into trailing user message to keep role alternation."""
+    if not text:
+        return
+    if msgs and isinstance(msgs[-1], dict) and msgs[-1].get("role") == "user":
+        prev = msgs[-1].get("content")
+        if isinstance(prev, list):
+            prev.append({"type": "text", "text": text})
+        else:
+            prev_s = str(prev or "").rstrip()
+            msgs[-1]["content"] = (prev_s + "\n\n" + text) if prev_s else text
+        return
+    msgs.append({"role": "user", "content": text})
+
+
 def _resolve_duo_compress_mode(ctx) -> str:
     """Resolve effective duo_compress_mode from ctx.settings or runtime DUO_COMPRESS_MODE."""
     s = getattr(ctx, "settings", None)
@@ -339,12 +354,12 @@ async def _duo_compress_cycle(ctx, ps):
             _comp_ctx_try = 16384
             _fit_comp = _lsm_comp.can_fit(
                 _comp_llm_cfg, _comp_ctx_try,
-                exclude_slot_id=_coder_slot_id)
+                exclude_slot_id=None)
             if not _fit_comp.ok:
                 _comp_ctx_try = 8192
                 _fit_comp = _lsm_comp.can_fit(
                     _comp_llm_cfg, _comp_ctx_try,
-                    exclude_slot_id=_coder_slot_id)
+                    exclude_slot_id=None)
             if _fit_comp.ok:
                 _comp_port_new = await asyncio.wait_for(
                     _lsm_comp.ensure_loaded(_comp_llm_cfg, num_ctx=_comp_ctx_try, n_parallel=1),
@@ -784,11 +799,12 @@ async def _duo_compress_cycle(ctx, ps):
         try:
             _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
             if _inv:
-                _dtool_msgs.append({"role": "user", "content":
-                    "[PROJECT FILES - these exist in the workspace "
-                    "right now]\n" + "\n".join(_inv[:80])
-                    + "\nread_file any file before editing it - "
-                    "do not edit from memory."})
+                _inv_txt = (
+                    "[PROJECT FILES - these exist in the workspace right now]\n"
+                    + "\n".join(_inv[:80])
+                    + "\nread_file any file before editing it - do not edit from memory."
+                )
+                _append_or_merge_user_msg(_dtool_msgs, _inv_txt)
         except (OSError, RuntimeError, ValueError, TypeError) as _inv_err:
             logger.debug("[COMPRESS-INVENTORY] workspace inventory skipped: %s", _inv_err)
     # PLAN-REINJECT-FIX (2026-08-31): plan pin as its own
@@ -800,7 +816,7 @@ async def _duo_compress_cycle(ctx, ps):
     try:
         _pin = _build_plan_pin_msg(_subtasks, _di, _n_items)
         if _pin:
-            _dtool_msgs.append({"role": "user", "content": _pin})
+            _append_or_merge_user_msg(_dtool_msgs, _pin)
             logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (current=%d)", _n_items, _di + 1)
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _pp_err:
         # Plan-pin is best-effort.

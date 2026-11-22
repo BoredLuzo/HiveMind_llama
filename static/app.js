@@ -1655,56 +1655,65 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
 let _settingsPatchQueue = {};
 let _settingsPostTimer = null;
 let _settingsPostWaiters = [];
-let _settingsFlushInFlight = false;
+let _settingsFlushPromise = null;
 let _settingsFlushPending = false;
 
-async function _flushQueuedSettings() {
-  if (_settingsFlushInFlight) {
-    _settingsFlushPending = true;
-    return;
-  }
-  var _payload = _settingsPatchQueue;
-  _settingsPatchQueue = {};
-  var _waiters = _settingsPostWaiters.splice(0);
-  if (!_payload || !Object.keys(_payload).length) {
-    _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
-    return;
-  }
-  _settingsFlushInFlight = true;
-  // UI-REV (2026-09-09): tag the patch with the loaded settings revision —
-  // the server strips protected keys from stale revisions (old tabs).
-  if (S.settingsRev > 0) _payload.ui_rev = S.settingsRev;
+async function _doFlushQueuedSettings() {
   try {
-    var _resp = await fetch('/settings', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(_payload)
-    });
-    try {
-      var _rj = await _resp.json();
-      if (_rj && _rj.settings_rev) S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
-      if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
-      // STALE-SNAPSHOT WARNING (2026-10-07, user feedback: git fields must not reset on save): the server strips protected keys from an
-      // older tab's patch - the user must know the save did NOT take.
-      if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
-        S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
-        var _msg = 'Stale tab state: ' + _rj.stripped.join(', ')
-          + ' was NOT saved (a newer value was set elsewhere). '
-          + 'Reload the page (F5) and save again.';
-        if (window._showErrorToast) window._showErrorToast(_msg);
-        else alert(_msg);
+    while (true) {
+      _settingsFlushPending = false;
+      var _payload = _settingsPatchQueue;
+      _settingsPatchQueue = {};
+      var _waiters = _settingsPostWaiters.splice(0);
+      if (!_payload || !Object.keys(_payload).length) {
+        _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
+      } else {
+        // UI-REV (2026-09-09): tag the patch with the loaded settings revision —
+        // the server strips protected keys from stale revisions (old tabs).
+        if (S.settingsRev > 0) _payload.ui_rev = S.settingsRev;
+        try {
+          var _resp = await fetch('/settings', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify(_payload)
+          });
+          try {
+            var _rj = await _resp.json();
+            if (_rj && _rj.settings_rev) S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
+            if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
+            // STALE-SNAPSHOT WARNING (2026-10-07, user feedback: git fields must not reset on save): the server strips protected keys from an
+            // older tab's patch - the user must know the save did NOT take.
+            if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
+              S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
+              var _msg = 'Stale tab state: ' + _rj.stripped.join(', ')
+                + ' was NOT saved (a newer value was set elsewhere). '
+                + 'Reload the page (F5) and save again.';
+              if (window._showErrorToast) window._showErrorToast(_msg);
+              else alert(_msg);
+            }
+          } catch (_je) {}
+        } catch(e) {
+          console.warn('postSettings flush failed:', e);
+          try { showInfo('⚠ Settings change could NOT be saved (' + (e && e.message || e) + ').'); } catch (_se) {}
+        }
+        _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
       }
-    } catch (_je) {}
-  } catch(e) {
-    console.warn('postSettings flush failed:', e);
-    try { showInfo('⚠ Settings change could NOT be saved (' + (e && e.message || e) + ').'); } catch (_se) {}
+      if (_settingsFlushPending || (!_settingsPostTimer && Object.keys(_settingsPatchQueue).length)) {
+        continue;
+      }
+      break;
+    }
   } finally {
-    _settingsFlushInFlight = false;
+    _settingsFlushPromise = null;
   }
-  _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
-  if (_settingsFlushPending || (!_settingsPostTimer && Object.keys(_settingsPatchQueue).length)) {
-    _settingsFlushPending = false;
-    await _flushQueuedSettings();
+}
+
+function _flushQueuedSettings() {
+  if (_settingsFlushPromise) {
+    _settingsFlushPending = true;
+    return _settingsFlushPromise;
   }
+  _settingsFlushPromise = _doFlushQueuedSettings();
+  return _settingsFlushPromise;
 }
 
 function postSettings(patch) {
@@ -13811,7 +13820,7 @@ async function loadChat(chatId) {
     var _lastCp = null;
     for (var _mi = (chat.messages || []).length - 1; _mi >= 0; _mi--) {
       var _mm = chat.messages[_mi];
-      if (_mm && _mm.cp) { _lastCp = _mm.cp; break; }
+      if (_mm && _mm.cp && typeof _mm.cp === 'object' && Object.keys(_mm.cp).length > 0) { _lastCp = _mm.cp; break; }
     }
     if (_lastCp) _cpRestoreSnapshot(_lastCp);
     (chat.messages || []).forEach(function(msg) {
@@ -14516,8 +14525,8 @@ async function refreshVram(fromTimer) {
         rows += '<div style="margin-top:2px;padding:5px 8px;background:rgba(176,64,64,.08);'
           +'border:1px solid rgba(176,64,64,.25);border-radius:3px;font-family:IBM Plex Mono,monospace;font-size:9px;line-height:1.6">'
           +'<span style="color:#b04040;font-weight:600">⚠ SOLO-MODE</span> '
-          +'<span style="color:#7a8fa8">'+soloModel+' ('+models[0].vram_gb.toFixed(1)+'GB) + '
-          +'Judge ('+data.judge_gb+'GB) = '+(models[0].vram_gb+data.judge_gb).toFixed(1)+'GB &gt; '
+          +'<span style="color:#7a8fa8">'+esc(soloModel)+' ('+models[0].vram_gb.toFixed(1)+'GB) + '
+          +'Judge ('+esc(data.judge_gb)+'GB) = '+(models[0].vram_gb+data.judge_gb).toFixed(1)+'GB &gt; '
           +TOTAL.toFixed(0)+'GB Budget.</span><br>'
           +'<span style="color:#556677">Judge is reloaded sequentially (~8s after Analyst).</span>'
           +'</div>';
@@ -14528,7 +14537,7 @@ async function refreshVram(fromTimer) {
           +'border:1px solid #1e2435;border-radius:3px;font-family:IBM Plex Mono,monospace;font-size:9px;'
           +'display:flex;align-items:center;gap:6px">'
           +'<span style="color:'+komboColor+';font-size:12px">'+komboIcon+'</span>'
-          +'<span style="color:#7a8fa8;flex:1">'+models.map(function(m){return m.name.replace(':latest','');}).join(' + ')+'</span>'
+          +'<span style="color:#7a8fa8;flex:1">'+models.map(function(m){return esc(m.name.replace(':latest',''));}).join(' + ')+'</span>'
           +'<span style="color:'+komboColor+'">'+used.toFixed(1)+' / '+TOTAL.toFixed(1)+' GB</span>'
           +'</div>';
       }

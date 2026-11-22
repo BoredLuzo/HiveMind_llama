@@ -155,6 +155,12 @@ if not BASE_PORT or BASE_PORT < 1024:
     BASE_PORT = 8101
 
 MAX_SLOTS = 3
+try:
+    from settings import load_settings as _ls_slots
+    _raw_slots = int(_ls_slots().get("llama_max_slots", 3) or 3)
+    MAX_SLOTS = max(1, min(16, _raw_slots))
+except (ImportError, OSError, TypeError, ValueError):
+    MAX_SLOTS = 3
 
 
 # ── Vulkan / GPU ──────────────────────────────────────────────────────────────

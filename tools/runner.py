@@ -1687,29 +1687,34 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
         f"  Reply with 'yes' to confirm or 'no' to decline."
     )
 
-    if _emit:
-        try:
-            await _emit({"type": "agent_asking", "question": _question, "run_id": run_id})
-            await _emit({"type": "status", "content": "Destructive action requires confirmation..."})
-        except Exception:
-            pass
-
     _timeout = _pause_timeout_s.get()
     await run_control.initiate_pause(run_id, _question)
+    _decision_id = run_control.get_decision_id(run_id)
     # DESTRUCTIVE-CARD (2026-09-19): publish the pause like the approval gate
     # does (kind "ask"), or /approval/pending reports nothing and neither the
     # UI nor an automation can answer — the run then sits silent for the full
     # pause timeout and the action is declined without the user ever seeing
-    # a question. The SSE emit above is best-effort (_tool_loop_emit is unset
-    # in the agentic loop), so the pending poll is the reliable channel.
+    # a question. Register the pause and pending card BEFORE emitting the SSE
+    # event so immediate readers always observe both pause state and decision_id.
     _pending_approvals[str(run_id)] = {
         "kind": "ask",
         "tool": name,
         "preview": str(_details)[:300],
         "question": str(_question),
-        "decision_id": run_control.get_decision_id(run_id),
+        "decision_id": _decision_id,
     }
     try:
+        if _emit:
+            try:
+                await _emit({
+                    "type": "agent_asking",
+                    "question": _question,
+                    "run_id": run_id,
+                    "decision_id": _decision_id,
+                })
+                await _emit({"type": "status", "content": "Destructive action requires confirmation..."})
+            except Exception:
+                pass
         _answer = await run_control.wait_for_resume(run_id, timeout_s=_timeout)
     finally:
         _pending_approvals.pop(str(run_id), None)

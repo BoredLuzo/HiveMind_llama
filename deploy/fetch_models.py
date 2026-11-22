@@ -1059,7 +1059,10 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
         if "mmproj" not in g.name.lower():
             continue
         low = g.name.lower().replace(".", "")
-        family = next((fam for fam in families if fam.replace(".", "") in low), None)
+        family = next(
+            (fam for fam in sorted(families, key=len, reverse=True) if fam.replace(".", "") in low),
+            None,
+        )
         if family:
             # SIZE-KEYED (2026-10-03): families with per-size projectors
             # (mmproj-Qwen3.5-{0.8B,2B,4B,9B}-F16) get a ":<size>b" key so

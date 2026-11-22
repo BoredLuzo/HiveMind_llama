@@ -22,6 +22,21 @@ from core.duo_helpers import _run_parallel_pre_explore
 from hive_functions.pre_explore import run_pre_explore
 
 
+def _xq_put_sentinel(q: asyncio.Queue) -> None:
+    """Enqueue None sentinel without blocking if consumer stopped with full queue."""
+    try:
+        q.put_nowait(None)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+        try:
+            q.put_nowait(None)
+        except asyncio.QueueFull:
+            return
+
+
 def _save_repomap_hash(explore_ctx: str) -> None:
     try:
         from tools.runner import _current_project_state
@@ -1135,7 +1150,11 @@ async def _phase_pre_explore(ctx, state: dict):
             # ── Parallel vs. sequenzieller Pre-Explore — VOR Port-Lookup ─
             #
             # USER-TOGGLE: duo_parallel_preexplore = true/false (aus UI-Toggle).
-            _worker_cfgs = _xexplore_cfg.get("workers") or []
+            _raw_worker_cfgs = _xexplore_cfg.get("workers") or []
+            _worker_cfgs = [
+                w for w in _raw_worker_cfgs
+                if isinstance(w, dict) and str(w.get("model") or "").strip()
+            ]
             _parallel_setting = bool(ctx.duo_config.parallel_preexplore)
             _use_parallel = bool(_parallel_setting and _worker_cfgs)
             if _parallel_setting and not _worker_cfgs:
@@ -1956,7 +1975,7 @@ async def _phase_pre_explore(ctx, state: dict):
                                             await _lsm_workers.evict(_wm_fin)
                                 except Exception as _evict_exc:
                                     logger.warning("Worker-evict after parallel failure failed: %s", _evict_exc)
-                            await _xq.put(None)
+                            _xq_put_sentinel(_xq)
 
                     _static_map_task = _maybe_start_static_map_task(
                         ctx, state, _partitions, _ws_str, _static_map_task,
@@ -1973,8 +1992,10 @@ async def _phase_pre_explore(ctx, state: dict):
                             _xdrain = _xq.get_nowait()
                             if _xdrain is not None:
                                 yield _xdrain
-                    except GeneratorExit:
+                    except (GeneratorExit, asyncio.CancelledError):
                         _xtask.cancel()
+                        if _static_map_task is not None and not _static_map_task.done():
+                            _static_map_task.cancel()
                         raise
                     _xparallel_results: list = []
                     _xmsgs = []            # pre-init — prevents NameError on timeout
@@ -2258,7 +2279,7 @@ async def _phase_pre_explore(ctx, state: dict):
                         )
                         return _seq_ctx, _seq_results, _seq_contracts, _seq_msgs
                     finally:
-                        await _xq.put(None)
+                        _xq_put_sentinel(_xq)
 
                 _static_map_task = _maybe_start_static_map_task(
                     ctx, state, _partitions, _ws_str, _static_map_task,
@@ -2275,8 +2296,10 @@ async def _phase_pre_explore(ctx, state: dict):
                         _xdrain = _xq.get_nowait()
                         if _xdrain is not None:
                             yield _xdrain
-                except GeneratorExit:
+                except (GeneratorExit, asyncio.CancelledError):
                     _xtask.cancel()
+                    if _static_map_task is not None and not _static_map_task.done():
+                        _static_map_task.cancel()
                     raise
                 _xmsgs = []
                 _xparallel_results = []    # pre-init — prevents NameError on timeout
@@ -2325,6 +2348,20 @@ async def _phase_pre_explore(ctx, state: dict):
                 pass
             yield await ctx.emit({"type": "status", "content": f"⚠️ Pre-Explore error: {str(_xe)[:120]}"})
         finally:
+            if "_lsm_workers" in locals() and locals().get("_worker_slots"):
+                from backend.llama_manager_utils import _nm as _nm_fin
+                _want_unpin = {
+                    _nm_fin(ws.get("model", ""))
+                    for ws in locals()["_worker_slots"]
+                    if isinstance(ws, dict) and ws.get("model")
+                }
+                for _sl in getattr(locals()["_lsm_workers"], "_slots", ()):
+                    if _sl.pinned and _nm_fin(getattr(_sl, "model", "")) in _want_unpin:
+                        _sl.pinned = False
+                        if hasattr(_sl, "pinned_at"):
+                            _sl.pinned_at = 0.0
+                        if hasattr(_sl, "touch"):
+                            _sl.touch()
             # On success the dedicated "unified evict" block below already
             # frees VRAM for the planner/coder in a controlled sequence. A full
             # force_kill_all here on every success was redundant and forced

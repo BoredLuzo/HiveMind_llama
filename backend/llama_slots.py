@@ -48,6 +48,7 @@ class ModelSlot:
         self._num_ctx: int = 0
         self._n_parallel: int = 1
         self._jinja: bool = False
+        self._moe_all_gpu_vram_gb: float = 0.0
         self.swa_window: int = 0               # SWA sliding-window size (0 = no SWA)
         # VISION TRUTH (2026-10-04): what /props.modalities.vision actually
         # reported for the running server. True/False = server truth,
@@ -374,6 +375,7 @@ class ModelSlot:
             self._num_ctx       = 0
             self._n_parallel    = 1
             self._jinja         = False
+            self._moe_all_gpu_vram_gb = 0.0
             # AUDIT M1 (2026-10-24): the AMD commit-wait token must not survive a
             # recycle — a stale equal seq made the wait skip on slots whose next
             # start came from a path that never bumps the sequence.

@@ -384,6 +384,11 @@ if errorlevel 2 (
 set "HM_PROFILE=autofit"
 :apply_hw_profile_autofit
 if not exist deploy\hardware_autofit.py goto after_hw_profile
+if defined VRAM_IN goto apply_hw_profile_autofit_custom
+"%PY%" deploy\hardware_autofit.py --profile autofit --backend "%HM_BACKEND%" --force
+if errorlevel 1 echo   [WARN] Hardware auto-fit skipped - using default tuning parameters.
+goto after_hw_profile
+:apply_hw_profile_autofit_custom
 "%PY%" deploy\hardware_autofit.py --profile autofit --backend "%HM_BACKEND%" --vram-gb "%HM_VRAM%" --keep-vram-budget --force
 if errorlevel 1 echo   [WARN] Hardware auto-fit skipped - using default tuning parameters.
 goto after_hw_profile

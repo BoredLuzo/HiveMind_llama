@@ -79,9 +79,10 @@ def test_hardware_autofit_tiers_and_validation() -> None:
           t80 == "datacenter_40gb_plus"
           and p80["vram_budget_gb"] == 75.2
           and p80["max_concurrent_models"] == 4
+          and p80["llama_max_slots"] == 4
           and p80["duo_ubatch"] == 1024
           and p80["llama_kv_cache_type"] == "q8_0"
-          and p80["duo_parallel_preexplore"] is True
+          and p80["duo_parallel_preexplore"] is False
           and p80["duo_evict_planner_on_coder"] is False
           and p80["llama_cache_ram_mib"] == 4096)
     check("A100 40GB tier scales budget to 37.6GB",

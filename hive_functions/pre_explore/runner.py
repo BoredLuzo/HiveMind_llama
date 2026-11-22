@@ -112,25 +112,32 @@ async def run_pre_explore(
     # eine Coroutine -> TypeError, die parallele Exploration lief nie.
     _gather_task = asyncio.ensure_future(asyncio.gather(*tasks, return_exceptions=True))
     _last_live_emit = 0.0
-    while not _gather_task.done():
-        await asyncio.sleep(0.5)
-        _now_mono = time.monotonic()
-        if emit_fn and (_now_mono - _last_live_emit) >= 2.0 and any(t and not t.done() for t in tasks):
-            _last_live_emit = _now_mono
-            try:
-                _lu = _snapshot_pre_explore_usage()
-                if _lu.get("completion_tokens"):
-                    await emit_fn({"type": "usage_meta", "phase": "pre_explore",
-                                   "completion_tokens": int(_lu["completion_tokens"]),
-                                   "prompt_tokens": int(_lu.get("prompt_tokens") or 0),
-                                   "cached_tokens": int(_lu.get("cached_tokens") or 0)})
-                if pctx and int(pctx) > 0:
-                    _est = int((_lu.get("prompt_tokens") or 0) + (_lu.get("completion_tokens") or 0))
-                    await emit_fn({"type": "ctx_meter", "est_tokens": _est,
-                                   "ctx_limit": int(pctx), "compressing": False})
-            except Exception:
-                pass
-    _gather_out = await _gather_task
+    try:
+        while not _gather_task.done():
+            await asyncio.sleep(0.5)
+            _now_mono = time.monotonic()
+            if emit_fn and (_now_mono - _last_live_emit) >= 2.0 and any(t and not t.done() for t in tasks):
+                _last_live_emit = _now_mono
+                try:
+                    _lu = _snapshot_pre_explore_usage()
+                    if _lu.get("completion_tokens"):
+                        await emit_fn({"type": "usage_meta", "phase": "pre_explore",
+                                       "completion_tokens": int(_lu["completion_tokens"]),
+                                       "prompt_tokens": int(_lu.get("prompt_tokens") or 0),
+                                       "cached_tokens": int(_lu.get("cached_tokens") or 0)})
+                    if pctx and int(pctx) > 0:
+                        _est = int((_lu.get("prompt_tokens") or 0) + (_lu.get("completion_tokens") or 0))
+                        await emit_fn({"type": "ctx_meter", "est_tokens": _est,
+                                       "ctx_limit": int(pctx), "compressing": False})
+                except Exception:
+                    pass
+        _gather_out = await _gather_task
+    finally:
+        for _wt in tasks:
+            if not _wt.done():
+                _wt.cancel()
+        if not _gather_task.done():
+            _gather_task.cancel()
 
     # Log task-level exceptions from gather (crashes BEFORE results.append)
     if _gather_out:

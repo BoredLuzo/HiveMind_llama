@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import copy
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -459,9 +460,10 @@ def test_frontend_perf_invariants() -> None:
         "tg-sup-status" in tg_body and "offsetParent !== null" in tg_body,
     )
 
+    _m_js = re.search(r"/static/app\.js\?v=(\d{8}-\d{2})", idx_html)
     check(
-        "index.html bumps app.js cache-buster to 20261121-05",
-        '/static/app.js?v=20261121-05' in idx_html,
+        "index.html bumps app.js cache-buster to >= 20261121-05",
+        bool(_m_js and _m_js.group(1) >= "20261121-05"),
     )
 
 

@@ -71,7 +71,11 @@ def _dedup_additional_explore_history(
             continue
         if touched_paths and m.get("role") == "tool" and m.get("name") == "read_file":
             tc_id = str(m.get("tool_call_id") or "")
-            if (tc_id and tc_id in touched_call_ids) or pending_touched:
+            if tc_id:
+                if tc_id in touched_call_ids:
+                    pending_touched = False
+                    continue
+            elif pending_touched:
                 pending_touched = False
                 continue
         out.append(m)

@@ -509,9 +509,9 @@ async def git_init_ep(request: Request):
                 remote_url, str(settings.get("git_token", "") or ""))
 
     if username:
-        await _run_git_async(ws, ["config", "user.name", username])
+        await _run_git_async(ws, ["config", "--", "user.name", username])
     if email:
-        await _run_git_async(ws, ["config", "user.email", email])
+        await _run_git_async(ws, ["config", "--", "user.email", email])
     if remote_url:
         await _run_git_async(ws, ["remote", "remove", "origin"])
         _attached = await _run_git_async(ws, ["remote", "add", "origin", remote_url])

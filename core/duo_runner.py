@@ -601,6 +601,7 @@ async def _duo_planner_phase(
         except Exception as _pre_load_err_outer:
             logger.warning("Planner pre-load outer failed: %s", _pre_load_err_outer, exc_info=True)
             _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "planner")  # Fallback
+        finally:
             if _lsm_plan_pre is not None:
                 _lsm_plan_pre._planner_critical_phase = False
 
@@ -680,9 +681,6 @@ async def _duo_planner_phase(
         # 30 heartbeats = 30s buffer; extras are silently dropped below.
         _planner_hb_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
 
-
-        _planner_hb_task = asyncio.create_task(_planner_hb_fn(
-        ctx, _planner_hb_queue, _planner_hb_stop, _planner_model))
         if _use_thinking_planner and not _planner_supports_thinking:
             yield await ctx.emit({
                 "type": "status",
@@ -848,6 +846,8 @@ async def _duo_planner_phase(
             yield await ctx.emit({"type": "planner_done", "summary": "⚠ no port"})
         else:
             # ── Run planner as background task ──────────────────────────────
+            _planner_hb_task = asyncio.create_task(_planner_hb_fn(
+                ctx, _planner_hb_queue, _planner_hb_stop, _planner_model))
             _plan_task = asyncio.create_task(run_planner(
                 task=_planner_task,
                 user_goal=ctx.user_input,
@@ -1508,6 +1508,7 @@ async def _duo_exec_round_task(
     if _last_too_large_ref is None:
         _last_too_large_ref = [""]
     _timed_out = False
+    _exec_task = None
     try:
         # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
         # _contracts_raw exports, normalized against _ws_str.
@@ -1636,6 +1637,8 @@ async def _duo_exec_round_task(
                 _duo_deadline_at = _exec_result.deadline_extended_to
                 state["_duo_deadline_at"] = _duo_deadline_at
     finally:
+        if _exec_task is not None and not _exec_task.done():
+            _exec_task.cancel()
         ps.duo_deadline_at = _duo_deadline_at
         ps.exec_result = _exec_result
         ps.snap_before = _snap_before
@@ -2058,6 +2061,35 @@ async def _duo_coder_post_wait(
             # Surface it and end the run with a real reason.
             try:
                 _result = _post_task.result()
+            except (
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.TimeoutException,
+            ):
+                if not is_ctx_aborted(ctx):
+                    raise
+                logger.warning("[CODER-ROUND-FAIL] transport error after abort")
+                ctx.phase_timer.skip("coder_loop")
+                if _inuse_slot is not None:
+                    try:
+                        _inuse_slot.clear_in_flight()
+                    except (AttributeError, TypeError):
+                        pass
+                    _inuse_slot = None
+                clear_graceful_stop(ctx.run_id)
+                _cleanup_pause_state(ctx.run_id)
+                if ctx.chat_id:
+                    _clear_pause_state(ctx.chat_id)
+                _cleanup_governor(ctx.chat_id or ctx.run_id)
+                ctx.duo_stop_reason = "aborted"
+                yield await ctx.emit(ctx.done_event(
+                    round(time.time() - ctx.t_total, 1),
+                    ctx.duo_stop_reason,
+                    **ctx.collect_done_metrics(),
+                ))
+                _run_ended = True; return
             except Exception as _pt_exc:
                 logger.warning(
                     "[CODER-ROUND-FAIL] post task died: %s: %s",

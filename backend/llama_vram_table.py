@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Set as _AbstractSet
 import logging
+import math
 import re
 
 from .llama_config import _ud_candidates
@@ -601,28 +602,41 @@ def _probe_nvidia_smi_total_mib() -> int | None:
         return None
 
 
+def _probe_linux_sysfs_total_mib() -> int | None:
+    """Query Linux DRM sysfs dedicated VRAM total in MiB (None if unavailable)."""
+    try:
+        from pathlib import Path as _P
+        sysfs_total = 0.0
+        for card in _P("/sys/class/drm").glob("card[0-9]*/device"):
+            tf = card / "mem_info_vram_total"
+            if not tf.exists():
+                continue
+            try:
+                tv = float(tf.read_text(encoding="utf-8", errors="replace").strip())
+            except (OSError, ValueError):
+                continue
+            if tv > 0:
+                sysfs_total = max(sysfs_total, tv)
+        if sysfs_total > 0:
+            return int(sysfs_total / (1024 * 1024))
+    except OSError as exc:
+        _logger.debug("detect_gpu_total_vram_mib: sysfs probe failed: %s", exc)
+    return None
+
+
 def _probe_gpu_total_vram_mib() -> int | None:
     """Detect physical GPU total dedicated VRAM in MiB (None if unavailable)."""
     import platform as _platform
 
     if _platform.system() != "Windows":
-        try:
-            from pathlib import Path as _P
-            sysfs_total = 0.0
-            for card in _P("/sys/class/drm").glob("card[0-9]*/device"):
-                tf = card / "mem_info_vram_total"
-                if not tf.exists():
-                    continue
-                try:
-                    tv = float(tf.read_text(encoding="utf-8", errors="replace").strip())
-                except (OSError, ValueError):
-                    continue
-                if tv > 0:
-                    sysfs_total = max(sysfs_total, tv)
-            if sysfs_total > 0:
-                return int(sysfs_total / (1024 * 1024))
-        except OSError as exc:
-            _logger.debug("detect_gpu_total_vram_mib: sysfs probe failed: %s", exc)
+        if _current_gpu_backend() == "cuda":
+            cu_total = _probe_nvidia_smi_total_mib()
+            if cu_total is not None:
+                return cu_total
+            return _probe_linux_sysfs_total_mib()
+        sysfs_total = _probe_linux_sysfs_total_mib()
+        if sysfs_total is not None:
+            return sysfs_total
         return _probe_nvidia_smi_total_mib()
 
     # Windows: 1) PDH Dedicated Limit when exposed, 2) WDDM adapter registry
@@ -793,63 +807,86 @@ def _select_gpu_instance(
     return _max
 
 
+def _probe_linux_sysfs_free_mib() -> float | None:
+    """Query Linux DRM sysfs free VRAM in MiB (None if unavailable)."""
+    try:
+        from pathlib import Path as _P
+        _sysfs_total = 0.0
+        _sysfs_used = 0.0
+        for _card in _P("/sys/class/drm").glob("card[0-9]*/device"):
+            _t = _card / "mem_info_vram_total"
+            _u = _card / "mem_info_vram_used"
+            if not (_t.exists() and _u.exists()):
+                continue
+            try:
+                _tv = float(_t.read_text().strip())
+                _uv = float(_u.read_text().strip())
+            except (OSError, ValueError):
+                continue
+            if _tv > _sysfs_total or (_tv == _sysfs_total and _tv > 0 and _uv < _sysfs_used):
+                _sysfs_total = _tv
+                _sysfs_used = _uv
+        if _sysfs_total > 0:
+            _free = max(0.0, (_sysfs_total - _sysfs_used) / (1024 * 1024))
+            _logger.debug("get_live_gpu_free_mib: sysfs amdgpu %.0f MiB free", _free)
+            return round(_free, 1)
+    except OSError as _exc:
+        _logger.debug("sysfs VRAM probe unavailable (%s), falling back", _exc)
+    return None
+
+
+def _probe_nvidia_smi_free_mib() -> float | None:
+    """Query free GPU VRAM in MiB via nvidia-smi (None if unavailable)."""
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    try:
+        _nsmi = _shutil.which("nvidia-smi")
+        if not _nsmi:
+            _logger.debug("get_live_gpu_free_mib: nvidia-smi missing - no NVIDIA live VRAM source")
+            return None
+        _cnf = int(getattr(_subprocess, "CREATE_NO_WINDOW", 0))
+        _r = _subprocess.run(
+            [_nsmi, "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, timeout=5, creationflags=_cnf,
+        )
+        if _r.returncode != 0:
+            return None
+        _vals: list[float] = []
+        for _x in _r.stdout.decode("ascii", "replace").replace(",", " ").split():
+            try:
+                _fv = float(_x)
+                if math.isfinite(_fv) and _fv >= 0.0:
+                    _vals.append(_fv)
+            except ValueError:
+                continue
+        if not _vals:
+            _logger.debug("get_live_gpu_free_mib: nvidia-smi returned no values")
+            return None
+        # Mehrere GPUs: der freigebigste. Single-GPU exakt; Multi-GPU
+        # bewusst optimistisch wie die Windows-Heuristik — ein Load, der
+        # real zu viel will, scheitert sichtbar beim llama-server-Start.
+        return round(max(_vals), 1)
+    except (OSError, ValueError, TypeError, _subprocess.SubprocessError) as _e:
+        _logger.warning("get_live_gpu_free_mib: nvidia-smi failed (%s: %s)",
+                        type(_e).__name__, _e)
+        return None
+
+
 def get_live_gpu_free_mib() -> float | None:
 
 
     import platform
     if platform.system() != "Windows":
-        # POSIX-LIVE-VRAM (2026-09-19): nvidia-smi ships with the driver on
-        # Linux too and reports memory.free directly (no PDH, no
-        # TOTAL_VRAM_MIB guess). CPU-only hosts: debug + None — the static
-        # tables stay the fallback (same as before).
-        import shutil as _shutil, subprocess as _subprocess
-        # AMD/Intel on Linux: the kernel exposes VRAM usage per card under
-        # sysfs (amdgpu: mem_info_vram_total/used). No driver tool needed.
-        try:
-            from pathlib import Path as _P
-            _sysfs_total = 0.0
-            _sysfs_used = 0.0
-            for _card in _P("/sys/class/drm").glob("card[0-9]*/device"):
-                _t = _card / "mem_info_vram_total"
-                _u = _card / "mem_info_vram_used"
-                if not (_t.exists() and _u.exists()):
-                    continue
-                try:
-                    _tv = float(_t.read_text().strip())
-                    _uv = float(_u.read_text().strip())
-                except (OSError, ValueError):
-                    continue
-                if _tv > _sysfs_total or (_tv == _sysfs_total and _tv > 0 and _uv < _sysfs_used):
-                    _sysfs_total = _tv
-                    _sysfs_used = _uv
-            if _sysfs_total > 0:
-                _free = max(0.0, (_sysfs_total - _sysfs_used) / (1024 * 1024))
-                _logger.debug("get_live_gpu_free_mib: sysfs amdgpu %.0f MiB free", _free)
-                return round(_free, 1)
-        except Exception:            # no sysfs (container) -> try nvidia-smi
-            _logger.debug("sysfs VRAM probe unavailable, falling back")
-        try:
-            _nsmi = _shutil.which("nvidia-smi")
-            if not _nsmi:
-                _logger.debug("get_live_gpu_free_mib: no sysfs VRAM and no nvidia-smi - no live VRAM source")
-                return None
-            _r = _subprocess.run(
-                [_nsmi, "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-                capture_output=True, timeout=5,
-            )
-            _vals = [float(_x) for _x in _r.stdout.decode("ascii", "replace").split()
-                     if _x.strip().isdigit()]
-            if not _vals:
-                _logger.debug("get_live_gpu_free_mib: nvidia-smi returned no values")
-                return None
-            # Mehrere GPUs: der freigebigste. Single-GPU exakt; Multi-GPU
-            # bewusst optimistisch wie die Windows-Heuristik — ein Load, der
-            # real zu viel will, scheitert sichtbar beim llama-server-Start.
-            return round(max(_vals), 1)
-        except Exception as _e:
-            _logger.warning("get_live_gpu_free_mib: nvidia-smi failed (%s: %s)",
-                            type(_e).__name__, _e)
-            return None
+        if _current_gpu_backend() == "cuda":
+            _cu_free = _probe_nvidia_smi_free_mib()
+            if _cu_free is not None:
+                return _cu_free
+            return _probe_linux_sysfs_free_mib()
+        _sysfs_free = _probe_linux_sysfs_free_mib()
+        if _sysfs_free is not None:
+            return _sysfs_free
+        return _probe_nvidia_smi_free_mib()
     h = None
     try:
         import win32pdh
@@ -1032,3 +1069,17 @@ def slot_mmproj_vram_mib(model_name: str, is_vision: bool) -> float:
         return mmproj_surcharge_mib(_rmp(model_name))
     except (ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError):
         return 0.0
+
+
+def slot_effective_vram_gb(slot: object, *, vram_fn=None) -> float:
+    """Return effective slot VRAM (GB), honoring runtime all-GPU MoE lifts."""
+    model = getattr(slot, "model", None)
+    if not model:
+        return 0.0
+    ctx = int(getattr(slot, "_num_ctx", 0) or 0)
+    if ctx <= 0:
+        ctx = 4096
+    key = re.sub(r"#\d+$", "", str(model)).removesuffix(":latest")
+    est = float(vram_fn(model, ctx)) if vram_fn is not None else float(vram_of_moe(key, ctx))
+    lifted = float(getattr(slot, "_moe_all_gpu_vram_gb", 0.0) or 0.0)
+    return max(est, lifted)

@@ -78,12 +78,14 @@ def sync_loader_settings(settings: dict) -> None:
     except (TypeError, ValueError):
         pass
 
-    # Optional global kv_cache_type override (if set in settings.json; default stays "q4_0")
+    # Optional global kv_cache_type override (canonical llama_kv_cache_type > legacy kv_cache_type)
     try:
-        _kv_raw = str(settings.get("kv_cache_type") or "").strip().lower()
+        _kv_raw = str(
+            settings.get("llama_kv_cache_type") or settings.get("kv_cache_type") or ""
+        ).strip().lower()
         if _kv_raw in ("f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"):
             _lc.KV_CACHE_TYPE = _kv_raw
-            for _mod_name in ("llama_server_manager", "manager_load", "llama_start_phases"):
+            for _mod_name in ("llama_server_manager", "manager_load", "llama_start_phases", "llama_vram_table"):
                 _mod = sys.modules.get(f"backend.{_mod_name}")
                 if _mod is not None and hasattr(_mod, "KV_CACHE_TYPE"):
                     setattr(_mod, "KV_CACHE_TYPE", _kv_raw)

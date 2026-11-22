@@ -550,6 +550,11 @@ async def _shutdown():
         except Exception as _e:
             _logger.debug("[Hivemind] websearch.shutdown error: %s", _e)
     try:
+        from tools.background import stop_all_background
+        await asyncio.to_thread(stop_all_background)
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _be:
+        _logger.debug("[Hivemind] background shutdown error: %s", _be)
+    try:
         from tools.browser import close_browser
         close_browser()
     except Exception as _e:

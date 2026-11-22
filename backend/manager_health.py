@@ -8,7 +8,7 @@ from .llama_manager_utils import (
     _kill_slot_async,
     _nm,
 )
-from .llama_vram_table import vram_of_with_ctx as _vram_of_ctx
+from .llama_vram_table import slot_effective_vram_gb, vram_of_with_ctx as _vram_of_ctx
 import asyncio
 from .llama_models import list_available_models
 import platform
@@ -158,6 +158,8 @@ class LlamaHealthMixin:
                     if hasattr(slot, "pinned_at"):
                         slot.pinned_at = 0.0
                     slot._idle_timeout = keep_alive_seconds
+                    if hasattr(slot, "touch"):
+                        slot.touch()
 
     def get_port_for(self, model: str) -> Optional[int]:
         slot = self._find_loaded_sync(model)
@@ -275,7 +277,7 @@ class LlamaHealthMixin:
 
         async with self._lock:
             for s in self._slots:
-                if s.process is not None:
+                if s.process is not None or getattr(s, "_orphan_port", None) is not None:
                     try:
                         await _kill_slot_async(s)
                     except Exception:
@@ -318,7 +320,7 @@ class LlamaHealthMixin:
         for s in self._slots:
             if not s.model:
                 continue
-            vram = _vram_of_ctx(s.model, s._num_ctx if s._num_ctx > 0 else 4096)
+            vram = slot_effective_vram_gb(s, vram_fn=_vram_of_ctx)
             total_vram += vram
             slots_info.append({
                 "slot_id":    s.slot_id,

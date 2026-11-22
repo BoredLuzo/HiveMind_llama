@@ -273,7 +273,7 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         if _env.get("PYTHONPATH"):
             _py_parts.append(_env["PYTHONPATH"])
         _env["PYTHONPATH"] = os.pathsep.join(_py_parts)
-        from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
+        from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree_and_reap as _kill_tree_and_reap
         if bench_cmd:
             r = await asyncio.create_subprocess_exec(
                 *bench_cmd,
@@ -300,15 +300,28 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
             except asyncio.TimeoutError:
                 if _job is not None:
                     _job.terminate()
-                _kill_tree(r)
                 try:
-                    r.kill()
-                except Exception:
-                    pass
+                    await _kill_tree_and_reap(r)
+                except (OSError, RuntimeError, asyncio.CancelledError):
+                    try:
+                        r.kill()
+                    except OSError:
+                        pass
                 return _tool_error_response(
                     "RUN_PYTHON_TIMEOUT",
                     "Python execution timed out.",
                     tool="run_python" )
+            except asyncio.CancelledError:
+                if _job is not None:
+                    _job.terminate()
+                try:
+                    await asyncio.shield(_kill_tree_and_reap(r))
+                except (OSError, RuntimeError, asyncio.CancelledError):
+                    try:
+                        r.kill()
+                    except OSError:
+                        pass
+                raise
         finally:
             if _job is not None:
                 _job.close()
@@ -1154,7 +1167,7 @@ async def _inline_tool_stop_background(args: dict, _workspace: Path, _workspace_
 async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
                        line_cap: int = 300) -> tuple[str, str, int, bool]:
     from collections import deque
-    from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
+    from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree_and_reap as _kill_tree_and_reap
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -1224,16 +1237,25 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
             # nachgelagertem /IM-Massaker auf powershell.exe.
             if _job is not None:
                 _job.terminate()
-            _kill_tree(proc)
             try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                await proc.wait()
-            except Exception:
-                pass
+                await _kill_tree_and_reap(proc)
+            except (OSError, RuntimeError, asyncio.CancelledError):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
             return "\n".join(stdout_buf), "\n".join(stderr_buf), -1, True
+        except asyncio.CancelledError:
+            if _job is not None:
+                _job.terminate()
+            try:
+                await asyncio.shield(_kill_tree_and_reap(proc))
+            except (OSError, RuntimeError, asyncio.CancelledError):
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            raise
 
         return "\n".join(stdout_buf), "\n".join(stderr_buf), proc.returncode or 0, False
     finally:

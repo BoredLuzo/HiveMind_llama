@@ -56,13 +56,23 @@ check("1f the route exposes ?all=true",
 # ── 2. AMD/Intel VRAM via sysfs ────────────────────────────────────────────
 _vstart = VRAM.index("def get_live_gpu_free_mib")
 _VFN = VRAM[_vstart:_vstart + 2600]
+_VFN_NON_CUDA = _VFN[_VFN.index("_sysfs_free = _probe_linux_sysfs_free_mib()"):]
 check("2a sysfs is read before the nvidia-smi call",
-      _VFN.index("mem_info_vram_total") < _VFN.index('_shutil.which("nvidia-smi")'))
+      "mem_info_vram_total" in VRAM
+      and _VFN_NON_CUDA.index("_probe_linux_sysfs_free_mib()") < _VFN_NON_CUDA.index("_probe_nvidia_smi_free_mib()"))
 check("2b both files are used", "mem_info_vram_used" in VRAM)
 check("2c the result is converted to MiB",
       "_sysfs_total - _sysfs_used) / (1024 * 1024)" in VRAM)
-check("2d an unreadable sysfs falls through to nvidia-smi",
-      "no sysfs (container) -> try nvidia-smi" in VRAM)
+
+from unittest import mock as _mock  # noqa: E402
+import backend.llama_vram_table as _LVT  # noqa: E402
+with _mock.patch("platform.system", return_value="Linux"), \
+     _mock.patch.object(_LVT, "_current_gpu_backend", return_value="vulkan"), \
+     _mock.patch.object(_LVT, "_probe_linux_sysfs_free_mib", return_value=None), \
+     _mock.patch.object(_LVT, "_probe_nvidia_smi_free_mib", return_value=12345.0):
+    check("2d an unreadable sysfs falls through to nvidia-smi",
+          "return _probe_nvidia_smi_free_mib()" in _VFN
+          and _LVT.get_live_gpu_free_mib() == 12345.0)
 
 # ── 3. the probe still works on this host ──────────────────────────────────
 from backend.llama_vram_table import get_live_gpu_free_mib  # noqa: E402
