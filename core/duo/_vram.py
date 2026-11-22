@@ -291,6 +291,10 @@ async def _phase_vram(ctx, state: dict):
         _effective_tool_think_toggle = False
         _tool_think_auto_mode = "off"
         _coder_tool_think = False
+        yield await ctx.emit({
+            "type": "status",
+            "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
+        })
     elif _user_eff in ("low", "medium", "high", "max"):
         if _exec_native_think:
             _effective_tool_think_toggle = True
@@ -299,7 +303,7 @@ async def _phase_vram(ctx, state: dict):
             _coder_tool_think = True
             yield await ctx.emit({
                 "type": "status",
-                "content": f"🧠 Reasoning effort: {_user_eff}",
+                "content": f"🧠 Reasoning effort: {_user_eff} (composer override)",
             })
         else:
             yield await ctx.emit({

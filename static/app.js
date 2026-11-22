@@ -341,6 +341,7 @@ function onDuoToolThinkingModeChange(v) {
     duo_coder_tool_thinking: S.duoToolThinkingAlways || S.duoToolThinkingEnabled,
     duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : S.duoToolThinkingMode,
   });
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 }
 
 var _REASONING_EFFORT_LABELS = {
@@ -348,6 +349,15 @@ var _REASONING_EFFORT_LABELS = {
   none: 'None',
   low: 'Low',
   medium: 'Medium',
+  high: 'High',
+  max: 'Max',
+};
+
+var _REASONING_EFFORT_SHORT = {
+  auto: 'Auto',
+  none: 'Off',
+  low: 'Low',
+  medium: 'Med',
   high: 'High',
   max: 'Max',
 };
@@ -363,7 +373,26 @@ function _normalizeReasoningEffort(v) {
     : 'auto';
 }
 
-function _getActiveEffortContext() {
+function _lookupModelProfileUI(modelName) {
+  if (!modelName || !S.modelProfiles) return null;
+  return S.modelProfiles[modelName] || S.modelProfiles[String(modelName).split(':')[0]] || null;
+}
+
+function _modelSupportsThinkingUI(modelName) {
+  var prof = _lookupModelProfileUI(modelName);
+  return prof ? Boolean(prof.thinking) : true;
+}
+
+function _targetModelForEffortKey(agentKey) {
+  if (agentKey === 'duo') {
+    return S.duoCoderModel || ((S.agentsCfg && S.agentsCfg.duo_coder && S.agentsCfg.duo_coder.model) || '');
+  }
+  return (S.currentAssignments && S.currentAssignments[agentKey] && S.currentAssignments[agentKey].model)
+    || (S.agentsCfg && S.agentsCfg[agentKey] && S.agentsCfg[agentKey].model)
+    || '';
+}
+
+function _getActiveEffortState(v) {
   var mode = S.mode || 'auto';
   var m = '';
   if (mode === 'code_duo') {
@@ -376,24 +405,86 @@ function _getActiveEffortContext() {
       || (S.agentsCfg && S.agentsCfg.direct && S.agentsCfg.direct.model)
       || '';
   }
-  if (!m) return 'Inherits active agent & model default';
-  var shortM = typeof _shortModel === 'function' ? _shortModel(m) : m;
-  var prof = (S.modelProfiles && (S.modelProfiles[m] || S.modelProfiles[String(m).split(':')[0]])) || null;
-  if (!prof) return shortM + ' \u00b7 agent & model default';
-  if (!prof.thinking) return shortM + ' \u00b7 no native reasoning (unchanged)';
-  var profEff = prof.reasoning_effort
-    || (prof.sampling_thinking_code && prof.sampling_thinking_code.reasoning_effort)
-    || (prof.sampling_thinking && prof.sampling_thinking.reasoning_effort)
-    || '';
-  if (profEff) return shortM + ' \u00b7 default: ' + profEff;
-  return shortM + ' \u00b7 reasoning capable';
+  var shortM = m ? (typeof _shortModel === 'function' ? _shortModel(m) : m) : '';
+  var prof = _lookupModelProfileUI(m);
+  var supportsThinking = prof ? Boolean(prof.thinking) : true;
+  var profEff = (supportsThinking && prof)
+    ? (prof.reasoning_effort
+      || (prof.sampling_thinking_code && prof.sampling_thinking_code.reasoning_effort)
+      || (prof.sampling_thinking && prof.sampling_thinking.reasoning_effort)
+      || '')
+    : '';
+  var eff = _normalizeReasoningEffort(v !== undefined ? v : S.reasoningEffort);
+  var isSkippedOnModel = (!supportsThinking && eff !== 'auto' && eff !== 'none');
+  var isOverriding = (supportsThinking && eff !== 'auto');
+  var toggleOff = false;
+  if (mode === 'code_duo') {
+    toggleOff = (!S.duoAgenticThinking && !S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off');
+  } else if (mode === 'pipeline') {
+    toggleOff = Boolean(S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.thinking === false);
+  } else {
+    toggleOff = Boolean(S.agentsCfg && S.agentsCfg.direct && S.agentsCfg.direct.thinking === false);
+  }
+
+  var effectiveAutoLabel = 'Auto';
+  if (!supportsThinking) {
+    effectiveAutoLabel = 'No reasoning';
+  } else if (profEff) {
+    effectiveAutoLabel = 'Auto \u00b7 ' + (_REASONING_EFFORT_SHORT[profEff] || profEff);
+  } else if (toggleOff) {
+    effectiveAutoLabel = 'Auto \u00b7 Off';
+  }
+
+  var trigLabel;
+  if (!supportsThinking) {
+    trigLabel = (eff !== 'auto' && eff !== 'none')
+      ? ((_REASONING_EFFORT_LABELS[eff] || eff) + ' (n/a)')
+      : 'No reasoning';
+  } else if (eff === 'auto') {
+    trigLabel = effectiveAutoLabel;
+  } else {
+    trigLabel = _REASONING_EFFORT_LABELS[eff] || 'Auto';
+  }
+
+  var ctxText;
+  if (!m) {
+    ctxText = 'Inherits active agent & model default';
+  } else if (!prof) {
+    ctxText = shortM + ' \u00b7 agent & model default';
+  } else if (!supportsThinking) {
+    ctxText = shortM + ' \u00b7 no native reasoning (unchanged)';
+  } else if (profEff) {
+    ctxText = shortM + ' \u00b7 default: ' + profEff;
+  } else if (toggleOff) {
+    ctxText = shortM + ' \u00b7 thinking off in card/sidebar';
+  } else {
+    ctxText = shortM + ' \u00b7 reasoning capable';
+  }
+
+  return {
+    eff: eff,
+    model: m,
+    shortModel: shortM || 'active model',
+    prof: prof,
+    supportsThinking: supportsThinking,
+    profEff: profEff,
+    isSkippedOnModel: isSkippedOnModel,
+    isOverriding: isOverriding,
+    effectiveAutoLabel: effectiveAutoLabel,
+    trigLabel: trigLabel,
+    ctxText: ctxText,
+  };
+}
+
+function _getActiveEffortContext() {
+  return _getActiveEffortState().ctxText;
 }
 
 function _syncReasoningOverrideBadges() {
   if (typeof document === 'undefined' || !document.querySelectorAll) return;
   var eff = _normalizeReasoningEffort(S.reasoningEffort);
   var active = eff !== 'auto';
-  var lbl = 'Composer: ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ' \u00d7';
+  var baseLbl = 'Composer: ' + (_REASONING_EFFORT_LABELS[eff] || eff);
   var slots = document.querySelectorAll('.reasoning-override-slot');
   for (var i = 0; i < slots.length; i++) {
     var slot = slots[i];
@@ -401,17 +492,32 @@ function _syncReasoningOverrideBadges() {
       slot.innerHTML = '';
       continue;
     }
+    var key = (typeof slot.getAttribute === 'function' ? slot.getAttribute('data-agent-override') : '') || 'duo';
+    var sup = _modelSupportsThinkingUI(_targetModelForEffortKey(key));
+    var lbl = (sup || eff === 'none') ? (baseLbl + ' \u00d7') : (baseLbl + ' (n/a) \u00d7');
     var btn = slot.querySelector('.reasoning-override-badge');
     if (!btn) {
       btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'reasoning-override-badge';
-      btn.title = 'Overridden by composer Thinking effort \u2014 click to reset to Auto';
       btn.setAttribute('onclick', "setReasoningEffort('auto')");
       slot.innerHTML = '';
       slot.appendChild(btn);
     }
+    btn.className = (!sup && eff !== 'none') ? 'reasoning-override-badge muted' : 'reasoning-override-badge';
+    btn.title = (!sup && eff !== 'none')
+      ? 'Skipped on this non-reasoning model \u2014 click to reset composer to Auto'
+      : 'Overridden by composer Thinking effort \u2014 click to reset to Auto';
     btn.textContent = lbl;
+  }
+  var rows = document.querySelectorAll('[data-reasoning-ovr-row]');
+  for (var j = 0; j < rows.length; j++) {
+    var row = rows[j];
+    var rKey = (typeof row.getAttribute === 'function' ? row.getAttribute('data-reasoning-ovr-row') : '') || 'duo';
+    var rSup = _modelSupportsThinkingUI(_targetModelForEffortKey(rKey));
+    if (row.classList && typeof row.classList.toggle === 'function') {
+      row.classList.toggle('reasoning-overridden', Boolean(active && rSup));
+    }
   }
 }
 
@@ -433,28 +539,64 @@ function toggleReasoningEffortMenu(ev) {
   menu.hidden = !willOpen;
   trig.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
   if (willOpen) {
-    var ctxEl = document.getElementById('effort-menu-ctx');
-    if (ctxEl) ctxEl.textContent = _getActiveEffortContext();
+    _renderReasoningEffortUI(S.reasoningEffort);
   }
 }
 
 function _renderReasoningEffortUI(v) {
-  var eff = _normalizeReasoningEffort(v);
+  var st = _getActiveEffortState(v);
+  var eff = st.eff;
   if (typeof document !== 'undefined') {
     var trig = document.getElementById('effort-trigger');
-    if (trig) trig.setAttribute('data-effort', eff);
+    if (trig) {
+      trig.setAttribute('data-effort', eff);
+      trig.setAttribute('data-override', st.isOverriding ? '1' : '0');
+      if (!st.supportsThinking) {
+        trig.setAttribute('data-no-reasoning', '1');
+      } else if (typeof trig.removeAttribute === 'function') {
+        trig.removeAttribute('data-no-reasoning');
+      }
+      trig.title = st.isSkippedOnModel
+        ? ('Composer set to ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ', skipped because ' + st.shortModel + ' has no native reasoning')
+        : (st.isOverriding
+          ? ('Composer override: ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ' (overrides sidebar & agent cards)')
+          : ('Thinking effort: ' + st.ctxText));
+    }
     var lblEl = document.getElementById('effort-trig-lbl');
-    if (lblEl) lblEl.textContent = _REASONING_EFFORT_LABELS[eff] || 'Auto';
+    if (lblEl) lblEl.textContent = st.trigLabel;
     var ctxEl = document.getElementById('effort-menu-ctx');
-    if (ctxEl) ctxEl.textContent = _getActiveEffortContext();
+    if (ctxEl) ctxEl.textContent = st.ctxText;
+    var ovrEl = document.getElementById('effort-menu-ovr');
+    var ovrTxt = document.getElementById('effort-menu-ovr-txt');
+    if (ovrEl) {
+      if (st.isOverriding) {
+        ovrEl.hidden = false;
+        if (ovrEl.classList) ovrEl.classList.remove('muted');
+        if (ovrTxt) ovrTxt.textContent = '\u26a1 Overriding sidebar & agent cards';
+      } else if (st.isSkippedOnModel) {
+        ovrEl.hidden = false;
+        if (ovrEl.classList) ovrEl.classList.add('muted');
+        if (ovrTxt) ovrTxt.textContent = 'Skipped for ' + st.shortModel + ' (no reasoning)';
+      } else {
+        ovrEl.hidden = true;
+      }
+    }
     var menu = document.getElementById('effort-menu');
     if (menu && menu.querySelectorAll) {
       var opts = menu.querySelectorAll('.effort-opt');
       for (var i = 0; i < opts.length; i++) {
         var b = opts[i];
-        var on = (b.getAttribute('data-effort') === eff);
-        b.classList.toggle('active', on);
+        var optEff = b.getAttribute('data-effort');
+        var locked = (!st.supportsThinking && optEff !== 'auto' && optEff !== 'none');
+        var on = (optEff === eff);
+        b.disabled = locked;
+        if (b.classList) {
+          b.classList.toggle('disabled', locked);
+          b.classList.toggle('active', on);
+        }
+        b.setAttribute('aria-disabled', locked ? 'true' : 'false');
         b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.title = locked ? (st.shortModel + ' does not support native reasoning') : '';
       }
     }
   }
@@ -3715,6 +3857,9 @@ function renderAgentCards(agents) {
     const thinkBudget = parseInt(cfg.thinking_budget || 0);
     const thkCell = document.createElement('div');
     thkCell.className = 'acard-cell';
+    if (key === 'direct' || key === 'duo_coder' || key === 'synthesizer') {
+      thkCell.setAttribute('data-reasoning-ovr-row', key);
+    }
     const thinkRow = document.createElement('div');
     thinkRow.className = 'fl';
     thinkRow.innerHTML = 'Thinking <input type="checkbox" data-agent="' + key + '"'
@@ -3794,6 +3939,7 @@ function renderAgentCards(agents) {
         const w = div.querySelector('[data-budget-wrap="' + key + '"]');
         if (w) w.style.display = this.checked ? 'block' : 'none';
         refresh();
+        if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
       });
     })(key, refreshBudget);
 
@@ -3939,7 +4085,9 @@ async function applyAgent(key, btn) {
     if (data.ok) {
       btn.textContent = 'OK - ' + (model ? model.slice(0,12) : 'Follow');
       btn.classList.add('ok');
+      if (S.agentsCfg && S.agentsCfg[key]) S.agentsCfg[key].thinking = thinking;
       _syncAgentModelState(key, model, sel);
+      if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
       if (!S.ctxOverrides) S.ctxOverrides = {};
       if (ctx > 0) S.ctxOverrides[key] = ctx; else delete S.ctxOverrides[key];
       if (ctx > 0 && key === 'duo_coder') {

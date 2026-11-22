@@ -295,6 +295,22 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             model, agent=_agent, settings=_settings_dict, role="direct",
         )
         _dt_user_eff = _dt_norm_re(_settings_dict.get("reasoning_effort"))
+        if _dt_user_eff == "none":
+            yield {
+                "type": "status",
+                "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
+            }
+        elif _dt_user_eff in ("low", "medium", "high", "max"):
+            if _dt_mst(model):
+                yield {
+                    "type": "status",
+                    "content": f"🧠 Reasoning effort: {_dt_user_eff} (composer override)",
+                }
+            else:
+                yield {
+                    "type": "status",
+                    "content": f"ℹ️ Reasoning effort ({_dt_user_eff}) skipped — {model} does not support reasoning",
+                }
         if _think and _dt_user_eff in ("low", "medium", "high", "max") and _dt_mst(model):
             _mgr._reasoning_override = {model: True}
         _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
@@ -983,6 +999,23 @@ async def _run_direct_inner(ctx):
                 normalize_reasoning_effort as _dir_norm_re,
             )
             _dir_user_eff = _dir_norm_re((ctx.settings or {}).get("reasoning_effort"))
+            if not _direct_tools_active:
+                if _dir_user_eff == "none":
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
+                    })
+                elif _dir_user_eff in ("low", "medium", "high", "max"):
+                    if _dir_mst(_direct_model):
+                        yield await ctx.emit({
+                            "type": "status",
+                            "content": f"🧠 Reasoning effort: {_dir_user_eff} (composer override)",
+                        })
+                    else:
+                        yield await ctx.emit({
+                            "type": "status",
+                            "content": f"ℹ️ Reasoning effort ({_dir_user_eff}) skipped — {_direct_model} does not support reasoning",
+                        })
             if _direct_think and _dir_user_eff in ("low", "medium", "high", "max") and _dir_mst(_direct_model):
                 try:
                     from backend.llama_client import manager as _dir_mgr

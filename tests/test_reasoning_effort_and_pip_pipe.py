@@ -283,6 +283,7 @@ check(
     "index.html & style.css & app.js expose #effort-trigger/#effort-menu and override badges",
     'id="effort-trigger"' in _idx
     and 'id="effort-menu"' in _idx
+    and 'id="effort-menu-ovr"' in _idx
     and 'id="effort-bar"' not in _idx
     and 'data-effort="auto"' in _idx
     and 'data-effort="none"' in _idx
@@ -291,8 +292,12 @@ check(
     and 'data-effort="high"' in _idx
     and 'data-effort="max"' in _idx
     and "reasoning-override-slot" in _idx
+    and 'data-reasoning-ovr-row="duo"' in _idx
     and ".effort-menu" in _css
+    and ".effort-opt.disabled" in _css
+    and '.effort-trigger[data-no-reasoning="1"]' in _css
     and ".reasoning-override-badge" in _css
+    and ".reasoning-overridden" in _css
     and ".effort-btn.active" not in _css
     and "reasoning_effort: S.reasoningEffort || 'auto'" in _js,
 )
@@ -304,33 +309,45 @@ const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
 const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
 const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
 const fnSrc = appSrc.slice(s, e);
+function makeCls(initial) {
+  const set = new Set(initial || []);
+  return {
+    _s: set,
+    add(c) { set.add(c); },
+    remove(c) { set.delete(c); },
+    toggle(c, f) { if (f === undefined) { if (set.has(c)) set.delete(c); else set.add(c); } else if (f) set.add(c); else set.delete(c); },
+    contains(c) { return set.has(c); },
+  };
+}
 const options = ['auto', 'none', 'low', 'medium', 'high', 'max'].map(lvl => ({
   _lvl: lvl,
-  _cls: new Set(lvl === 'auto' ? ['effort-opt', 'active'] : ['effort-opt']),
-  _attrs: { 'data-effort': lvl, 'aria-selected': lvl === 'auto' ? 'true' : 'false' },
+  disabled: false,
+  title: '',
+  classList: makeCls(lvl === 'auto' ? ['effort-opt', 'active'] : ['effort-opt']),
+  _attrs: { 'data-effort': lvl, 'aria-selected': lvl === 'auto' ? 'true' : 'false', 'aria-disabled': 'false' },
   getAttribute(k) { return this._attrs[k] || null; },
   setAttribute(k, v) { this._attrs[k] = String(v); },
-  classList: {
-    toggle(c, f) { if (f) this._s.add(c); else this._s.delete(c); },
-    contains(c) { return this._s.has(c); },
-  },
 }));
-for (const b of options) b.classList._s = b._cls;
 const trigAttrs = { 'data-effort': 'auto', 'aria-expanded': 'false' };
 const trig = {
+  title: '',
   setAttribute(k, v) { trigAttrs[k] = String(v); },
   getAttribute(k) { return trigAttrs[k] || null; },
+  removeAttribute(k) { delete trigAttrs[k]; },
 };
 const lblEl = { textContent: 'Auto' };
 const ctxEl = { textContent: '' };
+const ovrEl = { hidden: true, classList: makeCls(['effort-menu-ovr']) };
+const ovrTxt = { textContent: '' };
 const menu = {
   hidden: true,
   querySelectorAll(sel) { return sel === '.effort-opt' ? options : []; },
 };
-function makeSlot() {
+function makeSlot(agentOvr) {
   return {
     _children: [],
     _html: '',
+    getAttribute(k) { return (k === 'data-agent-override' && agentOvr) ? agentOvr : null; },
     get innerHTML() { return this._html; },
     set innerHTML(v) { this._html = String(v); if (!v) this._children = []; },
     querySelector(sel) {
@@ -339,13 +356,20 @@ function makeSlot() {
     appendChild(ch) { this._children.push(ch); },
   };
 }
-const badgeSlots = [makeSlot(), makeSlot()];
+const badgeSlots = [makeSlot(''), makeSlot('direct')];
+const ovrRows = [
+  { _key: 'duo', getAttribute(k) { return k === 'data-reasoning-ovr-row' ? 'duo' : null; }, classList: makeCls(['opt-row']) },
+  { _key: 'direct', getAttribute(k) { return k === 'data-reasoning-ovr-row' ? 'direct' : null; }, classList: makeCls(['acard-cell']) },
+];
 const saved = [];
 const ctx = {
   S: {
     reasoningEffort: 'auto',
     mode: 'code_duo',
     duoCoderModel: 'inkling-2-mini-ud',
+    duoAgenticThinking: true,
+    duoToolThinkingAlways: false,
+    duoToolThinkingMode: 'on_fail',
     modelProfiles: {
       'inkling-2-mini-ud': { thinking: true, reasoning_effort: 'medium' },
       'lfm2.5:24b': { thinking: false, reasoning_effort: null },
@@ -361,11 +385,15 @@ const ctx = {
       if (id === 'effort-trigger') return trig;
       if (id === 'effort-trig-lbl') return lblEl;
       if (id === 'effort-menu-ctx') return ctxEl;
+      if (id === 'effort-menu-ovr') return ovrEl;
+      if (id === 'effort-menu-ovr-txt') return ovrTxt;
       if (id === 'effort-menu') return menu;
       return null;
     },
     querySelectorAll(sel) {
-      return sel === '.reasoning-override-slot' ? badgeSlots : [];
+      if (sel === '.reasoning-override-slot') return badgeSlots;
+      if (sel === '[data-reasoning-ovr-row]') return ovrRows;
+      return [];
     },
   },
   _shortModel: (m) => m,
@@ -373,6 +401,13 @@ const ctx = {
 };
 vm.createContext(ctx);
 vm.runInContext(fnSrc, ctx);
+ctx._renderReasoningEffortUI('auto');
+const initInkling = {
+  label: lblEl.textContent,
+  ovrHidden: ovrEl.hidden,
+  noReasonAttr: trig.getAttribute('data-no-reasoning'),
+  disabledLvls: options.filter(o => o.disabled).map(o => o._lvl),
+};
 ctx.toggleReasoningEffortMenu({ stopPropagation() {} });
 const afterOpen = {
   menuHidden: menu.hidden,
@@ -386,8 +421,12 @@ const afterMed = {
   state: ctx.S.reasoningEffort,
   label: lblEl.textContent,
   trigEffort: trig.getAttribute('data-effort'),
-  active: options.filter(b => b._cls.has('active')).map(b => b._lvl),
+  active: options.filter(b => b.classList.contains('active')).map(b => b._lvl),
   selected: options.find(b => b._lvl === 'medium')._attrs['aria-selected'],
+  ovrHidden: ovrEl.hidden,
+  ovrMuted: ovrEl.classList.contains('muted'),
+  ovrTxt: ovrTxt.textContent,
+  duoDimmed: ovrRows[0].classList.contains('reasoning-overridden'),
   badgeText: badgeSlots.map(s => s._children[0] && s._children[0].textContent),
   saved,
 };
@@ -397,23 +436,37 @@ ctx.setReasoningEffort('xhigh');
 const afterMaxNonThink = {
   state: ctx.S.reasoningEffort,
   label: lblEl.textContent,
+  noReasonAttr: trig.getAttribute('data-no-reasoning'),
   ctxText: ctxEl.textContent,
+  ovrHidden: ovrEl.hidden,
+  ovrMuted: ovrEl.classList.contains('muted'),
+  ovrTxt: ovrTxt.textContent,
+  disabledLvls: options.filter(o => o.disabled).map(o => o._lvl),
+  enabledLvls: options.filter(o => !o.disabled).map(o => o._lvl),
+  directDimmed: ovrRows[1].classList.contains('reasoning-overridden'),
   badgeText: badgeSlots.map(s => s._children[0] && s._children[0].textContent),
 };
 ctx.setReasoningEffort('auto');
-const afterAuto = {
+const afterAutoNonThink = {
   state: ctx.S.reasoningEffort,
   label: lblEl.textContent,
+  noReasonAttr: trig.getAttribute('data-no-reasoning'),
+  ovrHidden: ovrEl.hidden,
+  duoDimmed: ovrRows[0].classList.contains('reasoning-overridden'),
   badgeCounts: badgeSlots.map(s => s._children.length),
 };
-console.log(JSON.stringify({ afterOpen, afterMed, afterMaxNonThink, afterAuto }));
+console.log(JSON.stringify({ initInkling, afterOpen, afterMed, afterMaxNonThink, afterAutoNonThink }));
 """
 _ne = subprocess.run(["node", "-e", _node_eff], cwd=_ROOT, capture_output=True, text=True)
 _ne_ok = _ne.returncode == 0
 if _ne_ok:
     _nej = json.loads(_ne.stdout.strip())
     _ne_ok = (
-        _nej["afterOpen"]["menuHidden"] is False
+        _nej["initInkling"]["label"] == "Auto \u00b7 Med"
+        and _nej["initInkling"]["ovrHidden"] is True
+        and _nej["initInkling"]["noReasonAttr"] is None
+        and _nej["initInkling"]["disabledLvls"] == []
+        and _nej["afterOpen"]["menuHidden"] is False
         and _nej["afterOpen"]["expanded"] == "true"
         and "default: medium" in _nej["afterOpen"]["ctxText"]
         and _nej["afterMed"]["menuHidden"] is True
@@ -423,17 +476,31 @@ if _ne_ok:
         and _nej["afterMed"]["trigEffort"] == "medium"
         and _nej["afterMed"]["active"] == ["medium"]
         and _nej["afterMed"]["selected"] == "true"
+        and _nej["afterMed"]["ovrHidden"] is False
+        and _nej["afterMed"]["ovrMuted"] is False
+        and "Overriding" in _nej["afterMed"]["ovrTxt"]
+        and _nej["afterMed"]["duoDimmed"] is True
         and _nej["afterMed"]["badgeText"] == ["Composer: Medium \u00d7", "Composer: Medium \u00d7"]
         and _nej["afterMed"]["saved"][0]["patch"] == {"reasoning_effort": "medium"}
         and _nej["afterMaxNonThink"]["state"] == "max"
-        and _nej["afterMaxNonThink"]["label"] == "Max"
+        and _nej["afterMaxNonThink"]["label"] == "Max (n/a)"
+        and _nej["afterMaxNonThink"]["noReasonAttr"] == "1"
         and "no native reasoning" in _nej["afterMaxNonThink"]["ctxText"]
-        and _nej["afterMaxNonThink"]["badgeText"] == ["Composer: Max \u00d7", "Composer: Max \u00d7"]
-        and _nej["afterAuto"]["state"] == "auto"
-        and _nej["afterAuto"]["label"] == "Auto"
-        and _nej["afterAuto"]["badgeCounts"] == [0, 0]
+        and _nej["afterMaxNonThink"]["ovrHidden"] is False
+        and _nej["afterMaxNonThink"]["ovrMuted"] is True
+        and "Skipped" in _nej["afterMaxNonThink"]["ovrTxt"]
+        and _nej["afterMaxNonThink"]["disabledLvls"] == ["low", "medium", "high", "max"]
+        and _nej["afterMaxNonThink"]["enabledLvls"] == ["auto", "none"]
+        and _nej["afterMaxNonThink"]["directDimmed"] is False
+        and _nej["afterMaxNonThink"]["badgeText"] == ["Composer: Max \u00d7", "Composer: Max (n/a) \u00d7"]
+        and _nej["afterAutoNonThink"]["state"] == "auto"
+        and _nej["afterAutoNonThink"]["label"] == "No reasoning"
+        and _nej["afterAutoNonThink"]["noReasonAttr"] == "1"
+        and _nej["afterAutoNonThink"]["ovrHidden"] is True
+        and _nej["afterAutoNonThink"]["duoDimmed"] is False
+        and _nej["afterAutoNonThink"]["badgeCounts"] == [0, 0]
     )
-check("Node VM confirms dropdown menu, live ctx, override badges, and persistence", _ne_ok, _ne.stdout.strip() or _ne.stderr.strip())
+check("Node VM confirms dropdown lock/dimming, Auto label, override notices, and persistence", _ne_ok, _ne.stdout.strip() or _ne.stderr.strip())
 
 # ── 6. Clash 1: Non-reasoning model guard ("lfm2.5:24b") ──────────────────────
 from types import SimpleNamespace as _SN  # noqa: E402
@@ -741,6 +808,19 @@ check(
     _mp_by_name.get("inkling-2-mini-ud", {}).get("reasoning_effort") == "medium"
     and _mp_by_name.get("lfm2.5:24b", {}).get("reasoning_effort") is None,
     repr(_mp_by_name),
+)
+
+# ── 11. Live stream override status notifications (duo + direct) ─────────────
+_vram_src = (_ROOT / "core" / "duo" / "_vram.py").read_text(encoding="utf-8")
+_direct_src = (_ROOT / "core" / "direct_runner.py").read_text(encoding="utf-8")
+check(
+    "Live status notifications surface composer overrides in both duo and direct runners",
+    "Reasoning effort: none (composer override" in _vram_src
+    and "Reasoning effort: {_user_eff} (composer override)" in _vram_src
+    and "Reasoning effort: none (composer override" in _direct_src
+    and "Reasoning effort: {_dt_user_eff} (composer override)" in _direct_src
+    and "Reasoning effort: {_dir_user_eff} (composer override)" in _direct_src
+    and "does not support reasoning" in _direct_src,
 )
 
 sys.exit(h.finish("reasoning_effort_and_pip_pipe"))

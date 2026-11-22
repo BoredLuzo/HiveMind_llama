@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261122-05">
+  <link rel="stylesheet" href="/static/style.css?v=20261122-06">
 </head>
 <body>
 <header>
@@ -56,6 +56,10 @@
                 <span class="effort-menu-info" title="Auto uses agent card toggle + model profile default (e.g. Inkling: medium). Non-reasoning models ignore effort > None.">&#9432;</span>
               </div>
               <div id="effort-menu-ctx" class="effort-menu-ctx">Inherits agent &amp; model default</div>
+              <div id="effort-menu-ovr" class="effort-menu-ovr" hidden>
+                <span id="effort-menu-ovr-txt"></span>
+                <button type="button" class="effort-ovr-reset" onclick="setReasoningEffort('auto')">Reset</button>
+              </div>
             </div>
             <button type="button" class="effort-opt active" data-effort="auto" role="option" aria-selected="true" onclick="setReasoningEffort('auto')">
               <span class="effort-opt-main">
@@ -698,14 +702,14 @@
       <div class="opt-group" style="margin-top:8px">
         <div class="opt-group-label">🧠 Thinking</div>
 
-        <div class="opt-row">
+        <div class="opt-row" data-reasoning-ovr-row="duo">
           <div class="opt-row-left">
             <span class="opt-name">Planner Thinking <span class="reasoning-override-slot"></span></span>
             <span class="opt-hint">Planner thinks through the task before output</span>
           </div>
           <label class="cfl-sw" style="margin:0">
             <input type="checkbox" id="duo-agentic-thinking-toggle"
-              onchange="S.duoAgenticThinking=this.checked;postSettings({duo_agentic_thinking:S.duoAgenticThinking});updateAgenticCombinedWarn()">
+              onchange="S.duoAgenticThinking=this.checked;postSettings({duo_agentic_thinking:S.duoAgenticThinking});updateAgenticCombinedWarn();if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
             <span class="sl"></span>
           </label>
         </div>
@@ -732,18 +736,18 @@
         </div>
 
         <div style="margin-top:4px" id="duo-coder-tool-thinking-wrap">
-          <div class="opt-row">
+          <div class="opt-row" data-reasoning-ovr-row="duo">
             <div class="opt-row-left">
               <span class="opt-name">Thinking with tool use <span class="reasoning-override-slot"></span></span>
               <span class="opt-hint">Always think on tool calls</span>
             </div>
             <label class="cfl-sw" style="margin:0">
               <input type="checkbox" id="duo-tool-thinking-toggle"
-                onchange="S.duoToolThinkingAlways=this.checked;postSettings({duo_coder_tool_thinking:S.duoToolThinkingAlways,duo_coder_tool_thinking_auto_mode:S.duoToolThinkingAlways?'always':S.duoToolThinkingMode})">
+                onchange="S.duoToolThinkingAlways=this.checked;postSettings({duo_coder_tool_thinking:S.duoToolThinkingAlways,duo_coder_tool_thinking_auto_mode:S.duoToolThinkingAlways?'always':S.duoToolThinkingMode});if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
               <span class="sl"></span>
             </label>
           </div>
-          <div id="duo-tool-thinking-mode-wrap" style="margin-top:4px">
+          <div id="duo-tool-thinking-mode-wrap" style="margin-top:4px" data-reasoning-ovr-row="duo">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
               <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);flex:1">Escalation</span>
             </div>
@@ -2847,6 +2851,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261122-06"></script>
+        <script src="/static/app.js?v=20261122-07"></script>
 </body>
 </html>
