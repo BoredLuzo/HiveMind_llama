@@ -833,6 +833,7 @@ class LlamaLoadMixin:
                 ):
                     await _kill_slot_async(slot)
                 raise
+        raise RuntimeError(f"Failed to load '{model}' after 3 waiter retries.")
 
     async def prefetch_next(self, model: str, num_ctx: Optional[int] = None):
         _prefetch_ctx = int(num_ctx or CONTEXT_SIZE_DEFAULT)
@@ -1152,41 +1153,45 @@ class LlamaLoadMixin:
 
             async def _reclaim_for_retry(expected_gen: int) -> int:
                 nonlocal _owned_gen
-                if _slot_aborted(expected_gen):
+                active_slot = slot
+                if active_slot is None or _slot_aborted(expected_gen):
                     raise SlotAbortedError(
                         f"Model load for '{model}' aborted (slot killed or purged)."
                     )
-                await _kill_slot_async(slot)
+                await _kill_slot_async(active_slot)
                 async with self._lock:
-                    if slot.model is not None or getattr(slot, "_loading", False):
+                    if active_slot.model is not None or getattr(active_slot, "_loading", False):
                         raise SlotAbortedError(
                             f"Model load for '{model}' aborted (slot reclaimed by peer)."
                         )
-                    new_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
-                    slot._lifecycle_gen = new_gen
-                    slot._loading = True
-                    slot.model = model
-                    slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
-                    slot.set_pinned(pin)
-                    slot._entry_load_seq = _my_load_seq
-                    if hasattr(slot, "_ready_event"):
-                        slot._ready_event.clear()
+                    new_gen = int(getattr(active_slot, "_lifecycle_gen", 0)) + 1
+                    active_slot._lifecycle_gen = new_gen
+                    active_slot._loading = True
+                    active_slot.model = model
+                    active_slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
+                    active_slot.set_pinned(pin)
+                    active_slot._entry_load_seq = _my_load_seq
+                    if hasattr(active_slot, "_ready_event"):
+                        active_slot._ready_event.clear()
                     _owned_gen = new_gen
                     return new_gen
 
             def _reset_leaked_slot() -> None:
-                slot._loading = False
-                slot.model = None
-                slot.pinned = False
-                if hasattr(slot, "pinned_at"):
-                    slot.pinned_at = 0.0
-                if hasattr(slot, "_entry_load_seq"):
-                    slot._entry_load_seq = None
-                old_ev = getattr(slot, "_ready_event", None)
+                active_slot = slot
+                if active_slot is None:
+                    return
+                active_slot._loading = False
+                active_slot.model = None
+                active_slot.pinned = False
+                if hasattr(active_slot, "pinned_at"):
+                    active_slot.pinned_at = 0.0
+                if hasattr(active_slot, "_entry_load_seq"):
+                    active_slot._entry_load_seq = None
+                old_ev = getattr(active_slot, "_ready_event", None)
                 if old_ev is not None:
                     old_ev.set()
                     if isinstance(old_ev, asyncio.Event):
-                        slot._ready_event = asyncio.Event()
+                        active_slot._ready_event = asyncio.Event()
 
             try:
                 await self._enforce_vram_budget(slot)
@@ -1480,6 +1485,7 @@ class LlamaLoadMixin:
                     and getattr(slot, "_loading", False)
                 ):
                     _reset_leaked_slot()
+        raise RuntimeError(f"Failed to load '{model}' after 3 waiter retries.")
 
     async def upgrade_port_to_vision(self, port: int) -> bool:
         """STEER-IMAGE (2026-10-06, live T2): a mid-run image steer can

@@ -504,7 +504,7 @@ async def _wiki_direct(query: str, max_results: int) -> str:
             resp = await _client.get(
                 url, params=params,
                 headers={"Accept": "application/json", "User-Agent": _WIKI_UA},
-                timeout=_httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0))
+                timeout=_httpx.Timeout(connect=3.0, read=6.0, write=5.0, pool=5.0))
             resp.raise_for_status()
             data = resp.json()
         except _WIKI_ERR as _we:
@@ -567,6 +567,8 @@ async def _fetch_searxng_json(
                 f"[web_search: SearXNG not reachable ({_SEARXNG_HOST}).\n"
                 f"Start with: docker run -d --name searxng -p 8888:8080 searxng/searxng]"
             )
+        except _httpx.ConnectTimeout:
+            return None, f"[web_search: connect timeout ({_SEARXNG_HOST}) - SearXNG unreachable]"
         except _httpx.TimeoutException:
             if _attempt == 0:
                 logger.warning("web_search: timeout attempt 1 - retry...")
@@ -633,15 +635,17 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
 
     # Rescue pass: if default instance engines failed (CAPTCHA / 429) or only returned
     # off-site / zero-overlap spam (e.g. un-updated container), query healthy fallback engines once.
+    rescue_err: str | None = None
     if not results and not _SEARXNG_ENGINES and (unresponsive or raw_results):
-        rescue_data, _ = await _fetch_searxng_json(query, max_results, engines_override=_RESCUE_ENGINES)
+        rescue_data, rescue_err = await _fetch_searxng_json(query, max_results, engines_override=_RESCUE_ENGINES)
         if rescue_data:
             raw_rescue = rescue_data.get("results", []) or []
             results, has_site = _process_searxng_results(query, raw_rescue)
 
     if not results:
-        # Never substitute Wikipedia articles when the caller explicitly requested another domain.
-        if not has_site:
+        # Never substitute Wikipedia articles when the caller explicitly requested another domain,
+        # or when the rescue request already failed due to network/timeout errors.
+        if not has_site and not rescue_err:
             _wd = await _wiki_direct(query, max_results)
             if _wd:
                 _SEARCH_CACHE[_cache_key] = (time.time(), _wd)
@@ -911,6 +915,10 @@ async def check_status() -> dict:
                         "host": _SEARXNG_HOST,
                         "engines": _SEARXNG_ENGINES, "language": _SEARXNG_LANGUAGE,
                         "trafilatura": _HAS_TRAFILATURA}
+    except (_httpx.ConnectError, _httpx.ConnectTimeout):
+        return {"ok": False, "reason": "unreachable", "host": _SEARXNG_HOST,
+                "trafilatura": _HAS_TRAFILATURA,
+                "engines": _SEARXNG_ENGINES, "language": _SEARXNG_LANGUAGE}
     except Exception:
         pass
 

@@ -12,6 +12,7 @@ exits set `ps.stop = True` and return; the runner does the `break`.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 import asyncio
@@ -122,7 +123,7 @@ def _compress_usage_event(usage: dict | None) -> dict | None:
     }
 
 
-def _evict_condensed_from_read_guard(condensed_files: list | None, ws_str: str) -> None:
+def _evict_condensed_from_read_guard(condensed_files: Iterable | None, ws_str: str) -> None:
     """Drop evicted read_file paths from the active read-guard set."""
     if not condensed_files:
         return

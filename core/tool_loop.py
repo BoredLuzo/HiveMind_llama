@@ -487,8 +487,9 @@ class ToolLoop:
                 _msg, _content_text, _tool_calls, _events = await self._post_with_retry(_payload)
                 for _ev in _events:
                     yield _ev
-            if getattr(self, "_last_compressed_messages", None) is not None:
-                _tool_messages = self._last_compressed_messages
+            _compressed_msgs = self._last_compressed_messages
+            if _compressed_msgs is not None:
+                _tool_messages = _compressed_msgs
                 self._last_compressed_messages = None
 
             if not _msg:
