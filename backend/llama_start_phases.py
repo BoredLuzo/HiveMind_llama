@@ -14,6 +14,7 @@ import httpx
 import logging
 import os
 import platform
+import re
 import shlex
 import subprocess
 import time
@@ -1167,6 +1168,40 @@ async def _should_lift_moe_to_all_gpu(
     return False, 0.0, ""
 
 
+_LOOPED_MOE_OT_RE = re.compile(r"^blk\\\.\((\d+(?:\|\d+)*)\)\\\.ffn_\.\*_exps\\\.=CPU$")
+
+
+def _build_looped_moe_cpu_ot(
+    block_count: int,
+    loop_start: int,
+    loop_end: int,
+    n_cpu_layers: int,
+) -> str | None:
+    """Build an --override-tensor regex keeping looped core layers on GPU."""
+    if n_cpu_layers <= 0 or n_cpu_layers >= block_count:
+        return None
+    if not (0 <= loop_start < loop_end <= block_count):
+        return None
+    candidates = list(range(0, loop_start)) + list(range(loop_end, block_count))
+    lo, hi = loop_start, loop_end - 1
+    while lo <= hi:
+        candidates.append(lo)
+        if hi != lo:
+            candidates.append(hi)
+        lo += 1
+        hi -= 1
+    chosen = sorted(candidates[:n_cpu_layers])
+    return rf"blk\.({'|'.join(str(i) for i in chosen)})\.ffn_.*_exps\.=CPU"
+
+
+def _parse_looped_moe_ot_count(ot_val: str) -> int | None:
+    """Extract the CPU-offloaded layer count from a `_build_looped_moe_cpu_ot` value."""
+    m = _LOOPED_MOE_OT_RE.match(str(ot_val or "").strip())
+    if not m:
+        return None
+    return len(m.group(1).split("|"))
+
+
 @dataclasses.dataclass
 class _MoePhase:
     """Phase-4 outputs (split 4.4): the MoE-augmented cmd; the cache
@@ -1379,11 +1414,35 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                     _moe_count,
                     cmd[cmd.index("--n-gpu-layers") + 1] if "--n-gpu-layers" in cmd else "auto",
                 )
-            cmd += ["--n-cpu-moe", str(_moe_count)]
-            logger.info(
-                f"MoE offloading active: {_moe_count} experts on CPU "
-                f"({_moe_model_key})"
-            )
+            _loop_ot: str | None = None
+            _ot_meta: dict = {}
+            try:
+                from backend.gguf_meta import read_gguf_metadata as _read_gguf_meta_ot
+                _ot_src: str = str(gguf_path) if gguf_path else model
+                _ot_meta = _read_gguf_meta_ot(_ot_src) or {}
+                if int(_ot_meta.get("loop_count") or 0) > 1:
+                    _bc = int(_ot_meta.get("block_count") or 0)
+                    _ls = _ot_meta.get("loop_start")
+                    _le = _ot_meta.get("loop_end")
+                    if isinstance(_ls, int) and isinstance(_le, int):
+                        _cand_ot = _build_looped_moe_cpu_ot(_bc, _ls, _le, _moe_count)
+                        if _cand_ot and await _help_supports("--override-tensor"):
+                            _loop_ot = _cand_ot
+            except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _ot_err:
+                logger.debug("[MOE-LOOP-OT] metadata probe skipped: %s", _ot_err)
+            if _loop_ot:
+                cmd += ["--override-tensor", _loop_ot]
+                logger.info(
+                    "[MOE-LOOP-OT] Looped MoE core-on-GPU offload active: "
+                    "%d/%d CPU layers via --override-tensor (%s)",
+                    _moe_count, int(_ot_meta.get("block_count") or 0), _loop_ot,
+                )
+            else:
+                cmd += ["--n-cpu-moe", str(_moe_count)]
+                logger.info(
+                    f"MoE offloading active: {_moe_count} experts on CPU "
+                    f"({_moe_model_key})"
+                )
             # THREADS-MOE (2026-10-19, revised 2026-11-03): experts in RAM
             # make decode a memory-bound CPU gather. Use HALF of the
             # logical CPUs (the SMT sibling adds contention, not
@@ -1442,6 +1501,10 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                     logger.info(
                         "MoE expert cache: %d MiB (--moe-cache-mib)",
                         _moe_cache_mib)
+                    if await _help_supports("--moe-cache-cpu-share"):
+                        cmd += ["--moe-cache-cpu-share", "0.5"]
+                        logger.info(
+                            "MoE expert cache CPU share: 0.5 (--moe-cache-cpu-share)")
                 else:
                     logger.warning(
                         "--moe-cache-mib is not supported by %s - ignored",
@@ -1701,12 +1764,26 @@ def _auto_step_moe_cpu_offload(
     """When live VRAM blocks an MoE load at its default --n-cpu-moe, step CPU
     expert offloading upward (up to GGUF block_count) so the full context can
     still load on GPU+CPU instead of refusing."""
-    if fit.ok or "--n-cpu-moe" not in cmd:
+    if fit.ok:
         return fit, moe_cache_used, ub_delta_mib, None
-    try:
+    idx = -1
+    ot_idx = -1
+    if "--n-cpu-moe" in cmd:
         idx = cmd.index("--n-cpu-moe")
-        cur_moe = int(cmd[idx + 1])
-    except (ValueError, IndexError, TypeError):
+        try:
+            cur_moe = int(cmd[idx + 1])
+        except (ValueError, IndexError, TypeError):
+            return fit, moe_cache_used, ub_delta_mib, None
+    elif "--override-tensor" in cmd:
+        ot_idx = cmd.index("--override-tensor")
+        try:
+            parsed_moe = _parse_looped_moe_ot_count(cmd[ot_idx + 1])
+        except IndexError:
+            return fit, moe_cache_used, ub_delta_mib, None
+        if parsed_moe is None:
+            return fit, moe_cache_used, ub_delta_mib, None
+        cur_moe = parsed_moe
+    else:
         return fit, moe_cache_used, ub_delta_mib, None
 
     try:
@@ -1717,6 +1794,9 @@ def _auto_step_moe_cpu_offload(
     total_blocks = int(meta.get("block_count") or 0)
     if total_blocks <= cur_moe:
         return fit, moe_cache_used, ub_delta_mib, cur_moe
+    loop_count = int(meta.get("loop_count") or 0)
+    loop_start = meta.get("loop_start")
+    loop_end = meta.get("loop_end")
 
     norm_model = _strip_alias(model)
     base_vram_gb = vram_of_moe(norm_model, num_ctx)
@@ -1752,7 +1832,25 @@ def _auto_step_moe_cpu_offload(
             cand_fit = _probe(cand_moe, extra_mib, margin_mib)
             if cand_fit is None or not cand_fit.ok:
                 continue
-            cmd[idx + 1] = str(cand_moe)
+            if idx >= 0:
+                cmd[idx + 1] = str(cand_moe)
+            elif ot_idx >= 0:
+                new_ot = (
+                    _build_looped_moe_cpu_ot(
+                        total_blocks, int(loop_start), int(loop_end), cand_moe,
+                    )
+                    if (
+                        loop_count > 1
+                        and isinstance(loop_start, int)
+                        and isinstance(loop_end, int)
+                        and cand_moe < total_blocks
+                    )
+                    else None
+                )
+                if new_ot:
+                    cmd[ot_idx + 1] = new_ot
+                else:
+                    cmd[ot_idx:ot_idx + 2] = ["--n-cpu-moe", str(cand_moe)]
             if drop_ub:
                 try:
                     cmd[cmd.index("--ubatch-size") + 1] = str(int(ub_base))
@@ -1983,7 +2081,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             if _new_lm:
                 _load_mode = _new_lm
     _active_moe_count = None
-    if not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE and "--n-cpu-moe" in cmd:
+    if not _fit.ok and _llama_cfg.VRAM_PREFLIGHT_GATE and ("--n-cpu-moe" in cmd or "--override-tensor" in cmd):
         _fit, _moe_cache_used, ub_delta_mib, _active_moe_count = _auto_step_moe_cpu_offload(
             self, slot, cmd, model, gguf_path, num_ctx,
             _fit, _moe_cache_used, ub_base, ub_eff, ub_src, ub_delta_mib,

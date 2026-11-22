@@ -38,7 +38,8 @@
     "mellum2.1:12b-a2.5b": 18,
     "mellum2.1:12b-a2.5b-thinking": 18,
     "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact": 35,
-    "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact": 35
+    "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact": 35,
+    "inkling-2-mini": 14
   },
   "mtp_models": [
     "qwen3.5:4b-mtp",
@@ -116,6 +117,11 @@
       "active_gpu_gb": 4.66,
       "measured_bytes_per_token": 6272,
       "calibrated_n_cpu_moe": 35
+    },
+    "inkling-2-mini": {
+      "active_gpu_gb": 5.1,
+      "measured_bytes_per_token": 9216,
+      "calibrated_n_cpu_moe": 14
     },
     "ling-3.0-tiny": {
       "active_gpu_gb": 4.8,
@@ -223,6 +229,7 @@
     "thinker": {"thinking": true, "vision": false, "tool_call": false},
     "twil": {"thinking": true, "vision": false, "tool_call": true},
     "air": {"thinking": true, "vision": false, "tool_call": true},
+    "inkling-2-mini": {"thinking": true, "vision": true, "tool_call": true},
     "granite4": {"thinking": false, "vision": false, "tool_call": true},
     "granite3": {"thinking": false, "vision": false, "tool_call": true},
     "granite": {"thinking": false, "vision": false, "tool_call": true},

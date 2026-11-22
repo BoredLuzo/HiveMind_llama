@@ -1,0 +1,81 @@
+{
+  "model": "inkling-2-mini",
+  "capabilities": {
+    "thinking": true,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "num_ctx": 32768,
+  "num_ctx_analyst": 32768,
+  "num_ctx_duo_coder": 32768,
+  "num_ctx_vision": 16384,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe": true,
+  "moe_cpu_experts": 14,
+  "ubatch": 256,
+  "load_mode": "none",
+  "cache_ram_mib": 2048,
+  "kv_cache_type": "q4_0",
+  "kv_bytes_per_token": 9216,
+  "mtp": false,
+  "gpu_layers": 99,
+  "mmproj_filename": "mmproj-Inkling-2-Mini-F16.gguf",
+  "vram_gb_override": null,
+  "dspark_draft_filename": null,
+  "dspark_draft_n_max": 0,
+  "sampling": {
+    "sampling_text": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "sampling_thinking_code": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "preserve_thinking": true,
+      "cache_prompt": true
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "top_k": 0,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "cache_prompt": true
+    }
+  },
+  "_notes": "Inkling-2-Mini (inkling2_loop: 24 physical MoE blocks, core 6..18 looped 3x -> 48 logical passes, 8 full-attn + 40 SWA-1024 layers = 9216 B/tok q4_0 KV). Requires llama.cpp b12600+ (PR #32704+). On 8 GB Vulkan (RX 6600), placing the 14 outer/edge layers on CPU via --override-tensor keeps core looped layers in VRAM for optimal throughput without spillover."
+}

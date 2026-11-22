@@ -53,6 +53,9 @@ _WANT_SUFFIXES = frozenset({
     ".expert_used_count",
     ".full_attention_interval",
     ".vision.block_count",
+    ".loop.count",
+    ".loop.start",
+    ".loop.end",
 })
 
 # Cache keyed by resolved path string -> (mtime_ns, size, parsed dict)
@@ -170,7 +173,8 @@ def _read_value(f: BinaryIO, vtype: int, key: str) -> Any:
         if key == "tokenizer.ggml.tokens" and etype == 8:
             return _scan_tokens_for_think(f, count)
         if (
-            key.endswith(".attention.head_count_kv")
+            key.endswith(".attention.head_count")
+            or key.endswith(".attention.head_count_kv")
             or key.endswith(".attention.sliding_window_pattern")
         ) and etype in _FIXED_FMTS and count <= 512:
             fmt, sz = _FIXED_FMTS[etype]
@@ -385,7 +389,13 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
         head_kv = head_kv_raw
 
     block_count = _arch_get(".block_count")
-    head_count = _arch_get(".attention.head_count")
+    head_count_raw = _arch_get(".attention.head_count")
+    head_count: int | None = None
+    if isinstance(head_count_raw, list):
+        _hc_nz = [float(x) for x in head_count_raw if isinstance(x, (int, float)) and x > 0]
+        head_count = int(round(sum(_hc_nz) / len(_hc_nz))) if _hc_nz else None
+    elif isinstance(head_count_raw, (int, float)):
+        head_count = int(head_count_raw)
     emb_len = _arch_get(".embedding_length")
     k_len = _arch_get(".attention.key_length")
     v_len = _arch_get(".attention.value_length")
@@ -393,6 +403,11 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
     swa_pattern = _arch_get(".attention.sliding_window_pattern")
     shared_kv_raw = _arch_get(".attention.shared_kv_layers")
     shared_kv_layers = int(shared_kv_raw) if isinstance(shared_kv_raw, int) and shared_kv_raw > 0 else None
+    loop_count = int(_arch_get(".loop.count") or 0)
+    loop_start_raw = _arch_get(".loop.start")
+    loop_end_raw = _arch_get(".loop.end")
+    loop_start = int(loop_start_raw) if isinstance(loop_start_raw, int) else None
+    loop_end = int(loop_end_raw) if isinstance(loop_end_raw, int) else None
     expert_count = int(_arch_get(".expert_count") or 0)
     expert_used = int(_arch_get(".expert_used_count") or 0)
     vision_blocks = next(
@@ -405,6 +420,8 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
     has_thinking = bool(
         think_token_found
         or "enable_thinking" in tpl_low
+        or "reasoning_effort" in tpl_low
+        or "<|content_thinking|>" in tpl_low
         or "<think>" in tpl_low
         or "[think]" in tpl_low
     )
@@ -412,9 +429,21 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
     siblings = detect_sibling_files(path)
     has_embedded_vision = vision_blocks > 0
     has_vision = bool(has_embedded_vision or siblings.get("mmproj"))
+    eff_blocks = block_count
+    eff_swa = swa_pattern if isinstance(swa_pattern, list) else None
+    if (
+        loop_count > 1
+        and isinstance(block_count, int)
+        and loop_start is not None
+        and loop_end is not None
+        and 0 <= loop_start < loop_end <= block_count
+    ):
+        eff_blocks = block_count + (loop_end - loop_start) * (loop_count - 1)
+        if isinstance(eff_swa, list) and len(eff_swa) == block_count:
+            eff_swa = eff_swa[:loop_start] + eff_swa[loop_start:loop_end] * loop_count + eff_swa[loop_end:]
     kv_q4, kv_f16 = _derive_kv_bytes(
-        block_count, head_count, head_kv, emb_len, k_len, v_len, full_attn_int,
-        sliding_window_pattern=swa_pattern if isinstance(swa_pattern, list) else None,
+        eff_blocks, head_count, head_kv, emb_len, k_len, v_len, full_attn_int,
+        sliding_window_pattern=eff_swa,
         shared_kv_layers=shared_kv_layers,
     )
     return {
@@ -433,6 +462,9 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
         "value_length": v_len,
         "expert_count": expert_count,
         "expert_used_count": expert_used,
+        "loop_count": loop_count,
+        "loop_start": loop_start,
+        "loop_end": loop_end,
         "sliding_window": _arch_get(".attention.sliding_window"),
         "full_attention_interval": full_attn_int,
         "chat_template": chat_tpl_str,

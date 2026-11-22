@@ -1,4 +1,4 @@
 # Known-good fallback/pin llama.cpp release tag used by deploy/fetch_llamacpp.py
 # when passing --pinned (or as fallback if GitHub latest resolution fails).
 # Default behavior is always the newest nightly (override with --tag or HIVEMIND_LLAMA_TAG).
-b12001
+b12631

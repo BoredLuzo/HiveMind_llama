@@ -578,6 +578,7 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = bool(thinking)
         if not thinking:
             payload["thinking_budget"] = 0
+            payload["reasoning_effort"] = "none"
     if thinking_budget is not None:
         payload["thinking_budget"] = thinking_budget
     return payload

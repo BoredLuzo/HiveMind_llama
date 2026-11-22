@@ -73,5 +73,6 @@
       "repetition_penalty": 1.0,
       "cache_prompt": true
     }
-  }
+  },
+  "_notes": "Qwen3.6-35B-A3B-MTP (UD-IQ4_XS, 16.96 GiB, qwen35moe with nextn MTP). RX 6600 Vulkan (b12631, @16k q4_0 KV, ubatch=1024, n_cpu_moe=35, draft-mtp nmax=2): load 8.68s, VRAM delta 5181 MiB (852 MiB free), Q_CODE 18.63 t/s (89.0% MTP accept), Q_TEXT 19.41 t/s (+30.6% vs b12001). Expert cache (--moe-cache-mib) degrades throughput on 8 GB VRAM (-25% to -55%), so moe_cache_mib stays 0."
 }

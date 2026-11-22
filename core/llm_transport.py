@@ -134,6 +134,7 @@ def disable_thinking_in_payload(
         **payload,
         "thinking": False,
         "thinking_budget": 0,
+        "reasoning_effort": "none",
     }
     if max_tokens is not None and int(max_tokens) > 0:
         out["max_tokens"] = int(max_tokens)
@@ -151,6 +152,7 @@ def strip_payload_extras(payload: dict) -> dict:
     out.pop("min_p", None)
     out["thinking"] = False
     out.pop("thinking_budget", None)
+    out.pop("reasoning_effort", None)
     ctk = dict(out.get("chat_template_kwargs") or {})
     ctk["enable_thinking"] = False
     ctk.pop("preserve_thinking", None)
