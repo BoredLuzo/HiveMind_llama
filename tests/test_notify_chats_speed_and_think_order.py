@@ -506,4 +506,90 @@ check(
     and "if (typeof j.n === 'number') S._sseFrameSeq = Math.max(S._sseFrameSeq || 0, j.n);" in _js,
 )
 
+# ── 6. Per-element think-body mid-stream scroll follow ──────────────────────────
+_node_scroll = r"""
+const fs = require('fs');
+const vm = require('vm');
+const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const s = appSrc.indexOf('function _elEnsureFollowListener(el)');
+const e = appSrc.indexOf('\nfunction rmEl(', s);
+if (s < 0 || e < 0) throw new Error('missing follow helpers');
+const fnSrc = appSrc.slice(s, e);
+let rafQueue = [];
+const ctx = {
+  _chatFollow: true,
+  requestAnimationFrame: (cb) => { rafQueue.push(cb); return rafQueue.length; },
+};
+vm.createContext(ctx);
+vm.runInContext(fnSrc, ctx);
+function flushRaf() {
+  const q = rafQueue;
+  rafQueue = [];
+  for (const cb of q) cb();
+}
+const listeners = {};
+const el = {
+  scrollHeight: 1000,
+  clientHeight: 240,
+  scrollTop: 760,
+  isConnected: true,
+  addEventListener: (ev, fn) => { (listeners[ev] = listeners[ev] || []).push(fn); },
+  emit: (ev, payload) => { for (const fn of (listeners[ev] || [])) fn(payload || {}); },
+};
+
+// 1. Initial follow scrolls to bottom
+ctx._scrollElToBottomSoon(el);
+flushRaf();
+const step1 = el.scrollTop;
+
+// 2. User scrolls up mid-stream (chat itself stays at bottom -> _chatFollow=true)
+el.scrollTop = 200;
+el.emit('scroll');
+el.scrollHeight = 1200;
+ctx._scrollElToBottomSoon(el);
+flushRaf();
+const step2 = el.scrollTop;
+
+// 3. User scrolls back down near bottom -> auto-follow resumes
+el.scrollTop = 960;
+el.emit('scroll');
+el.scrollHeight = 1400;
+ctx._scrollElToBottomSoon(el);
+flushRaf();
+const step3 = el.scrollTop;
+
+// 4. Upward wheel event cancels even an already-queued rAF
+el.scrollHeight = 1600;
+ctx._scrollElToBottomSoon(el);
+el.scrollTop = 900;
+el.emit('wheel', { deltaY: -120 });
+flushRaf();
+const step4 = el.scrollTop;
+
+console.log(JSON.stringify({ step1, step2, step3, step4 }));
+"""
+_nsc = subprocess.run(["node", "-e", _node_scroll], cwd=_ROOT, capture_output=True, text=True)
+_nsc_ok = _nsc.returncode == 0
+if _nsc_ok:
+    _nsc_j = json.loads(_nsc.stdout.strip())
+    _nsc_ok = (
+        _nsc_j["step1"] == 1000
+        and _nsc_j["step2"] == 200
+        and _nsc_j["step3"] == 1400
+        and _nsc_j["step4"] == 900
+    )
+check(
+    "node VM confirms _scrollElToBottomSoon respects per-element scroll/wheel upward navigation",
+    _nsc_ok,
+    _nsc.stdout.strip() or _nsc.stderr.strip(),
+)
+
+_planner_think_slice = _js[_js.index("else if (d.type === 'planner_thinking_token')"):_js.index("else if (d.type === 'planner_plan_token')")]
+_scroll_btm_slice = _js[_js.index("function scrollBtmIfNearBottom("):_js.index("function _elEnsureFollowListener(")]
+check(
+    "planner thinking uses _scrollElToBottomSoon and scrollBtmIfNearBottom re-checks _chatFollow in rAF",
+    "_scrollElToBottomSoon(_thinkEl)" in _planner_think_slice
+    and _scroll_btm_slice.count("if (!_chatFollow) return;") >= 2,
+)
+
 sys.exit(h.finish("notify_chats_speed_and_think_order"))

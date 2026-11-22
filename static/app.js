@@ -6966,7 +6966,13 @@ function _chatEnsureFollowListener() {
   c._followWired = true;
   c.addEventListener('scroll', function() {
     _chatFollow = (c.scrollHeight - (c.scrollTop + c.clientHeight)) <= 60;
-  });
+  }, { passive: true });
+  c.addEventListener('wheel', function(e) {
+    if (!e || e.deltaY >= 0) return;
+    var _inner = e.target && e.target.closest ? e.target.closest('.think-body, #planner-think-content') : null;
+    if (_inner && _inner.scrollTop > 0) return;
+    _chatFollow = false;
+  }, { passive: true });
 }
 
 function scrollBtmIfNearBottom(thresholdPx) {
@@ -6977,6 +6983,7 @@ function scrollBtmIfNearBottom(thresholdPx) {
     window._scrollNearRaf = requestAnimationFrame(function() {
       requestAnimationFrame(function() {
         window._scrollNearRaf = null;
+        if (!_chatFollow) return;
         const c = document.getElementById('chat');
         if (!c) return;
         c.scrollTop = c.scrollHeight;
@@ -6985,11 +6992,26 @@ function scrollBtmIfNearBottom(thresholdPx) {
   }
 }
 
+function _elEnsureFollowListener(el) {
+  if (!el || el._followWired) return;
+  el._followWired = true;
+  el._followBottom = true;
+  if (typeof el.addEventListener !== 'function') return;
+  el.addEventListener('scroll', function() {
+    el._followBottom = (el.scrollHeight - (el.scrollTop + el.clientHeight)) <= 24;
+  }, { passive: true });
+  el.addEventListener('wheel', function(e) {
+    if (e && e.deltaY < 0) el._followBottom = false;
+  }, { passive: true });
+}
+
 function _scrollElToBottomSoon(el) {
-  if (!el || el._scrollRaf) return;
+  if (!el) return;
+  _elEnsureFollowListener(el);
+  if (el._followBottom === false || el._scrollRaf) return;
   el._scrollRaf = requestAnimationFrame(function() {
     el._scrollRaf = null;
-    if (_chatFollow && el.isConnected) el.scrollTop = el.scrollHeight;
+    if (_chatFollow && el._followBottom !== false && el.isConnected) el.scrollTop = el.scrollHeight;
   });
 }
 
@@ -8354,6 +8376,7 @@ function handleEvent(d) {
         _thinkEl.textContent = '';  // clear the pulse placeholder
         _thinkEl._tn = document.createTextNode('');
         _thinkEl.appendChild(_thinkEl._tn);
+        _thinkEl._followBottom = true;
       }
       if (!_thinkEl._tn) { _thinkEl._tn = document.createTextNode(''); _thinkEl.appendChild(_thinkEl._tn); }
       _thinkEl._tn.appendData(d.content);
@@ -8370,7 +8393,7 @@ function handleEvent(d) {
       var _det2 = document.getElementById('planner-think-block');
       if (_det2) {
         if (!_det2.open) _det2.open = true;
-        (function(el) { requestAnimationFrame(function() { el.scrollTop = el.scrollHeight; }); })(_thinkEl);
+        if (_chatFollow) _scrollElToBottomSoon(_thinkEl);
       }
     }
     scrollBtmIfNearBottom(60);
