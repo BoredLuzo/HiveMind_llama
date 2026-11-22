@@ -471,6 +471,7 @@ SUITES = [
     ("hardware_autofit_and_moe_lift", "tests/test_hardware_autofit_and_moe_lift.py", 45),
     ("audit_wave3c_deep_fixes",       "tests/test_audit_wave3c_deep_fixes.py",       45),
     ("b12631_inkling_loop_and_qwen36", "tests/test_b12631_inkling_loop_and_qwen36.py", 45),
+    ("live_pip_think_codepanel_fixes", "tests/test_live_pip_think_codepanel_fixes.py", 45),
 
 ]
 

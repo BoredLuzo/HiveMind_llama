@@ -87,6 +87,8 @@ def shell_os_hint(shell_mode: str, platform: str) -> str:
             "NOT exist here; /c/Users/... is just Git Bash's spelling of "
             "C:/Users/.... Never 're-create' a file because a /Users/... "
             "path failed - list_dir or find_files first.\n"
+            "Use forward slashes for paths (e.g. .venv/Scripts/python.exe, "
+            "never unquoted backslashes like .venv\\Scripts\\python.exe).\n"
             "To open or verify a local HTML page use the browser tool "
             "(Playwright is pre-installed) - do NOT pip-install playwright "
             "or run browser downloads.\n"
@@ -137,6 +139,23 @@ _EXPLICIT_VENV_FLAG_RE = re.compile(
     r"(?:--python\s+['\"]?(?:\.?[/\\])?(?:\.venv|venv)\b|--target\s+|-t\s+)",
     re.IGNORECASE,
 )
+_CREATES_VENV_RE = re.compile(
+    r"\b(?:python3?|py|uv)(?:\.exe)?\s+(?:-m\s+venv|venv)\b",
+    re.IGNORECASE,
+)
+_ACTIVATES_VENV_RE = re.compile(
+    r"(?:^|\s)(?:source|\.)\s+['\"]?(?:\.?[/\\])?(?:\.venv|venv)[/\\](?:Scripts|bin)[/\\]activate\b",
+    re.IGNORECASE,
+)
+_WIN_BASH_VENV_PATH_RE = re.compile(
+    r"(?:^|(?<=[\s;&|(]))(\.?\\?(?:\.venv|venv)\\Scripts\\[\w.\-]+)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_win_bash_venv_paths(cmd: str) -> str:
+    """Convert unquoted Windows backslash .venv\\Scripts\\... paths for Git Bash."""
+    return _WIN_BASH_VENV_PATH_RE.sub(lambda m: m.group(1).replace("\\", "/"), str(cmd or ""))
 
 
 def _is_unscoped_pip_install(cmd: str, workspace: Path | None) -> bool:
@@ -144,8 +163,18 @@ def _is_unscoped_pip_install(cmd: str, workspace: Path | None) -> bool:
     from infra.child_env import workspace_venv_python
     if workspace_venv_python(workspace) is not None:
         return False
+    _creates_venv = False
+    _activates_venv = False
     for seg in re.split(r"&&|\|\||[;\n|]", str(cmd or "")):
-        if _PIP_INSTALL_SEG_RE.match(seg) and not _EXPLICIT_VENV_FLAG_RE.search(seg):
+        if _CREATES_VENV_RE.search(seg):
+            _creates_venv = True
+        if _ACTIVATES_VENV_RE.search(seg):
+            _activates_venv = True
+        if (
+            _PIP_INSTALL_SEG_RE.match(seg)
+            and not _EXPLICIT_VENV_FLAG_RE.search(seg)
+            and not (_creates_venv and _activates_venv)
+        ):
             return True
     return False
 
@@ -184,8 +213,10 @@ _PIP_SOURCE_BUILD_MARKERS = (
     "Microsoft Visual C++", "error: command", "No module named 'setuptools'",
 )
 
-_PIP_INSTALL_RX = re.compile(r"(^|[\s;&|(])(?:\S*python\S*\s+-m\s+)?pip\s+install\s+(.+)",
-                             re.IGNORECASE)
+_PIP_INSTALL_RX = re.compile(
+    r"(?:^|[\s;&|(])(?:(?:\"[^\"]*python[^\"]*\"|'[^']*python[^']*'|\S*python\S*)\s+-m\s+)?pip3?(?:\.exe)?\s+install\s+(.+)",
+    re.IGNORECASE,
+)
 
 
 def _pip_packages_from_cmd(cmd: str) -> str:
@@ -193,7 +224,7 @@ def _pip_packages_from_cmd(cmd: str) -> str:
     m = _PIP_INSTALL_RX.search(str(cmd or ""))
     if not m:
         return ""
-    _tail = m.group(2).strip()
+    _tail = m.group(1).strip()
     # a requirements-file install is not a single package name - no hint
     if re.search(r"(^|\s)(-r|--requirement)\b", _tail):
         return ""
@@ -296,7 +327,7 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         _job = _ToolJob.confine(r)
         try:
             try:
-                out, err = await asyncio.wait_for(r.communicate(), 60 if bench_cmd else 10)
+                out, err = await asyncio.wait_for(r.communicate(), 60 if bench_cmd else 45)
             except asyncio.TimeoutError:
                 if _job is not None:
                     _job.terminate()
@@ -665,7 +696,8 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 # VENV-SHIMS (2026-11-19): uv venvs ship python.exe without
                 # pip.exe or python3.exe; bare `pip`/`python3` fell through PATH
                 # to global/broken Python installations.
-                _stream_cmd = [_win_bash_exe, "-c", _bash_shims + cmd]
+                _bash_cmd = _normalize_win_bash_venv_paths(cmd)
+                _stream_cmd = [_win_bash_exe, "-c", _bash_shims + _bash_cmd]
             else:
                 _stream_cmd = (
                     ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ps_cmd]
@@ -1068,7 +1100,7 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
             _q_py = "'" + str(_venv_py).replace("'", "''") + "'"
             _cmd = f"& {_q_py} -m pip install --prefer-binary {packages}"
         else:
-            _cmd = f'"{_venv_py}" -m pip install --prefer-binary {packages}'
+            _cmd = f'"{_venv_py.as_posix()}" -m pip install --prefer-binary {packages}'
     else:
         _cmd = _INSTALL_CMDS[manager].format(pkgs=packages)
     if dev and manager == "npm":
@@ -1104,7 +1136,11 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
     # The same hint now also fires for a pip install run through run_bash (see
     # _pip_source_build_hint below): install_package is tier 99 and drops out at
     # small windows, and then run_bash is the only path the model has.
-    if _venv_py is not None and any(_p in _res for _p in _PIP_SOURCE_BUILD_MARKERS):
+    if (
+        _venv_py is not None
+        and any(_p in _res for _p in _PIP_SOURCE_BUILD_MARKERS)
+        and "[HINT] pip fell back to building from SOURCE" not in _res
+    ):
         _res += _pip_source_build_hint(packages, str(_venv_py))
     return _res
 

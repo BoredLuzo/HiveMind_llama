@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -288,7 +289,11 @@ _app_js = _read("static/app.js")
 _idx_html = _read("index.html")
 check("app.js uses Object.keys(_mm.cp).length > 0 guard", "typeof _mm.cp === 'object' && Object.keys(_mm.cp).length > 0" in _app_js)
 check("app.js escapes soloModel with esc()", "esc(soloModel)" in _app_js)
-check("index.html bumps app.js cache key to 20261122-01", "app.js?v=20261122-01" in _idx_html)
+_m_app_ver = re.search(r"app\.js\?v=(\d{8})-(\d+)", _idx_html)
+check(
+    "index.html bumps app.js cache key to >= 20261122-01",
+    _m_app_ver is not None and (int(_m_app_ver.group(1)), int(_m_app_ver.group(2))) >= (20261122, 1),
+)
 
 _node = shutil.which("node")
 if _node:

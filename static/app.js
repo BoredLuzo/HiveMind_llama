@@ -5125,11 +5125,21 @@ function _attachLoadTimer(hdr, tid, baseColor) {
   }, 2000);
 }
 
+function _toggleThinkBlock(tb) {
+  if (!tb) return;
+  var currentlyOpen = tb.classList.contains('open')
+    || (tb.classList.contains('live') && !tb.classList.contains('user-collapsed'));
+  var nextOpen = !currentlyOpen;
+  tb.classList.toggle('open', nextOpen);
+  tb.classList.toggle('user-collapsed', !nextOpen);
+  tb.dataset.userToggled = '1';
+}
+
 function _buildAgentThinkBlock(tid) {
   const thinkBlock = document.createElement('div'); thinkBlock.className = 'think-block live'; thinkBlock.id = 'tk-' + tid; thinkBlock.style.display = 'none';
   const thinkHdr = document.createElement('div'); thinkHdr.className = 'think-hdr';
   thinkHdr.innerHTML = '<span class="th-label">🧠 Thinking</span><span class="th-tokens" id="tkt-' + tid + '"></span><span class="th-chevron">▲</span>';
-  thinkHdr.onclick = function() { thinkBlock.classList.toggle('open'); };
+  thinkHdr.onclick = function() { _toggleThinkBlock(thinkBlock); };
   const thinkBody = document.createElement('div'); thinkBody.className = 'think-body'; thinkBody.id = 'thb-' + tid;
   thinkBlock.appendChild(thinkHdr); thinkBlock.appendChild(thinkBody);
   return thinkBlock;
@@ -5224,7 +5234,7 @@ function _createThinkBlock() {
   _tb.className = 'think-block live open';
   _tb.id = _id;
   _tb.style.cssText = 'margin:4px 0 4px;';
-  _tb.innerHTML = '<div class="think-hdr" onclick="this.parentElement.classList.toggle(\'open\')">'
+  _tb.innerHTML = '<div class="think-hdr" onclick="_toggleThinkBlock(this.parentElement)">'
     + '<span class="th-label">\uD83E\uDDE0 Thinking</span>'
     + '<span class="th-tokens"></span>'
     + '<span class="th-chevron">\u25B2</span></div>'
@@ -5939,11 +5949,19 @@ function _tgPendingRekey(realPath, pkey) {
   var _k = pkey || _TG_PENDING_KEY;
   var pend = _cpFiles[_k];
   if (!pend) return;
+  var _wasActive = (_cpActive === _k);
   var content = pend.content, op = pend.op;
   delete _cpFiles[_k];
   pend.tab.remove();
-  if (_cpActive === _k) _cpActive = null;
-  _cpAddOrUpdateFile(realPath, content, op, 'plain');
+  if (_wasActive) _cpActive = null;
+  _cpAddOrUpdateFile(realPath, content, op, _wasActive ? false : 'plain');
+  if (_wasActive) {
+    _cpShowFile(realPath, true);
+    var _bRekey = document.getElementById('code-panel-body');
+    if (_bRekey && _cpFollowStream && document.body.classList.contains('code-panel-open')) {
+      _bRekey.scrollTop = _bRekey.scrollHeight;
+    }
+  }
 }
 
 function _tgEachPendingKey(fn) {
@@ -6088,8 +6106,18 @@ function _toolGenStream(d) {
     if (!S.curAgent) return;
     var body = document.getElementById('ab-' + S.curAgent.tid);
     if (!body) return;
+    if (S._thinkBlockId) {
+      var _tkPre = document.getElementById(S._thinkBlockId);
+      if (_tkPre) _tkPre.classList.remove('live');
+      S._thinkBlockId = null;
+    }
     var idx = (d.index != null) ? d.index : 0;
+    var _cid = d.call_id || '';
     var st = _tgCards[idx];
+    if (st && _cid && st.callId && _cid !== st.callId) {
+      _toolGenDone();
+      st = null;
+    }
     if (!st || !st.row || !st.row.isConnected) {
       var row = document.createElement('div');
       row.className = 'tool-call-row';
@@ -6112,16 +6140,21 @@ function _toolGenStream(d) {
         var _own = _TG_PENDING_KEY + '#' + idx;
         var _k = (st && st.path) ? st.path
                : ((_cpFiles[_own]) ? _own : '');
+        _cpFollowStream = true;
         toggleCodePanel(true);
         if (_k && _cpFiles[_k]) {
           _cpFiles[_k].view = 'file';
           _cpShowFile(_k, true);
+          var _cbClick = document.getElementById('code-panel-body');
+          if (_cbClick) _cbClick.scrollTop = _cbClick.scrollHeight;
         }
       });
       row.appendChild(chip);
       body.appendChild(row);
       scrollBtmIfNearBottom(60);
-      st = _tgCards[idx] = { row: row, chip: chip, buf: '', path: '', tool: d.name || '', idx: idx };
+      st = _tgCards[idx] = { row: row, chip: chip, buf: '', path: '', tool: d.name || '', idx: idx, callId: _cid };
+    } else if (_cid && !st.callId) {
+      st.callId = _cid;
     }
     st.buf += (d.content || '');
     if (d.name && st.tool !== d.name) {
@@ -6190,7 +6223,11 @@ function _tokenFlushLoop() {
       var before = combined.split('<think>')[0];
       if (before) _liveMdAppend(body, before);
       S.curAgent._thinkBuf = '<think>' + combined.split('<think>').slice(1).join('<think>');
-      if (thinkBlockEl) { thinkBlockEl.style.display = ''; thinkBlockEl.classList.add('live', 'open'); }
+      if (thinkBlockEl) {
+        thinkBlockEl.style.display = '';
+        thinkBlockEl.classList.add('live');
+        if (thinkBlockEl.dataset.userToggled !== '1') thinkBlockEl.classList.add('open');
+      }
     } else if (S.curAgent._inThink) {
       S.curAgent._thinkBuf = combined;
       if (thinkBodyEl) {
@@ -8533,6 +8570,9 @@ function handleEvent(d) {
     // arguments — the user sees the code being generated instead of waiting.
     _toolGenStream(d);
   }
+  else if (d.type === 'tool_gen_reset') {
+    _toolGenDone();
+  }
   else if (d.type === 'complexity') {
     // ROUTE-FOR-SPEECH: "complex" (pipeline) and "code_duo" are multi-agent
     // runs - their final answer belongs to the agentic read-aloud switch.
@@ -8582,6 +8622,7 @@ function handleEvent(d) {
   // Each new think block is created after the previous tool call.
   else if (d.type === 'thinking_token') {
     _perfOnToken(d.content);
+    if (Object.keys(_tgCards).length > 0) _toolGenDone();
     if (S.curAgent) {
       if (!S._thinkBlockId) {
         S._thinkBlockId = _createThinkBlock();
@@ -8589,7 +8630,8 @@ function handleEvent(d) {
       var _tbEl = S._thinkBlockId ? document.getElementById(S._thinkBlockId) : null;
       if (!_tbEl) return;
       _tbEl.style.display = '';
-      _tbEl.classList.add('live', 'open');
+      _tbEl.classList.add('live');
+      if (_tbEl.dataset.userToggled !== '1') _tbEl.classList.add('open');
       var _thbEl = _tbEl.querySelector('.think-body');
       if (_thbEl) {
         // PERF (2026-10-23): O(delta) append on a persistent text node — the
@@ -14982,6 +15024,10 @@ function _cpRequestShow(path, plain, streamOnly) {
     _cpPaintJob = null;
     if (job && job.seq === _cpPaintSeq && _cpActive === job.path) {
       _cpShowFile(job.path, job.plain, job.streamOnly);
+      if (job.plain && _cpFollowStream && document.body.classList.contains('code-panel-open')) {
+        var _cpB = document.getElementById('code-panel-body');
+        if (_cpB) _cpB.scrollTop = _cpB.scrollHeight;
+      }
     }
   };
   if (window.requestAnimationFrame) _cpPaintRaf = window.requestAnimationFrame(run);
@@ -15035,10 +15081,13 @@ function toggleCodePanel(forceOpen) {
       && Date.now() - (_cpLastShowAt || 0) > 300) {
     var _live = _cpFiles[_tgLivePath];
     _live.view = 'file';
+    _cpFollowStream = true;
     // An edit/append stream is a FRAGMENT in streamText while content still
     // holds the old disk state; opening the panel mid-stream must show the
     // fragment, not the stale file.
     _cpShowFile(_tgLivePath, true, !!_live.streamText);
+    var _cpJumpB = document.getElementById('code-panel-body');
+    if (_cpJumpB) _cpJumpB.scrollTop = _cpJumpB.scrollHeight;
   }
 }
 

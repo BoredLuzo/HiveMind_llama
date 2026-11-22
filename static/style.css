@@ -1108,6 +1108,8 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .think-body::-webkit-scrollbar { width: 3px; }
 .think-body::-webkit-scrollbar-thumb { background: rgba(72,120,192,.3); border-radius: 2px; }
 .think-block.open .think-body { display: block; }
+.think-block.live .think-body { display: block; }
+.think-block.live.user-collapsed .think-body { display: none; }
 
 /* TOOL-GEN-STREAM chip (2026-09-18): compact live chip during write
    generation — tool + target path + char counter. The code itself streams
@@ -1130,7 +1132,6 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
   white-space: pre;
   color: #cfe3ff;
 }
-.think-block.live .think-body { display: block; }
 /* ── Chunk-plan CSS removed — chunking runs invisibly in the background ──── */
 
 @media (max-width:1180px){

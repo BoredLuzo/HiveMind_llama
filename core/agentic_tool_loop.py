@@ -481,6 +481,7 @@ class AgenticToolLoop(ToolLoop):
                     from utils.tool import arguments_repetition_drift as _arg_drift
                     _drift_args_buf = ""
                     _drift_cut = False
+                    _emitted_tool_gen = False
                     async for _sse_chunk in _t_iter_sse(_resp):
                         self._diag_chunk_n = getattr(self, '_diag_chunk_n', 0) + 1
                         if _ttfb_ms is None:
@@ -677,9 +678,11 @@ class AgenticToolLoop(ToolLoop):
                                 # zeigt daraus live Pfad/Kommando auf der
                                 # Approval-Card ("welcher file/welcher bash").
                                 if _acc_fn in _gated_tool_names or _acc_fn.startswith("mcp_"):
+                                    _emitted_tool_gen = True
                                     await self._emit({"type": "tool_gen",
                                                       "name": _acc_fn,
                                                       "index": _tc_idx,
+                                                      "call_id": str(_acc.get("id") or ""),
                                                       "content": _tc_args})
                             _tc_idx = _tc_d.get("index", 0)
                             _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
@@ -723,6 +726,11 @@ class AgenticToolLoop(ToolLoop):
                     logger.info("[STREAM-DIAG] ended chunks=%d usage=%s fr=%s",
                                 getattr(self, '_diag_chunk_n', -1),
                                 _dr_usage_final is not None, _dr_finish_reason)
+                    if _emitted_tool_gen and _dr_finish_reason in ("length", "drift"):
+                        await self._emit({
+                            "type": "tool_gen_reset",
+                            "reason": str(_dr_finish_reason),
+                        })
                     # send usage EXACTLY ONCE after the stream ends
                     if _dr_usage_final:
                         await self._emit({"type": "usage_meta", "phase": "coder", **_dr_usage_final})
