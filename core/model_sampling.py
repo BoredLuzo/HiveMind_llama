@@ -44,14 +44,8 @@ _FLAT_SAMPLING_KEYS = (
 
 VALID_REASONING_EFFORTS = ("auto", "none", "on", "minimal", "low", "medium", "high", "max")
 POSITIVE_REASONING_EFFORTS = frozenset({"on", "minimal", "low", "medium", "high", "max"})
-REASONING_EFFORT_BUDGETS: dict[str, int] = {
-    "none": 0,
-    "low": 1024,
-    "medium": 3072,
-    "high": 8192,
-    "max": 16384,
-}
 _EFFORT_USER_ROLES = frozenset({"direct", "duo_coder", "duo_planner", "synthesizer"})
+_EFFORT_NONE_ROLES = frozenset({"direct", "duo_coder", "duo_planner", "synthesizer", "analyst", "refiner", "critic", "vision"})
 
 
 def normalize_reasoning_effort(raw: object) -> str:
@@ -118,6 +112,8 @@ def resolve_reasoning_effort(
         return "" if user_eff == "on" else user_eff
     if thinking is False:
         return clamp_reasoning_effort_for_model(model_name, "none") if model_name else "none"
+    if model_name and not model_supports_thinking(model_name):
+        return ""
     prof_eff = normalize_reasoning_effort((profile or {}).get("reasoning_effort"))
     if prof_eff not in ("auto", "on"):
         return clamp_reasoning_effort_for_model(model_name, prof_eff) if model_name else prof_eff
@@ -291,10 +287,24 @@ _model_cap_overrides: dict = {}
 def update_model_capability_overrides(overrides: dict | None = None):
     _model_cap_overrides.clear()
     _model_cap_overrides.update(overrides or {})
+    try:
+        from backend.gguf_meta import _REASONING_INFO_CACHE
+        _REASONING_INFO_CACHE.clear()
+    except (ImportError, AttributeError):
+        pass
 
 
 def _model_profile(model: str) -> dict:
-    base = _MODEL_PROFILES_CACHE.get(model.split(":")[0], _MODEL_PROFILES_CACHE.get(model, {}))
+    _m_low = str(model or "").lower()
+    _prefix = model.split(":")[0]
+    _prefix_low = _m_low.split(":")[0]
+    base = (
+        _MODEL_PROFILES_CACHE.get(_prefix)
+        or _MODEL_PROFILES_CACHE.get(model)
+        or _MODEL_PROFILES_CACHE.get(_prefix_low)
+        or _MODEL_PROFILES_CACHE.get(_m_low)
+        or {}
+    )
     result = dict(base)
     try:
         from model_configs.models_registry import get_capabilities as _reg_caps
@@ -303,8 +313,12 @@ def _model_profile(model: str) -> dict:
             result.update(_user_caps)
     except Exception:
         pass
-    _prefix = model.split(":")[0]
-    _ovr = _model_cap_overrides.get(_prefix, _model_cap_overrides.get(model))
+    _ovr = (
+        _model_cap_overrides.get(model)
+        or _model_cap_overrides.get(_m_low)
+        or _model_cap_overrides.get(_prefix)
+        or _model_cap_overrides.get(_prefix_low)
+    )
     if _ovr:
         for _k in ("thinking", "tool_call", "vision"):
             if _k in _ovr:
@@ -374,9 +388,14 @@ def resolve_agent_sampling(
     except (TypeError, ValueError):
         eff_budget = 0
 
+    _raw_user_eff = normalize_reasoning_effort((settings or {}).get("reasoning_effort"))
     _effort_settings = settings if role in _EFFORT_USER_ROLES else None
     _user_eff = normalize_reasoning_effort((_effort_settings or {}).get("reasoning_effort"))
-    if _user_eff == "none":
+    if _raw_user_eff == "none" and role in _EFFORT_NONE_ROLES:
+        eff_think = False
+        eff_budget = 0
+        _effort_settings = settings
+    elif _user_eff == "none":
         eff_think = False
         eff_budget = 0
     elif _user_eff in POSITIVE_REASONING_EFFORTS and _supports_think:

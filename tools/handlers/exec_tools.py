@@ -229,8 +229,8 @@ def _pip_packages_from_cmd(cmd: str) -> str:
     # a requirements-file install is not a single package name - no hint
     if re.search(r"(^|\s)(-r|--requirement)\b", _tail):
         return ""
-    # drop redirections/pipes and flags; keep the package-ish tokens
-    _tail = _tail.split(" 2>&1")[0].split("|")[0].strip()
+    # drop chained commands, redirections/pipes and flags; keep the package-ish tokens
+    _tail = re.split(r"\s*(?:&&|\|\||;|\||2>&1|>|<)", _tail, maxsplit=1)[0].strip()
     _pkgs = [t for t in _tail.split() if not t.startswith("-")]
     return " ".join(_pkgs[:6])
 
@@ -837,6 +837,8 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
         _low_ok = result.lower()
         if (
             _pkgs_ok
+            and "|" in str(cmd)
+            and "successfully installed" not in _low_ok
             and any(_p in result for _p in _PIP_SOURCE_BUILD_MARKERS)
             and any(_em in _low_ok for _em in ("error", "exit code:", "failed", "did not run successfully", "traceback"))
         ):

@@ -63,8 +63,9 @@ _META_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
 
 
 def clear_cache() -> None:
-    """Clear the cached GGUF metadata map (primarily for tests)."""
+    """Clear the cached GGUF metadata and reasoning-info maps (primarily for tests/rescan)."""
     _META_CACHE.clear()
+    _REASONING_INFO_CACHE.clear()
 
 
 def _read_exact(f: BinaryIO, n: int) -> bytes:
@@ -543,18 +544,22 @@ def read_gguf_metadata(path_or_model: str | Path) -> dict[str, Any]:
 
 
 _REASONING_CANONICAL_ORDER = ("none", "minimal", "low", "medium", "high", "max")
-_REASONING_INFO_CACHE: dict[str, tuple[str, int, bool, dict[str, Any]]] = {}
+_REASONING_INFO_CACHE: dict[str, tuple[str, int, str, int, int, bool | None, dict[str, Any]]] = {}
 
 
-def _norm_tpl_effort_token(tok: str) -> str:
+def _norm_tpl_effort_token(tok: str, *, strict: bool = False) -> str:
     t = tok.strip().lower()
-    if t in ("off", "disabled", "false", "0"):
+    if t == "none":
+        return "none"
+    if not strict and t in ("off", "disabled", "false", "0"):
         return "none"
     if t == "med":
         return "medium"
-    if t in ("xhigh", "maximum"):
+    if t in ("max", "maximum"):
         return "max"
-    if t in ("none", "minimal", "low", "medium", "high", "max"):
+    if not strict and t == "xhigh":
+        return "max"
+    if t in ("minimal", "low", "medium", "high"):
         return t
     return ""
 
@@ -578,6 +583,7 @@ def _extract_template_default_effort(tpl: str) -> str | None:
         r"_default_reasoning_effort\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]",
         r"\breasoning_effort\s*\|\s*default\s*\(\s*['\"]([a-zA-Z0-9_]+)['\"]",
         r"\bdefault_reasoning_effort\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]",
+        r"\breasoning_effort\b[^\n]*\belse\s+['\"]([a-zA-Z0-9_]+)['\"]",
     ):
         m = re.search(pat, tpl)
         if m:
@@ -588,17 +594,18 @@ def _extract_template_default_effort(tpl: str) -> str | None:
     if m_num:
         try:
             val = float(m_num.group(1))
-            if val <= 0.0:
-                return "none"
-            if val <= 0.12:
-                return "minimal"
-            if val <= 0.4:
-                return "low"
-            if val <= 0.75:
-                return "medium"
-            if val < 0.95:
-                return "high"
-            return "max"
+            if 0.0 <= val <= 1.0:
+                if val <= 0.0:
+                    return "none"
+                if val <= 0.12:
+                    return "minimal"
+                if val <= 0.4:
+                    return "low"
+                if val <= 0.75:
+                    return "medium"
+                if val < 0.95:
+                    return "high"
+                return "max"
         except ValueError:
             pass
     return None
@@ -606,7 +613,7 @@ def _extract_template_default_effort(tpl: str) -> str | None:
 
 def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False) -> dict[str, Any]:
     """Inspect a Jinja chat template to determine exact supported reasoning controls."""
-    tpl = str(template_text or "")
+    tpl = re.sub(r"\{#.*?#\}", "", str(template_text or ""), flags=re.S)
     supports_enable_thinking = "enable_thinking" in tpl
     has_effort = "reasoning_effort" in tpl
     if not has_effort:
@@ -633,18 +640,25 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
     m_map = re.search(r"\beffort_map\s*=\s*\{([^}]+)\}", tpl)
     if m_map:
         raw_keys = [k.strip().lower() for k in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]\s*:", m_map.group(1))]
-        accepts_none_effort = any(k in ("none", "off") for k in raw_keys)
+        accepts_none_effort = "none" in raw_keys
         for k in raw_keys:
-            norm = _norm_tpl_effort_token(k)
+            norm = _norm_tpl_effort_token(k, strict=True)
             if norm:
                 found.add(norm)
     else:
-        m_guard = re.search(r"reasoning_effort[^\n]*\bnot\s+in\s*\(([^)]+)\)", tpl)
+        m_guard = re.search(r"reasoning_effort[^\n]*\bnot\s+in\s*[\(\[]([^\)\]]+)[\)\]]", tpl)
+        _guard_pos: list[str] = []
+        _guard_raw: list[str] = []
         if m_guard:
-            raw_vals = [v.strip().lower() for v in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", m_guard.group(1))]
-            accepts_none_effort = any(v in ("none", "off") for v in raw_vals)
-            for v in raw_vals:
-                norm = _norm_tpl_effort_token(v)
+            _guard_raw = [v.strip().lower() for v in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", m_guard.group(1))]
+            _guard_pos = [
+                n for n in (_norm_tpl_effort_token(v, strict=True) for v in _guard_raw)
+                if n and n != "none"
+            ]
+        if m_guard and _guard_pos:
+            accepts_none_effort = "none" in _guard_raw
+            for v in _guard_raw:
+                norm = _norm_tpl_effort_token(v, strict=True)
                 if norm:
                     found.add(norm)
         else:
@@ -659,7 +673,7 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
                 vals = [v.strip().lower() for v in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", cond)]
                 if not vals:
                     continue
-                if any(v in ("none", "off") for v in vals):
+                if "none" in vals:
                     accepts_none_effort = True
                 for lvl in _pick_group_canonical_level(vals):
                     found.add(lvl)
@@ -668,9 +682,12 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
                     r"(?<!\.)\b(?:_effort_raw|reasoning_effort)\s*==\s*['\"]([a-zA-Z0-9_]+)['\"]",
                     tpl,
                 ):
-                    _eq_norm = _norm_tpl_effort_token(_eq_v)
+                    _eq_low = _eq_v.strip().lower()
+                    _eq_norm = _norm_tpl_effort_token(_eq_low)
                     if _eq_norm == "none":
-                        accepts_none_effort = True
+                        if _eq_low == "none":
+                            accepts_none_effort = True
+                        found.add("none")
                     elif _eq_norm:
                         found.add(_eq_norm)
             if tpl_default:
@@ -697,6 +714,31 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
         "supports_enable_thinking": supports_enable_thinking,
         "template_default": tpl_default,
     }
+
+
+def _gguf_stat_key(model_name: str) -> tuple[str, int, int]:
+    """Cheaply locate GGUF file stat (path, mtime_ns, size) for cache validation."""
+    raw = str(model_name or "").strip()
+    if not raw:
+        return ("", 0, 0)
+    p = Path(raw)
+    if not p.is_file():
+        try:
+            from backend.llama_models import resolve_model_path
+            try:
+                resolved = resolve_model_path(raw, quiet=True)
+            except TypeError:
+                resolved = resolve_model_path(raw)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            return ("", 0, 0)
+        if not resolved or not resolved.is_file():
+            return ("", 0, 0)
+        p = resolved
+    try:
+        st = p.stat()
+        return (str(p.resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ("", 0, 0)
 
 
 def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
@@ -727,7 +769,8 @@ def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
     ext_path: Path | None = None
     try:
         from backend.manager_load import resolve_chat_template_file
-        model_base = name.split(":")[0].lower()
+        _no_alias = name.split("#", 1)[0]
+        model_base = _no_alias.split(":", 1)[0].lower()
         ext_path = resolve_chat_template_file(model_base, reg_tpl)
     except (ImportError, AttributeError, TypeError, ValueError, OSError) as exc:
         _logger.debug("[GGUF-META] external template lookup skipped for %r: %s", name, exc)
@@ -741,9 +784,17 @@ def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
             ext_mtime = 0
 
     explicit_think: bool | None = None
-    if isinstance(reg_caps, dict) and "thinking" in reg_caps:
+    try:
+        from core.model_sampling import _model_profile as _mp_cap_fn
+        _mp_caps = _mp_cap_fn(name)
+        if isinstance(_mp_caps, dict) and "thinking" in _mp_caps:
+            explicit_think = bool(_mp_caps["thinking"])
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        _logger.debug("[GGUF-META] model_profile lookup skipped for %r: %s", name, exc)
+
+    if explicit_think is None and isinstance(reg_caps, dict) and "thinking" in reg_caps:
         explicit_think = bool(reg_caps["thinking"])
-    else:
+    if explicit_think is None:
         try:
             from routing.model_automap import get_model_capabilities
             auto_caps = get_model_capabilities(name)
@@ -752,11 +803,19 @@ def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
         except (ImportError, AttributeError, TypeError, ValueError) as exc:
             _logger.debug("[GGUF-META] automap caps skipped for %r: %s", name, exc)
 
-    has_thinking = explicit_think if explicit_think is not None else False
+    gguf_key, gguf_mtime, gguf_size = _gguf_stat_key(name)
     cache_key = name.lower()
     cached = _REASONING_INFO_CACHE.get(cache_key)
-    if cached and cached[0] == ext_key and cached[1] == ext_mtime and cached[2] == has_thinking:
-        return dict(cached[3])
+    if (
+        cached
+        and cached[0] == ext_key
+        and cached[1] == ext_mtime
+        and cached[2] == gguf_key
+        and cached[3] == gguf_mtime
+        and cached[4] == gguf_size
+        and cached[5] == explicit_think
+    ):
+        return dict(cached[6])
 
     tpl_text = ""
     tpl_source = "none"
@@ -772,11 +831,11 @@ def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
         tpl_text = str(meta.get("chat_template") or "")
         if tpl_text:
             tpl_source = "gguf"
-    if explicit_think is None and meta:
-        has_thinking = bool(meta.get("has_thinking"))
 
-    # If capabilities explicitly mark thinking=False AND no external/GGUF reasoning_effort/enable_thinking exists, treat as none.
-    if explicit_think is False and "reasoning_effort" not in tpl_text and "enable_thinking" not in tpl_text:
+    has_thinking = explicit_think if explicit_think is not None else bool(meta.get("has_thinking")) if meta else False
+
+    # Honor explicit thinking=False capability/override unconditionally so UI & backend never split-brain.
+    if explicit_think is False:
         info: dict[str, Any] = {
             "mode": "none",
             "levels": [],
@@ -789,5 +848,7 @@ def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
         info = inspect_template_reasoning(tpl_text, has_thinking=has_thinking)
         info["template_source"] = tpl_source
 
-    _REASONING_INFO_CACHE[cache_key] = (ext_key, ext_mtime, has_thinking, dict(info))
+    _REASONING_INFO_CACHE[cache_key] = (
+        ext_key, ext_mtime, gguf_key, gguf_mtime, gguf_size, explicit_think, dict(info),
+    )
     return info

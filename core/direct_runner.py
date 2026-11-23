@@ -313,9 +313,14 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                     "content": f"ℹ️ Reasoning effort ({_dt_user_eff}) skipped — {model} does not support reasoning",
                 }
         if _think and _dt_user_eff in _DT_POS_RE and _dt_mst(model):
-            _mgr._reasoning_override = {model: True}
-        _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
-                                         vision=vision)
+            from backend.manager_load import set_reasoning_override as _set_dt_ro
+            _set_dt_ro(_mgr, model, True)
+        try:
+            _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
+                                             vision=vision)
+        finally:
+            from backend.manager_load import clear_reasoning_override as _clr_dt_ro
+            _clr_dt_ro(_mgr, model)
         _budget = int(_resolved_budget or 0)
         _base_tok = int(getattr(_agent, "max_tokens", 600) or 600)
         _max_tokens = _base_tok + (_budget if _think and _budget > 0 else 0)
@@ -1018,10 +1023,13 @@ async def _run_direct_inner(ctx):
                             "type": "status",
                             "content": f"ℹ️ Reasoning effort ({_dir_user_eff}) skipped — {_direct_model} does not support reasoning",
                         })
+            _dir_ro_set = False
             if _direct_think and _dir_user_eff in _DIR_POS_RE and _dir_mst(_direct_model):
                 try:
                     from backend.llama_client import manager as _dir_mgr
-                    _dir_mgr._reasoning_override = {_direct_model: True}
+                    from backend.manager_load import set_reasoning_override as _set_dir_ro
+                    _set_dir_ro(_dir_mgr, _direct_model, True)
+                    _dir_ro_set = True
                 except (ImportError, AttributeError):
                     pass
             _d_ct_sum = _d_pt_sum = _d_ca_sum = 0
@@ -1178,6 +1186,14 @@ async def _run_direct_inner(ctx):
                 _err_tok = f"[Direct error: {str(_direct_err)[:300]}]"
                 parts.append(_err_tok)
                 yield await ctx.emit({"type": "token", "content": _err_tok})
+            finally:
+                if _dir_ro_set:
+                    try:
+                        from backend.llama_client import manager as _dir_mgr_clr
+                        from backend.manager_load import clear_reasoning_override as _clr_dir_ro
+                        _clr_dir_ro(_dir_mgr_clr, _direct_model)
+                    except (ImportError, AttributeError):
+                        pass
             # RUN-STATS (2026-10-23): real usage for the per-answer stats line —
             # the same include_usage pattern the pipeline wrapper uses. The model
             # rides run_meta so run records and the done event attribute direct

@@ -566,7 +566,26 @@ el.emit('wheel', { deltaY: -120 });
 flushRaf();
 const step4 = el.scrollTop;
 
-console.log(JSON.stringify({ step1, step2, step3, step4 }));
+// 5. Programmatic scroll guard: SSE appends lines between rAF and deferred scroll -> does NOT self-disarm
+const el2L = {};
+const el2 = {
+  scrollHeight: 1000, clientHeight: 240, scrollTop: 760, isConnected: true,
+  addEventListener: (ev, fn) => { (el2L[ev] = el2L[ev] || []).push(fn); },
+  emit: (ev, p) => { for (const fn of (el2L[ev] || [])) fn(p || {}); },
+};
+ctx._scrollElToBottomSoon(el2);
+flushRaf();
+el2.scrollHeight = 1060; // +60px (>24px) arrives before browser fires deferred scroll
+el2.emit('scroll');
+const step5FollowAfterProg = el2._followBottom;
+
+// 6. Small-delta (<24px) upward wheel followed immediately by scroll does NOT snap back
+el2.emit('wheel', { deltaY: -10 });
+el2.scrollTop = el2.scrollHeight - el2.clientHeight - 8;
+el2.emit('scroll');
+const step6FollowAfterSmallUp = el2._followBottom;
+
+console.log(JSON.stringify({ step1, step2, step3, step4, step5FollowAfterProg, step6FollowAfterSmallUp }));
 """
 _nsc = subprocess.run(["node", "-e", _node_scroll], cwd=_ROOT, capture_output=True, text=True)
 _nsc_ok = _nsc.returncode == 0
@@ -577,6 +596,8 @@ if _nsc_ok:
         and _nsc_j["step2"] == 200
         and _nsc_j["step3"] == 1400
         and _nsc_j["step4"] == 900
+        and _nsc_j["step5FollowAfterProg"] is True
+        and _nsc_j["step6FollowAfterSmallUp"] is False
     )
 check(
     "node VM confirms _scrollElToBottomSoon respects per-element scroll/wheel upward navigation",

@@ -558,32 +558,37 @@ def _strip_stale_ctx_notices(msgs: list) -> list:
 
 def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think, settings=None):
     """Apply preserve_thinking, enable_thinking, and reasoning_effort kwargs to payload."""
-    from core.model_sampling import resolve_reasoning_effort
-    _mdl = str(payload.get("model") or "")
-    _eff = resolve_reasoning_effort(
-        settings, profile, thinking=bool(thinking and coder_tool_think),
-        model_name=_mdl,
+    from core.model_sampling import (
+        clamp_reasoning_effort_for_model,
+        normalize_reasoning_effort,
+        resolve_reasoning_effort,
     )
-    if _eff == "none":
-        payload["thinking"] = False
-        payload["thinking_budget"] = 0
-        payload["reasoning_effort"] = "none"
+    _mdl = str(payload.get("model") or "")
+    _user_eff = normalize_reasoning_effort((settings or {}).get("reasoning_effort"))
+    _eff_think = bool(thinking and coder_tool_think) and _user_eff != "none"
+    if not _eff_think:
+        if _user_eff == "none":
+            payload["thinking"] = False
+            payload["thinking_budget"] = 0
         ctk = payload.setdefault("chat_template_kwargs", {})
         ctk["enable_thinking"] = False
         ctk.pop("preserve_thinking", None)
+        if not _mdl or clamp_reasoning_effort_for_model(_mdl, "none") == "none":
+            payload["reasoning_effort"] = "none"
+        else:
+            payload.pop("reasoning_effort", None)
         return payload
-    if _eff:
+    _eff = resolve_reasoning_effort(
+        settings, profile, thinking=True, model_name=_mdl,
+    )
+    if _eff and _eff != "none":
         payload["reasoning_effort"] = _eff
     else:
         payload.pop("reasoning_effort", None)
+    ctk = payload.setdefault("chat_template_kwargs", {})
+    ctk["enable_thinking"] = True
     if (profile or {}).get("preserve_thinking") and thinking:
-        payload.setdefault("chat_template_kwargs", {})["preserve_thinking"] = True
-    if not coder_tool_think:
-        payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
-        if not _mdl or resolve_reasoning_effort(None, profile, thinking=False, model_name=_mdl) == "none":
-            payload.setdefault("reasoning_effort", "none")
-        else:
-            payload.pop("reasoning_effort", None)
+        ctk["preserve_thinking"] = True
     return payload
 
 

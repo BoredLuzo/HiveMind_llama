@@ -238,7 +238,11 @@ async def run_pipeline(ctx):
                 }
                 if _va_smp.get("seed") is not None:
                     _va_payload["seed"] = int(_va_smp["seed"])
-                _apply_thinking_fields(_va_payload, _va_think, _va_budget)
+                _apply_thinking_fields(
+                    _va_payload, _va_think, _va_budget,
+                    reasoning_effort=str(_va_smp.get("reasoning_effort") or ""),
+                    model_name=_va_model,
+                )
                 async for _va_d in _stream_chat_chunks(
                     _va_port,
                     _va_payload,
@@ -397,7 +401,11 @@ async def run_pipeline(ctx):
                 analyst_out = "".join(parts)
                 # Truncation check: retry with more tokens if output cut off
                 if ctx.is_truncated(analyst_out) and not ctx.aborted():
-                    retry_tokens = min(int(a.max_tokens * 2), 2000)  # INFO-3 FIX: 1200→2000
+                    _an_ctx = ctx.get_num_ctx(a.model, "analyst") or 8192
+                    retry_tokens = min(
+                        min(int(a.max_tokens * 2), 2000) + (_ag_budget if _ag_think and _ag_budget > 0 else 0),
+                        max(256, _an_ctx),
+                    )  # INFO-3 FIX: 1200→2000 + preserve thinking budget headroom
                     yield await ctx.emit({"type": "status", "content": f"⚠ Analyst output truncated - retry with {retry_tokens} tokens"})
                     yield await ctx.emit({"type": "clear_agent"})
                     retry_msgs = ctx.make_messages(ctx.pipeline, sys_p, analyst_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_analyst, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
@@ -485,7 +493,11 @@ async def run_pipeline(ctx):
                 refiner_out = "".join(parts).strip()
                 # Truncation check
                 if ctx.is_truncated(refiner_out) and not ctx.aborted():
-                    retry_tokens = min(int(a.max_tokens * 2), 2000)  # INFO-3 FIX: 1200→2000
+                    _rf_ctx = ctx.get_num_ctx(a.model, a.key) or 8192
+                    retry_tokens = min(
+                        min(int(a.max_tokens * 2), 2000) + (_ag_budget if _ag_think and _ag_budget > 0 else 0),
+                        max(256, _rf_ctx),
+                    )  # INFO-3 FIX: 1200→2000 + preserve thinking budget headroom
                     yield await ctx.emit({"type": "status", "content": f"⚠ Refiner output truncated - retry with {retry_tokens} tokens"})
                     yield await ctx.emit({"type": "clear_agent"})
                     retry_msgs2 = ctx.make_messages(ctx.pipeline, sys_p, refiner_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_refiner, False, True, cached_mem_ctx=ctx.pipeline_mem_ctx)
@@ -695,18 +707,65 @@ async def run_pipeline(ctx):
             parts, t = [], time.time()
             _synth_mdl = ctx.registry_get("synthesizer") or a.model
             _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, _synth_mdl)
-            async for _ev in _stream_stage_once(
-                ctx, _synth_mdl, msgs, _ag_temp, _ag_max,
-                agent_role=a.key, think=_ag_think,
-                thinking_budget=_ag_budget, sampler=_ag_smp,
-                parts_out=parts, no_cache=_synth_vision,
-                error_label="Synthesizer",
-            ):
-                yield _ev
+            from core.model_sampling import (
+                POSITIVE_REASONING_EFFORTS as _PIPE_POS_RE,
+                clamp_reasoning_effort_for_model as _clamp_pipe_re,
+                model_supports_thinking as _pipe_mst,
+                normalize_reasoning_effort as _norm_pipe_re,
+            )
+            _pipe_user_eff = _norm_pipe_re((ctx.settings or {}).get("reasoning_effort"))
+            if _pipe_user_eff == "none":
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
+                })
+            elif _pipe_user_eff in _PIPE_POS_RE:
+                if _pipe_mst(_synth_mdl):
+                    _pipe_mapped = _clamp_pipe_re(_synth_mdl, _pipe_user_eff)
+                    _pipe_sfx = f" → {_pipe_mapped}" if (_pipe_mapped and _pipe_mapped != _pipe_user_eff) else ""
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": f"🧠 Reasoning effort: {_pipe_user_eff} (composer override){_pipe_sfx}",
+                    })
+                else:
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": f"ℹ️ Reasoning effort ({_pipe_user_eff}) skipped — {_synth_mdl} does not support reasoning",
+                    })
+            _pipe_ro_set = False
+            if _ag_think and _pipe_user_eff in _PIPE_POS_RE and _pipe_mst(_synth_mdl):
+                try:
+                    from backend.llama_client import manager as _pipe_mgr
+                    from backend.manager_load import set_reasoning_override as _set_pipe_ro
+                    _set_pipe_ro(_pipe_mgr, _synth_mdl, True)
+                    _pipe_ro_set = True
+                except (ImportError, AttributeError):
+                    pass
+            try:
+                async for _ev in _stream_stage_once(
+                    ctx, _synth_mdl, msgs, _ag_temp, _ag_max,
+                    agent_role=a.key, think=_ag_think,
+                    thinking_budget=_ag_budget, sampler=_ag_smp,
+                    parts_out=parts, no_cache=_synth_vision,
+                    error_label="Synthesizer",
+                ):
+                    yield _ev
+            finally:
+                if _pipe_ro_set:
+                    try:
+                        from backend.llama_client import manager as _pipe_mgr_clr
+                        from backend.manager_load import clear_reasoning_override as _clr_pipe_ro
+                        _clr_pipe_ro(_pipe_mgr_clr, _synth_mdl)
+                    except (ImportError, AttributeError):
+                        pass
 
             synth_out = "".join(parts).strip()
             if ctx.is_truncated(synth_out) and not ctx.aborted():
-                retry_tokens_s = min(int(a.max_tokens * 2), 2000)
+                _sy_ctx = ctx.get_num_ctx(_synth_mdl, a.key) or 8192
+                retry_tokens_s = min(
+                    min(int(a.max_tokens * 2), 2000) + (_ag_budget if _ag_think and _ag_budget > 0 else 0),
+                    max(256, _sy_ctx),
+                )
                 yield await ctx.emit({"type": "status",
                                       "content": f"⚠ Synthesizer output truncated - retry with {retry_tokens_s} tokens"})
                 yield await ctx.emit({"type": "clear_agent"})

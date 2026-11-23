@@ -570,8 +570,11 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
     # Explicit cache_prompt=False (e.g. no_cache=True) must never be clobbered by profile defaults.
     if not cache_prompt:
         payload["cache_prompt"] = False
-    if str(payload.get("reasoning_effort") or "").strip().lower() in ("", "auto", "on"):
+    _raw_re = str(payload.get("reasoning_effort") or "").strip().lower()
+    if _raw_re in ("", "auto", "on", "true", "1", "enabled"):
         payload.pop("reasoning_effort", None)
+    elif _raw_re in ("off", "disabled", "false", "0"):
+        payload["reasoning_effort"] = "none"
     if "preserve_thinking" in payload:
         _pt_val = payload.pop("preserve_thinking")
         if _pt_val is not None:
@@ -589,12 +592,12 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
                     payload.pop("reasoning_effort", None)
             else:
                 payload["reasoning_effort"] = "none"
-        elif payload.get("reasoning_effort") == "none":
+        elif str(payload.get("reasoning_effort") or "").strip().lower() in ("none", "off", "disabled", "false", "0"):
             payload.pop("reasoning_effort", None)
-    if model and "reasoning_effort" in payload and payload.get("reasoning_effort") != "none":
+    if model and "reasoning_effort" in payload:
         from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_re_lc2
         _clamped_re = _clamp_re_lc2(model, str(payload.get("reasoning_effort") or ""))
-        if _clamped_re:
+        if _clamped_re and not (thinking is True and _clamped_re == "none"):
             payload["reasoning_effort"] = _clamped_re
         else:
             payload.pop("reasoning_effort", None)

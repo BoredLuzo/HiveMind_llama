@@ -33,6 +33,7 @@ class _ChatShortcutState:
     iterations: int = 0
     use_learned: bool = False
     constraint_mode: bool = False
+    run_settings: dict | None = None
     t_total: float = 0.0
     pipeline_soul: dict = dataclasses.field(default_factory=dict)
     handled: bool = False
@@ -147,17 +148,36 @@ async def _chat_memory_shortcuts(ps):
         yield await emit({"type": "agent", "content": "Hivemind", "model": agent.model})
 
         from core.model_sampling import resolve_agent_sampling as _resolve_sq_smp
+        _sq_cfg = ps.run_settings if ps.run_settings is not None else _state.settings
         _sq_temp, _sq_think, _sq_budget, _sq_smp = _resolve_sq_smp(
-            agent.model, agent=agent, settings=_state.settings, role="direct",
+            agent.model, agent=agent, settings=_sq_cfg, role="direct",
         )
         parts, t = [], time.time()
-        async for tok in _pipeline_chat_stream(
-            agent.model, messages, _sq_temp, 600,
-            agent_role="direct", think=_sq_think,
-            thinking_budget=_sq_budget or None, sampler=_sq_smp,
-        ):  # BUG-11 FIX: num_ctx via wrapper
-            parts.append(tok)
-            yield await emit({"type": "token", "content": tok})
+        if _sq_think:
+            async for _chunk in _pipeline_chat_stream(
+                agent.model, messages, _sq_temp, 600,
+                agent_role="direct", think=True,
+                thinking_budget=_sq_budget or None,
+                split_thinking=True, sampler=_sq_smp,
+            ):
+                if isinstance(_chunk, tuple):
+                    _sc, _sth = _chunk
+                    if _sth:
+                        yield await emit({"type": "thinking_token", "content": _sth})
+                    if _sc:
+                        parts.append(_sc)
+                        yield await emit({"type": "token", "content": _sc})
+                elif _chunk:
+                    parts.append(_chunk)
+                    yield await emit({"type": "token", "content": _chunk})
+        else:
+            async for tok in _pipeline_chat_stream(
+                agent.model, messages, _sq_temp, 600,
+                agent_role="direct", think=False,
+                thinking_budget=None, sampler=_sq_smp,
+            ):  # BUG-11 FIX: num_ctx via wrapper
+                parts.append(tok)
+                yield await emit({"type": "token", "content": tok})
         yield await emit({"type": "agent_done", "elapsed": round(time.time() - t, 1)})
         _state.memory.add_to_session("user", user_input)
         _state.memory.add_to_session("assistant", "".join(parts))

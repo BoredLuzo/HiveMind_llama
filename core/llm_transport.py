@@ -134,8 +134,16 @@ def disable_thinking_in_payload(
         **payload,
         "thinking": False,
         "thinking_budget": 0,
-        "reasoning_effort": "none",
     }
+    _mdl = str(payload.get("model") or "")
+    if _mdl:
+        from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_dt
+        if _clamp_dt(_mdl, "none") == "none":
+            out["reasoning_effort"] = "none"
+        else:
+            out.pop("reasoning_effort", None)
+    else:
+        out["reasoning_effort"] = "none"
     if max_tokens is not None and int(max_tokens) > 0:
         out["max_tokens"] = int(max_tokens)
     ctk = dict(out.get("chat_template_kwargs") or {})
@@ -595,11 +603,22 @@ async def _handle_tool_loop_http_error(
             if cfg.thinking:
                 cfg.thinking = False
                 cfg.thinking_budget = 0
+                setattr(cfg, "_thinking_disabled_by_error", True)
                 payload = dict(payload)
                 payload.pop("thinking", None)
                 payload.pop("thinking_budget", None)
+                _err_mdl = str(getattr(cfg, "model", "") or payload.get("model") or "")
+                if _err_mdl:
+                    from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_err
+                    if _clamp_err(_err_mdl, "none") == "none":
+                        payload["reasoning_effort"] = "none"
+                    else:
+                        payload.pop("reasoning_effort", None)
+                else:
+                    payload.pop("reasoning_effort", None)
                 _ctk = dict(payload.get("chat_template_kwargs") or {})
                 _ctk["enable_thinking"] = False
+                _ctk.pop("preserve_thinking", None)
                 payload["chat_template_kwargs"] = _ctk
                 if use_gbnf_grammar:
                     payload, _ = apply_tool_call_grammar(payload, grammar_compatible_fn, build_grammar_fn)

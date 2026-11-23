@@ -1359,9 +1359,10 @@ async def run_planner(
         normalize_reasoning_effort as _norm_plan_re,
     )
     _p_user_eff = _norm_plan_re(settings.get("reasoning_effort"))
-    if _p_user_eff == "none":
+    _p_supports = _plan_mst(planner_model)
+    if not _p_supports or _p_user_eff == "none":
         use_thinking = False
-    elif _p_user_eff in _PLAN_POS_RE and _plan_mst(planner_model):
+    elif _p_user_eff in _PLAN_POS_RE:
         use_thinking = True
     result = PlannerResult(
         planner_model=planner_model,
@@ -1676,9 +1677,10 @@ async def run_inloop_planner(
         normalize_reasoning_effort as _norm_inloop_re,
     )
     _inloop_user_eff = _norm_inloop_re(settings.get("reasoning_effort"))
-    if _inloop_user_eff == "none":
+    _inloop_supports = _inloop_mst(planner_model)
+    if not _inloop_supports or _inloop_user_eff == "none":
         use_thinking = False
-    elif _inloop_user_eff in _INLOOP_POS_RE and _inloop_mst(planner_model):
+    elif _inloop_user_eff in _INLOOP_POS_RE:
         use_thinking = True
 
     _plan_user_msg = build_planner_user_prompt(

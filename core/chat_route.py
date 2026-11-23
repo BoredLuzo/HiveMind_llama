@@ -43,6 +43,7 @@ class _ChatRoutePreState:
     t_total: object = None
     use_learned: object = None
     user_input: object = None
+    run_settings: dict | None = None
     _done_event: object = None
     _collect_done_metrics: object = None
     _complexity_source: str = ""
@@ -115,8 +116,9 @@ async def _chat_route_pre(ps):
         intent_model = registry_get(intent_agent)
         yield await emit({"type": "agent", "content": agent.name, "model": intent_model})
         from core.model_sampling import resolve_agent_sampling as _resolve_intent_smp
+        _int_cfg = ps.run_settings if ps.run_settings is not None else settings
         _int_temp, _int_think, _int_budget, _int_smp = _resolve_intent_smp(
-            intent_model, agent=agent, settings=settings, role=intent_agent,
+            intent_model, agent=agent, settings=_int_cfg, role=intent_agent,
         )
         parts, t = [], time.time()
         _think_open_i = False

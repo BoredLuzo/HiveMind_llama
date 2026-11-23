@@ -400,10 +400,24 @@ class ToolLoop:
                                 self.cfg.tool_phase, self.cfg.tool_mode, len(_phase_tools))
                     else:
                         _tools_payload = _phase_tools
+            from core.model_sampling import (
+                POSITIVE_REASONING_EFFORTS as _TL_POS_RE,
+                clamp_reasoning_effort_for_model as _tl_clamp_re,
+                normalize_reasoning_effort as _tl_norm_re,
+            )
+            _err_disabled = bool(getattr(self.cfg, "_thinking_disabled_by_error", False))
+            _tl_user_eff = _tl_norm_re((self.cfg.settings or {}).get("reasoning_effort"))
+            _tl_supports = model_supports_thinking(self.cfg.model)
+            if _err_disabled or _tl_user_eff == "none":
+                _want_think = False
+            elif _tl_user_eff in _TL_POS_RE:
+                _want_think = _tl_supports
+            else:
+                _want_think = bool(self.cfg.thinking) and (_tl_supports or bool(self.cfg.thinking))
             # N1: Model-aware sampling profile
             _smp = get_sampling_profile(
                 self.cfg.model,
-                thinking=bool(self.cfg.thinking),
+                thinking=_want_think,
                 settings=self.cfg.settings,
             )
             # IMAGES→PARTS (2026-10-04, live run D finding): the direct-chat
@@ -422,7 +436,7 @@ class ToolLoop:
             _presence_pen = resolve_presence_penalty(
                 _smp,
                 self.cfg.model,
-                thinking=bool(self.cfg.thinking),
+                thinking=_want_think,
                 settings=self.cfg.settings,
             )
             _payload = {
@@ -448,27 +462,29 @@ class ToolLoop:
                 "repetition_penalty": float(_smp.get("repetition_penalty", _smp.get("repeat_penalty", 1.0))),
                 "max_tokens": self.cfg.max_tokens,
             }
-            _eff = resolve_reasoning_effort(
-                self.cfg.settings, _smp, thinking=bool(self.cfg.thinking),
-                model_name=self.cfg.model,
-            )
-            _can_think = model_supports_thinking(self.cfg.model) or bool(self.cfg.thinking)
-            if _eff == "none" or (not self.cfg.thinking and not _eff) or not _can_think:
+            if not _want_think:
                 _payload["thinking"] = False
                 _payload["thinking_budget"] = 0
-                if _eff == "none":
+                if _tl_clamp_re(self.cfg.model, "none") == "none":
                     _payload["reasoning_effort"] = "none"
                 else:
                     _payload.pop("reasoning_effort", None)
                 _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
             else:
+                _eff = resolve_reasoning_effort(
+                    self.cfg.settings, _smp, thinking=True,
+                    model_name=self.cfg.model,
+                )
                 _payload["thinking"] = True
-                _payload["thinking_budget"] = self.cfg.thinking_budget
+                if int(self.cfg.thinking_budget or 0) > 0:
+                    _payload["thinking_budget"] = int(self.cfg.thinking_budget)
                 _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = True
                 if _smp.get("preserve_thinking"):
                     _payload["chat_template_kwargs"]["preserve_thinking"] = True
-                if _eff:
+                if _eff and _eff != "none":
                     _payload["reasoning_effort"] = _eff
+                else:
+                    _payload.pop("reasoning_effort", None)
             if _overrides:
                 _payload.update(_overrides)
 

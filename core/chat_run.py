@@ -967,6 +967,7 @@ async def _run_stream_locked(
         iterations=iterations, use_learned=use_learned,
         constraint_mode=constraint_mode, t_total=t_total,
         pipeline_soul=_pipeline_soul,
+        run_settings=_run_settings,
         carry={"emit": emit, "_done_event": _done_event},
     )
     async with contextlib.aclosing(_chat_memory_shortcuts(_sc_ps)) as _sc_stream:
@@ -1011,6 +1012,7 @@ async def _run_stream_locked(
         _step_skipped=_step_skipped,
         active_preset=active_preset,
         duo_config=duo_config,
+        run_settings=_run_settings,
         emit=emit,
         force_complexity=force_complexity,
         image_description=image_description,
@@ -1109,6 +1111,7 @@ async def _run_stream_locked(
             websearch_available=_WEBSEARCH_AVAILABLE, aborted=_aborted,
             emit=emit, done_event=_done_event,
             collect_done_metrics=_collect_done_metrics,
+            run_settings=_run_settings,
         )
         async with contextlib.aclosing(_chat_tools_route(_tool_ps)) as _tools_stream:
             async for _ev in _tools_stream:

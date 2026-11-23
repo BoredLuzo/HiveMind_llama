@@ -170,12 +170,12 @@ async def _run_tl_case(thinking: bool, settings_dict: dict) -> dict:
 _tl_off = asyncio.run(_run_tl_case(False, {"reasoning_effort": "auto"}))
 _tl_med = asyncio.run(_run_tl_case(False, {"reasoning_effort": "medium"}))
 check(
-    "ToolLoop emits reasoning_effort='none' on auto+thinking=False and overrides to medium without touching thinking_budget",
+    "ToolLoop emits reasoning_effort='none' on auto+thinking=False and overrides to medium without clamping thinking_budget=0",
     _tl_off.get("reasoning_effort") == "none"
     and _tl_off.get("thinking") is False
     and _tl_med.get("reasoning_effort") == "medium"
     and _tl_med.get("thinking") is True
-    and _tl_med.get("thinking_budget") == 0,
+    and "thinking_budget" not in _tl_med,
     repr((_tl_off.get("reasoning_effort"), _tl_med.get("reasoning_effort"), _tl_med.get("thinking_budget"))),
 )
 
@@ -1061,5 +1061,255 @@ check(
     and _pl_compat_off.get("reasoning_effort") == "none",
     repr((_cl_k2_max, _cl_k2_none, _cl_sp_med, _pl_k2_off.get("reasoning_effort"), _pl_sp_med.get("reasoning_effort"), _pl_compat_off.get("reasoning_effort"))),
 )
+
+
+# ── 13. Deep-audit regressions (P0/P1/P2 fixes) ──────────────────────────────
+from core.llm_transport import disable_thinking_in_payload as _dtip, _handle_tool_loop_http_error as _htlhe  # noqa: E402
+from core.duo.preflight import _apply_thinking_kwargs as _atk_da  # noqa: E402
+
+with mock.patch.object(_gm_tpl, "get_effective_reasoning_info", side_effect=_sim_ri):
+    # P0-1: disable_thinking_in_payload omits reasoning_effort on strict templates, keeps on empty model
+    _dt_k2 = _dtip({"model": "k2-sim", "thinking": True, "reasoning_effort": "high"})
+    _dt_empty = _dtip({"thinking": True, "reasoning_effort": "high"})
+
+    # P0-2 / P1-1: _apply_thinking_kwargs sets enable_thinking=True when ON and obeys user 'none' on strict/binary
+    _atk_bin_on = _atk_da({"model": "bin-sim", "thinking": True}, {}, True, True, settings={"reasoning_effort": "auto"})
+    _atk_k2_off = _atk_da({"model": "k2-sim", "thinking": True, "thinking_budget": 2000}, {"preserve_thinking": True}, True, True, settings={"reasoning_effort": "none"})
+
+    # P0-2 / P0-3 / P1-1 / P1-2: ToolLoop user intent ('none'/'on' on binary) + CallExpression error stays off
+    _da_tl_payloads: list[dict] = []
+
+    class _DaFakeClient:
+        def stream(self, _method: str, _url: str, json: dict | None = None, timeout=None):  # noqa: A002
+            _da_tl_payloads.append(dict(json or {}))
+            return _FakeStreamCtx(_FakeResp({"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}}))
+
+        async def post(self, url, json=None, **kw):
+            _da_tl_payloads.append(dict(json or {}))
+            return _FakeResp({"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}})
+
+    async def _run_da_tl(model_name, thinking, settings_d, budget=0):
+        _da_tl_payloads.clear()
+        _tl = ToolLoop(
+            config=ToolLoopConfig(
+                stream=False, max_rounds=1, model=model_name,
+                max_tokens=1200, thinking=thinking, thinking_budget=budget,
+                settings=settings_d, tools=[], require_tool_call=False,
+            ),
+            http_client=_DaFakeClient(), port=18080,
+        )
+        async for _ev in _tl.run([{"role": "user", "content": "hi"}]):
+            pass
+        return dict(_da_tl_payloads[0])
+
+    _tl_bin_none = asyncio.run(_run_da_tl("bin-sim", True, {"reasoning_effort": "none"}))
+    _tl_bin_on = asyncio.run(_run_da_tl("bin-sim", False, {"reasoning_effort": "on"}))
+    _tl_bin_bud = asyncio.run(_run_da_tl("bin-sim", False, {"reasoning_effort": "on"}, budget=2048))
+
+    # CallExpression HTTP 500 error recovery strips reasoning_effort & disables future rounds
+    _err_cfg = ToolLoopConfig(stream=False, max_rounds=2, max_post_attempts=3, retry_on_grammar_crash=True, model="k2-sim", thinking=True, thinking_budget=1000, settings={"reasoning_effort": "high"}, tools=[])
+    _err_loop = _SN(cfg=_err_cfg, state=_SN(total_rounds=0, parse_errors=0))
+    _err_resp = _SN(status_code=500, text="CallExpression grammar parse error", aread=mock.AsyncMock(return_value=b"CallExpression grammar parse error"))
+    _err_ev: list[dict] = []
+    _err_act, _err_pl = asyncio.run(_htlhe(
+        _err_loop, _err_resp,
+        {"model": "k2-sim", "messages": [], "thinking": True, "thinking_budget": 1000, "reasoning_effort": "high"},
+        0,
+        retry_allowed_fn=lambda *_a, **_kw: True,
+        inject_feedback_fn=lambda *_a, **_kw: None,
+        build_grammar_fn=lambda *_a: None,
+        grammar_compatible_fn=lambda *_a: False,
+        use_gbnf_grammar=False,
+        fdbk_injected=[False],
+        events_out=_err_ev,
+    ))
+
+    # P1-6: _build_payload thinking=None + 'none' on k2-sim, and thinking=True + 'off' alias on inkling
+    _bp_k2_none = _lc_tpl._build_payload([{"role": "user", "content": "hi"}], 0.7, 512, False, thinking=None, sampler={"reasoning_effort": "none"}, model="k2-sim")
+    _bp_ink_off = _lc_tpl._build_payload([{"role": "user", "content": "hi"}], 0.7, 512, False, thinking=True, sampler={"reasoning_effort": "off"}, model="inkling-2-mini-ud")
+
+check(
+    "Deep-audit P0-1/2/3 & P1-1/2/6: transport/ToolLoop/preflight/_build_payload guards hold",
+    "reasoning_effort" not in _dt_k2
+    and _dt_k2.get("chat_template_kwargs", {}).get("enable_thinking") is False
+    and _dt_empty.get("reasoning_effort") == "none"
+    and _atk_bin_on.get("chat_template_kwargs", {}).get("enable_thinking") is True
+    and _atk_k2_off.get("thinking") is False
+    and _atk_k2_off.get("thinking_budget") == 0
+    and "reasoning_effort" not in _atk_k2_off
+    and _tl_bin_none.get("thinking") is False
+    and _tl_bin_none.get("chat_template_kwargs", {}).get("enable_thinking") is False
+    and "reasoning_effort" not in _tl_bin_none
+    and _tl_bin_on.get("thinking") is True
+    and "thinking_budget" not in _tl_bin_on
+    and _tl_bin_bud.get("thinking_budget") == 2048
+    and _err_act == "retry"
+    and "reasoning_effort" not in _err_pl
+    and getattr(_err_cfg, "_thinking_disabled_by_error", False) is True
+    and "reasoning_effort" not in _bp_k2_none
+    and "reasoning_effort" not in _bp_ink_off,
+    repr((_dt_k2.get("reasoning_effort"), _atk_bin_on.get("chat_template_kwargs"), _atk_k2_off, _tl_bin_none.get("thinking"), _tl_bin_on.get("thinking"), _tl_bin_on.get("thinking_budget"), _err_pl.get("reasoning_effort"), _bp_k2_none.get("reasoning_effort"), _bp_ink_off.get("reasoning_effort"))),
+)
+
+# P0-4: Planner forces use_thinking=False & thinking_budget=0 on non-reasoning lfm2.5:24b even when caller passes use_thinking=True
+_pl_mod.httpx = _SN(
+    AsyncClient=_PlFakeClient,
+    Limits=_orig_pl_httpx.Limits,
+    Timeout=_orig_pl_httpx.Timeout,
+    HTTPError=_orig_pl_httpx.HTTPError,
+    ConnectError=_orig_pl_httpx.ConnectError,
+)
+try:
+    _pl_stream_payloads.clear()
+    _res_nr_auto = asyncio.run(_pl_mod.run_planner(
+        task="Implement widget", explore_ctx="ctx", planner_model="lfm2.5:24b",
+        planner_port=18081, use_thinking=True, thinking_budget=0,
+        settings={"reasoning_effort": "auto", "duo_planner_thinking_budget": 8000},
+    ))
+    _pl_nr_auto = dict(_pl_stream_payloads[0])
+
+    _pl_post_payloads.clear()
+    asyncio.run(_pl_mod.run_inloop_planner(
+        task="Follow-up", explore_ctx="ctx", planner_model="lfm2.5:24b",
+        planner_port=18081, use_thinking=True, thinking_budget=0,
+        settings={"reasoning_effort": "auto", "duo_planner_thinking_budget": 8000},
+    ))
+    _inloop_nr_auto = dict(_pl_post_payloads[0])
+finally:
+    _pl_mod.httpx = _orig_pl_httpx
+
+check(
+    "Deep-audit P0-4: Planner never forces thinking or 8000 budget on non-reasoning lfm2.5:24b",
+    _res_nr_auto.used_thinking is False
+    and _pl_nr_auto.get("thinking") is False
+    and _pl_nr_auto.get("thinking_budget") == 0
+    and _inloop_nr_auto.get("thinking") is False
+    and _inloop_nr_auto.get("thinking_budget") == 0,
+    repr((_res_nr_auto.used_thinking, _pl_nr_auto.get("thinking"), _pl_nr_auto.get("thinking_budget"), _inloop_nr_auto.get("thinking"), _inloop_nr_auto.get("thinking_budget"))),
+)
+
+# P1-10 & P1-8 & P2: Template parser edge cases, cache clear, non-reasoning auto budget=0, pip command split
+_ri_sq = _gm_tpl.inspect_template_reasoning("{%- if reasoning_effort not in ['low', 'medium', 'high'] %}{{ raise_exception('bad') }}{% endif %}")
+_ri_neg = _gm_tpl.inspect_template_reasoning("{%- if reasoning_effort not in ('none', 'off') %}{% if reasoning_effort == 'low' %}a{% elif reasoning_effort == 'max' %}b{% endif %}{% endif %}")
+_ri_cmt = _gm_tpl.inspect_template_reasoning("{# enable_thinking reasoning_effort #}hello", has_thinking=False)
+_ri_tb = _gm_tpl.inspect_template_reasoning("{%- set tb = 1024 if reasoning_effort == 'low' else 4096 %}{{ tb }}")
+_ri_eq_none = _gm_tpl.inspect_template_reasoning("{%- set t = false if reasoning_effort == 'none' else true %}{%- set d = true if reasoning_effort == 'high' else false %}")
+_gm_tpl._REASONING_INFO_CACHE["__test_clear_key__"] = ("", 0, "", 0, 0, None, {})
+_gm_tpl.clear_cache()
+_cache_cleared = "__test_clear_key__" not in _gm_tpl._REASONING_INFO_CACHE
+_nr_auto_tok = _calculate_thinking_tokens(
+    "lfm2.5:24b",
+    {"reasoning_effort": "auto", "agents": {"duo_coder": {"thinking_budget": 2048}}},
+    input_tokens=500, available_ctx=65000, agent_name="duo_coder",
+)
+from tools.handlers import exec_tools as _et_da  # noqa: E402
+_pip_chain_pkgs = _et_da._pip_packages_from_cmd("pip install pygame && echo done")
+_pip_unpiped_clean = ""
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _td_da:
+    _ws_da = Path(_td_da)
+    (_ws_da / ".venv" / "Scripts").mkdir(parents=True, exist_ok=True)
+    (_ws_da / ".venv" / "Scripts" / "python.exe").write_bytes(b"")
+    with mock.patch.object(_et_da, "_stream_proc", return_value=("Building wheel for mypkg ... copying errors.py\nSuccessfully installed mypkg-1.0\n", "", 0, False)):
+        _pip_unpiped_clean = asyncio.run(_et_da._inline_tool_run_bash({"cmd": ".venv/Scripts/python.exe -m pip install mypkg"}, _ws_da, None))
+
+check(
+    "Deep-audit P1-8/10 & P2: template parser, cache clear, non-reasoning auto budget, and pip hint guards hold",
+    _ri_sq["levels"] == ["low", "medium", "high"]
+    and _ri_sq["accepts_none_effort"] is False
+    and _ri_neg["levels"] == ["none", "low", "max"]
+    and _ri_cmt["mode"] == "none"
+    and _ri_tb["template_default"] != "max"
+    and "none" in _ri_eq_none["levels"]
+    and _ri_eq_none["accepts_none_effort"] is True
+    and _cache_cleared is True
+    and _nr_auto_tok == 0
+    and _pip_chain_pkgs == "pygame"
+    and "[HINT] pip fell back" not in _pip_unpiped_clean,
+    repr((_ri_sq, _ri_neg, _ri_cmt, _ri_tb, _ri_eq_none, _cache_cleared, _nr_auto_tok, _pip_chain_pkgs)),
+)
+
+# P1-13/14 & P2: Frontend Node VM deep-audit edge cases (k2 Off visible, 'on' on effort, 'none' on lfm, duo_planner model, revert cb)
+_node_da = r"""
+const fs = require('fs');
+const vm = require('vm');
+const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
+const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
+const fnSrc = appSrc.slice(s, e);
+function makeCls(init) { const set = new Set(init || []); return { add(c){set.add(c);}, remove(c){set.delete(c);}, toggle(c,f){if(f===undefined){set.has(c)?set.delete(c):set.add(c);}else if(f)set.add(c);else set.delete(c);}, contains(c){return set.has(c);} }; }
+const opts = ['auto', 'none', 'on', 'minimal', 'low', 'medium', 'high', 'max'].map(l => ({
+  _lvl: l, hidden: false, disabled: false, classList: makeCls(['effort-opt']),
+  _a: { 'data-effort': l }, getAttribute(k){return this._a[k]||null;}, setAttribute(k,v){this._a[k]=String(v);}
+}));
+const trig = { _a: {}, title: '', setAttribute(k,v){this._a[k]=String(v);}, getAttribute(k){return this._a[k]||null;}, removeAttribute(k){delete this._a[k];} };
+const lblEl = { textContent: '' }, ctxEl = { textContent: '' }, ovrTxt = { textContent: '' }, ovrReset = { hidden: true }, emptyEl = { hidden: true, textContent: '' };
+const ovrEl = { hidden: true, className: 'effort-menu-ovr' };
+const menu = { hidden: true, querySelectorAll(sel){ return sel === '.effort-opt' ? opts : []; } };
+function mkSlot(k){ return { _ch: [], getAttribute(a){return a==='data-agent-override'?k:null;}, set innerHTML(v){if(!v)this._ch=[];}, querySelector(){return this._ch[0]||null;}, appendChild(c){this._ch.push(c);} }; }
+const slots = [mkSlot('duo'), mkSlot('duo_planner')];
+let lastRevert = null;
+const ctx = {
+  S: {
+    reasoningEffort: 'auto', mode: 'code_duo', duoCoderModel: 'inkling-2-mini-ud', duoPlannerModel: 'lfm2.5:24b',
+    duoAgenticThinking: true, duoToolThinkingAlways: false, duoToolThinkingMode: 'on_fail',
+    modelProfiles: {
+      'k2-horizon:7b': { thinking: true, reasoning_mode: 'effort', reasoning_levels: ['low', 'medium', 'high'], reasoning_template_source: 'gguf', reasoning_effort: 'medium' },
+      'inkling-2-mini-ud': { thinking: true, reasoning_mode: 'effort', reasoning_levels: ['none', 'minimal', 'low', 'medium', 'high', 'max'], reasoning_template_source: 'gguf', reasoning_effort: 'medium' },
+      'lfm2.5:24b': { thinking: false, reasoning_mode: 'none', reasoning_levels: [], reasoning_template_source: 'gguf', reasoning_effort: null },
+    },
+    currentAssignments: {}, agentsCfg: {},
+  },
+  document: {
+    createElement(tag){ return { tag, type: '', className: '', title: '', textContent: '', setAttribute(){} }; },
+    getElementById(id){ return ({ 'effort-trigger': trig, 'effort-trig-lbl': lblEl, 'effort-menu-ctx': ctxEl, 'effort-menu-ovr': ovrEl, 'effort-menu-ovr-txt': ovrTxt, 'effort-ovr-reset-btn': ovrReset, 'effort-menu-empty': emptyEl, 'effort-menu': menu })[id] || null; },
+    querySelectorAll(sel){ return sel === '.reasoning-override-slot' ? slots : []; },
+  },
+  _shortModel: m => m,
+  _postSettingsFF: (_p, cb) => { lastRevert = cb; },
+};
+vm.createContext(ctx);
+vm.runInContext(fnSrc, ctx);
+// 1. duo_planner uses duoPlannerModel (lfm2.5 -> n/a), duo uses duoCoderModel (inkling)
+ctx.setReasoningEffort('high');
+const duoBadges = slots.map(s => s._ch[0] && ({ txt: s._ch[0].textContent, cls: s._ch[0].className }));
+// 2. Revert callback restores previous effort ('auto')
+const revertIsFn = typeof lastRevert === 'function';
+if (revertIsFn) lastRevert();
+const afterRevert = ctx.S.reasoningEffort;
+// 3. 'on' carried onto Inkling effort model maps to Medium (from On)
+ctx.setReasoningEffort('on');
+const inkOn = { label: lblEl.textContent, active: opts.filter(o => o.classList.contains('active')).map(o => o._lvl) };
+// 4. k2-horizon keeps Off visible and selectable
+ctx.S.duoCoderModel = 'k2-horizon:7b';
+ctx.setReasoningEffort('none');
+const k2Off = { label: lblEl.textContent, vis: opts.filter(o => !o.hidden).map(o => o._lvl), active: opts.filter(o => o.classList.contains('active')).map(o => o._lvl) };
+// 5. 'none' on non-reasoning lfm2.5 shows Off (n/a), muted banner, visible Reset button
+ctx.S.duoCoderModel = 'lfm2.5:24b';
+ctx._renderReasoningEffortUI('none');
+const lfmOff = { label: lblEl.textContent, ovrClass: ovrEl.className, resetHidden: ovrReset.hidden, badge: slots[0]._ch[0] && ({ txt: slots[0]._ch[0].textContent, cls: slots[0]._ch[0].className }) };
+console.log(JSON.stringify({ duoBadges, revertIsFn, afterRevert, inkOn, k2Off, lfmOff }));
+"""
+_nda = subprocess.run(["node", "-e", _node_da], cwd=_ROOT, capture_output=True, text=True)
+_nda_ok = _nda.returncode == 0
+if _nda_ok:
+    _ndaj = json.loads(_nda.stdout.strip())
+    _nda_ok = (
+        _ndaj["duoBadges"][0]["txt"] == "Composer: High \u00d7"
+        and _ndaj["duoBadges"][1]["txt"] == "Composer: High (n/a) \u00d7"
+        and "muted" in _ndaj["duoBadges"][1]["cls"]
+        and _ndaj["revertIsFn"] is True
+        and _ndaj["afterRevert"] == "auto"
+        and _ndaj["inkOn"]["label"] == "Medium (from On)"
+        and _ndaj["inkOn"]["active"] == ["medium"]
+        and "none" in _ndaj["k2Off"]["vis"]
+        and _ndaj["k2Off"]["label"] == "Off"
+        and _ndaj["k2Off"]["active"] == ["none"]
+        and _ndaj["lfmOff"]["label"] == "Off (n/a)"
+        and _ndaj["lfmOff"]["ovrClass"] == "effort-menu-ovr muted"
+        and _ndaj["lfmOff"]["resetHidden"] is False
+        and _ndaj["lfmOff"]["badge"]["txt"] == "Composer: Off (n/a) \u00d7"
+        and "muted" in _ndaj["lfmOff"]["badge"]["cls"]
+    )
+check("Deep-audit P1-13/14 & P2: frontend k2 Off, On-on-effort, LFM Off reset, duo_planner & revert callback hold", _nda_ok, _nda.stdout.strip() or _nda.stderr.strip())
 
 sys.exit(h.finish("reasoning_effort_and_pip_pipe"))

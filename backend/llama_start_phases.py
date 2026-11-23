@@ -1670,17 +1670,29 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     # specific server instance, so it must only fire for the model it was
     # set for — a plain consume-once flag landed on whichever model loaded
     # first (e.g. the planner) and left the coder server at template default.
+    from .llama_manager_utils import _nm as _nm_ro
     _inst_ro = getattr(self, "__dict__", {}).get("_reasoning_override")
     _cls_ro = getattr(type(self), "_reasoning_override", None)
     _ro_for_model = None
-    if isinstance(_inst_ro, dict) and model in _inst_ro:
-        _ro_for_model = _inst_ro.pop(model, None)
-    elif isinstance(_cls_ro, dict) and model in _cls_ro:
-        _ro_for_model = _cls_ro.pop(model, None)
-    if isinstance(_inst_ro, dict) and not _inst_ro:
-        self._reasoning_override = None
-    if isinstance(_cls_ro, dict) and not _cls_ro:
-        type(self)._reasoning_override = None
+    _norm_ro_m = _nm_ro(model)
+    for _is_inst, _ro_map in ((True, _inst_ro), (False, _cls_ro)):
+        if isinstance(_ro_map, dict):
+            _hit_k = None
+            if model in _ro_map:
+                _hit_k = model
+            else:
+                for _rk in list(_ro_map.keys()):
+                    if _nm_ro(_rk) == _norm_ro_m:
+                        _hit_k = _rk
+                        break
+            if _hit_k is not None:
+                _ro_for_model = _ro_map.pop(_hit_k, None)
+                if not _ro_map:
+                    if _is_inst:
+                        self._reasoning_override = None
+                    else:
+                        type(self)._reasoning_override = None
+                break
     if _ro_for_model is not None:
         cmd += ["--reasoning", "on" if _ro_for_model else "off"]
         logger.info(f"--reasoning {'on' if _ro_for_model else 'off'} for {model} (user override)")
@@ -2561,19 +2573,27 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             slot._n_parallel = n_parallel
             slot._jinja      = "--jinja" in cmd
             _r_flag_val = None
-            for _ci in range(len(cmd) - 2, -1, -1):
-                if cmd[_ci] == "--reasoning":
+            for _ci in range(len(cmd) - 1, -1, -1):
+                _tok = str(cmd[_ci]).strip()
+                if _tok == "--reasoning" and _ci + 1 < len(cmd):
                     _rv = str(cmd[_ci + 1]).strip().lower()
-                    if _rv in ("on", "true", "1", "auto"):
-                        _r_flag_val = True
-                    elif _rv in ("off", "false", "0"):
-                        _r_flag_val = False
+                elif _tok.startswith("--reasoning="):
+                    _rv = _tok.split("=", 1)[1].strip().lower()
+                else:
+                    continue
+                if _rv in ("on", "true", "1", "auto"):
+                    _r_flag_val = True
+                elif _rv in ("off", "false", "0"):
+                    _r_flag_val = False
+                break
+            for _ci in range(len(cmd) - 1, -1, -1):
+                _tok = str(cmd[_ci]).strip()
+                if _tok == "--reasoning-budget" and _ci + 1 < len(cmd) and str(cmd[_ci + 1]).strip() == "0":
+                    _r_flag_val = False
                     break
-            if _r_flag_val is None:
-                for _ci in range(len(cmd) - 2, -1, -1):
-                    if cmd[_ci] == "--reasoning-budget" and str(cmd[_ci + 1]).strip() == "0":
-                        _r_flag_val = False
-                        break
+                if _tok == "--reasoning-budget=0":
+                    _r_flag_val = False
+                    break
             slot._reasoning_on = _r_flag_val
 
             _wait_done = False

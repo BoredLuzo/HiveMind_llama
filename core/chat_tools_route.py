@@ -82,6 +82,7 @@ class _ChatToolsRouteState:
     emit: Callable = lambda *a, **kw: None      # async emit(event) -> str
     done_event: Callable = lambda *a, **kw: {}
     collect_done_metrics: Callable = lambda: {}
+    run_settings: dict | None = None
     stop: bool = False
 
 
@@ -170,7 +171,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                     require_tool_call=False,
                     include_websearch=_tool_ws,
                     include_git=_tool_git,
-                    settings=settings,
+                    settings=(ps.run_settings if ps.run_settings is not None else settings),
                     read_timeout_s=_tool_read_timeout_s,
                 ),
                 http_client=_tc, port=_tool_port,

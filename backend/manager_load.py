@@ -88,14 +88,59 @@ def _wants_jinja(model: str, model_base: str) -> bool:
         return False
 
 
-def _wants_reasoning_on(mgr: object, model: str) -> bool:
-    """Return True when the user/run explicitly requested --reasoning on for model."""
+def _get_reasoning_override(mgr: object, model: str) -> bool | None:
+    """Return explicit True/False --reasoning override for model, or None if unset."""
+    _norm_m = _nm(model)
     _inst_ro = getattr(mgr, "__dict__", {}).get("_reasoning_override")
     _cls_ro = getattr(type(mgr), "_reasoning_override", None)
     for _ro in (_inst_ro, _cls_ro):
-        if isinstance(_ro, dict) and _ro.get(model) is True:
-            return True
-    return False
+        if isinstance(_ro, dict):
+            if model in _ro and _ro[model] is not None:
+                return bool(_ro[model])
+            for _rk, _rv in _ro.items():
+                if _rv is not None and _nm(_rk) == _norm_m:
+                    return bool(_rv)
+    return None
+
+
+def _wants_reasoning_on(mgr: object, model: str) -> bool:
+    """Return True when the user/run explicitly requested --reasoning on for model."""
+    return _get_reasoning_override(mgr, model) is True
+
+
+def set_reasoning_override(mgr: object, model: str, enabled: bool) -> None:
+    """Merge a per-model --reasoning override into mgr._reasoning_override without clobbering others."""
+    if not model:
+        return
+    _cur = getattr(mgr, "__dict__", {}).get("_reasoning_override")
+    _d = dict(_cur) if isinstance(_cur, dict) else {}
+    _norm_m = _nm(model)
+    for _k in [k for k in _d if _nm(k) == _norm_m and k != model]:
+        _d.pop(_k, None)
+    _d[model] = bool(enabled)
+    setattr(mgr, "_reasoning_override", _d)
+
+
+def clear_reasoning_override(mgr: object, model: str) -> None:
+    """Remove any consumed per-model --reasoning override for model."""
+    if not model:
+        return
+    _norm_m = _nm(model)
+    _inst_ro = getattr(mgr, "__dict__", {}).get("_reasoning_override")
+    if isinstance(_inst_ro, dict):
+        for _k in [k for k in _inst_ro if k == model or _nm(k) == _norm_m]:
+            _inst_ro.pop(_k, None)
+        if not _inst_ro:
+            setattr(mgr, "_reasoning_override", None)
+    _cls_ro = getattr(type(mgr), "_reasoning_override", None)
+    if isinstance(_cls_ro, dict):
+        for _k in [k for k in _cls_ro if k == model or _nm(k) == _norm_m]:
+            _cls_ro.pop(_k, None)
+        if not _cls_ro:
+            try:
+                setattr(type(mgr), "_reasoning_override", None)
+            except (AttributeError, TypeError):
+                pass
 
 
 def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
@@ -744,14 +789,39 @@ class LlamaLoadMixin:
                         )
                         else self._active_slot_for(model)
                     )
+                    _kill_reason_slot = None
                     if slot is not None:
                         if not slot._loading:
-                            slot.touch()
-                            if pin:
-                                slot.set_pinned(True)
-                                slot._idle_timeout = None
-                            return slot
-                        break
+                            _in_fl_load = (
+                                slot.in_flight_active()
+                                if hasattr(slot, "in_flight_active")
+                                else int(getattr(slot, "in_flight", 0) or 0) > 0
+                            )
+                            if (
+                                _wants_reasoning_on(self, model)
+                                and getattr(slot, "_reasoning_on", None) is False
+                                and not _in_fl_load
+                            ):
+                                logger.info(
+                                    f"load: {model} reasoning mismatch (--reasoning off -> on) — reload."
+                                )
+                                self._metric_inc("evictions_total")
+                                slot._lifecycle_gen = int(getattr(slot, "_lifecycle_gen", 0)) + 1
+                                slot._loading = True
+                                slot.model = None
+                                _kill_reason_slot = slot
+                            else:
+                                slot.touch()
+                                if pin:
+                                    slot.set_pinned(True)
+                                    slot._idle_timeout = None
+                                clear_reasoning_override(self, model)
+                                return slot
+                        if _kill_reason_slot is None:
+                            break
+                if _kill_reason_slot is not None:
+                    await self._kill_claimed_slot(_kill_reason_slot)
+                    continue
                 slot, _owned_gen = await self._claim_free_or_evict_slot(
                     model, pin=pin, idle_timeout=keep_alive_seconds,
                 )
@@ -1082,11 +1152,15 @@ class LlamaLoadMixin:
                                 _ctx_short = slot._num_ctx > 0 and _req_ctx > slot._num_ctx
                                 _par_short = (getattr(slot, "_n_parallel", 1) > 0
                                               and n_parallel > getattr(slot, "_n_parallel", 1))
-                                if _busy and (_ctx_short or _par_short):
+                                _reason_short = (
+                                    _wants_reasoning_on(self, model)
+                                    and getattr(slot, "_reasoning_on", None) is False
+                                )
+                                if (_busy and (_ctx_short or _par_short)) or (_in_flight and _reason_short):
                                     logger.warning(
                                         "ensure_loaded: %s busy (in-flight/pinned) - reusing slot "
-                                        "instead of reload (ctx %d<%d, parallel_short=%s)",
-                                        model, slot._num_ctx, _req_ctx, _par_short,
+                                        "instead of reload (ctx %d<%d, parallel_short=%s, reasoning_short=%s)",
+                                        model, slot._num_ctx, _req_ctx, _par_short, _reason_short,
                                     )
                                 if _ctx_short and not _busy:
                                     logger.info(
@@ -1110,11 +1184,11 @@ class LlamaLoadMixin:
                                     slot._loading = True
                                     slot.model = None
                                     _kill_before_retry = slot
-                                elif (
-                                    _wants_reasoning_on(self, model)
-                                    and getattr(slot, "_reasoning_on", None) is False
-                                    and not _busy
-                                ):
+                                elif _reason_short and not _in_flight:
+                                    # Allow idle pinned slots (e.g. pin_direct_after_response) to reload --reasoning off -> on,
+                                    # preserving their pinned state after reload.
+                                    if bool(getattr(slot, "pinned", False)):
+                                        pin = True
                                     logger.info(
                                         f"ensure_loaded: {model} reasoning mismatch (--reasoning off -> on) — reload."
                                     )
@@ -1148,6 +1222,7 @@ class LlamaLoadMixin:
                             if pin and not slot.pinned:
                                 slot.set_pinned(True)
                                 slot._idle_timeout = None
+                            clear_reasoning_override(self, model)
                             return slot.port
                         logger.warning(
                             "ensure_loaded: %s port %d dead despite loaded slot - reload.",
@@ -1203,6 +1278,8 @@ class LlamaLoadMixin:
                     active_slot._entry_load_seq = _my_load_seq
                     if hasattr(active_slot, "_ready_event"):
                         active_slot._ready_event.clear()
+                    if _saved_ro_for_retry is not None:
+                        set_reasoning_override(self, model, _saved_ro_for_retry)
                     _owned_gen = new_gen
                     return new_gen
 
@@ -1223,6 +1300,7 @@ class LlamaLoadMixin:
                     if isinstance(old_ev, asyncio.Event):
                         active_slot._ready_event = asyncio.Event()
 
+            _saved_ro_for_retry = _get_reasoning_override(self, model)
             try:
                 await self._enforce_vram_budget(slot)
 
@@ -1481,7 +1559,7 @@ class LlamaLoadMixin:
                                 and n_parallel > getattr(slot, "_n_parallel", 1)
                             )
                             or (
-                                not _busy
+                                not _in_flight
                                 and _wants_reasoning_on(self, model)
                                 and getattr(slot, "_reasoning_on", None) is False
                             )
@@ -1500,6 +1578,7 @@ class LlamaLoadMixin:
                         continue
 
                 slot.touch()
+                clear_reasoning_override(self, model)
                 return slot.port
             except BaseException:
                 if _owned_gen is not None and not _slot_aborted(_owned_gen):

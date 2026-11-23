@@ -416,18 +416,24 @@ function _modelSupportsThinkingUI(modelName) {
   return _getModelReasoningMetaUI(modelName).mode !== 'none';
 }
 
-function _resolveMappedEffortUI(rawEff, rMode, availLevels) {
+function _resolveMappedEffortUI(rawEff, rMode, availLevels, profEff) {
   if (rawEff === 'auto') return 'auto';
   if (rMode === 'none') return '';
   if (rMode === 'binary') return rawEff === 'none' ? 'none' : 'on';
-  if (rawEff === 'on') return 'on';
-  if (availLevels.indexOf(rawEff) >= 0) return rawEff;
+  if (rawEff === 'none') return 'none';
   var scale = { minimal: 0, low: 1, medium: 2, high: 3, max: 4 };
   var pos = ['minimal', 'low', 'medium', 'high', 'max'].filter(function(l) {
     return availLevels.indexOf(l) >= 0;
   });
+  if (rawEff === 'on') {
+    if (profEff && profEff !== 'auto' && profEff !== 'on' && profEff !== 'none') {
+      return _resolveMappedEffortUI(profEff, rMode, availLevels);
+    }
+    if (pos.indexOf('medium') >= 0) return 'medium';
+    return pos.length ? pos[Math.floor(pos.length / 2)] : 'on';
+  }
+  if (availLevels.indexOf(rawEff) >= 0) return rawEff;
   if (!pos.length) return '';
-  if (rawEff === 'none') return '';
   var targetRank = scale[rawEff] !== undefined ? scale[rawEff] : 2;
   var best = pos[0];
   var bestDist = Math.abs(scale[best] - targetRank);
@@ -446,6 +452,13 @@ function _targetModelForEffortKey(agentKey) {
   if (agentKey === 'duo') {
     return S.duoCoderModel || ((S.agentsCfg && S.agentsCfg.duo_coder && S.agentsCfg.duo_coder.model) || '');
   }
+  if (agentKey === 'duo_planner') {
+    return S.duoPlannerModel
+      || (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model)
+      || (S.agentsCfg && S.agentsCfg.duo_planner && S.agentsCfg.duo_planner.model)
+      || S.duoCoderModel
+      || '';
+  }
   return (S.currentAssignments && S.currentAssignments[agentKey] && S.currentAssignments[agentKey].model)
     || (S.agentsCfg && S.agentsCfg[agentKey] && S.agentsCfg[agentKey].model)
     || '';
@@ -457,7 +470,9 @@ function _getActiveEffortState(v) {
   if (mode === 'code_duo') {
     m = S.duoCoderModel || ((S.agentsCfg && S.agentsCfg.duo_coder && S.agentsCfg.duo_coder.model) || '');
   } else if (mode === 'pipeline') {
-    m = (S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.model) || '';
+    m = (S.currentAssignments && S.currentAssignments.synthesizer && S.currentAssignments.synthesizer.model)
+      || (S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.model)
+      || '';
   } else {
     m = S._lastDirectRunModel
       || (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model)
@@ -470,8 +485,8 @@ function _getActiveEffortState(v) {
   var supportsThinking = (rMode !== 'none');
   var availLevels = meta.levels;
   var eff = _normalizeReasoningEffort(v !== undefined ? v : S.reasoningEffort);
-  var mappedEff = _resolveMappedEffortUI(eff, rMode, availLevels);
-  var isSkippedOnModel = (!supportsThinking && eff !== 'auto' && eff !== 'none');
+  var mappedEff = _resolveMappedEffortUI(eff, rMode, availLevels, meta.profEff);
+  var isSkippedOnModel = (!supportsThinking && eff !== 'auto');
   var isOverriding = (supportsThinking && eff !== 'auto');
   var toggleOff = false;
   if (mode === 'code_duo') {
@@ -505,7 +520,7 @@ function _getActiveEffortState(v) {
 
   var trigLabel;
   if (!supportsThinking) {
-    trigLabel = (eff !== 'auto' && eff !== 'none')
+    trigLabel = (eff !== 'auto')
       ? ((_REASONING_EFFORT_LABELS[eff] || eff) + ' (n/a)')
       : 'No reasoning';
   } else if (eff === 'auto') {
@@ -606,9 +621,9 @@ function _syncReasoningOverrideBadges() {
     var tModel = _targetModelForEffortKey(key);
     var tMeta = _getModelReasoningMetaUI(tModel);
     var sup = tMeta.mode !== 'none';
-    var tMapped = _resolveMappedEffortUI(eff, tMeta.mode, tMeta.levels);
+    var tMapped = _resolveMappedEffortUI(eff, tMeta.mode, tMeta.levels, tMeta.profEff);
     var lbl;
-    if (!sup && eff !== 'none') {
+    if (!sup && eff !== 'auto') {
       lbl = baseLbl + ' (n/a) \u00d7';
     } else if (sup && tMapped && tMapped !== eff) {
       lbl = baseLbl + ' \u2192 ' + (_REASONING_EFFORT_LABELS[tMapped] || tMapped) + ' \u00d7';
@@ -624,8 +639,8 @@ function _syncReasoningOverrideBadges() {
       slot.innerHTML = '';
       slot.appendChild(btn);
     }
-    btn.className = (!sup && eff !== 'none') ? 'reasoning-override-badge muted' : 'reasoning-override-badge';
-    btn.title = (!sup && eff !== 'none')
+    btn.className = (!sup && eff !== 'auto') ? 'reasoning-override-badge muted' : 'reasoning-override-badge';
+    btn.title = (!sup && eff !== 'auto')
       ? 'Skipped on this non-reasoning model \u2014 click to reset composer to Auto'
       : 'Overridden by composer Thinking effort \u2014 click to reset to Auto';
     btn.textContent = lbl;
@@ -714,10 +729,10 @@ function _renderReasoningEffortUI(v) {
       for (var i = 0; i < opts.length; i++) {
         var b = opts[i];
         var optEff = b.getAttribute('data-effort');
-        var visible = st.supportsThinking && (optEff === 'auto' || st.availLevels.indexOf(optEff) >= 0);
+        var visible = st.supportsThinking && (optEff === 'auto' || optEff === 'none' || st.availLevels.indexOf(optEff) >= 0);
         var activeOpt = visible && (
           optEff === eff
-          || (eff !== 'auto' && st.availLevels.indexOf(eff) < 0 && optEff === st.mappedEff)
+          || (eff !== 'auto' && optEff === st.mappedEff)
         );
         b.hidden = !visible;
         b.disabled = !visible;
@@ -733,12 +748,16 @@ function _renderReasoningEffortUI(v) {
 }
 
 function setReasoningEffort(level) {
+  var prev = S.reasoningEffort || 'auto';
   var eff = _normalizeReasoningEffort(level);
   S.reasoningEffort = eff;
   closeReasoningEffortMenu();
   _renderReasoningEffortUI(eff);
   if (typeof _postSettingsFF === 'function') {
-    _postSettingsFF({ reasoning_effort: eff }, 'Reasoning effort');
+    _postSettingsFF({ reasoning_effort: eff }, function() {
+      S.reasoningEffort = prev;
+      _renderReasoningEffortUI(prev);
+    });
   } else if (typeof postSettings === 'function') {
     postSettings({ reasoning_effort: eff });
   }
@@ -1179,6 +1198,7 @@ async function loadAgentMap() {
     S.currentAssignments = d.assignments || {};
     renderAgentMap();
     if (typeof updateModelsChip === 'function') updateModelsChip();
+    if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   } catch(e) {
     buildAgentMapFromSettings();
   }
@@ -1192,6 +1212,7 @@ function buildAgentMapFromSettings() {
   });
   renderAgentMap();
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 }
 
 const AGENT_COLORS = {
@@ -1328,6 +1349,7 @@ function showAutomapEvent(taskType, assignments) {
   S._lastDirectRunModel = '';
   renderAgentMap(changed);
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   changed.forEach(function(agent) {
     updateAgentDropdownAutomap(agent, assignments[agent]);
   });
@@ -2008,6 +2030,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
       const cardsEl = document.getElementById('agent-cards');
       if (cardsEl) cardsEl.innerHTML = '<div class="empty">No agent configuration from server.</div>';
     }
+    if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 
     // initialize g-model with the first agent
     const g = document.getElementById('g-model');
@@ -2321,6 +2344,7 @@ function onDuoPlannerModelChange(model) {
   updateDuoImageUI();
   if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 }
 
 function syncEngineTwinInputs(peerId, settingKey, rawVal, isBool) {
@@ -2357,6 +2381,7 @@ function _applyDuoModelChange(agentKey, stateField, settingKey, model, extraPatc
   if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 }
 
 function onDuoCoderModelChange(model) {
@@ -4082,9 +4107,9 @@ function renderAgentCards(agents) {
     div.appendChild(btn);
 
     c.appendChild(div);
-    if (typeof _syncReasoningOverrideBadges === 'function') _syncReasoningOverrideBadges();
     } catch(cardErr) { console.error('[renderAgentCards] error for agent', entries[i] && entries[i][0], cardErr); }
   }
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   // fill all selects with the current models (if S.models is already filled)
   refreshAllSelects();
   // update the agent map after rendering
@@ -4669,6 +4694,7 @@ async function newChat() {
   S.currentChatMessages = [];
   S._lastDirectRunModel = '';
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   setPauseBtnState('idle');
   setStopBtnState('idle');
   stopAskUserCountdown();
@@ -5528,6 +5554,7 @@ function startAgent(name, model, role, isRepair) {
   if ((name === 'Answer' || name === 'Direct') && model) {
     S._lastDirectRunModel = model;
     if (typeof updateModelsChip === 'function') updateModelsChip();
+    if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   }
   // THINK-BLOCK-FIX (2026-08-19): new agent → discard the old think-block reference.
   // Otherwise the next agent with thinking (e.g. Direct after Vision-Agent) streams into
@@ -6660,6 +6687,7 @@ function _tokenFlushLoop() {
         thinkBlockEl.classList.add('live');
         if (thinkBlockEl.dataset.userToggled !== '1') thinkBlockEl.classList.add('open');
       }
+      if (thinkBodyEl) thinkBodyEl._followBottom = true;
     } else if (S.curAgent._inThink) {
       S.curAgent._thinkBuf = combined;
       if (thinkBodyEl) {
@@ -7395,14 +7423,26 @@ function _chatEnsureFollowListener() {
   var c = document.getElementById('chat');
   if (!c || c._followWired) return;
   c._followWired = true;
+  c._userUpTs = 0;
   c.addEventListener('scroll', function() {
-    _chatFollow = (c.scrollHeight - (c.scrollTop + c.clientHeight)) <= 60;
+    var dist = c.scrollHeight - (c.scrollTop + c.clientHeight);
+    if (c._progScrollGuard && c.scrollTop >= (c._progScrollTarget || 0) - 2) {
+      c._progScrollGuard = false;
+      return;
+    }
+    c._progScrollGuard = false;
+    if (!_chatFollow) {
+      if (dist <= 24 && (Date.now() - (c._userUpTs || 0)) > 180) _chatFollow = true;
+    } else if (dist > 60) {
+      _chatFollow = false;
+    }
   }, { passive: true });
   c.addEventListener('wheel', function(e) {
     if (!e || e.deltaY >= 0) return;
     var _inner = e.target && e.target.closest ? e.target.closest('.think-body, #planner-think-content') : null;
     if (_inner && _inner.scrollTop > 0) return;
     _chatFollow = false;
+    c._userUpTs = Date.now();
   }, { passive: true });
 }
 
@@ -7417,7 +7457,9 @@ function scrollBtmIfNearBottom(thresholdPx) {
         if (!_chatFollow) return;
         const c = document.getElementById('chat');
         if (!c) return;
+        c._progScrollGuard = true;
         c.scrollTop = c.scrollHeight;
+        c._progScrollTarget = c.scrollTop;
       });
     });
   }
@@ -7427,12 +7469,32 @@ function _elEnsureFollowListener(el) {
   if (!el || el._followWired) return;
   el._followWired = true;
   el._followBottom = true;
+  el._userUpTs = 0;
   if (typeof el.addEventListener !== 'function') return;
   el.addEventListener('scroll', function() {
-    el._followBottom = (el.scrollHeight - (el.scrollTop + el.clientHeight)) <= 24;
+    var dist = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    if (el._progScrollGuard && el.scrollTop >= (el._progScrollTarget || 0) - 2) {
+      el._progScrollGuard = false;
+      return;
+    }
+    el._progScrollGuard = false;
+    if (el._followBottom === false) {
+      if (dist <= 12 && (Date.now() - (el._userUpTs || 0)) > 180) el._followBottom = true;
+    } else if (dist > 24) {
+      el._followBottom = false;
+    }
   }, { passive: true });
   el.addEventListener('wheel', function(e) {
-    if (e && e.deltaY < 0) el._followBottom = false;
+    if (e && e.deltaY < 0) {
+      el._followBottom = false;
+      el._userUpTs = Date.now();
+    }
+  }, { passive: true });
+  el.addEventListener('pointerdown', function() {
+    el._userUpTs = Date.now();
+  }, { passive: true });
+  el.addEventListener('touchstart', function() {
+    el._userUpTs = Date.now();
   }, { passive: true });
 }
 
@@ -7442,7 +7504,11 @@ function _scrollElToBottomSoon(el) {
   if (el._followBottom === false || el._scrollRaf) return;
   el._scrollRaf = requestAnimationFrame(function() {
     el._scrollRaf = null;
-    if (_chatFollow && el._followBottom !== false && el.isConnected) el.scrollTop = el.scrollHeight;
+    if (_chatFollow && el._followBottom !== false && el.isConnected) {
+      el._progScrollGuard = true;
+      el.scrollTop = el.scrollHeight;
+      el._progScrollTarget = el.scrollTop;
+    }
   });
 }
 
@@ -11196,6 +11262,7 @@ async function saveModelDefaults() {
     var d = await res.json();
     if (res.ok && d.ok) {
       if (stEl) stEl.textContent = 'Saved defaults (' + (d.file || model) + ').';
+      if (typeof loadModels === 'function') await loadModels();
       if (typeof loadSettings === 'function') await loadSettings();
       await loadModelDefaults(model);
     } else {
@@ -12829,6 +12896,7 @@ function onChunkingChange(persist) {
         // the server enforces thinking during chunking automatically (see server.py)
         // show the per-chunk test feedback
         if (tfChunkRow) tfChunkRow.style.display = '';
+        if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
     } else {
         // Chunking OFF → disable + dim per-chunk thinking
         S.duoThinkingPerChunk = false;
@@ -12853,6 +12921,7 @@ function onChunkingChange(persist) {
             if (_persist) postSettings({_thinking_before_chunking: null}); // clear persisted backup
         }
         if (thinkHint) thinkHint.textContent = 'Planner thinks through the task before output';
+        if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
         // Test-Feedback pro Chunk ausblenden (nur bei Chunking relevant)
         S.duoTestFeedbackChunk = false;
         if (tfChunkToggle) { tfChunkToggle.checked = false; }
@@ -16774,7 +16843,13 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
       // labels without checkbox markup; "Tool rounds", "Chunking",
       // "Until Finished" etc. were not searched at all.
       panel.querySelectorAll('.opt-name').forEach(function(opt) {
-        var t = (opt.textContent || '').replace(/\s+/g, ' ').trim();
+        var t = '';
+        opt.childNodes.forEach(function(n) {
+          if (n.nodeType === 3) { t += n.textContent; return; }
+          if (n.nodeType === 1 && n.classList && n.classList.contains('reasoning-override-slot')) return;
+          if (n.nodeType === 1) t += n.textContent;
+        });
+        t = t.replace(/\s+/g, ' ').trim();
         if (t.length >= 3 && !_dead(opt)) _push(pid, t, opt, 'Duo option');
       });
       // VRAM TTL / keep-alive row (2026-11-01): "VRAM TTL" is the label, the
@@ -16818,12 +16893,25 @@ function _updateDuoRoleStatus(elId, label, model, opts) {
               }, 'soul ' + lbl.toLowerCase());
       });
       panel.querySelectorAll('button[title]').forEach(function(b) {
+        if (b.classList && b.classList.contains('reasoning-override-badge')) return;
         var t = (b.title || '').trim();
         // SKIP utility buttons (Apply/Save/Load/Close) - noise in a search
         if (t.length < 8 || /^(apply|save|load|close|refresh|test)$/i.test(t)) return;
         _push(pid, t, b, 'Button');
       });
     });
+    var _effTrigSearch = document.getElementById('effort-trigger');
+    if (_effTrigSearch) {
+      _push('chat', 'Composer — Thinking effort', _effTrigSearch, 'Composer',
+            function() {
+              if (typeof toggleReasoningEffortMenu === 'function') {
+                var m = document.getElementById('effort-menu');
+                if (m && m.hidden) toggleReasoningEffortMenu();
+              }
+              _effTrigSearch.focus();
+            },
+            'thinking effort reasoning_effort reasoning auto off on minimal low medium high max composer dropdown');
+    }
     // VOICE (1.4): the search must find the new features by their everyday
     // names - the card scan only yields English labels, people type "vorlesen",
     // "tts", "diktieren", "microphone", "voice note".

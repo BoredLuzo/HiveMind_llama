@@ -274,16 +274,20 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
         get_load_mode as _glm,
         get_thinking_budget as _gtb,
     )
+    from core.model_sampling import (
+        clamp_reasoning_effort_for_model as _clamp_prof_re,
+        normalize_reasoning_effort as _norm_prof_re,
+    )
 
     for p in prof_list:
         _mname = p.get("name", "")
         _mp = _model_profile(_mname)
-        if "thinking" not in p:
-            p["thinking"] = _mp.get("thinking", False)
-        if "vision" not in p:
-            p["vision"] = _mp.get("vision", False)
-        if "tool_call" not in p:
-            p["tool_call"] = _mp.get("tool_call", False)
+        for _ck in ("thinking", "vision", "tool_call"):
+            if _ck in _mp:
+                p[_ck] = bool(_mp[_ck])
+            elif _ck not in p:
+                p[_ck] = False
+        _explicit_think_off = ("thinking" in _mp and _mp["thinking"] is False)
         try:
             _reg_prof = _gp(_mname) or {}
             p["mtp"] = bool(_im(_mname))
@@ -293,7 +297,11 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
             _ri = _gguf_meta.get_effective_reasoning_info(_mname)
             _r_mode = str(_ri.get("mode") or "none")
             _r_levels = list(_ri.get("levels") or [])
-            if p.get("thinking") and _r_mode == "none" and not _ri.get("template_source", "").startswith("external:"):
+            if _explicit_think_off:
+                p["thinking"] = False
+                _r_mode = "none"
+                _r_levels = []
+            elif p.get("thinking") and _r_mode == "none" and not _ri.get("template_source", "").startswith("external:"):
                 _r_mode = "binary"
                 _r_levels = ["none", "on"]
             elif _r_mode != "none":
@@ -318,8 +326,12 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
                         break
                 if not _re_val and _ri.get("template_default"):
                     _re_val = str(_ri.get("template_default") or "")
-            _re_norm = _re_val.strip().lower()
-            p["reasoning_effort"] = _re_norm if (_r_mode == "effort" and _re_norm and _re_norm not in ("auto", "on")) else None
+            _re_norm = _norm_prof_re(_re_val) if _re_val else "auto"
+            if _r_mode == "effort" and _re_norm not in ("auto", "on"):
+                _re_clamped = _clamp_prof_re(_mname, _re_norm)
+                p["reasoning_effort"] = _re_clamped or (_re_norm if _re_norm in _r_levels else None)
+            else:
+                p["reasoning_effort"] = None
             p["source"] = _gps(_mname)
             _kv_bpt = _reg_prof.get("kv_bytes_per_token")
             if not _kv_bpt:

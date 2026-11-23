@@ -272,23 +272,24 @@ async def _phase_vram(ctx, state: dict):
         _tool_think_auto_mode = "on_fail"
     if _tool_think_auto_mode not in {"off", "balanced", "on_fail", "always"}:
         _tool_think_auto_mode = "off"
+    from core.model_sampling import (
+        POSITIVE_REASONING_EFFORTS as _VRAM_POS_RE,
+        clamp_reasoning_effort_for_model as _clamp_vram_re,
+        model_supports_thinking as _mst_vram,
+        normalize_reasoning_effort as _norm_re_vram,
+    )
     _effective_tool_think_toggle = bool(ctx.duo_config.coder_tool_thinking)
     _model_hint_thinking = bool(
         ctx.model_profile(exec_mdl).get("thinking", False)
     )
-    _exec_supports_thinking = _model_hint_thinking or _effective_tool_think_toggle or bool(ctx.duo_config.agentic_thinking)
+    _exec_native_think = _model_hint_thinking or _mst_vram(exec_mdl)
+    _exec_supports_thinking = _exec_native_think
     _exec_has_thinking = _exec_supports_thinking
     _coder_tool_think = (
         _effective_tool_think_toggle
         and _exec_supports_thinking
     )
-    from core.model_sampling import (
-        POSITIVE_REASONING_EFFORTS as _VRAM_POS_RE,
-        model_supports_thinking as _mst_vram,
-        normalize_reasoning_effort as _norm_re_vram,
-    )
     _user_eff = _norm_re_vram((ctx.settings or {}).get("reasoning_effort"))
-    _exec_native_think = _model_hint_thinking or _mst_vram(exec_mdl)
     if _user_eff == "none":
         _effective_tool_think_toggle = False
         _tool_think_auto_mode = "off"
@@ -303,9 +304,11 @@ async def _phase_vram(ctx, state: dict):
             _exec_supports_thinking = True
             _exec_has_thinking = True
             _coder_tool_think = True
+            _mapped_vram = _clamp_vram_re(exec_mdl, _user_eff)
+            _map_sfx = f" → {_mapped_vram}" if (_mapped_vram and _mapped_vram != _user_eff) else ""
             yield await ctx.emit({
                 "type": "status",
-                "content": f"🧠 Reasoning effort: {_user_eff} (composer override)",
+                "content": f"🧠 Reasoning effort: {_user_eff} (composer override){_map_sfx}",
             })
         else:
             yield await ctx.emit({
@@ -388,11 +391,14 @@ async def _phase_vram(ctx, state: dict):
     # Always set (or reset to None) to prevent stale override leaking into next run.
     # Scoped per model: the flag belongs to the tool-round server, not whichever model loads first.
     from backend.llama_server_manager import manager as _lsm_ro
-    _lsm_ro._reasoning_override = (
-        {exec_mdl: _coder_tool_think}
-        if (ctx.duo_config.coder_tool_thinking_explicit or (_user_eff in _VRAM_POS_RE and _exec_native_think))
-        else None
+    from backend.manager_load import (
+        clear_reasoning_override as _clr_ro_vram,
+        set_reasoning_override as _set_ro_vram,
     )
+    if _exec_native_think and (ctx.duo_config.coder_tool_thinking_explicit or _user_eff in _VRAM_POS_RE):
+        _set_ro_vram(_lsm_ro, exec_mdl, _coder_tool_think)
+    else:
+        _clr_ro_vram(_lsm_ro, exec_mdl)
 
     # ── State population ──
     state.update({

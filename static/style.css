@@ -347,6 +347,7 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 .effort-trig-caret{font-size:9px;opacity:.75;transition:transform .15s}
 .effort-trigger[aria-expanded="true"] .effort-trig-caret{transform:rotate(180deg)}
 .effort-menu{position:absolute;bottom:calc(100% + 8px);right:0;z-index:120;min-width:255px;max-width:310px;
+  max-height:min(380px, calc(100vh - 140px));overflow-y:auto;
   background:#111722;border:1px solid var(--b2);border-radius:10px;padding:6px;
   box-shadow:0 12px 32px rgba(0,0,0,.55);display:flex;flex-direction:column;gap:2px}
 .effort-menu[hidden]{display:none}
@@ -475,8 +476,11 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .acard-role{font-size:11px;color:var(--tx2);margin-left:auto;font-style:italic}
 .acard-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;margin-top:2px}
 .acard-cell{min-width:0}
-.acard-cell .fl{margin:5px 0 2px;font-size:10.5px;letter-spacing:.05em}
-.acard-cell .fl span{font-size:11px}
+.acard-cell .fl{margin:5px 0 2px;font-size:10.5px;letter-spacing:.05em;display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.acard-cell .fl span{font-size:11px;float:none}
+.acard-cell .fl .thk-badge,.acard-cell .fl > span:last-child:not(.reasoning-override-slot){margin-left:auto}
+.acard-cell .fl .reasoning-override-slot{float:none;text-transform:none;letter-spacing:0}
+.acard-cell .fl .reasoning-override-badge{margin-left:0}
 .fl{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);
   text-transform:uppercase;letter-spacing:.06em;margin:6px 0 3px}
 .fl span{float:right;color:var(--tx);font-style:normal}

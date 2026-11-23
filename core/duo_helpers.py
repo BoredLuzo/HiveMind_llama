@@ -414,15 +414,23 @@ def _get_thinking_profile(model_name: str, settings_dict: dict | None = None) ->
         return dict(_ov)
 
     from model_configs.models_registry import get_profile, get_capabilities, get_thinking_budget
-    from core.model_sampling import _model_profile
+    from core.model_sampling import _model_profile, model_supports_thinking
 
     prof = get_profile(model_name) or {}
     caps = get_capabilities(model_name) or {}
     mp = _model_profile(model_name) or {}
-    thinking = bool(
-        caps.get("thinking") or prof.get("thinking")
-        or prof.get("reasoning") in ("on", True) or mp.get("thinking")
-    )
+    if mp.get("thinking") is False:
+        thinking = False
+    elif "thinking" in mp:
+        thinking = bool(mp["thinking"])
+    elif "thinking" in caps:
+        thinking = bool(caps["thinking"])
+    else:
+        thinking = bool(
+            prof.get("thinking")
+            or prof.get("reasoning") in ("on", True)
+            or model_supports_thinking(model_name)
+        )
     _gtb = get_thinking_budget(model_name)
     raw_tb = _gtb if _gtb is not None else prof.get("thinking_budget")
     try:
@@ -455,7 +463,7 @@ def _calculate_thinking_tokens(
     if _user_eff == "none":
         return 0
     profile = _get_thinking_profile(model_name, _s)
-    if _user_eff in _POS_RE and not (profile.get("thinking_enabled") or _mst_dh(model_name)):
+    if not (profile.get("thinking_enabled") or _mst_dh(model_name)):
         return 0
     base_budget = None
     if agent_name:
@@ -511,7 +519,7 @@ def _apply_thinking_fields(
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = True
         if thinking_budget > 0:
             payload["thinking_budget"] = max(64, thinking_budget)
-        if reasoning_effort and reasoning_effort != "auto":
+        if reasoning_effort and reasoning_effort not in ("auto", "on", "none"):
             if _mdl:
                 from core.model_sampling import clamp_reasoning_effort_for_model
                 _clamped = clamp_reasoning_effort_for_model(_mdl, reasoning_effort)
@@ -521,6 +529,10 @@ def _apply_thinking_fields(
                     payload.pop("reasoning_effort", None)
             elif reasoning_effort in ("minimal", "low", "medium", "high", "max"):
                 payload["reasoning_effort"] = reasoning_effort
+            else:
+                payload.pop("reasoning_effort", None)
+        else:
+            payload.pop("reasoning_effort", None)
     else:
         payload["thinking"] = False
         payload["thinking_budget"] = 0

@@ -417,7 +417,11 @@ async def _duo_planner_phase(
         _planner_effective_thinking = (
             True
             if (_plan_user_eff in _PLAN_POS_RE and _planner_supports_thinking)
-            else (False if _plan_user_eff == "none" else bool(_use_thinking_planner))
+            else (
+                False
+                if _plan_user_eff == "none"
+                else (bool(_use_thinking_planner) and _planner_supports_thinking)
+            )
         )
 
         _planner_ctx_cap_cfg = int(ctx.settings.get("duo_planner_ctx_cap", 0) or 0)
@@ -508,7 +512,8 @@ async def _duo_planner_phase(
                     pass
             _lsm_plan_pre._planner_critical_phase = True
             if _plan_user_eff in _PLAN_POS_RE and _planner_supports_thinking:
-                _lsm_plan_pre._reasoning_override = {_planner_model: True}
+                from backend.manager_load import set_reasoning_override as _set_plan_ro
+                _set_plan_ro(_lsm_plan_pre, _planner_model, True)
             # PIN RESET AT RUN START (2026-10-02): stale pins from a
             # crashed previous run must not block eviction for this one.
             try:
@@ -3976,8 +3981,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                     _tool_thinking_budget, _think_cap,
                                 )
                                 _tool_thinking_budget = _think_cap
-                            # (e.g. context full), thinking per _apply_thinking_kwargs in the
-                            if _tool_thinking_budget == 0:
+                            # (e.g. context full), skip thinking for THIS round via _thinking=False;
+                            # only permanently turn off reactive think_runtime when explicit/composer thinking isn't requested.
+                            if _tool_thinking_budget == 0 and not _coder_tool_think and _coder_user_eff == "auto":
                                 _duo_state.think_runtime = False
                         else:
                             _tool_thinking_budget = 0
@@ -4777,15 +4783,48 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             if _duo_coder_temp is not None
                             else float(_plain_coder_smp.get("temperature", 0.6))
                         )
-                        async for _tok in ctx.pipeline_chat_stream(coder_mdl, _coder_msgs, _plain_coder_temp, _duo_coder_tok,
-                                                                   agent_role="duo_coder",
-                                                                   force_ctx=_coder_ctx_eff,
-                                                                    think=_coder_tool_think if _exec_supports_thinking else False,
-                                                                    sampler=_plain_coder_smp):
-                            if is_ctx_aborted(ctx):
-                                break
-                            _parts_attempt.append(_tok)
-                            yield await ctx.emit({"type": "token", "content": _tok})
+                        _plain_think_budget = (
+                            _calculate_thinking_tokens(
+                                coder_mdl, ctx.settings, input_tokens=0,
+                                available_ctx=_coder_ctx_eff, agent_name="duo_coder",
+                            )
+                            if _plain_think_on
+                            else 0
+                        )
+                        if _plain_think_on:
+                            async for _chunk in ctx.pipeline_chat_stream(
+                                coder_mdl, _coder_msgs, _plain_coder_temp, _duo_coder_tok,
+                                agent_role="duo_coder",
+                                force_ctx=_coder_ctx_eff,
+                                think=True,
+                                thinking_budget=_plain_think_budget or None,
+                                split_thinking=True,
+                                sampler=_plain_coder_smp,
+                            ):
+                                if is_ctx_aborted(ctx):
+                                    break
+                                if isinstance(_chunk, tuple):
+                                    _pc, _pth = _chunk
+                                    if _pth:
+                                        yield await ctx.emit({"type": "thinking_token", "content": _pth})
+                                    if _pc:
+                                        _parts_attempt.append(_pc)
+                                        yield await ctx.emit({"type": "token", "content": _pc})
+                                elif _chunk:
+                                    _parts_attempt.append(_chunk)
+                                    yield await ctx.emit({"type": "token", "content": _chunk})
+                        else:
+                            async for _tok in ctx.pipeline_chat_stream(
+                                coder_mdl, _coder_msgs, _plain_coder_temp, _duo_coder_tok,
+                                agent_role="duo_coder",
+                                force_ctx=_coder_ctx_eff,
+                                think=False,
+                                sampler=_plain_coder_smp,
+                            ):
+                                if is_ctx_aborted(ctx):
+                                    break
+                                _parts_attempt.append(_tok)
+                                yield await ctx.emit({"type": "token", "content": _tok})
                         _parts.extend(_parts_attempt)
                         break
                     except Exception as _ce:

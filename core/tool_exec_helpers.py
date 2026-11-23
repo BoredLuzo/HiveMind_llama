@@ -953,7 +953,7 @@ async def _maybe_activate_reactive_think(_dname, _dresult, round_state, dtool_ms
                 await hooks.emit({
                     "type": "status",
                     "content": (
-                        f"🧠 Reaktiv Thinking zugeschaltet "
+                        f"🧠 Reactive thinking enabled "
                         f"(mode={tool_think_auto_mode}, "
                         f"fail_streak={round_state.tool_fail_streak})"
                     ),
