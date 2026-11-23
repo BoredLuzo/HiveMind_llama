@@ -63,7 +63,7 @@ def _build_synthetic_inkling_gguf(path: Path) -> None:
 # ── Step 1: Pinned llama.cpp build ─────────────────────────────────────
 print("-- Step 1: Pinned build tag --")
 import deploy.fetch_llamacpp as FL  # noqa: E402
-check("deploy/llama_build_pin.txt pins b12631", FL._read_pinned_tag() == "b12631", repr(FL._read_pinned_tag()))
+check("deploy/llama_build_pin.txt pins >= b12645", FL._read_pinned_tag() == "b12645", repr(FL._read_pinned_tag()))
 
 
 # ── Step 2: GGUF metadata for inkling2_loop & reasoning_effort ─────────

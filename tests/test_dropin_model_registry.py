@@ -493,4 +493,50 @@ check("6c deploy/install_linux.sh excludes model_configs/user in rsync & tar",
 check("6d deploy/update_prune.ps1 protects model_configs\\user",
       "model_configs\\user" in ps_txt)
 
+# ── 7. Fresh-install catalog dedup & case-insensitive mmproj parity ──────────
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td7:
+    mdir7 = Path(td7)
+    for fn7 in (
+        "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        "mmproj-gemma-4-e4b-it-qat-f16.gguf",
+        "mtp-gemma-4-E4B-it.gguf",
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "mmproj-qwen3.5-4b-f16.gguf",
+        "Sharp-MiniCPM5-2B-Q6_K_XL.gguf",
+        "MiniCPM5-2.6B-DSpark.gguf",
+        "LFM3-1.7B-Q4_K_M.gguf",
+        "Qwen3.6-35B-A3B-MTP-UD-IQ4_XS.gguf",
+        "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
+    ):
+        p7 = mdir7 / fn7
+        with open(p7, "wb") as f7:
+            f7.seek(2 * 1024 * 1024)
+            f7.write(b"\x00")
+    mjson7 = {
+        "gemma-4:e4b-it-qat": str(mdir7 / "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"),
+        "qwen3.5:4b-mtp": str(mdir7 / "Qwen3.5-4B-Q4_K_M.gguf"),
+        "minicpm5:2b-sharp": str(mdir7 / "Sharp-MiniCPM5-2B-Q6_K_XL.gguf"),
+        "lfm3:1.7b-qad": str(mdir7 / "LFM3-1.7B-Q4_K_M.gguf"),
+        "qwen3.6:35b-a3b-mtp": str(mdir7 / "Qwen3.6-35B-A3B-MTP-UD-IQ4_XS.gguf"),
+    }
+    with mock.patch.object(lm, "MODELS_DIR", mdir7), \
+         mock.patch.object(lm, "_load_overrides", return_value=mjson7), \
+         mock.patch.object(lm, "_find_ollama_root", return_value=None):
+        avail7 = lm.list_available_models(force_refresh=True)
+        mm7_q4 = lm.resolve_mmproj_path("qwen3.5:4b-mtp")
+    lm.invalidate_caches()
+    check(
+        "7a fresh-install catalog dedups models.json overrides with zero duplicate aliases",
+        avail7 == [
+            "gemma-4:e4b-it-qat",
+            "lfm3:1.7b-qad",
+            "minicpm5:2b-sharp",
+            "qwen3.5:4b-mtp",
+            "qwen3.6:35b-a3b-mtp",
+        ]
+        and mm7_q4 is not None
+        and mm7_q4.name.lower() == "mmproj-qwen3.5-4b-f16.gguf",
+        repr((avail7, mm7_q4)),
+    )
+
 sys.exit(h.finish("dropin_model_registry"))

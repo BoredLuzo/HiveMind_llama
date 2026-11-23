@@ -227,7 +227,7 @@ SPECS: list[dict] = [
             r"(?i)^qwen3\.5-4b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        "mmproj_dest": "mmproj-qwen3.5-4b-f16.gguf",
+        "mmproj_dest": "mmproj-Qwen3.5-4B-F16.gguf",
     },
     {
         "key": "minicpm5:2b-sharp",
@@ -395,7 +395,7 @@ SPECS: list[dict] = [
             r"(?i)^qwen3\.5-9b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
-        "mmproj_dest": "mmproj-qwen3.5-9b-f16.gguf",
+        "mmproj_dest": "mmproj-Qwen3.5-9B-F16.gguf",
     },
     # ── Tier 4: Hybrid / Heavy MoE Class (8 GB+32 GB RAM or 16-24+ GB VRAM)
     {

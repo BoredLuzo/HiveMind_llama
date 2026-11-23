@@ -158,18 +158,25 @@ _filename_tag_map: dict[str, str] | None = None
 _BUILTIN_FILENAME_TAGS: dict[str, str] = {
     "qwen3.5-4b-q4_k_m.gguf": "qwen3.5:4b-mtp",
     "qwen3.5-2b-q4_k_m.gguf": "qwen3.5:2b-mtp",
+    "qwen3.5-9b-q4_k_m.gguf": "qwen3.5:9b-mtp",
     "gemma-4-e4b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e4b-it-qat",
     "gemma-4-e2b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e2b-it-qat",
     "gemma-4-e4b-uncensored-hauhaucs-aggressive-q4_k_p.gguf": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
     "gemma-4-e4b-it-obliterated-q5_k_m.gguf": "gemma-4:e4b-it-obliterated",
     "sharp-minicpm5-2b-q6_k_xl.gguf": "minicpm5:2b-sharp",
     "lfm3-1.7b-qad-q4_0.gguf": "lfm3:1.7b-qad",
+    "lfm3-1.7b-q4_k_m.gguf": "lfm3:1.7b-qad",
     "lfm3-1.7b-uncensored-ad-q6_k.gguf": "lfm3:1.7b-uncensored-ad",
+    "lfm3-1.7b-uncensored-ad-q4_k_m.gguf": "lfm3:1.7b-uncensored-ad",
+    "lfm3-omni-2b-q4_0.gguf": "lfm3-omni:2b",
+    "lfm3-omni-2b-q4_k_m.gguf": "lfm3-omni:2b",
     "lfm2.5-24b-a2b-q4_k_m.gguf": "lfm2.5:24b-a2b",
     "spark-x2.6-4b-q4_k_m.gguf": "spark-x2.6:4b",
     "air-26b-a4b.gguf": "air:26b-a4b",
     "groot-19b-a3b-261023-q4_k_m.gguf": "groot:19b-a3b-261023",
     "qwen3.6-35b-a3b-ud-q4_k_xl.gguf": "qwen3.6:35b-a3b-ud",
+    "qwen3.6-35b-a3b-mtp-ud-iq4_xs.gguf": "qwen3.6:35b-a3b-mtp",
+    "qwen3.6-35b-a3b-ud-iq4_xs.gguf": "qwen3.6:35b-a3b-mtp",
     "qwen3.5-0.8b-ud-q4_k_xl.gguf": "qwen3.5:0.8b-ud",
     "nvidia-nemotron-3.5-bolt-e4b-ud-q4_k_xl.gguf": "nvidia-nemotron-3.5-bolt:e4b",
     "nemotron-3.5-bolt-e4b-q4_k_m.gguf": "nvidia-nemotron-3.5-bolt:e4b",
@@ -646,6 +653,10 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
                 for _cand in MODELS_DIR.rglob(_reg_fn):
                     if _cand.is_file():
                         return _cand
+                _reg_fn_low = _reg_fn.lower()
+                for _cand in MODELS_DIR.rglob("*mmproj*.gguf"):
+                    if _cand.is_file() and _cand.name.lower() == _reg_fn_low:
+                        return _cand
             elif _reg_p.exists():
                 return _reg_p
     except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
@@ -796,12 +807,31 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
     result = sorted(n for n in names if n and "#" not in n)
 
     _override_names = {_strip_alias(k) for k in overrides if not k.endswith("_mmproj") and not k.startswith("_")}
+
+    def _norm_path_key(raw_p: object) -> str:
+        try:
+            return os.path.normcase(str(Path(str(raw_p)).resolve()))
+        except OSError:
+            return os.path.normcase(str(raw_p))
+
     file_to_names: dict[str, list[str]] = {}
     for name, path in index.items():
-        key = str(path)
-        if key not in file_to_names:
-            file_to_names[key] = []
-        file_to_names[key].append(name)
+        key = _norm_path_key(path)
+        lst = file_to_names.setdefault(key, [])
+        if name not in lst:
+            lst.append(name)
+    for ov_k, ov_v in overrides.items():
+        if "mmproj" in ov_k.lower() or ov_k.startswith("_"):
+            continue
+        if str(ov_v).strip().upper().startswith("TODO:"):
+            continue
+        ov_name = _strip_alias(ov_k)
+        if ov_name not in result:
+            continue
+        ov_key = _norm_path_key(str(ov_v).strip())
+        lst = file_to_names.setdefault(ov_key, [])
+        if ov_name not in lst:
+            lst.append(ov_name)
     # DEDUP PRIORITY (2026-11-05, P1 audit): the old length sort kept the
     # LONGEST alias — for gemma-4-e4b-it-qat-ud-q4_k_xl.gguf that is the
     # parsed '…-ud' alias, and the catalog/profile name
@@ -831,7 +861,7 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
                 # (manifest tag vs models.json override vs parsed name) now
                 # collapse to ONE listing instead of confusing the model
                 # picker with three entries for the same weights.
-                if dup in _override_names and str(
+                if dup in _override_names and _norm_path_key(
                         overrides.get(dup, "")) != path_key:
                     continue
                 try:
