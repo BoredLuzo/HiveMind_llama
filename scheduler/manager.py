@@ -61,6 +61,11 @@ class SchedulerManager:
         # would survive as a detached engine run with nobody watching it.
         if self._active_run_id:
             try:
+                from infra import run_control as _sched_rc
+                _sched_rc._abort_event(self._active_run_id).set()
+            except (ImportError, AttributeError):
+                pass
+            try:
                 await self._http().post(f"/abort/{self._active_run_id}",
                                         json={})
                 logger.warning("[AUTOMATION] aborted in-flight run %s on "
@@ -387,7 +392,8 @@ class SchedulerManager:
                 "duration_s": duration_s,
                 "started": started, "finished": _now(),
                 "reason": reason})
-            if (str((current.get("schedule") or {}).get("kind") or "")
+            if (reason != "manual"
+                    and str((current.get("schedule") or {}).get("kind") or "")
                     == "once"):
                 self.store.delete(job_id)
 

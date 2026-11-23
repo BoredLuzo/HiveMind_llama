@@ -271,8 +271,28 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
             and (_coder_ctx_need <= 0 or _plan_port_actual_ctx >= _coder_ctx_need)
         )
         _need_raw_vision = (_img_plan.get("coder") == "raw")
+        from core.model_sampling import (
+            POSITIVE_REASONING_EFFORTS as _CP_REUSE_POS_RE,
+            model_supports_thinking as _cp_reuse_mst,
+            normalize_reasoning_effort as _cp_reuse_norm_re,
+        )
+        _cp_reuse_eff = _cp_reuse_norm_re((ctx.settings or {}).get("reasoning_effort"))
+        _coder_wants_reasoning_on = bool(
+            (_cp_reuse_eff in _CP_REUSE_POS_RE or (_cp_reuse_eff == "auto" and bool(getattr(ctx.duo_config, "coder_tool_thinking", False))))
+            and _cp_reuse_mst(exec_mdl)
+        )
+        _plan_port_reasoning_ok = True
+        if _coder_wants_reasoning_on and _plan_port is not None and _lsm_pv is not None:
+            try:
+                _get_sbp = getattr(_lsm_pv, "get_slot_by_port", None)
+                _pslot_ro = _get_sbp(int(_plan_port)) if callable(_get_sbp) else None
+                if _pslot_ro is not None and getattr(_pslot_ro, "_reasoning_on", None) is False:
+                    _plan_port_reasoning_ok = False
+            except (AttributeError, TypeError, ValueError):
+                pass
         if _planner_is_coder and _plan_port_available and _plan_port_alive \
-                and _planner_ctx_ok and (not _always_vision or _plan_port_vision) \
+                and _planner_ctx_ok and _plan_port_reasoning_ok \
+                and (not _always_vision or _plan_port_vision) \
                 and (not _need_raw_vision or _plan_port_vision):
             _cached_coder_port = _plan_port
             _cached_coder_port_ctx = _plan_port_actual_ctx  # honest slot ctx (>= coder need)

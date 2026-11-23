@@ -297,6 +297,7 @@ class LlamaProcessMixin:
                       and not getattr(s, "_loading", False) and not _protected(s)]  # H-audit: never kill a mid-load slot
         if not candidates:
             candidates = [s for s in self._slots if s is not exclude_slot and not s.pinned
+                          and (s.is_running or getattr(s, "_orphan_port", None) is not None)
                           and not _slot_in_flight(s)
                           and not s._loading]
         if not candidates:

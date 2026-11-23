@@ -79,6 +79,15 @@ async def _duo_loop_guards(ctx, ps: _DuoLoopGuardsState):
                 try:
                     from backend.llama_server_manager import manager as _lsm_hc
                     await _lsm_hc.evict(exec_mdl)
+                    from core.model_sampling import (
+                        POSITIVE_REASONING_EFFORTS as _HC_POS_RE,
+                        model_supports_thinking as _hc_mst,
+                        normalize_reasoning_effort as _hc_norm_re,
+                    )
+                    _hc_eff = _hc_norm_re((ctx.settings or {}).get("reasoning_effort"))
+                    if (_hc_eff in _HC_POS_RE or (_hc_eff == "auto" and bool(getattr(ctx.duo_config, "coder_tool_thinking", False)))) and _hc_mst(exec_mdl):
+                        from backend.manager_load import set_reasoning_override as _set_hc_ro
+                        _set_hc_ro(_lsm_hc, exec_mdl, True)
                     _dport = await _lsm_hc.ensure_loaded(
                         exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
                         n_parallel=1, ctx_graceful=False, pin=True,

@@ -95,14 +95,19 @@ def start_background(cmd: str, cwd: str | Path | None = None) -> dict:
         from tools.handlers.exec_tools import _BASH_BIN as _bg_bash
         _shell_kwargs = {"executable": _bg_bash} if _os_bg.name != "nt" else {}
         from infra.child_env import tool_env as _tool_env
+        try:
+            _bg_env = _tool_env(workspace=cwd) if cwd is not None else _tool_env()
+        except TypeError:
+            _bg_env = _tool_env()
         _popen_kw = {
             "shell": True,
+            "stdin": subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "text": True,
             "encoding": "utf-8",
             "errors": "replace",
-            "env": _tool_env(),
+            "env": _bg_env,
             **_spawn_kwargs(),
             **_shell_kwargs,
         }

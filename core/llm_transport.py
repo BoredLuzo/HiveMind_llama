@@ -738,6 +738,9 @@ async def iter_tool_loop_post(
                 )
             ) as slot_stream:
                 async for item in slot_stream:
+                    _ab_chk = getattr(loop_obj, "_abort_check", None)
+                    if callable(_ab_chk) and _ab_chk():
+                        break
                     if isinstance(item, _SlotStreamError):
                         err_info = item
                         break
@@ -758,8 +761,12 @@ async def iter_tool_loop_post(
                     if not isinstance(delta, dict):
                         continue
                     ct, tc_delta = parse_sse_delta_fn(delta, tool_calls_acc=tool_calls_acc)
-                    if _st_first is None and (ct or tc_delta or delta.get("reasoning_content") or delta.get("thinking")):
+                    th = str(delta.get("reasoning_content") or delta.get("thinking") or delta.get("reasoning") or "")
+                    if _st_first is None and (ct or tc_delta or th):
                         _st_first = time.monotonic()
+                    if th:
+                        yield {"type": "thinking_token", "content": th}
+                        partial_stream = True
                     if ct:
                         content_parts.append(ct)
                         yield {"type": "token", "content": ct}

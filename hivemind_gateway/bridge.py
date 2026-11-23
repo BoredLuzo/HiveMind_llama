@@ -640,7 +640,7 @@ class RunBridge:
             # it as a plain question and let the next text message through.
             await self.ms.send_message(
                 f"❓ The agent asks (run {rid})\n\n"
-                f"{question}\n\n"
+                f"{question[:2500]}\n\n"
                 "Reply with your answer as text - it goes straight back to "
                 "the agent. /stop aborts.\n"
                 "(This is the agent's own question - NOT the approval gate.)")
@@ -648,7 +648,7 @@ class RunBridge:
         await self.ms.send_message(
             f"🛡 Approval needed (run {rid})\n\n"
             f"tool: {tool}\n\n"
-            f"{preview}\n\n"
+            f"{preview[:2500]}\n\n"
             "Buttons below; or reply 1 (once) / 2 (always, this chat) / "
             "3 (deny).",
             reply_markup={"inline_keyboard": [[
@@ -696,14 +696,17 @@ class RunBridge:
                         except (HiveUnreachable, HTTPError, OSError):
                             pass
                     else:
-                        await self._relay_own_approval({
-                            "run_id": run_id,
-                            "decision_id": str(body.get("decision_id") or ""),
-                            "tool": str(body.get("tool") or ""),
-                            "preview": str(body.get("preview") or ""),
-                            "kind": _kind,
-                            "question": str(body.get("question") or ""),
-                        })
+                        try:
+                            await self._relay_own_approval({
+                                "run_id": run_id,
+                                "decision_id": str(body.get("decision_id") or ""),
+                                "tool": str(body.get("tool") or ""),
+                                "preview": str(body.get("preview") or ""),
+                                "kind": _kind,
+                                "question": str(body.get("question") or ""),
+                            })
+                        except (TelegramApiError, HTTPError, OSError):
+                            last_sig = ""
             elif last_sig:
                 # The engine-side pause vanished (ask timeout or fail-closed
                 # deny). Drop the stale latch; otherwise the next owner text
@@ -1292,7 +1295,7 @@ class RunBridge:
         try:
             await self.ms.send_voice(ogg, 0)
             self._voice_sent = True
-        except (PolicyViolation, HiveUnreachable, HTTPError, OSError) as exc:
+        except (PolicyViolation, HiveUnreachable, HTTPError, OSError, TelegramApiError) as exc:
             self._log_note(f"voice answer send failed: {exc}")
 
     async def _finish(self, chat_id, q, parts, stop_reason, error_text,
@@ -1330,7 +1333,12 @@ class RunBridge:
             if stop_reason != "error" and answer:
                 await self._maybe_voice_answer(answer)
                 if not self._voice_sent:
-                    await self._send_chunk(text)
+                    chunks = render.split_message(text)
+                    if len(chunks) > FINAL_CHUNK_LIMIT:
+                        await self.ms.send_document(text.encode("utf-8"), "result.txt")
+                    else:
+                        for chunk in chunks:
+                            await self._send_chunk(chunk)
                 elif _safety_note:
                     _tail = "\n".join([n for n in notes] +
                                        ([] if (stop_reason or "completed") == "completed"
@@ -2217,9 +2225,18 @@ class RunBridge:
         frames = j.get("frames") or []
         _base = int(j.get("base") or 0)
         after = int(m["after"] or 0)
-        _start = after - _base
-        new_frames = frames[max(0, _start):] if _start < len(frames) else []
-        m["after"] = int(j.get("n") or (_base + len(frames)))
+        _n_total = int(j.get("n") or (_base + len(frames)))
+        # server.py /run/journal?after=N already returns the pre-sliced delta
+        # frames[max(0, after - _base):] while reporting the window's _base.
+        # Only slice client-side when the server returned the unsliced window
+        # (e.g. legacy/unit-test stubs where _base + len(frames) == _n_total
+        # and after > _base).
+        if after > _base and (_base + len(frames)) == _n_total and len(frames) > max(0, _n_total - after):
+            _start = after - _base
+            new_frames = frames[max(0, _start):] if _start < len(frames) else []
+        else:
+            new_frames = list(frames)
+        m["after"] = _n_total
         done_reason = self._parse_done(new_frames)
         last_status = ""
         tool_lines: list[str] = []
@@ -2981,8 +2998,9 @@ class RunBridge:
                 continue
             resp.raise_for_status()
             mapping["workspace"] = path
-            self.state.data["tg_chat"] = mapping
-            self.state.save()
+            if not mapping.get("followed"):
+                self.state.data["tg_chat"] = mapping
+                self.state.save()
             return (f"📁 Workspace (Telegram) set: {self._short_path(path)}\n"
                     "Phone runs now work there - the agent can read "
                     "from this folder. /workspace without an argument "

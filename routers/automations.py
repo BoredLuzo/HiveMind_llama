@@ -288,7 +288,7 @@ async def preview_schedule(req: Request):
             break
         out.append(nxt)
         if str(schedule.get("kind")) == "every":
-            cursor = nxt + max(60, int(schedule.get("interval_s") or 60))
+            cursor = nxt
         elif str(schedule.get("kind")) == "daily":
             cursor = nxt + 1
         else:

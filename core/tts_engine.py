@@ -225,11 +225,15 @@ def base_url() -> str:
 
 
 # ── lifecycle ───────────────────────────────────────────────────────────────
+def _pocket_running() -> bool:
+    proc = _state.get("proc")
+    return proc is not None and proc.poll() is None
+
+
 def is_running(settings: dict | None = None) -> bool:
     if settings is not None and resolve_backend(settings) == "woof":
         return tts_woof.is_running()
-    proc = _state.get("proc")
-    return (proc is not None and proc.poll() is None) or tts_woof.is_running()
+    return _pocket_running() or tts_woof.is_running()
 
 
 def stop(force: bool = False) -> None:
@@ -317,7 +321,7 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
         raise TtsError("TTS_FAILED", f"HIVEMIND_TTS_URL {url} is not answering /health")
     _pending_url, _pending_budget = None, 0.0
     with _lock:
-        if is_running():
+        if _pocket_running():
             if _state.get("ready"):
                 _state["last_used"] = time.time()
                 return base_url()
@@ -327,13 +331,13 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
     if _pending_url is not None:
         if _wait_healthy(_pending_url, _pending_budget):
             with _lock:
-                if is_running() and base_url() == _pending_url:
+                if _pocket_running() and base_url() == _pending_url:
                     _state["ready"] = True
                     _state["last_used"] = time.time()
                     return _pending_url
             return _start(settings, voice)   # restarted meanwhile - recheck
         with _lock:
-            if is_running():
+            if _pocket_running():
                 raise TtsError("TTS_FAILED",
                                "the TTS engine did not answer /health in time - see logs/pocket_tts.log")
             stop(force=True)

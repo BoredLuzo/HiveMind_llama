@@ -929,6 +929,10 @@ async def _llm_stream(
     # Thinking-Budget-Guard: statische Schwelle pro Aufruf.
     if use_thinking and thinking_budget > 0:
         _think_cap_est = max(64, int(thinking_budget * _THINK_EST_HEADROOM))
+    elif use_thinking and max_tokens > 0:
+        # Without a fixed thinking_budget, cap thinking at 70% of max_tokens
+        # (Planner Max Tokens) so at least 30% remains for the actual plan.
+        _think_cap_est = max(256, int(max_tokens * 0.70))
     elif not use_thinking:
         _think_cap_est = _NT_THINK_CAP_EST
     else:
@@ -1165,8 +1169,8 @@ async def _llm_stream(
                 _plan_hold = ""
 
     thinking_text = "".join(thinking_chunks).strip()
-    thinking_text = re.sub(r"</?thinking?>", "", thinking_text, flags=re.IGNORECASE).strip()
-    content_text = re.sub(r"<thinking?>[\s\S]*?(?:</thinking?>|$)", "", "".join(content_chunks), flags=re.DOTALL | re.IGNORECASE).strip()
+    thinking_text = re.sub(r"</?think(?:ing)?>", "", thinking_text, flags=re.IGNORECASE).strip()
+    content_text = re.sub(r"<think(?:ing)?>[\s\S]*?(?:</think(?:ing)?>|$)", "", "".join(content_chunks), flags=re.DOTALL | re.IGNORECASE).strip()
 
     return thinking_text, content_text, hit_timeout
 
@@ -1180,7 +1184,9 @@ async def _llm_stream(
 # NOTHING — a single dead port killed the whole planner phase. Here we add the
 # same resilience: ConnectError -> evict + reload (fresh port) -> retry.
 
-async def _planner_refresh_port(model: str, port: int, num_ctx: int) -> int:
+async def _planner_refresh_port(
+    model: str, port: int, num_ctx: int, *, use_thinking: bool = False, vision: bool = False,
+) -> int:
     """Evict + reload the planner model after a dead port. Returns a fresh port."""
     try:
         from backend.llama_server_manager import manager as _lsm_p
@@ -1188,7 +1194,12 @@ async def _planner_refresh_port(model: str, port: int, num_ctx: int) -> int:
             await _lsm_p.evict(model)
         except Exception:
             pass
-        _new_port = await _lsm_p.ensure_loaded(model, num_ctx=num_ctx or 0, n_parallel=1)
+        if use_thinking:
+            from backend.manager_load import set_reasoning_override as _set_pr_ro
+            _set_pr_ro(_lsm_p, model, True)
+        _new_port = await _lsm_p.ensure_loaded(
+            model, num_ctx=num_ctx or 0, n_parallel=1,
+        )
         return int(_new_port or port)
     except Exception:
         return port
@@ -1510,7 +1521,7 @@ async def run_planner(
                 from core.duo_helpers import attach_images_to_last_user
                 _nt_messages = attach_images_to_last_user(_nt_messages, images)
             _nt_timeout = float(settings.get("duo_soft_planner_wall_timeout_s", 180))
-            _nt_retry_settings = dict(settings, reasoning_effort="none", duo_planner_separate_effort=False)
+            _nt_retry_settings = dict(settings, reasoning_effort="none", planner_reasoning_effort="none")
             _nt_temp, _nt_smp = _resolve_planner_sampling(
                 planner_model, False, _nt_retry_settings, fallback_temp=0.1,
             )
@@ -1523,10 +1534,11 @@ async def run_planner(
                     # OUTPUT-LIMIT-POLICY (0.99.2): max_tokens = _planner_max_tokens
                     # (enthaelt min(setting, planner_ctx)).
                     max_tokens=_planner_max_tokens,
-                    read_timeout=180.0,
+                    read_timeout=_nt_timeout,
                     emit_fn=emit_fn,
                     aborted_fn=aborted_fn,
                     wall_timeout=_nt_timeout,
+                    heartbeat_fn=heartbeat_fn,
                     ctx_limit=planner_ctx,
                     num_ctx=planner_ctx,
                     sampler=_nt_smp,
@@ -1541,16 +1553,24 @@ async def run_planner(
                 _used_fallback = True
                 _fallback_reason = f"nt_retry_error: {type(e).__name__}"
 
-        # Last resort: use thinking as plan content
+        # Last resort: extract structured steps from thinking (never copy raw
+        # thinking prose into _plan_content where it could reach the coder).
         if not _plan_content and _plan_thinking:
-            _plan_thinking_plan = _plan_thinking
-            if len(_plan_thinking_plan) > 6000:
-                _plan_thinking_plan = _plan_thinking_plan[:6000] + "\n... [plan truncated from thinking content]"
-            _plan_content = _plan_thinking_plan
-            logger.warning(
-                "[Planner] Empty content - using think content as plan (%d chars, fallback=%s)",
-                len(_plan_content), _fallback_reason or "keiner",
+            _goal_for_fb = str(user_goal or task or "")
+            _fb_steps, _fb_mode, _ = parse_planner_output(
+                _plan_thinking[:6000], step_cap=step_cap, goal=_goal_for_fb,
             )
+            if _fb_steps:
+                _plan_content = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(_fb_steps))
+                logger.warning(
+                    "[Planner] Empty content - distilled %d step(s) from think block (mode=%s, fallback=%s)",
+                    len(_fb_steps), _fb_mode, _fallback_reason or "none",
+                )
+            else:
+                logger.warning(
+                    "[Planner] Empty content and no structured steps in think block (%d chars, fallback=%s)",
+                    len(_plan_thinking), _fallback_reason or "none",
+                )
 
     else:
         # ── Non-Thinking Planner (Streaming) ──────────────────────────────────
@@ -1699,7 +1719,11 @@ async def run_inloop_planner(
         caps=compute_char_caps(planner_ctx, overrides=settings.get("duo_caps")),
     )
 
-    _inloop_plan_sys = make_thinking_planner_sys(step_cap, model_name=planner_model)
+    _inloop_plan_sys = (
+        make_thinking_planner_sys(step_cap, model_name=planner_model)
+        if use_thinking
+        else make_planner_sys(step_cap)
+    )
     if _should_inject_prompt_think_tags(planner_model):
         if use_thinking:
             if "/think" not in _inloop_plan_sys:
@@ -1824,9 +1848,16 @@ async def run_inloop_planner(
         _plan_data = _plan_resp.json()
         _plan_msg  = (_plan_data.get("choices") or [{}])[0].get("message", {})
         _plan_raw = _plan_msg.get("content") or ""
-        _think_m = re.search(r"<think\>([\s\S]*?)\</think\>", _plan_raw, re.IGNORECASE)
+        _think_m = re.search(r"<think(?:ing)?>([\s\S]*?)</think(?:ing)?>", _plan_raw, re.IGNORECASE)
         _plan_thinking = _think_m.group(1).strip() if _think_m else ""
-        _plan_text = re.sub(r"<think\>[\s\S]*?\</think\>", "", _plan_raw, flags=re.IGNORECASE).strip()
+        if not _plan_thinking:
+            _plan_thinking = str(
+                _plan_msg.get("reasoning_content")
+                or _plan_msg.get("thinking")
+                or _plan_msg.get("reasoning")
+                or ""
+            ).strip()
+        _plan_text = re.sub(r"<think(?:ing)?>[\s\S]*?</think(?:ing)?>", "", _plan_raw, flags=re.IGNORECASE).strip()
 
         # PLAN-TOOLMARK-GUARD (2026-09-02): tool-calling-trained models (e.g.
         # lfm2.5) sometimes emit <|tool_call_start|>[read(path=...)] markup in
@@ -1843,10 +1874,18 @@ async def run_inloop_planner(
                 len(_plan_text0), len(_plan_text),
             )
 
-        # Distilled <think/> Fallback
+        # Distilled <think/> Fallback — extract only structured steps from
+        # thinking so raw thinking prose never leaks into _plan_text / coder.
         if not _plan_text and _plan_thinking:
-            _plan_text = _plan_thinking
-            logger.info("Distilled <think/>-Fallback activated | %d chars from thinking block", len(_plan_thinking))
+            _fb_steps, _fb_mode, _ = parse_planner_output(
+                _plan_thinking[:6000], step_cap=step_cap, goal=task,
+            )
+            if _fb_steps:
+                _plan_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(_fb_steps))
+                logger.info(
+                    "Distilled <think/>-Fallback activated | %d step(s) from thinking block (%d chars, mode=%s)",
+                    len(_fb_steps), len(_plan_thinking), _fb_mode,
+                )
 
         if not _plan_text:
             _plan_text = fallback_planner_steps(task, max_steps=max(3, min(6, step_cap)))

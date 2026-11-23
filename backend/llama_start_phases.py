@@ -442,9 +442,31 @@ async def _resolve_spec_config(
         return None
 
     # Sibling auto-discovery in the target GGUF's directory when no explicit
-    # external drafter filename is configured.
+    # external drafter filename is configured (and not explicitly disabled in
+    # the model profile via dspark_draft_n_max == 0 / dspark_draft_filename: null).
+    _dspark_disabled_in_profile = False
+    try:
+        from model_configs.models_registry import get_profile as _gp_dsp
+        for _cand_d in m_cands:
+            _prof_d = _gp_dsp(_cand_d)
+            if isinstance(_prof_d, dict) and (
+                ("dspark_draft_n_max" in _prof_d and int(_prof_d.get("dspark_draft_n_max") or 0) <= 0)
+                or ("dspark_draft_filename" in _prof_d and _prof_d.get("dspark_draft_filename") in (None, "", False))
+            ):
+                _dspark_disabled_in_profile = True
+                break
+    except (ImportError, OSError, ValueError, TypeError, AttributeError):
+        pass
+    if not _dspark_disabled_in_profile:
+        try:
+            from backend.gguf_meta import read_gguf_metadata as _rgm_dsp
+            _gmeta_d = _rgm_dsp(model)
+            if str(_gmeta_d.get("architecture") or "").lower() == "inkling2_loop" or int(_gmeta_d.get("loop_count") or 0) > 1:
+                _dspark_disabled_in_profile = True
+        except (ImportError, OSError, ValueError, TypeError, AttributeError):
+            pass
     if not draft_fn:
-        sib_dspark = _get_sib("dspark")
+        sib_dspark = None if _dspark_disabled_in_profile else _get_sib("dspark")
         if sib_dspark is not None:
             draft_path = sib_dspark
             draft_fn = sib_dspark.name
@@ -2162,8 +2184,18 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     "[PRE-FLIGHT-EVICT] %s (slot %d) sacrificed for load %s @ctx=%d",
                     _victim.model, _victim.slot_id, model, num_ctx,
                 )
-                _victim._loading = True  # claim-for-kill (2026-11-08)
-                await _kill_slot_async(_victim)
+                _lk_pf = getattr(self, "_lock", None)
+                if _lk_pf is not None:
+                    async with _lk_pf:
+                        _victim._lifecycle_gen = int(getattr(_victim, "_lifecycle_gen", 0)) + 1
+                        _victim._loading = True  # claim-for-kill (2026-11-08)
+                        _victim.model = None
+                else:
+                    _victim._loading = True  # claim-for-kill (2026-11-08)
+                if hasattr(self, "_kill_claimed_slot"):
+                    await self._kill_claimed_slot(_victim)
+                else:
+                    await _kill_slot_async(_victim)
                 _fit = await self._pre_flight_grace_recheck(
                     model, num_ctx, slot,
                     safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
@@ -2588,11 +2620,13 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 break
             for _ci in range(len(cmd) - 1, -1, -1):
                 _tok = str(cmd[_ci]).strip()
-                if _tok == "--reasoning-budget" and _ci + 1 < len(cmd) and str(cmd[_ci + 1]).strip() == "0":
-                    _r_flag_val = False
+                if _tok == "--reasoning-budget" and _ci + 1 < len(cmd):
+                    if str(cmd[_ci + 1]).strip() == "0":
+                        _r_flag_val = False
                     break
-                if _tok == "--reasoning-budget=0":
-                    _r_flag_val = False
+                if _tok.startswith("--reasoning-budget="):
+                    if _tok.split("=", 1)[1].strip() == "0":
+                        _r_flag_val = False
                     break
             slot._reasoning_on = _r_flag_val
 

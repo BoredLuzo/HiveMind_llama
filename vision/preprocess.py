@@ -125,7 +125,7 @@ def _png_size_from_data_url(img: str) -> tuple[int, int] | None:
         # image just to read 8-24 bytes blocked the loop) and accept
         # JPEG alongside PNG - a 1x1 JPEG used to sail through the
         # degenerate-image filter.
-        head = img.split(",", 1)[1][:96]
+        head = img.split(",", 1)[1][:4096]
         raw = base64.b64decode(head + "==", validate=False)
         if len(raw) < 24:
             return None
@@ -291,7 +291,7 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
                     async for _vp_line in _vp_resp.aiter_lines():
                         if not _vp_line or not _vp_line.startswith("data:"):
                             continue
-                        _vp_raw = _vp_line[6:].strip()
+                        _vp_raw = _vp_line[5:].strip()
                         if _vp_raw == "[DONE]":
                             break
                         try:

@@ -146,6 +146,7 @@ def _load_settings_from_disk(*, strict: bool = False) -> dict:
                         "searxng_enabled", "tool_profile", "budget_schema_budget",
                         "budget_tool_result_cap", "judge_bias",
                         "duo_candidate_models",
+                        "duo_planner_separate_effort",
                         "git_branch"):
                     data.pop(_stale_key, None)
                 # MIGRATION: duo_test_feedback → new split toggles (chunk/final)

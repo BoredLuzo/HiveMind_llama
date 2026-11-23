@@ -466,15 +466,20 @@ def _calculate_thinking_tokens(
     if not (profile.get("thinking_enabled") or _mst_dh(model_name)):
         return 0
     base_budget = None
+    _has_explicit_budget = False
     if agent_name:
-        agent_cfg = _s.get("agents", {}).get(agent_name, {})
-        if "thinking_budget" in agent_cfg:
+        _agents_map = _s.get("agents") or {}
+        agent_cfg = _agents_map.get(agent_name) or (
+            _agents_map.get("duo_planner", {}) if agent_name == "planner" else {}
+        )
+        if isinstance(agent_cfg, dict) and "thinking_budget" in agent_cfg:
             tb = agent_cfg.get("thinking_budget")
             if tb is not None:
                 try:
                     val = int(tb)
                     if val > 0:
                         base_budget = val
+                        _has_explicit_budget = True
                 except (ValueError, TypeError):
                     pass
 
@@ -493,7 +498,7 @@ def _calculate_thinking_tokens(
             if base_budget <= 0:
                 base_budget = 2500
 
-    if input_tokens > 0 and input_tokens < base_budget * 0.2:
+    if not _has_explicit_budget and _user_eff not in _POS_RE and input_tokens > 0 and input_tokens < base_budget * 0.2:
         adaptive_budget = max(200, int(base_budget * 0.3))
     else:
         adaptive_budget = base_budget
@@ -503,6 +508,46 @@ def _calculate_thinking_tokens(
     if _max_thinking_share < 64 or adaptive_budget <= 0:
         return 0
     return min(max(64, int(adaptive_budget)), _max_thinking_share)
+
+
+def resolve_user_planner_thinking_budget(
+    model_name: str,
+    settings_dict: dict | None = None,
+    input_tokens: int = 0,
+    available_ctx: int = 8192,
+) -> int:
+    """Return user-configured planner thinking budget, or 0 (no fixed token cap) when unset."""
+    _s = settings_dict or {}
+    from core.model_sampling import model_supports_thinking as _mst_upb, normalize_reasoning_effort as _norm_upb
+    if _norm_upb(_s.get("reasoning_effort")) == "none":
+        return 0
+    profile = _get_thinking_profile(model_name, _s)
+    if not (profile.get("thinking_enabled") or _mst_upb(model_name)):
+        return 0
+    _user_tb = 0
+    try:
+        _user_tb = int(_s.get("duo_planner_thinking_budget", 0) or 0)
+    except (TypeError, ValueError):
+        _user_tb = 0
+    if _user_tb <= 0:
+        _agents_map = _s.get("agents") or {}
+        for _ak in ("planner", "duo_planner"):
+            _acfg = _agents_map.get(_ak)
+            if isinstance(_acfg, dict) and _acfg.get("thinking_budget") is not None:
+                try:
+                    _cand = int(_acfg.get("thinking_budget") or 0)
+                    if _cand > 0:
+                        _user_tb = _cand
+                        break
+                except (TypeError, ValueError):
+                    pass
+    if _user_tb <= 0:
+        return 0
+    available = max(0, available_ctx - input_tokens)
+    _max_thinking_share = int(available * 0.40)
+    if _max_thinking_share < 64:
+        return 0
+    return min(max(64, _user_tb), _max_thinking_share)
 
 
 def _apply_thinking_fields(

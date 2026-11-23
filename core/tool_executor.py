@@ -913,12 +913,13 @@ async def execute_tool_round(
                 # feedback — accept instead of nagging again (each blocked call
                 # costs a full LLM round + auto-test probe).
                 trs.tc_consecutive[0] += 1
-                if trs.tc_consecutive[0] >= 2:
-                    _logger.warning("[TC-DE-NAG] consecutive task_complete accepted (call #%d)", trs.tc_consecutive[0])
-                    result.task_complete_called = True
-                    break
                 dtool_msgs.append({"role": "tool", "content": _dresult,
                                     "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+                if trs.tc_consecutive[0] >= 2:
+                    _logger.warning("[TC-DE-NAG] consecutive task_complete accepted (call #%d)", trs.tc_consecutive[0])
+                    _pair_unexecuted_tool_calls(dtool_msgs, tool_calls, _i + 1, "not executed: task_complete reached")
+                    result.task_complete_called = True
+                    break
                 _mutations_made = result.verify_mutation_serial > 0
                 # TC-BLOCKED-MARKER (2026-09-13): the handler emits
                 # "[task_complete] Build: blocked" — the old check required

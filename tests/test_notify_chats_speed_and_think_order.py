@@ -653,7 +653,6 @@ async def _test_sse_keepalive_and_detach():
         resp = await _srv_mod.stream(_FakeReq({
             "q": "hi",
             "mode": "simple",
-            "duo_planner_separate_effort": True,
             "planner_reasoning_effort": "HIGH",
         }))
         chunks = []
@@ -692,7 +691,6 @@ check(
     ": keepalive\n\n" in _ka_chunks
     and any('"hello"' in c for c in _ka_chunks)
     and any('"done"' in c for c in _ka_chunks)
-    and _cap_ovr.get("duo_planner_separate_effort") is True
     and _cap_ovr.get("planner_reasoning_effort") == "high"
     and '"test-det-2"' in (str(_det_first) if isinstance(_det_first, str) else _det_first.decode("utf-8"))
     and _det_j.get("done") is True

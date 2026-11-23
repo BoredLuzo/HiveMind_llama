@@ -461,6 +461,8 @@ def preload(settings: dict | None = None, *, model_key: str | None = None) -> bo
         logger.warning("[STT] preload failed to start: %s", exc)
         return False
     _WARM.update({"proc": proc, "port": port, "model": key})
+    import atexit as _stt_atexit
+    _stt_atexit.register(stop_warm)
     logger.info("[STT] preloaded %s (whisper-server on 127.0.0.1:%d)", key, port)
     return True
 

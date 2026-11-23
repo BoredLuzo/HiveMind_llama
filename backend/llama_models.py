@@ -654,7 +654,7 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
                     if _cand.is_file():
                         return _cand
                 _reg_fn_low = _reg_fn.lower()
-                for _cand in MODELS_DIR.rglob("*mmproj*.gguf"):
+                for _cand in MODELS_DIR.rglob("*"):
                     if _cand.is_file() and _cand.name.lower() == _reg_fn_low:
                         return _cand
             elif _reg_p.exists():
@@ -694,8 +694,16 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
 
     # 4. Filename search in MODELS_DIR - family+size first, then family, then legacy generic.
     if MODELS_DIR.exists():
-        _cands = sorted(MODELS_DIR.rglob("*mmproj*.gguf"))
+        _cands = sorted(
+            _p for _p in MODELS_DIR.rglob("*")
+            if _p.is_file() and _p.suffix.lower() == ".gguf" and "mmproj" in _p.name.lower()
+        )
         if _nsize:
+            _sz_rx = re.compile(rf"(?<!\d){re.escape(_nsize)}(?![\da-z])")
+            for _cp in _cands:
+                _n = _norm(_cp.name)
+                if _nfam in _n and _sz_rx.search(_cp.name.lower()):
+                    return _cp
             for _cp in _cands:
                 _n = _norm(_cp.name)
                 if _nfam in _n and _nsize in _n:
@@ -838,22 +846,27 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
     # 'gemma-4:e4b-it-qat' became unselectable (its per-model config was
     # silently skipped). Priority now: known manifest tag >
     # models.json override > shortest (closest to the profile key).
-    _manifest_tags = set(_known_filename_tags().values())
-    _override_keys = set(overrides.keys())
-
-    def _name_rank(n: str) -> tuple[int, int]:
-        # manifest/override names are canonical — the shorter spelling wins
-        # inside a rank; plain parsed aliases keep the LONGEST (the old
-        # behavior — a shorter parse like 'qwen3.6:35b' says less than
-        # 'qwen3.6:35b-a3b-ud').
-        if n in _manifest_tags:
-            return (0, len(n))
-        if n in _override_keys:
-            return (1, len(n))
-        return (2, -len(n))
+    _known_tags_map = _known_filename_tags()
+    _manifest_tags = set(_known_tags_map.values())
+    _clean_overrides = {_strip_alias(k): v for k, v in overrides.items() if isinstance(k, str)}
+    _override_keys = set(_clean_overrides.keys())
 
     for path_key, name_list in file_to_names.items():
         if len(name_list) > 1:
+            _pk_fname = Path(path_key).name.lower()
+            _own_mtag = _known_tags_map.get(_pk_fname)
+
+            def _name_rank(n: str, _own=_own_mtag, _pk=path_key) -> tuple[int, int]:
+                if _own and n == _own:
+                    return (0, len(n))
+                if n in _override_keys and _norm_path_key(str(_clean_overrides.get(n, ""))) == _pk:
+                    return (1, len(n))
+                if n in _manifest_tags and _own is None:
+                    return (0, len(n))
+                if n in _override_keys and _own is None:
+                    return (1, len(n))
+                return (2, -len(n))
+
             name_list.sort(key=_name_rank)
             for dup in name_list[1:]:
                 # DEDUP FIX (2026-10-07, user feedback: minicpm listed twice under different names): an override name stays protected
@@ -862,12 +875,10 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
                 # collapse to ONE listing instead of confusing the model
                 # picker with three entries for the same weights.
                 if dup in _override_names and _norm_path_key(
-                        overrides.get(dup, "")) != path_key:
+                        str(_clean_overrides.get(dup, ""))) != path_key:
                     continue
-                try:
+                if dup in result:
                     result.remove(dup)
-                except ValueError:
-                    pass
 
     _names_cache = result
     _names_cache_ts = _time_module.time()

@@ -242,7 +242,7 @@ async def vram_estimate(model: str = "", ctx: int = 4096):
         return JSONResponse({"error": "model required"}, status_code=400)
     try:
         from backend.llama_vram_table import (
-            VRAM_GB, moe_base_gb_for_experts, moe_cfg_for, vram_of_moe, vram_of_with_ctx,
+            moe_base_gb_for_experts, moe_cfg_for, vram_of, vram_of_moe, vram_of_with_ctx,
         )
         # moe_cfg_for: same exact/-ud/prefix resolution as vram_of_moe — the
         # estimate shown in the UI must agree with the pre-flight gate.
@@ -254,7 +254,7 @@ async def vram_estimate(model: str = "", ctx: int = 4096):
             ram_gb = round(20.6, 1)
         else:
             total = vram_of_with_ctx(model, int(ctx))
-            base = float(VRAM_GB.get(model, 4.0))
+            base = float(vram_of(model))
             kv_gb = round(max(0, total - base), 2)
             ram_gb = 0.0
         return {"model": model, "ctx": int(ctx), "vram_gb": round(total, 2), "vram_kv_gb": kv_gb, "ram_gb": ram_gb}
@@ -314,7 +314,8 @@ async def set_vram_budget(req: Request):
         _sync_vram_budget(settings)
     except Exception:
         pass
-    await asyncio.to_thread(save_settings, settings)
+    import copy as _vram_copy
+    await asyncio.to_thread(save_settings, _vram_copy.deepcopy(settings))
     _invalidate_vram_status_cache()
     _verify = load_settings()
     logger.info("[VRAM-BUDGET] After save: settings['vram_budget_gb']=%s, verify_reload=%s",

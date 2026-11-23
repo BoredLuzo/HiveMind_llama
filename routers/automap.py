@@ -54,7 +54,8 @@ async def automap_apply(req: Request):
             if agent_key in settings.get("agents", {}):
                 settings["agents"][agent_key]["model"] = model
     settings["automap_excluded"] = []
-    await asyncio.to_thread(save_settings, settings)
+    import copy as _am_copy
+    await asyncio.to_thread(save_settings, _am_copy.deepcopy(settings))
     return {"ok": True, "applied": assignments}
 
 

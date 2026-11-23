@@ -754,6 +754,7 @@ def main(argv: list[str] | None = None) -> int:
             except RuntimeError as _cud_dig:
                 # DIGEST (audit r4): fail hard, do not install unverified code
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+                shutil.rmtree(exe.parent, ignore_errors=True)
                 print(f"       [ERROR] {_cud_dig}")
                 return 1
             except Exception as _cud_err:

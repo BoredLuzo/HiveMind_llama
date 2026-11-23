@@ -784,9 +784,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # -- 5. Backup the current code (user data is excluded) ------------------
     bk = f"update_backup_{tagnum}"
+    if (base / bk).exists():
+        bk = f"update_backup_{tagnum}_{int(time.time())}"
     print(f"  Backing up code   : {bk}\\")
     if _run_rc(backup_cmd(base, bk)) >= 8:
         print("  [ERROR] Backup failed - nothing was changed.")
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
     info("5 done: backup created.")
 

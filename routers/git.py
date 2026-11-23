@@ -183,7 +183,8 @@ async def save_git_config_ep(request: Request):
             if k == "git_token" and data[k] in ("****", "***"):
                 continue
             settings[k] = data[k]
-    await asyncio.to_thread(save_settings, settings)
+    import copy as _git_copy
+    await asyncio.to_thread(save_settings, _git_copy.deepcopy(settings))
     valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _resolve_ws(await _ws_from_body(request)))
     has_credentials = bool(settings.get("git_username") or settings.get("git_token"))
     fully_valid = valid and has_credentials

@@ -227,12 +227,13 @@ async def _phase_vram(ctx, state: dict):
             _pin_eff = _pin_norm_re((ctx.settings or {}).get("reasoning_effort"))
             if (
                 _pm in (coder_mdl, exec_mdl)
-                and _pin_eff in _PIN_POS_RE
+                and (_pin_eff in _PIN_POS_RE or (_pin_eff == "auto" and bool(getattr(ctx.duo_config, "coder_tool_thinking", False))))
                 and _pin_mst(_pm)
             ):
                 try:
                     from backend.llama_server_manager import manager as _lsm_pin_ro
-                    _lsm_pin_ro._reasoning_override = {_pm: True}
+                    from backend.manager_load import set_reasoning_override as _set_pin_ro
+                    _set_pin_ro(_lsm_pin_ro, _pm, True)
                 except (ImportError, AttributeError):
                     pass
             await _bk_load(_pm, keep_alive="-1", num_ctx=_pc_ctx or None)
@@ -395,7 +396,11 @@ async def _phase_vram(ctx, state: dict):
         clear_reasoning_override as _clr_ro_vram,
         set_reasoning_override as _set_ro_vram,
     )
-    if _exec_native_think and (ctx.duo_config.coder_tool_thinking_explicit or _user_eff in _VRAM_POS_RE):
+    if _exec_native_think and (
+        ctx.duo_config.coder_tool_thinking_explicit
+        or _user_eff in _VRAM_POS_RE
+        or (_user_eff == "auto" and _coder_tool_think)
+    ):
         _set_ro_vram(_lsm_ro, exec_mdl, _coder_tool_think)
     else:
         _clr_ro_vram(_lsm_ro, exec_mdl)

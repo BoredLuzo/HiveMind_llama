@@ -219,7 +219,11 @@ async def _chat_route_decision(ps):
 
     # LEARNED-ROUTE: consult routing weights for data-driven mode selection.
     # Only overrides if enough samples exist (N >= 20) and confidence >= 0.70.
-    _routing_hint = get_routing_suggestion(_task_type)
+    _routing_hint = (
+        get_routing_suggestion(_task_type)
+        if (not force_complexity and not agentic_force)
+        else None
+    )
     if _routing_hint is not None and _routing_hint.get("confidence", 0) >= 0.70:
         _preferred = _routing_hint["preferred_mode"]
         _mapping = {"duo": "code_duo", "pipeline": "complex", "direct": "simple"}
@@ -237,7 +241,11 @@ async def _chat_route_decision(ps):
     # DIRECT-CHAT-TOOLS (2026-08-31): when the direct chat has tools enabled,
     # tool-y requests are handled by the direct tool loop (run_direct) instead
     # of the separate tool-agent path -- one unified chat context/session.
-    _direct_tools_route = bool(settings.get("direct_tools_enabled", True))
+    _direct_tools_route = bool(
+        _run_settings["direct_tools_enabled"]
+        if (isinstance(_run_settings, dict) and "direct_tools_enabled" in _run_settings)
+        else settings.get("direct_tools_enabled", True)
+    )
     _route_as_tool = (
         ((_judge_route == "tool") or (not _judge_verdict and detect_tool_request(user_input)))
         and mode not in ("simple", "pipeline", "agent")

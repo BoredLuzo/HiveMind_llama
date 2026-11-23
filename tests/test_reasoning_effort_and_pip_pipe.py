@@ -1269,10 +1269,14 @@ const ctx = {
 };
 vm.createContext(ctx);
 vm.runInContext(fnSrc, ctx);
-// 1. duo_planner uses duoPlannerModel (lfm2.5 -> n/a), duo uses duoCoderModel (inkling)
+// 1. duo_planner is decoupled from chat composer (uses plannerReasoningEffort), duo uses duoCoderModel (inkling)
 ctx.setReasoningEffort('high');
 const duoBadges = slots.map(s => s._ch[0] && ({ txt: s._ch[0].textContent, cls: s._ch[0].className }));
+ctx.setPlannerReasoningEffort('high');
+const planNaBadge = slots[1]._ch[0] && ({ txt: slots[1]._ch[0].textContent, cls: slots[1]._ch[0].className });
+ctx.S.plannerReasoningEffort = 'auto';
 // 2. Revert callback restores previous effort ('auto')
+ctx.setReasoningEffort('high');
 const revertIsFn = typeof lastRevert === 'function';
 if (revertIsFn) lastRevert();
 const afterRevert = ctx.S.reasoningEffort;
@@ -1287,7 +1291,7 @@ const k2Off = { label: lblEl.textContent, vis: opts.filter(o => !o.hidden).map(o
 ctx.S.duoCoderModel = 'lfm2.5:24b';
 ctx._renderReasoningEffortUI('none');
 const lfmOff = { label: lblEl.textContent, ovrClass: ovrEl.className, resetHidden: ovrReset.hidden, badge: slots[0]._ch[0] && ({ txt: slots[0]._ch[0].textContent, cls: slots[0]._ch[0].className }) };
-console.log(JSON.stringify({ duoBadges, revertIsFn, afterRevert, inkOn, k2Off, lfmOff }));
+console.log(JSON.stringify({ duoBadges, planNaBadge, revertIsFn, afterRevert, inkOn, k2Off, lfmOff }));
 """
 _nda = subprocess.run(["node", "-e", _node_da], cwd=_ROOT, capture_output=True, text=True)
 _nda_ok = _nda.returncode == 0
@@ -1295,10 +1299,11 @@ if _nda_ok:
     _ndaj = json.loads(_nda.stdout.strip())
     _nda_ok = (
         _ndaj["duoBadges"][0]["txt"] == "Composer: High \u00d7"
-        and _ndaj["duoBadges"][1]["txt"] == "Composer: High (n/a) \u00d7"
-        and "muted" in _ndaj["duoBadges"][1]["cls"]
+        and _ndaj["duoBadges"][1] is None
+        and _ndaj["planNaBadge"]["txt"] == "Planner: High (n/a) \u00d7"
+        and "muted" in _ndaj["planNaBadge"]["cls"]
         and _ndaj["revertIsFn"] is True
-        and _ndaj["afterRevert"] == "auto"
+        and _ndaj["afterRevert"] == "high"
         and _ndaj["inkOn"]["label"] == "Medium (from On)"
         and _ndaj["inkOn"]["active"] == ["medium"]
         and "none" in _ndaj["k2Off"]["vis"]
@@ -1312,20 +1317,20 @@ if _nda_ok:
     )
 check("Deep-audit P1-13/14 & P2: frontend k2 Off, On-on-effort, LFM Off reset, duo_planner & revert callback hold", _nda_ok, _nda.stdout.strip() or _nda.stderr.strip())
 
-# ── 14. Separate Planner Reasoning Effort & Composer Button Sizing ───────────
+# ── 14. Sidebar Planner Reasoning Effort & Composer Button Sizing ───────────
 from settings_defaults import DEFAULT_SETTINGS as _DEF_S, SETTINGS_UI_META as _UI_META  # noqa: E402
 
 _sep_meta_ok = (
-    _DEF_S.get("duo_planner_separate_effort") is False
+    "duo_planner_separate_effort" not in _DEF_S
     and _DEF_S.get("planner_reasoning_effort") == "auto"
-    and "duo_planner_separate_effort" in _UI_META
     and "planner_reasoning_effort" in _UI_META
     and set(_UI_META["planner_reasoning_effort"].get("choices") or ()) == set(MS.VALID_REASONING_EFFORTS)
 )
-_orig_cfg = {"reasoning_effort": "none", "duo_planner_separate_effort": True, "planner_reasoning_effort": "high"}
+_orig_cfg = {"reasoning_effort": "none", "planner_reasoning_effort": "high"}
 _eff_on = MS.resolve_planner_effort_settings(_orig_cfg)
-_eff_off = MS.resolve_planner_effort_settings({"reasoning_effort": "low", "duo_planner_separate_effort": False, "planner_reasoning_effort": "max"})
-_eff_bad = MS.resolve_planner_effort_settings({"reasoning_effort": "high", "duo_planner_separate_effort": True, "planner_reasoning_effort": "bogus"})
+_eff_auto = MS.resolve_planner_effort_settings({"reasoning_effort": "low", "planner_reasoning_effort": "auto"})
+_eff_bare = MS.resolve_planner_effort_settings({"reasoning_effort": "low"})
+_eff_bad = MS.resolve_planner_effort_settings({"reasoning_effort": "high", "planner_reasoning_effort": "bogus"})
 
 _pl_mod.httpx = _SN(
     AsyncClient=_PlFakeClient,
@@ -1335,41 +1340,41 @@ _pl_mod.httpx = _SN(
     ConnectError=_orig_pl_httpx.ConnectError,
 )
 try:
-    # Case A: Coder='none', Separate Planner='high' -> Planner runs WITH thinking=True & effort='high'
+    # Case A: Composer='none', Sidebar Planner='high' -> Planner runs WITH thinking=True & effort='high'
     _pl_stream_payloads.clear()
     _res_sep_hi = asyncio.run(_pl_mod.run_planner(
         task="Plan Pac-Man", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
         planner_port=18081, use_thinking=False, thinking_budget=0,
-        settings={"reasoning_effort": "none", "duo_planner_separate_effort": True, "planner_reasoning_effort": "high"},
+        settings={"reasoning_effort": "none", "planner_reasoning_effort": "high"},
     ))
     _pl_sep_hi = dict(_pl_stream_payloads[0])
 
-    # Case B: Coder='high', Separate Planner='none' -> Planner runs WITH thinking=False & effort='none'
+    # Case B: Composer='high', Sidebar Planner='none' -> Planner runs WITH thinking=False & effort='none'
     _pl_stream_payloads.clear()
     _res_sep_none = asyncio.run(_pl_mod.run_planner(
         task="Plan Pac-Man", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
         planner_port=18081, use_thinking=True, thinking_budget=0,
-        settings={"reasoning_effort": "high", "duo_planner_separate_effort": True, "planner_reasoning_effort": "none"},
+        settings={"reasoning_effort": "high", "planner_reasoning_effort": "none"},
     ))
     _pl_sep_none = dict(_pl_stream_payloads[0])
 
-    # Case C: In-loop planner with separate='max' while Coder='low'
+    # Case C: In-loop planner with Sidebar Planner='max' while Composer='low'
     _pl_post_payloads.clear()
     asyncio.run(_pl_mod.run_inloop_planner(
         task="Refine", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
         planner_port=18081, use_thinking=False, thinking_budget=0,
-        settings={"reasoning_effort": "low", "duo_planner_separate_effort": True, "planner_reasoning_effort": "max"},
+        settings={"reasoning_effort": "low", "planner_reasoning_effort": "max"},
     ))
     _inloop_sep_max = dict(_pl_post_payloads[0])
 
-    # Case D: Separate toggle OFF -> planner_reasoning_effort='max' is ignored; follows Coder 'low'
+    # Case D: Composer='none', Sidebar Planner='auto' with use_thinking=True -> Planner ignores Composer 'none' and keeps thinking=True (profile 'medium')
     _pl_post_payloads.clear()
     asyncio.run(_pl_mod.run_inloop_planner(
         task="Refine", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
-        planner_port=18081, use_thinking=False, thinking_budget=0,
-        settings={"reasoning_effort": "low", "duo_planner_separate_effort": False, "planner_reasoning_effort": "max"},
+        planner_port=18081, use_thinking=True, thinking_budget=0,
+        settings={"reasoning_effort": "none", "planner_reasoning_effort": "auto"},
     ))
-    _inloop_sep_off = dict(_pl_post_payloads[0])
+    _inloop_auto_decoupled = dict(_pl_post_payloads[0])
 finally:
     _pl_mod.httpx = _orig_pl_httpx
 
@@ -1431,17 +1436,19 @@ try:
     asyncio.run(_pl_mod.run_planner(
         task="Plan Pac-Man", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
         planner_port=18081, use_thinking=True, thinking_budget=0,
-        settings={"reasoning_effort": "none", "duo_planner_separate_effort": True, "planner_reasoning_effort": "high"},
+        settings={"reasoning_effort": "none", "planner_reasoning_effort": "high"},
     ))
 finally:
     _pl_mod.httpx = _orig_pl_httpx
 
+_input_box_slice = _html_src[_html_src.index('id="input-box"'):_html_src.index('id="pause-btn"')]
 check(
-    "Separate Planner effort settings, resolver, planner/inloop/NT-retry payloads, slot overrides & CSS button sizing hold",
+    "Sidebar Planner effort settings, resolver, planner/inloop/NT-retry payloads, single composer pill & CSS hold",
     _sep_meta_ok
     and _eff_on["reasoning_effort"] == "high"
     and _orig_cfg["reasoning_effort"] == "none"
-    and _eff_off["reasoning_effort"] == "low"
+    and _eff_auto["reasoning_effort"] == "auto"
+    and _eff_bare["reasoning_effort"] == "low"
     and _eff_bad["reasoning_effort"] == "auto"
     and _res_sep_hi.used_thinking is True
     and _pl_sep_hi.get("thinking") is True
@@ -1451,7 +1458,8 @@ check(
     and _pl_sep_none.get("reasoning_effort") == "none"
     and _inloop_sep_max.get("thinking") is True
     and _inloop_sep_max.get("reasoning_effort") == "max"
-    and _inloop_sep_off.get("reasoning_effort") == "low"
+    and _inloop_auto_decoupled.get("thinking") is True
+    and _inloop_auto_decoupled.get("reasoning_effort") == "medium"
     and len(_nt_retry_payloads) == 2
     and _nt_retry_payloads[0].get("reasoning_effort") == "high"
     and _nt_retry_payloads[1].get("thinking") is False
@@ -1461,17 +1469,16 @@ check(
     and "set_reasoning_override as _set_cl_ro" in _dcl_src
     and "resolve_planner_effort_settings as _ilp_res_cfg" in _dip_src
     and "set_reasoning_override as _set_ilp_ro" in _dip_src
-    and '"duo_planner_separate_effort" in body' in _srv_src
     and '"planner_reasoning_effort" in body' in _srv_src
     and '"planner_reasoning_effort"' in _cfg_src
-    and 'id="planner-effort-wrap"' in _html_src
+    and 'id="planner-effort-wrap"' not in _input_box_slice
+    and 'id="effort-wrap"' in _input_box_slice
+    and 'id="planner-effort-row"' in _html_src
     and 'id="planner-effort-trigger"' in _html_src
-    and 'id="duo-planner-sep-effort-toggle"' in _html_src
-    and 'id="routing-planner-sep-effort-toggle"' in _html_src
-    and 'id="effort-trig-role"' in _html_src
+    and 'id="routing-planner-effort-sel"' in _html_src
     and "min-width:96px;height:28px" in _css_src
-    and ".planner-effort-trigger{min-width:112px" in _css_src,
-    repr((_sep_meta_ok, _eff_on.get("reasoning_effort"), _pl_sep_hi.get("reasoning_effort"), _pl_sep_none.get("reasoning_effort"), _inloop_sep_max.get("reasoning_effort"), _inloop_sep_off.get("reasoning_effort"), [p.get("reasoning_effort") for p in _nt_retry_payloads])),
+    and ".sidebar-effort-trigger{min-width:104px" in _css_src,
+    repr((_sep_meta_ok, _eff_on.get("reasoning_effort"), _eff_auto.get("reasoning_effort"), _pl_sep_hi.get("reasoning_effort"), _pl_sep_none.get("reasoning_effort"), _inloop_sep_max.get("reasoning_effort"), _inloop_auto_decoupled.get("reasoning_effort"), [p.get("reasoning_effort") for p in _nt_retry_payloads])),
 )
 
 _node_sep = r"""
@@ -1487,26 +1494,26 @@ function mkOpts(){ return ['auto', 'none', 'on', 'minimal', 'low', 'medium', 'hi
   _a: { 'data-effort': l }, getAttribute(k){return this._a[k]||null;}, setAttribute(k,v){this._a[k]=String(v);}
 })); }
 const mainOpts = mkOpts(), planOpts = mkOpts();
-function mkEl(extra){ return Object.assign({ hidden: false, textContent: '', className: '', title: '', checked: false, style: { display: '' }, _a: {}, setAttribute(k,v){this._a[k]=String(v);}, getAttribute(k){return this._a[k]||null;}, removeAttribute(k){delete this._a[k];} }, extra || {}); }
+function mkEl(extra){ return Object.assign({ hidden: false, textContent: '', innerHTML: '', value: '', disabled: false, className: '', title: '', style: { display: '' }, _a: {}, setAttribute(k,v){this._a[k]=String(v);}, getAttribute(k){return this._a[k]||null;}, removeAttribute(k){delete this._a[k];} }, extra || {}); }
 const byId = {
-  'effort-trigger': mkEl(), 'effort-trig-role': mkEl({ hidden: true }), 'effort-trig-lbl': mkEl(),
+  'effort-trigger': mkEl(), 'effort-trig-lbl': mkEl(),
   'effort-menu-ctx': mkEl(), 'effort-menu-ovr': mkEl({ hidden: true }), 'effort-menu-ovr-txt': mkEl(),
   'effort-ovr-reset-btn': mkEl({ hidden: true }), 'effort-menu-empty': mkEl({ hidden: true }),
   'effort-menu': mkEl({ hidden: true, querySelectorAll(sel){ return sel === '.effort-opt' ? mainOpts : []; } }),
-  'planner-effort-wrap': mkEl({ hidden: true }), 'planner-effort-trigger': mkEl(), 'planner-effort-trig-lbl': mkEl(),
+  'planner-effort-wrap': mkEl(), 'planner-effort-trigger': mkEl(), 'planner-effort-trig-lbl': mkEl(),
+  'planner-effort-hint': mkEl(),
   'planner-effort-menu-ctx': mkEl(), 'planner-effort-menu-ovr': mkEl({ hidden: true }), 'planner-effort-menu-ovr-txt': mkEl(),
   'planner-effort-ovr-reset-btn': mkEl({ hidden: true }), 'planner-effort-menu-empty': mkEl({ hidden: true }),
   'planner-effort-menu': mkEl({ hidden: true, querySelectorAll(sel){ return sel === '.effort-opt' ? planOpts : []; } }),
-  'duo-planner-sep-effort-toggle': mkEl({ checked: false }),
-  'routing-planner-sep-effort-toggle': mkEl({ checked: false }),
-  'routing-planner-sep-row': mkEl(),
+  'routing-planner-effort-row': mkEl(),
+  'routing-planner-effort-sel': mkEl(),
 };
 function mkSlot(k){ return { _ch: [], getAttribute(a){return a==='data-agent-override'?k:null;}, set innerHTML(v){if(!v)this._ch=[];}, querySelector(){return this._ch[0]||null;}, appendChild(c){this._ch.push(c);} }; }
 const slots = [mkSlot('duo'), mkSlot('duo_planner')];
 let lastPatch = null, lastRevert = null;
 const ctx = {
   S: {
-    reasoningEffort: 'low', duoPlannerSeparateEffort: false, plannerReasoningEffort: 'auto',
+    reasoningEffort: 'auto', plannerReasoningEffort: 'auto',
     mode: 'code_duo', routingPlanner: 'decider', duoPlannerUseCoderCtx: true,
     duoCoderModel: 'inkling-2-mini-ud', duoPlannerModel: '',
     duoAgenticThinking: true, duoToolThinkingAlways: false, duoToolThinkingMode: 'off',
@@ -1528,103 +1535,134 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(fnSrc, ctx);
 
-// 1. Default coupled state: planner pill & coder role tag hidden; both badges show Composer: Low
-ctx._renderReasoningEffortUI('low');
+// 1. Default decoupled state: Coder Auto reflects Coder toggles (Auto · Off) independent of Planner Thinking; Planner resolves to Coder model (duoPlannerUseCoderCtx=true -> Auto · Med) & syncs Auto routing select
+ctx._renderReasoningEffortUI('auto');
 const s1 = {
-  planHidden: byId['planner-effort-wrap'].hidden,
-  roleHidden: byId['effort-trig-role'].hidden,
-  coderBadge: slots[0]._ch[0] && slots[0]._ch[0].textContent,
-  planBadge: slots[1]._ch[0] && slots[1]._ch[0].textContent,
-};
-
-// 2. Enable separate planner effort: both checkboxes sync; planner resolves to Coder model (duoPlannerUseCoderCtx=true beats stale agentsCfg.duo_planner); Coder Auto reflects Coder toggles (Auto · Off) decoupled from Planner Thinking
-ctx.S.reasoningEffort = 'auto';
-ctx.onDuoPlannerSeparateEffortChange(true);
-const s2 = {
-  patch: lastPatch,
-  chk1: byId['duo-planner-sep-effort-toggle'].checked,
-  chk2: byId['routing-planner-sep-effort-toggle'].checked,
-  planHidden: byId['planner-effort-wrap'].hidden,
-  roleHidden: byId['effort-trig-role'].hidden,
   coderAutoLbl: byId['effort-trig-lbl'].textContent,
   planLbl: byId['planner-effort-trig-lbl'].textContent,
   planCtx: byId['planner-effort-menu-ctx'].textContent,
+  planHint: byId['planner-effort-hint'].textContent,
+  rtVal: byId['routing-planner-effort-sel'].value,
+  rtHasHigh: byId['routing-planner-effort-sel'].innerHTML.includes('value="high"'),
+  rtRowDisp: byId['routing-planner-effort-row'].style.display,
 };
 
-// 3. Set Coder='low' and Planner='high': independent badges & onclick handlers
-ctx.S.reasoningEffort = 'low';
-ctx._renderReasoningEffortUI('low');
+// 2. Setting chat composer to 'low' overrides ONLY Coder badge (NOT Planner!)
+ctx.setReasoningEffort('low');
+const s2 = {
+  coderBadge: slots[0]._ch[0] && { txt: slots[0]._ch[0].textContent, oc: slots[0]._ch[0].getAttribute('onclick') },
+  planBadgeEmpty: slots[1]._ch.length === 0,
+};
+
+// 3. Setting Sidebar Planner Effort to 'high' overrides Planner badge & syncs Auto routing select without touching Coder
 ctx.setPlannerReasoningEffort('high');
 const s3 = {
   patch: lastPatch,
   planLbl: byId['planner-effort-trig-lbl'].textContent,
   coderLbl: byId['effort-trig-lbl'].textContent,
+  rtVal: byId['routing-planner-effort-sel'].value,
   coderBadge: slots[0]._ch[0] && { txt: slots[0]._ch[0].textContent, oc: slots[0]._ch[0].getAttribute('onclick') },
   planBadge: slots[1]._ch[0] && { txt: slots[1]._ch[0].textContent, oc: slots[1]._ch[0].getAttribute('onclick') },
 };
 
-// 4. Revert callback restores planner effort to 'auto'
+// 4. Revert callback restores planner effort to 'auto' and clears Planner badge
 lastRevert();
-const s4 = { afterRevert: ctx.S.plannerReasoningEffort, planBadgeEmpty: slots[1]._ch.length === 0 };
+const s4 = { afterRevert: ctx.S.plannerReasoningEffort, rtVal: byId['routing-planner-effort-sel'].value, planBadgeEmpty: slots[1]._ch.length === 0 };
 
-// 5. Auto mode keeps Planner pill visible (without CODER role tag) when routingPlanner !== 'never', hides on 'never' or in 'simple'/'pipeline'
-ctx.S.mode = 'auto';
-ctx.S.routingPlanner = 'decider';
-ctx._renderReasoningEffortUI('low');
-const s5Auto = { planHidden: byId['planner-effort-wrap'].hidden, roleHidden: byId['effort-trig-role'].hidden, rowDisp: byId['routing-planner-sep-row'].style.display };
-
+// 5. Auto routing_planner='never' hides the Auto routing planner effort row
 ctx.S.routingPlanner = 'never';
 ctx._renderReasoningEffortUI('low');
-const s5Never = { planHidden: byId['planner-effort-wrap'].hidden, rowDisp: byId['routing-planner-sep-row'].style.display };
+const s5Never = { rtRowDisp: byId['routing-planner-effort-row'].style.display };
 
-ctx.S.mode = 'simple';
+// 6. Unchecking duoPlannerUseCoderCtx falls back to agentsCfg.duo_planner (lfm2.5 -> No reasoning & grays out all reasoning levels)
 ctx.S.routingPlanner = 'decider';
-ctx._renderReasoningEffortUI('low');
-const s5Simple = { planHidden: byId['planner-effort-wrap'].hidden };
-
-// 6. Unchecking duoPlannerUseCoderCtx falls back to agentsCfg.duo_planner (lfm2.5 -> No reasoning)
-ctx.S.mode = 'code_duo';
 ctx.S.duoPlannerUseCoderCtx = false;
 ctx._renderReasoningEffortUI('low');
-const s6SepModel = { planLbl: byId['planner-effort-trig-lbl'].textContent, planCtx: byId['planner-effort-menu-ctx'].textContent };
+const s6SepModel = {
+  planLbl: byId['planner-effort-trig-lbl'].textContent,
+  planCtx: byId['planner-effort-menu-ctx'].textContent,
+  rtDisabled: byId['routing-planner-effort-sel'].disabled,
+  shownDis: planOpts.filter(o => !o.hidden && o.disabled).map(o => o._lvl),
+  shownEn: planOpts.filter(o => !o.hidden && !o.disabled).map(o => o._lvl),
+};
 
-console.log(JSON.stringify({ s1, s2, s3, s4, s5Auto, s5Never, s5Simple, s6SepModel }));
+// 7. Effort model with subset of levels (qwen3.6: low/medium/high) shows minimal/max grayed out (disabled, NOT hidden)
+ctx.S.modelProfiles['qwen3.6:35b'] = { thinking: true, reasoning_mode: 'effort', reasoning_levels: ['none', 'low', 'medium', 'high'], reasoning_template_source: 'external:chat_template_sharp_v22.5.0.jinja', reasoning_effort: 'medium' };
+ctx.S.duoPlannerModel = 'qwen3.6:35b';
+ctx._renderReasoningEffortUI('low');
+const s7Gray = {
+  enabled: planOpts.filter(o => !o.hidden && !o.disabled).map(o => o._lvl),
+  grayed: planOpts.filter(o => !o.hidden && o.disabled).map(o => o._lvl),
+  rtDisMax: byId['routing-planner-effort-sel'].innerHTML.includes('value="max" disabled'),
+};
+
+// 8. Carried-over 'on' on graduated model or 'max' on qwen3.6 never leaves routing select without a matching option
+ctx.S.plannerReasoningEffort = 'on';
+ctx._renderPlannerReasoningEffortUI('on');
+const s8OnCarry = {
+  rtHasOn: byId['routing-planner-effort-sel'].innerHTML.includes('value="on"'),
+  rtVal: byId['routing-planner-effort-sel'].value,
+};
+ctx.S.plannerReasoningEffort = 'max';
+ctx._renderPlannerReasoningEffortUI('max');
+const s8MaxCarry = {
+  rtMappedTxt: byId['routing-planner-effort-sel'].innerHTML.includes('High (from Max)'),
+};
+
+console.log(JSON.stringify({ s1, s2, s3, s4, s5Never, s6SepModel, s7Gray, s8OnCarry, s8MaxCarry }));
 """
 _nsep = subprocess.run(["node", "-e", _node_sep], cwd=_ROOT, capture_output=True, text=True)
 _nsep_ok = _nsep.returncode == 0
 if _nsep_ok:
     _nsep_j = json.loads(_nsep.stdout.strip())
     _nsep_ok = (
-        _nsep_j["s1"]["planHidden"] is True
-        and _nsep_j["s1"]["roleHidden"] is True
-        and _nsep_j["s1"]["coderBadge"] == "Composer: Low \u00d7"
-        and _nsep_j["s1"]["planBadge"] == "Composer: Low \u00d7"
-        and _nsep_j["s2"]["patch"] == {"duo_planner_separate_effort": True}
-        and _nsep_j["s2"]["chk1"] is True
-        and _nsep_j["s2"]["chk2"] is True
-        and _nsep_j["s2"]["planHidden"] is False
-        and _nsep_j["s2"]["roleHidden"] is False
-        and _nsep_j["s2"]["coderAutoLbl"] == "Auto \u00b7 Off"
-        and _nsep_j["s2"]["planLbl"] == "Auto \u00b7 Med"
-        and "inkling-2-mini-ud" in _nsep_j["s2"]["planCtx"]
+        _nsep_j["s1"]["coderAutoLbl"] == "Auto \u00b7 Off"
+        and _nsep_j["s1"]["planLbl"] == "Auto \u00b7 Med"
+        and "inkling-2-mini-ud" in _nsep_j["s1"]["planCtx"]
+        and "Independent of chat composer" in _nsep_j["s1"]["planHint"]
+        and _nsep_j["s1"]["rtVal"] == "auto"
+        and _nsep_j["s1"]["rtHasHigh"] is True
+        and _nsep_j["s1"]["rtRowDisp"] == ""
+        and _nsep_j["s2"]["coderBadge"]["txt"] == "Composer: Low \u00d7"
+        and _nsep_j["s2"]["planBadgeEmpty"] is True
         and _nsep_j["s3"]["patch"] == {"planner_reasoning_effort": "high"}
         and _nsep_j["s3"]["planLbl"] == "High"
         and _nsep_j["s3"]["coderLbl"] == "Low"
+        and _nsep_j["s3"]["rtVal"] == "high"
         and _nsep_j["s3"]["coderBadge"]["txt"] == "Composer: Low \u00d7"
         and _nsep_j["s3"]["coderBadge"]["oc"] == "setReasoningEffort('auto')"
         and _nsep_j["s3"]["planBadge"]["txt"] == "Planner: High \u00d7"
         and _nsep_j["s3"]["planBadge"]["oc"] == "setPlannerReasoningEffort('auto')"
         and _nsep_j["s4"]["afterRevert"] == "auto"
+        and _nsep_j["s4"]["rtVal"] == "auto"
         and _nsep_j["s4"]["planBadgeEmpty"] is True
-        and _nsep_j["s5Auto"]["planHidden"] is False
-        and _nsep_j["s5Auto"]["roleHidden"] is True
-        and _nsep_j["s5Auto"]["rowDisp"] == ""
-        and _nsep_j["s5Never"]["planHidden"] is True
-        and _nsep_j["s5Never"]["rowDisp"] == "none"
-        and _nsep_j["s5Simple"]["planHidden"] is True
+        and _nsep_j["s5Never"]["rtRowDisp"] == "none"
         and _nsep_j["s6SepModel"]["planLbl"] == "No reasoning"
         and "lfm2.5:24b" in _nsep_j["s6SepModel"]["planCtx"]
+        and _nsep_j["s6SepModel"]["rtDisabled"] is True
+        and _nsep_j["s6SepModel"]["shownEn"] == ["auto"]
+        and "high" in _nsep_j["s6SepModel"]["shownDis"]
+        and _nsep_j["s7Gray"]["enabled"] == ["auto", "none", "low", "medium", "high"]
+        and _nsep_j["s7Gray"]["grayed"] == ["minimal", "max"]
+        and _nsep_j["s7Gray"]["rtDisMax"] is True
+        and _nsep_j["s8OnCarry"]["rtHasOn"] is True
+        and _nsep_j["s8OnCarry"]["rtVal"] == "on"
+        and _nsep_j["s8MaxCarry"]["rtMappedTxt"] is True
     )
-check("Node VM confirms separate Planner effort across Code/Auto/Simple modes, toggle sync, Coder decoupling & model resolution", _nsep_ok, _nsep.stdout.strip() or _nsep.stderr.strip())
+check("Node VM confirms sidebar Planner effort gray-out, Auto routing select sync, Composer decoupling & model resolution", _nsep_ok, _nsep.stdout.strip() or _nsep.stderr.strip())
+
+from core.duo_helpers import resolve_user_planner_thinking_budget as _res_upb  # noqa: E402
+_, _nt_smp_chk = _pl_mod._resolve_planner_sampling(
+    "inkling-2-mini-ud", False,
+    {"reasoning_effort": "none", "planner_reasoning_effort": "none"},
+    fallback_temp=0.1,
+)
+check(
+    "Planner user thinking budget defaults to 0 (no fixed tokens) and honors explicit user budget + NT retry sampling",
+    _res_upb("inkling-2-mini-ud", {"reasoning_effort": "high"}, input_tokens=400, available_ctx=36000) == 0
+    and _res_upb("inkling-2-mini-ud", {"reasoning_effort": "high", "duo_planner_thinking_budget": 4000}, input_tokens=400, available_ctx=36000) == 4000
+    and _nt_smp_chk.get("reasoning_effort") == "none"
+    and 'id="duo-tool-thinking-mode-wrap"' not in _html_src,
+)
 
 sys.exit(h.finish("reasoning_effort_and_pip_pipe"))

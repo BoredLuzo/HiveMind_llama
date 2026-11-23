@@ -358,9 +358,8 @@ DEFAULT_SETTINGS = {
     # thinking toggle ("auto" inherits per-agent sidebar/card settings + model
     # profile defaults; independent of Think-Budget sliders).
     "reasoning_effort": "auto",
-    # SEPARATE-PLANNER-EFFORT (2026-11-23): optional independent reasoning effort
-    # for the Code Duo Planner (adds a second planner effort dropdown in Code Duo).
-    "duo_planner_separate_effort": False,
+    # PLANNER-REASONING-EFFORT (2026-11-23): independent sidebar reasoning effort
+    # for the Code Duo Planner ("auto" follows Planner Thinking + planner model default).
     "planner_reasoning_effort": "auto",
     # TOOL-THINKING BUDGET CAP: upper bound for the per-round thinking budget
     # in agentic tool rounds (only has an effect when tool thinking is on via
@@ -925,7 +924,6 @@ SETTINGS_UI_META = {
     "duo_tool_thinking_budget_cap": {"group": "agentic", "apply_mode": "live", "min": 0, "max": 32768, "step": 128},
     "duo_coder_tool_tier": {"group": "agentic", "apply_mode": "live", "choices": ["core", "full"]},
     "reasoning_effort": {"group": "agentic", "apply_mode": "live", "choices": ["auto", "none", "on", "minimal", "low", "medium", "high", "max"]},
-    "duo_planner_separate_effort": {"group": "agentic", "apply_mode": "live"},
     "planner_reasoning_effort": {"group": "agentic", "apply_mode": "live", "choices": ["auto", "none", "on", "minimal", "low", "medium", "high", "max"]},
     "duo_coder_after_run": {"group": "agentic", "apply_mode": "live", "choices": ["keep", "evict"]},
     "direct_tools_tier": {"group": "agentic", "apply_mode": "live", "choices": ["off", "readonly", "research", "python", "mcp", "full"]},

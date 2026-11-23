@@ -234,6 +234,8 @@ class ServerSpec:
                 raise McpError(f"command not found: {self.command}")
             exe = found
         argv = [exe, *self.args]
+        if any(c in "\x00\n\r" for tok in argv for c in str(tok)):
+            raise McpError(f"MCP command token contains NUL or newline characters: {self.name}")
         if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
             # M5: cmd parses its command line. An argument like
             # https://x/?a=1&b=2 would split the command, and %VAR% would be
@@ -397,20 +399,35 @@ class ServerConn:
         env.update(self.spec.env)
         env.setdefault("PYTHONUNBUFFERED", "1")
         try:
-            self._proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.spec.cwd or None,
-                env=env,
-                # POSIX: own process group so the whole tree can be signalled.
-                # Windows: no console window (the engine often runs under
-                # pythonw) and a tree kill via taskkill.
-                start_new_session=(sys.platform != "win32"),
-                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                               if sys.platform == "win32" else 0),
-            )
+            if (sys.platform == "win32" and len(argv) >= 4
+                    and str(argv[0]).lower() in ("cmd", "cmd.exe")
+                    and str(argv[2]).lower() == "/c"):
+                from infra.lsp_registry import _quote_cmd_token
+                _cmd_exe = _quote_cmd_token(argv[3])
+                self._proc = await asyncio.create_subprocess_shell(
+                    " ".join([_cmd_exe, *argv[4:]]),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=self.spec.cwd or None,
+                    env=env,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                self._proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=self.spec.cwd or None,
+                    env=env,
+                    # POSIX: own process group so the whole tree can be signalled.
+                    # Windows: no console window (the engine often runs under
+                    # pythonw) and a tree kill via taskkill.
+                    start_new_session=(sys.platform != "win32"),
+                    creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                   if sys.platform == "win32" else 0),
+                )
         except (OSError, ValueError) as exc:
             raise McpError(f"could not start {self.spec.name}: {exc}") from exc
         self._drainer = asyncio.create_task(self._drain_stderr())

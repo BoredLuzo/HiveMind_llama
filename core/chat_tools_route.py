@@ -109,7 +109,8 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                        registry_get("direct"))
     _tool_ctx_override = max(_get_num_ctx(_tool_model) or 4096, 8192)
     _tool_opts: dict = {"temperature": 0.1, "num_predict": 1200, "num_ctx": _tool_ctx_override}
-    _tool_ws = bool(settings.get("duo_websearch_enabled", False)) and _tool_websearch
+    _eff_cfg = ps.run_settings if isinstance(ps.run_settings, dict) else settings
+    _tool_ws = bool(_eff_cfg.get("duo_websearch_enabled", settings.get("duo_websearch_enabled", False))) and _tool_websearch
     # SCHEMA-FIT (2026-10-17): fit to the tool-agent ctx. TOOL-LIST-DRIFT
     # (deep audit 2026-11-08): the prompt used to hard-code 11 tools while the
     # real schema ships the full tool_agent set (LSP/run_tests/... included).
@@ -121,11 +122,11 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
     except (ImportError, AttributeError, TypeError, ValueError):
         _tool_schema_budget = 0
     from tools.definitions import git_tools_enabled as _gte_ct
-    _tool_git = _gte_ct(settings)
+    _tool_git = _gte_ct(_eff_cfg)
     _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent",
                                       budget_chars=_tool_schema_budget or None,
                                       include_git=_tool_git,
-                                      settings=settings)
+                                      settings=_eff_cfg)
     _tool_names_txt = ", ".join(t["function"]["name"] for t in _active_tools)
     _tool_sys = (
         "Use the available tools to complete file and code operations. "

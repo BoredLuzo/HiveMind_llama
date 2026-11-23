@@ -836,7 +836,10 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
             else:
                 return f"[web_fetch: too many redirects (>5) - {url}]"
             resp.raise_for_status()
-            body = resp.text
+            _cl_hdr = resp.headers.get("content-length")
+            if _cl_hdr and _cl_hdr.isdigit() and int(_cl_hdr) > 5 * 1024 * 1024:
+                return f"[web_fetch: response too large ({int(_cl_hdr)} bytes) - {url}]"
+            body = resp.text[:500_000]
             _content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
             break
         except _httpx.ConnectError:

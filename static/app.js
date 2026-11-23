@@ -139,7 +139,6 @@ let S = {
   duoCoderToolThinking: false,
   duoCoderToolThinkingAutoMode: 'on_fail',
   reasoningEffort: 'auto',
-  duoPlannerSeparateEffort: false,
   plannerReasoningEffort: 'auto',
   duoUntilFinished: false,    // true=coder runs until tests pass (budget 300)
   _askUserCountdownInterval: null,
@@ -494,9 +493,7 @@ function _getActiveEffortState(v) {
   var isOverriding = (supportsThinking && eff !== 'auto');
   var toggleOff = false;
   if (mode === 'code_duo') {
-    toggleOff = S.duoPlannerSeparateEffort
-      ? (!S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off')
-      : (!S.duoAgenticThinking && !S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off');
+    toggleOff = Boolean(S.duoAgenticMode !== false && !S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off');
   } else if (mode === 'pipeline') {
     toggleOff = Boolean(S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.thinking === false);
   } else {
@@ -614,20 +611,19 @@ function _getActiveEffortContext() {
 function _syncReasoningOverrideBadges() {
   if (typeof document === 'undefined' || !document.querySelectorAll) return;
   var mainEff = _normalizeReasoningEffort(S.reasoningEffort);
-  var sepPlan = Boolean(S.duoPlannerSeparateEffort);
   var planEff = _normalizeReasoningEffort(S.plannerReasoningEffort);
   var slots = document.querySelectorAll('.reasoning-override-slot');
   for (var i = 0; i < slots.length; i++) {
     var slot = slots[i];
     var key = (typeof slot.getAttribute === 'function' ? slot.getAttribute('data-agent-override') : '') || 'duo';
-    var isPlanSep = (key === 'duo_planner' && sepPlan);
-    var eff = isPlanSep ? planEff : mainEff;
+    var isPlan = (key === 'duo_planner');
+    var eff = isPlan ? planEff : mainEff;
     var active = eff !== 'auto';
     if (!active) {
       slot.innerHTML = '';
       continue;
     }
-    var baseLbl = (isPlanSep ? 'Planner: ' : 'Composer: ') + (_REASONING_EFFORT_LABELS[eff] || eff);
+    var baseLbl = (isPlan ? 'Planner: ' : 'Composer: ') + (_REASONING_EFFORT_LABELS[eff] || eff);
     var tModel = _targetModelForEffortKey(key);
     var tMeta = _getModelReasoningMetaUI(tModel);
     var sup = tMeta.mode !== 'none';
@@ -640,7 +636,7 @@ function _syncReasoningOverrideBadges() {
     } else {
       lbl = baseLbl + ' \u00d7';
     }
-    var resetCall = isPlanSep ? "setPlannerReasoningEffort('auto')" : "setReasoningEffort('auto')";
+    var resetCall = isPlan ? "setPlannerReasoningEffort('auto')" : "setReasoningEffort('auto')";
     var btn = slot.querySelector('.reasoning-override-badge');
     if (!btn) {
       btn = document.createElement('button');
@@ -652,16 +648,16 @@ function _syncReasoningOverrideBadges() {
     btn.setAttribute('onclick', resetCall);
     btn.className = (!sup && eff !== 'auto') ? 'reasoning-override-badge muted' : 'reasoning-override-badge';
     btn.title = (!sup && eff !== 'auto')
-      ? ('Skipped on this non-reasoning model \u2014 click to reset ' + (isPlanSep ? 'planner effort' : 'composer') + ' to Auto')
-      : ('Overridden by ' + (isPlanSep ? 'separate Planner effort' : 'composer Thinking effort') + ' \u2014 click to reset to Auto');
+      ? ('Skipped on this non-reasoning model \u2014 click to reset ' + (isPlan ? 'planner effort' : 'composer') + ' to Auto')
+      : ('Overridden by ' + (isPlan ? 'Planner Effort' : 'composer Thinking effort') + ' \u2014 click to reset to Auto');
     btn.textContent = lbl;
   }
   var rows = document.querySelectorAll('[data-reasoning-ovr-row]');
   for (var j = 0; j < rows.length; j++) {
     var row = rows[j];
     var rKey = (typeof row.getAttribute === 'function' ? row.getAttribute('data-reasoning-ovr-row') : '') || 'duo';
-    var rIsPlanSep = (rKey === 'duo_planner' && sepPlan);
-    var rEff = rIsPlanSep ? planEff : mainEff;
+    var rIsPlan = (rKey === 'duo_planner');
+    var rEff = rIsPlan ? planEff : mainEff;
     var rActive = rEff !== 'auto';
     var rSup = _modelSupportsThinkingUI(_targetModelForEffortKey(rKey));
     if (row.classList && typeof row.classList.toggle === 'function') {
@@ -778,56 +774,62 @@ function _getPlannerEffortState(v) {
   } else if (isOverriding) {
     ovrKind = 'source-composer';
     var mapHint = (mappedEff && mappedEff !== eff) ? (' \u2192 ' + (_REASONING_EFFORT_LABELS[mappedEff] || mappedEff)) : '';
-    ovrText = '\u26a1 Separate Planner override' + mapHint;
+    ovrText = '\u26a1 Overrides Planner Thinking' + mapHint;
     showReset = true;
   } else if (supportsThinking && meta.known) {
     ovrKind = 'source-sidebar';
     var pDef = toggleOff ? 'Off' : (meta.profEff && meta.profEff !== 'auto' && meta.profEff !== 'on'
       ? (_REASONING_EFFORT_LABELS[meta.profEff] || meta.profEff)
       : (rMode === 'binary' ? 'On' : 'Planner Thinking'));
-    ovrText = 'Sidebar controls Planner \u00b7 ' + pDef;
+    ovrText = 'Planner Thinking controls \u00b7 ' + pDef;
   }
 
   return {
     eff: eff, mappedEff: mappedEff, trigEff: trigEff, model: m,
     shortModel: shortM || 'planner model', rMode: rMode, availLevels: availLevels,
     supportsThinking: supportsThinking, isSkippedOnModel: isSkippedOnModel,
-    isOverriding: isOverriding, trigLabel: trigLabel, ctxText: ctxText,
+    isOverriding: isOverriding, effectiveAutoLabel: effectiveAutoLabel,
+    trigLabel: trigLabel, ctxText: ctxText,
     ovrKind: ovrKind, ovrText: ovrText, showReset: showReset,
   };
 }
 
-function _shouldShowPlannerEffortPill() {
-  if (!S.duoPlannerSeparateEffort) return false;
-  var mode = S.mode || 'auto';
-  if (mode === 'code_duo') return true;
-  if (mode === 'auto' && (S.routingPlanner || 'auto') !== 'never') return true;
-  return false;
-}
-
-function _syncSeparatePlannerToggleEls(checked) {
+function _syncRoutingPlannerEffortSelect(st) {
   if (typeof document === 'undefined') return;
-  var on = Boolean(checked);
-  var t1 = document.getElementById('duo-planner-sep-effort-toggle');
-  if (t1) t1.checked = on;
-  var t2 = document.getElementById('routing-planner-sep-effort-toggle');
-  if (t2) t2.checked = on;
-  var rRow = document.getElementById('routing-planner-sep-row');
+  var rRow = document.getElementById('routing-planner-effort-row');
   if (rRow && rRow.style) {
     rRow.style.display = ((S.routingPlanner || 'auto') === 'never') ? 'none' : '';
   }
+  var sel = document.getElementById('routing-planner-effort-sel');
+  if (!sel) return;
+  var showLevels = (st.rMode === 'binary')
+    ? ['auto', 'none', 'on', 'low', 'medium', 'high', 'max']
+    : ['auto', 'none', 'minimal', 'low', 'medium', 'high', 'max'];
+  if (st.eff && showLevels.indexOf(st.eff) < 0) {
+    showLevels = showLevels.concat([st.eff]);
+  }
+  var html = '';
+  for (var i = 0; i < showLevels.length; i++) {
+    var lv = showLevels[i];
+    var avail = (lv === 'auto') || (st.supportsThinking && (lv === 'none' || st.availLevels.indexOf(lv) >= 0));
+    var txt;
+    if (lv === 'auto') {
+      txt = st.effectiveAutoLabel;
+    } else if (!avail && lv === st.eff && st.supportsThinking && st.mappedEff && st.mappedEff !== lv) {
+      txt = (_REASONING_EFFORT_LABELS[st.mappedEff] || st.mappedEff) + ' (from ' + (_REASONING_EFFORT_SHORT[lv] || lv) + ')';
+    } else {
+      txt = (_REASONING_EFFORT_LABELS[lv] || lv) + (avail ? '' : ' (n/a)');
+    }
+    html += '<option value="' + lv + '"' + (avail ? '' : ' disabled') + '>' + txt + '</option>';
+  }
+  if (typeof sel.innerHTML === 'string') sel.innerHTML = html;
+  sel.value = st.eff;
+  sel.disabled = !st.supportsThinking && st.eff === 'auto';
+  sel.title = st.ctxText;
 }
 
 function _renderPlannerReasoningEffortUI(v) {
   if (typeof document === 'undefined') return;
-  _syncSeparatePlannerToggleEls(S.duoPlannerSeparateEffort);
-  var wrap = document.getElementById('planner-effort-wrap');
-  var show = _shouldShowPlannerEffortPill();
-  if (wrap) wrap.hidden = !show;
-  if (!show) {
-    closePlannerReasoningEffortMenu();
-    return;
-  }
   var st = _getPlannerEffortState(v);
   var eff = st.eff;
   var trig = document.getElementById('planner-effort-trigger');
@@ -839,11 +841,17 @@ function _renderPlannerReasoningEffortUI(v) {
     trig.title = st.isSkippedOnModel
       ? ('Planner effort set to ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ', skipped because ' + st.shortModel + ' has no native reasoning')
       : (st.isOverriding
-        ? ('Planner override: ' + st.trigLabel + ' (independent of Coder effort)')
-        : ('Planner thinking effort: ' + st.ctxText));
+        ? ('Planner override: ' + st.trigLabel + ' (independent of chat composer)')
+        : ('Planner reasoning effort: ' + st.ctxText));
   }
   var lblEl = document.getElementById('planner-effort-trig-lbl');
   if (lblEl) lblEl.textContent = st.trigLabel;
+  var hintEl = document.getElementById('planner-effort-hint');
+  if (hintEl) {
+    if (!st.supportsThinking) hintEl.textContent = st.shortModel + ' has no native reasoning';
+    else if (st.isOverriding) hintEl.textContent = 'Overrides Planner Thinking · independent of chat composer';
+    else hintEl.textContent = 'Independent of chat composer · ' + st.ctxText;
+  }
   var ctxEl = document.getElementById('planner-effort-menu-ctx');
   if (ctxEl) ctxEl.textContent = st.ctxText;
   var ovrEl = document.getElementById('planner-effort-menu-ovr');
@@ -871,15 +879,26 @@ function _renderPlannerReasoningEffortUI(v) {
     for (var i = 0; i < opts.length; i++) {
       var b = opts[i];
       var optEff = b.getAttribute('data-effort');
-      var visible = st.supportsThinking && (optEff === 'auto' || optEff === 'none' || st.availLevels.indexOf(optEff) >= 0);
-      var activeOpt = visible && (optEff === eff || (eff !== 'auto' && optEff === st.mappedEff));
-      b.hidden = !visible;
-      b.disabled = !visible;
-      if (b.classList) b.classList.toggle('active', activeOpt);
-      b.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      // Hide only the binary-only "on" row on graduated effort models (and "minimal" on binary models);
+      // gray out (disable) every other unsupported level so availability is visible at a glance.
+      var shown = (optEff === 'on')
+        ? (st.rMode === 'binary')
+        : (optEff === 'minimal' ? (st.rMode !== 'binary') : true);
+      var avail = (optEff === 'auto') || (st.supportsThinking && (optEff === 'none' || st.availLevels.indexOf(optEff) >= 0));
+      var activeOpt = shown && avail && (optEff === eff || (eff !== 'auto' && optEff === st.mappedEff));
+      b.hidden = !shown;
+      b.disabled = !shown || !avail;
+      if (b.classList) {
+        b.classList.toggle('active', activeOpt);
+        b.classList.toggle('disabled', shown && !avail);
+      }
+      b.title = (shown && !avail) ? ('Not supported by ' + st.shortModel) : '';
+      b.setAttribute('aria-hidden', shown ? 'false' : 'true');
+      b.setAttribute('aria-disabled', (!avail) ? 'true' : 'false');
       b.setAttribute('aria-selected', activeOpt ? 'true' : 'false');
     }
   }
+  _syncRoutingPlannerEffortSelect(st);
 }
 
 function _renderReasoningEffortUI(v) {
@@ -901,8 +920,6 @@ function _renderReasoningEffortUI(v) {
           ? ('Composer override: ' + st.trigLabel + ' (overrides sidebar & agent cards; Think-Budget slider stays independent)')
           : ('Thinking effort: ' + st.ctxText));
     }
-    var roleEl = document.getElementById('effort-trig-role');
-    if (roleEl) roleEl.hidden = !((S.mode || 'auto') === 'code_duo' && Boolean(S.duoPlannerSeparateEffort));
     var lblEl = document.getElementById('effort-trig-lbl');
     if (lblEl) lblEl.textContent = st.trigLabel;
     var ctxEl = document.getElementById('effort-menu-ctx');
@@ -984,22 +1001,6 @@ function setPlannerReasoningEffort(level) {
     });
   } else if (typeof postSettings === 'function') {
     postSettings({ planner_reasoning_effort: eff });
-  }
-}
-
-function onDuoPlannerSeparateEffortChange(checked) {
-  var prev = Boolean(S.duoPlannerSeparateEffort);
-  S.duoPlannerSeparateEffort = Boolean(checked);
-  _syncSeparatePlannerToggleEls(S.duoPlannerSeparateEffort);
-  _renderReasoningEffortUI(S.reasoningEffort);
-  if (typeof _postSettingsFF === 'function') {
-    _postSettingsFF({ duo_planner_separate_effort: S.duoPlannerSeparateEffort }, function() {
-      S.duoPlannerSeparateEffort = prev;
-      _syncSeparatePlannerToggleEls(prev);
-      _renderReasoningEffortUI(S.reasoningEffort);
-    });
-  } else if (typeof postSettings === 'function') {
-    postSettings({ duo_planner_separate_effort: S.duoPlannerSeparateEffort });
   }
 }
 
@@ -1880,8 +1881,6 @@ async function loadSettings() {
   var _ttmRb = document.getElementById('ttm_' + S.duoToolThinkingMode);
   if (_ttmRb) _ttmRb.checked = true;
   S.reasoningEffort = _normalizeReasoningEffort(s.reasoning_effort || 'auto');
-  S.duoPlannerSeparateEffort = Boolean(s.duo_planner_separate_effort);
-  if (typeof _syncSeparatePlannerToggleEls === 'function') _syncSeparatePlannerToggleEls(S.duoPlannerSeparateEffort);
   S.plannerReasoningEffort = _normalizeReasoningEffort(s.planner_reasoning_effort || 'auto');
   _renderReasoningEffortUI(S.reasoningEffort);
     // UNTIL-FINISHED ON BY DEFAULT (2026-10-27, owner): a coding run should
@@ -1935,7 +1934,7 @@ async function loadSettings() {
     // apply the FULL toggle state (disabled + value + opacity + ctx-scope
     // hint) — the old inline copy only half-applied it, leaving the planner
     // ctx select greyed until the checkbox was toggled once by hand.
-    togglePlannerUseCoderCtx(S.duoPlannerUseCoderCtx);
+    togglePlannerUseCoderCtx(S.duoPlannerUseCoderCtx, false);
     // Planner / coder model
     S.duoPlannerModel = s.duo_planner_model || '';
     // PLANNER-MAX-TOKENS (0.99.2): visible output budget (0 = context as limit)
@@ -3758,7 +3757,7 @@ function updateModelsChip() {
   if (mode === 'code_duo') {
     var c = _shortModel(S.duoCoderModel);
     if (c) parts.push('C: ' + c);
-    var p = (S.duoPlannerUseCoderCtx === false && S.duoPlannerModel && S.duoPlannerModel !== S.duoCoderModel)
+    var p = (S.duoPlannerModel && S.duoPlannerModel !== S.duoCoderModel)
       ? _shortModel(S.duoPlannerModel) : '';
     if (p) parts.push('P: ' + p);
     var crName = !S.duoAgenticMode ? (S.duoCriticModel || ((S.currentAssignments && S.currentAssignments.duo_critic && S.currentAssignments.duo_critic.model) || '') || S.duoCoderModel) : '';
@@ -3950,6 +3949,7 @@ function setDuoSubMode(mode, opts) {
   }
   updateDuoPairHint();
   if (typeof updateModelsChip === 'function') updateModelsChip();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
   updateCtxScopeHint();
   updateComplexityVisibility();
   updateChatToolsSectionVisibility();
@@ -4868,7 +4868,6 @@ function _cleanupLoadTimers() {
   document.querySelectorAll('[id^="lh-"]').forEach(function(el) {
     if (el._loadTimer) { clearInterval(el._loadTimer); el._loadTimer = null; }
   });
-  if (S._runAbortCtrl) { S._runAbortCtrl.abort(); S._runAbortCtrl = null; }
 }
 
 function _pruneToolCallRows(body, maxRows) {
@@ -4930,7 +4929,10 @@ async function newChat() {
   }
   await fetch('/memory/clear_session', {method:'POST'});
   if (S._chatSwitchEpoch !== _epoch) return;
+  if (typeof _journalStopTail === 'function') _journalStopTail();
+  if (S._runAbortCtrl) { try { S._runAbortCtrl.abort(); } catch (_e) {} S._runAbortCtrl = null; }
   _cleanupLoadTimers();
+  _chatFollow = true;
   if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
   if (_tokenRafId) { cancelAnimationFrame(_tokenRafId); _tokenRafId = null; }
   _tokenQueue = [];
@@ -5354,6 +5356,7 @@ function addUserMsg(text, imgs) {
   bubble.textContent = text;
   d.appendChild(bubble);
   c.appendChild(d);
+  _chatFollow = true;
   scrollBtmIfNearBottom(120);
 }
 
@@ -7046,15 +7049,14 @@ function doneAgent(elapsed) {
 
   if (S.curAgent._thinkBuf) {
     const body = document.getElementById('ab-' + S.curAgent.tid) || S.curAgent.body;
-    if (body) {
-      var flushed = S.curAgent._thinkBuf.replace(/^<think>/i, '');
-      if (flushed.indexOf('</think>') >= 0) {
-        var afterClose = flushed.split('</think>').slice(1).join('</think>').trim();
-        flushed = afterClose || flushed.split('</think>')[0].trim();
+    var flushed = S.curAgent._thinkBuf.replace(/^<think>/i, '');
+    if (flushed.indexOf('</think>') >= 0) {
+      var afterClose = flushed.split('</think>').slice(1).join('</think>').trim();
+      if (body && afterClose) {
+        _liveMdAppend(body, afterClose);
       }
-      if (flushed.trim()) {
-        _liveMdAppend(body, flushed);
-      }
+    } else if (!S.curAgent._inThink && body && flushed.trim()) {
+      _liveMdAppend(body, flushed);
     }
     S.curAgent._thinkBuf = '';
     S.curAgent._inThink  = false;
@@ -8337,6 +8339,7 @@ async function sendMsg() {
   var _papReset = document.getElementById('perf-agent-phase'); if (_papReset) { _papReset.className = ''; _papReset.innerHTML = ''; }
   // historicize the planner bubble: old run stays visible, new run gets a new bubble id.
   document.querySelectorAll('#planner-bubble').forEach(function(el) {
+    if (typeof _stripPlannerLiveIds === 'function') _stripPlannerLiveIds(el);
     el.classList.remove('live');
     el.id = '';
   });
@@ -8522,7 +8525,6 @@ async function sendMsg() {
                 duo_coder_tool_thinking: S.duoToolThinkingAlways || S.duoToolThinkingEnabled,
                 duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : (S.duoToolThinkingMode || 'off'),
                 reasoning_effort: S.reasoningEffort || 'auto',
-                duo_planner_separate_effort: !!S.duoPlannerSeparateEffort,
                 planner_reasoning_effort: S.plannerReasoningEffort || 'auto',
                 chat_id: S.currentChatId || undefined,
         until_finished: !!S.duoUntilFinished,
@@ -8795,19 +8797,25 @@ function _journalStopTail() {
 function _journalStartTail(runId) {
   if (!runId || S._journalTailing) return;
   S._journalTailing = runId;
+  var _tailInFlight = false;
   var _pollOnce = function() {
     if (S._journalTailing !== runId) {
       if (window._journalTailIv) { clearInterval(window._journalTailIv); window._journalTailIv = null; }
       return;
     }
-    if (document.hidden) return;
-    fetch('/run/journal?run_id=' + encodeURIComponent(runId) + '&after=' + (S._sseFrameSeq || 0))
+    if (document.hidden || _tailInFlight) return;
+    _tailInFlight = true;
+    var _reqAfter = S._sseFrameSeq || 0;
+    fetch('/run/journal?run_id=' + encodeURIComponent(runId) + '&after=' + _reqAfter)
       .then(function(r) { return r.json(); })
       .then(function(j) {
+        _tailInFlight = false;
+        if (S._journalTailing !== runId) return;
         if (!j || j.active === false) { _journalStopTail(); return; }
         if (j.frames && j.frames.length) {
           _journalClearReattachBanner(true);
-          for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
+          var _alreadySkip = Math.max(0, (S._sseFrameSeq || 0) - _reqAfter);
+          for (var i = _alreadySkip; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
           if (typeof j.n === 'number') S._sseFrameSeq = Math.max(S._sseFrameSeq || 0, j.n);
         }
         if (S._sawDoneEvent || j.done || j.aborted) {
@@ -8815,7 +8823,7 @@ function _journalStartTail(runId) {
           if (j.aborted && !S._sawDoneEvent) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
         }
       })
-      .catch(function() {});
+      .catch(function() { _tailInFlight = false; });
   };
   var _iv = setInterval(_pollOnce, 2000);
   window._journalTailIv = _iv;
@@ -8824,9 +8832,11 @@ function _journalStartTail(runId) {
 
 function _journalInitAttach() {
   if (S.streaming || S._journalTailing) return;
+  var _initEpoch = S._chatSwitchEpoch || 0;
   fetch('/run/journal')
     .then(function(r) { return r.json(); })
     .then(function(j) {
+      if (S.streaming || S._journalTailing || (S._chatSwitchEpoch || 0) !== _initEpoch) return;
       if (!j || !j.active || !j.frames || !j.frames.length) return;
       if (j.done && ((Date.now() / 1000) - (j.ts || 0)) > 300) return;
       // JOURNAL-CHAT-SCOPE (audit 2026-11-03): only reattach a run that
@@ -8854,8 +8864,12 @@ function _journalInitAttach() {
       // ask from the logical position, not the window length.
       S._sseFrameSeq = (typeof j.n === 'number' && j.frames.length)
         ? j.n : (S._sseFrameSeq || 0);
-      if (!S._sawDoneEvent && !j.done && !j.aborted) _journalStartTail(j.run_id);
-      else if (j.aborted) { S.streaming = false; _journalNote('Run was interrupted (connection/tab). Send a message to resume.'); }
+      if (!S._sawDoneEvent && !j.done && !j.aborted) {
+        _journalStartTail(j.run_id);
+      } else {
+        _finalizeStreamUi();
+        if (j.aborted && !S._sawDoneEvent) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
+      }
     })
     .catch(function() {});
 }
@@ -12865,7 +12879,7 @@ window.addEventListener('pagehide', function() {
   const payload = {
     chat_id: S.currentChatId || undefined,
     messages: S.currentChatMessages,
-    workspace: S.workspace || '',
+    workspace: S.currentChatWorkspace || S.workspace || '',
     title: S.currentChatId ? undefined : title   // don't overwrite existing titles
   };
   try {
@@ -13240,9 +13254,11 @@ function _ctxNum(id, fallback) {
   return (v === null || isNaN(v)) ? fallback : v;
 }
 
-function togglePlannerUseCoderCtx(on) {
+function togglePlannerUseCoderCtx(on, persist) {
   S.duoPlannerUseCoderCtx = on;
-  postSettings({duo_planner_use_coder_ctx: on});
+  if (persist !== false) {
+    postSettings({duo_planner_use_coder_ctx: on});
+  }
   var plInput = document.getElementById('duo-ctx-planner');
   var plWrap = document.getElementById('wrapper-ctx-planner');
   if (on) {
@@ -14053,7 +14069,7 @@ async function _persistCurrentChatNow(silent) {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({title: title, messages: S.currentChatMessages, workspace: S.workspace || ''})
       })).json();
-      if (r && r.id) { S.currentChatId = r.id; S.currentRev = r.rev || 0; }
+      if (r && r.id) { S.currentChatId = r.id; S.currentRev = r.rev || 0; S.currentChatWorkspace = S.workspace || ''; }
     }
   } catch(e) {
     if (!silent) showStatus('Saving chat failed: ' + e.message);
@@ -14669,6 +14685,7 @@ async function loadChat(chatId) {
     await fetch('/memory/clear_session', {method:'POST'});
     if (S._chatSwitchEpoch !== _epoch) return;
     document.getElementById('chat').innerHTML = '';
+    _chatFollow = true;
 
     S.currentChatId = chatId;
     S.currentRev = chat.rev || 0;

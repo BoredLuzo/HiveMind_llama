@@ -40,10 +40,15 @@ async def test_vision_model(req: Request):
     try:
         models = list(S_models_cache) if S_models_cache else await _bk_tags()
         available = model in models
+        from backend.llama_manager_utils import resolve_mmproj_strict as _vis_mm
+        from core.model_sampling import _model_profile as _vis_mp
+        _v_cap = bool(
+            (_vis_mp(model) or {}).get("vision")
+            or _vis_mm(model) is not None
+            or any(v in model.lower() for v in ["vl", "llava", "vision", "moondream", "minicpm-v", "glm", "granite3.2"])
+        )
         return {"ok": True, "model": model, "available": available,
-                # 'minicpm-v' (not 'minicpm'): minicpm5:2b-sharp is a text-only
-                # coder and used to be falsely flagged as vision-capable
-                "vision_capable": any(v in model.lower() for v in ["vl", "llava", "vision", "moondream", "minicpm-v", "glm", "granite3.2"])}
+                "vision_capable": _v_cap}
     except Exception as e:
         return {"ok": False, "reason": str(e)}
 

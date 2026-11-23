@@ -63,9 +63,15 @@ def normalize_reasoning_effort(raw: object) -> str:
 
 
 def resolve_planner_effort_settings(settings: dict | None) -> dict:
-    """Return settings with Planner's effective reasoning_effort when separate Planner effort is enabled."""
+    """Return settings with Planner's independent reasoning_effort.
+
+    Planner effort is controlled by `planner_reasoning_effort` in the sidebar,
+    independent of the chat composer's `reasoning_effort` (which targets Direct/Coder).
+    Bare caller dicts that omit `planner_reasoning_effort` keep `reasoning_effort`
+    for direct helper/test compatibility.
+    """
     s = dict(settings or {})
-    if s.get("duo_planner_separate_effort"):
+    if "planner_reasoning_effort" in s:
         s["reasoning_effort"] = normalize_reasoning_effort(s.get("planner_reasoning_effort"))
     return s
 

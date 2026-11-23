@@ -89,7 +89,7 @@ from core.version import HIVEMIND_VERSION
 # version from THIS file (Select-String, first match) before applying a zip.
 # The literal below is text only — core/version.py stays the executable
 # source. Keep it in sync; test_split_audit_fixes (h2) pins the match.
-# HIVEMIND_VERSION = "1.6.4"
+# HIVEMIND_VERSION = "1.6.5"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -539,9 +539,9 @@ async def _shutdown():
             _clear_imgs_all(_SESSIONS_DIR)
         except (ImportError, OSError, ValueError):
             pass
-# Flush pending writes on shutdown.
+# Flush pending writes on shutdown (preserve settings_saved_at so clean exit does not mark preset stale).
     try:
-        save_settings(settings)
+        save_settings(settings, saved_at=settings.get("settings_saved_at"))
     except Exception as _e:
         _logger.debug("[Hivemind] flush_settings error: %s", _e)
     if _WEBSEARCH_AVAILABLE and _websearch is not None:
@@ -1017,7 +1017,7 @@ def _flush_prefetch_settings(run_prefetch_state: dict | None = None):
             except Exception:
                 pass
 
-        save_settings(settings)
+        save_settings(settings, saved_at=settings.get("settings_saved_at"))
 
 
 # -- SSE Stream ------------------------------------------------
@@ -1354,11 +1354,6 @@ async def stream(req: Request):
     if "reasoning_effort" in body:
         from core.model_sampling import normalize_reasoning_effort as _norm_re
         _model_overrides["reasoning_effort"] = _norm_re(body.get("reasoning_effort"))
-    if "duo_planner_separate_effort" in body:
-        _model_overrides["duo_planner_separate_effort"] = _as_bool(
-            body.get("duo_planner_separate_effort"),
-            default=bool(settings.get("duo_planner_separate_effort", False)),
-        )
     if "planner_reasoning_effort" in body:
         from core.model_sampling import normalize_reasoning_effort as _norm_pre
         _model_overrides["planner_reasoning_effort"] = _norm_pre(body.get("planner_reasoning_effort"))
@@ -1576,7 +1571,13 @@ async def stream(req: Request):
                         _state["jr_reg"]["ts"] = time.time()
                     if not _state.get("detached"):
                         await _q.put(("error", _se))
+                    else:
+                        logger.error("/stream detached producer error: mode=%s chat_id=%s\n%s",
+                                     mode, chat_id, _state["error_tb"])
             else:
+                if _state["jr_reg"] is not None:
+                    _state["jr_reg"]["done"] = True
+                    _state["jr_reg"]["ts"] = time.time()
                 if not _state.get("detached"):
                     await _q.put(("done", None))
             finally:

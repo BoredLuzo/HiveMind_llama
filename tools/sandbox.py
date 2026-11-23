@@ -194,10 +194,16 @@ def kill_tree(proc, taskkill_timeout: int = 5) -> None:
     # attribute is always present, so behavior is unchanged there.
     _killpg = getattr(os, "killpg", None)
     _getpgid = getattr(os, "getpgid", None)
+    _getpgrp = getattr(os, "getpgrp", None)
     _sigkill = getattr(signal, "SIGKILL", None)
     if _killpg is not None and _getpgid is not None and _sigkill is not None:
         try:
-            _killpg(_getpgid(pid), _sigkill)
+            _pgid = _getpgid(pid)
+            _own_pgrp = _getpgrp() if _getpgrp is not None else -1
+            if _pgid != _own_pgrp:
+                _killpg(_pgid, _sigkill)
+            else:
+                proc.kill()
         except Exception:
             try:
                 proc.kill()

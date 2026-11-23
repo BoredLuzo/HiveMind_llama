@@ -815,7 +815,10 @@ def get_effective_reasoning_info(model_name: str) -> dict[str, Any]:
         and cached[4] == gguf_size
         and cached[5] == explicit_think
     ):
-        return dict(cached[6])
+        _ret_info = dict(cached[6])
+        if "levels" in _ret_info and isinstance(_ret_info["levels"], list):
+            _ret_info["levels"] = list(_ret_info["levels"])
+        return _ret_info
 
     tpl_text = ""
     tpl_source = "none"

@@ -169,6 +169,7 @@ from core.duo_helpers import (
     build_steer_user_message as _build_steer_user_message,
     RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _calculate_thinking_tokens, _build_duo_coder_sys,
+    resolve_user_planner_thinking_budget as _resolve_user_planner_thinking_budget,
     should_compress_after_truncated_drop as _should_compress_after_truncated_drop,
     _build_symbol_reference_hints,
     _sum_edit_lines, _build_dropped_tool_retry, _log_msgsig_drift,
@@ -384,7 +385,6 @@ async def _duo_planner_phase(
             resolve_planner_effort_settings as _res_plan_eff_cfg,
         )
         _plan_eff_settings = _res_plan_eff_cfg(ctx.settings)
-        _plan_sep_effort = bool((ctx.settings or {}).get("duo_planner_separate_effort", False))
         _plan_user_eff = _norm_re_plan(_plan_eff_settings.get("reasoning_effort"))
         _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
         _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
@@ -427,25 +427,24 @@ async def _duo_planner_phase(
                 else (bool(_use_thinking_planner) and _planner_supports_thinking)
             )
         )
-        if _plan_sep_effort:
-            if _plan_user_eff == "none":
+        if _plan_user_eff == "none":
+            yield await ctx.emit({
+                "type": "status",
+                "content": "🧠 Planner reasoning effort: none (sidebar override — planner thinking disabled)",
+            })
+        elif _plan_user_eff in _PLAN_POS_RE:
+            if _planner_supports_thinking:
+                _pm_map = _clamp_plan_re(_planner_model, _plan_user_eff)
+                _pm_sfx = f" → {_pm_map}" if (_pm_map and _pm_map != _plan_user_eff) else ""
                 yield await ctx.emit({
                     "type": "status",
-                    "content": "🧠 Planner reasoning effort: none (separate override — planner thinking disabled)",
+                    "content": f"🧠 Planner reasoning effort: {_plan_user_eff} (sidebar override){_pm_sfx}",
                 })
-            elif _plan_user_eff in _PLAN_POS_RE:
-                if _planner_supports_thinking:
-                    _pm_map = _clamp_plan_re(_planner_model, _plan_user_eff)
-                    _pm_sfx = f" → {_pm_map}" if (_pm_map and _pm_map != _plan_user_eff) else ""
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": f"🧠 Planner reasoning effort: {_plan_user_eff} (separate override){_pm_sfx}",
-                    })
-                else:
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": f"ℹ️ Planner reasoning effort ({_plan_user_eff}) skipped — {_planner_model} does not support reasoning",
-                    })
+            else:
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": f"ℹ️ Planner reasoning effort ({_plan_user_eff}) skipped — {_planner_model} does not support reasoning",
+                })
 
         _planner_ctx_cap_cfg = int(ctx.settings.get("duo_planner_ctx_cap", 0) or 0)
         _planner_ctx_target = int(ctx.settings.get("duo_planner_ctx_target", 0) or 0)
@@ -537,6 +536,9 @@ async def _duo_planner_phase(
             if _planner_effective_thinking:
                 from backend.manager_load import set_reasoning_override as _set_plan_ro
                 _set_plan_ro(_lsm_plan_pre, _planner_model, True)
+            else:
+                from backend.manager_load import clear_reasoning_override as _clr_plan_ro
+                _clr_plan_ro(_lsm_plan_pre, _planner_model)
             # PIN RESET AT RUN START (2026-10-02): stale pins from a
             # crashed previous run must not block eviction for this one.
             try:
@@ -728,7 +730,7 @@ async def _duo_planner_phase(
         # 30 heartbeats = 30s buffer; extras are silently dropped below.
         _planner_hb_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
 
-        if _use_thinking_planner and not _planner_supports_thinking:
+        if _planner_effective_thinking and not _planner_supports_thinking:
             yield await ctx.emit({
                 "type": "status",
                 "content": (
@@ -860,12 +862,11 @@ async def _duo_planner_phase(
             _planner_sys_est = _make_duo_thinking_planner_sys(_planner_step_cap, model_name=_planner_model) if _planner_effective_thinking else _make_duo_planner_sys(_planner_step_cap)
         else:
             _planner_sys_est = make_planner_analysis_sys(model_name=_planner_model)
-        _planner_thinking_budget = _calculate_thinking_tokens(
+        _planner_thinking_budget = _resolve_user_planner_thinking_budget(
             _planner_model,
             _plan_eff_settings,
             input_tokens=(len(_planner_sys_est) + len(_planner_ctx) + len(ctx.user_input) + 500) // 3,
             available_ctx=_plan_ctx_final,
-            agent_name="planner",
         )
         logger.info("[PLANNER-THINKING] model=%s thinking=%s budget=%d ctx=%d",
                      _planner_model, _planner_effective_thinking,
@@ -1236,7 +1237,11 @@ def _build_critic_payload(
     payload = _apply_thinking_kwargs(
         payload, critic_profile, critic_thinking, coder_tool_think=critic_thinking,
     )
-    payload = _apply_thinking_fields(payload, critic_thinking, critic_thinking_budget)
+    payload = _apply_thinking_fields(
+        payload, critic_thinking, critic_thinking_budget,
+        reasoning_effort=str(payload.get("reasoning_effort") or ""),
+        model_name=critic_mdl,
+    )
     return payload
 
 
@@ -1929,9 +1934,10 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
     # the pin so normal eviction can reclaim VRAM after the run.
     try:
         from backend.llama_server_manager import manager as _lsm_unpin
-        _lsm_unpin._reasoning_override = None
+        from backend.manager_load import clear_reasoning_override as _clr_unpin_ro
         for _m in (_planner_model, exec_mdl):
             if _m:
+                _clr_unpin_ro(_lsm_unpin, _m)
                 _lsm_unpin.clear_pin(_m)
     except Exception:
         pass
@@ -2450,8 +2456,13 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _raw_critic_think = _duo_critic_cfg.get(
             "thinking", getattr(ctx.pipeline.agents["duo_critic"], "thinking", False)
         )
-        if _raw_critic_think is None:
-            from core.model_sampling import _model_thinking_default
+        from core.model_sampling import (
+            _model_thinking_default,
+            normalize_reasoning_effort as _norm_crit_re,
+        )
+        if _norm_crit_re((ctx.settings or {}).get("reasoning_effort")) == "none":
+            _critic_thinking = False
+        elif _raw_critic_think is None:
             _critic_thinking = _model_thinking_default(critic_mdl)
         else:
             _critic_thinking = bool(_raw_critic_think)
@@ -3396,6 +3407,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 _run_thinking_now = _ip_ps._run_thinking_now
                 _inloop_plan_text = _ip_ps._inloop_plan_text
                 _duo_timed_out = _ip_ps._duo_timed_out
+                if "_cached_coder_port" in _ip_ps.carry and _ip_ps.carry["_cached_coder_port"] is not None:
+                    _cached_coder_port = _ip_ps.carry["_cached_coder_port"]
+                    _cached_coder_port_ctx = _dtool_ctx
                 # PLAN-TO-EXEC DEBUG: Log state after planning step to diagnose early-exit.
                 logger.warning(
                     "[PLAN-TO-EXEC] _is_tool_round=%s ctx.aborted=%s _dtool_msgs_len=%d "
@@ -4216,6 +4230,11 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _duo_state.cached_port = None
                             _duo_state.current_port = None
                             await _lsm_retry.evict(exec_mdl)
+                            if _duo_state.think_runtime:
+                                from core.model_sampling import model_supports_thinking as _dce_mst
+                                if _dce_mst(exec_mdl):
+                                    from backend.manager_load import set_reasoning_override as _set_dce_ro
+                                    _set_dce_ro(_lsm_retry, exec_mdl, True)
                             _dport = await _lsm_retry.ensure_loaded(
                                 exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096),
                                 n_parallel=1, ctx_graceful=False, pin=True,

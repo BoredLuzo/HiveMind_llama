@@ -339,7 +339,10 @@ class HiveClient:
         return r.json()
 
     async def delete_automation(self, job_id: str) -> bool:
-        r = await self._client.delete(f"/automations/{job_id}")
+        try:
+            r = await self._client.delete(f"/automations/{job_id}")
+        except httpx.HTTPError as exc:
+            raise HiveUnreachable(f"DELETE /automations/{job_id}: {exc}") from exc
         return r.status_code == 200
 
     async def run_automation(self, job_id: str) -> dict:

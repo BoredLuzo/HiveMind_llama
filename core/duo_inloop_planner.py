@@ -30,7 +30,8 @@ from core.duo.preflight import (
     _distilled_execution_steps, inloop_plan_emit_fn, plan_aborted_fn,
 )
 from core.duo_helpers import (
-    _calculate_thinking_tokens, inloop_plan_should_run as _inloop_plan_should_run,
+    inloop_plan_should_run as _inloop_plan_should_run,
+    resolve_user_planner_thinking_budget as _resolve_user_planner_thinking_budget,
 )
 from core.run_context import is_ctx_aborted
 
@@ -83,6 +84,7 @@ async def _duo_inloop_planner(ctx, ps):
     if _run_thinking_now:
         from core.model_sampling import (
             POSITIVE_REASONING_EFFORTS as _ILP_POS_RE,
+            clamp_reasoning_effort_for_model as _ilp_clamp_re,
             model_supports_thinking as _ilp_mst,
             normalize_reasoning_effort as _ilp_norm_re,
             resolve_planner_effort_settings as _ilp_res_cfg,
@@ -96,6 +98,24 @@ async def _duo_inloop_planner(ctx, ps):
             _ilp_eff_thinking = True
         else:
             _ilp_eff_thinking = bool(_exec_has_thinking)
+        if _ilp_user_eff == "none":
+            yield await ctx.emit({
+                "type": "status",
+                "content": "🧠 Planner reasoning effort: none (sidebar override — planner thinking disabled)",
+            })
+        elif _ilp_user_eff in _ILP_POS_RE:
+            if _ilp_supports:
+                _ilp_map = _ilp_clamp_re(exec_mdl, _ilp_user_eff)
+                _ilp_sfx = f" → {_ilp_map}" if (_ilp_map and _ilp_map != _ilp_user_eff) else ""
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": f"🧠 Planner reasoning effort: {_ilp_user_eff} (sidebar override){_ilp_sfx}",
+                })
+            else:
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": f"ℹ️ Planner reasoning effort ({_ilp_user_eff}) skipped — {exec_mdl} does not support reasoning",
+                })
         ctx.exec_ctrl.transition(AgentState.PLANNING)
         ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
         yield await ctx.emit({"type": "status",
@@ -123,19 +143,20 @@ async def _duo_inloop_planner(ctx, ps):
                 exec_mdl, num_ctx=_dtool_ctx, n_parallel=1,
                 ctx_graceful=False, pin=True,
                 vision=bool(ps.carry.get("_coder_vision", False)))
+            if _plan_port_inloop is not None:
+                ps.carry["_cached_coder_port"] = _plan_port_inloop
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                 AttributeError, httpx.HTTPError, asyncio.TimeoutError,
                 LlamaError) as _port_err:
             logger.warning("Inloop planner: port not available (%s)", _port_err)
         _inloop_plan_thinking = ""
         if _plan_port_inloop is not None:
-            # Compute thinking budget
-            _exec_thinking_budget = _calculate_thinking_tokens(
+            # Compute thinking budget (0 unless user explicitly configured one)
+            _exec_thinking_budget = _resolve_user_planner_thinking_budget(
                 exec_mdl,
                 _ilp_eff_settings,
                 input_tokens=len((_make_duo_thinking_planner_sys(_planner_step_cap, model_name=exec_mdl) or "") + (_plan_seed_task or "")) // 3,
                 available_ctx=_dtool_ctx,
-                agent_name="planner",
             )
             # Event-Bridge: run_inloop_planner emit_fn → asyncio.Queue → yield await ctx.emit
             _inloop_event_q: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -160,6 +181,13 @@ async def _duo_inloop_planner(ctx, ps):
                 )
                 # Yield events from the bridge while planner runs
                 while not _inloop_plan_task.done() or not _inloop_event_q.empty():
+                    if is_ctx_aborted(ctx):
+                        _inloop_plan_task.cancel()
+                        try:
+                            await asyncio.wait_for(_inloop_plan_task, timeout=2.0)
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
+                        break
                     if _duo_deadline_at and time.monotonic() >= _duo_deadline_at:
                         _duo_timed_out = True
                         logger.warning(

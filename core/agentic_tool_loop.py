@@ -1103,6 +1103,11 @@ class AgenticToolLoop(ToolLoop):
 
     async def _ensure_loaded(self, model: str) -> int:
         from backend.llama_server_manager import manager as _lsm
+        if getattr(self.round_state, "think_runtime", False):
+            from core.model_sampling import model_supports_thinking as _atl_mst
+            if _atl_mst(model):
+                from backend.manager_load import set_reasoning_override as _set_atl_ro
+                _set_atl_ro(_lsm, model, True)
         return await _lsm.ensure_loaded(
             model, num_ctx=self.round_state.dtool_opts.get("num_ctx", 4096),
             n_parallel=1, pin=True,

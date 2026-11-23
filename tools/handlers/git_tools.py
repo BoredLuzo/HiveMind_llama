@@ -20,6 +20,7 @@ async def _inline_tool_git_status(args: dict, workspace: Path, _workspace_lock: 
     cmd = args.get("cmd", "status")
     if cmd not in ("status", "diff", "log", "show"):
         cmd = "status"
+    r = None
     try:
         r = await asyncio.create_subprocess_exec(
             "git", cmd,
@@ -36,6 +37,9 @@ async def _inline_tool_git_status(args: dict, workspace: Path, _workspace_lock: 
                 details={"cmd": cmd, "exit_code": r.returncode})
         return (stdout_str or stderr_str)[:4000]
     except Exception as e:
+        if r is not None and getattr(r, "returncode", 0) is None:
+            from tools.sandbox import kill_tree_and_reap as _gs_kill_reap
+            await _gs_kill_reap(r)
         return _tool_error_response(
             "GIT_STATUS_FAILED",
             f"git {cmd} failed: {e}",

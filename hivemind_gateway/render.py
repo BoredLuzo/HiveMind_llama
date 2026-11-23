@@ -153,7 +153,8 @@ def split_message(text: str, limit: int = TELEGRAM_HARD_LIMIT) -> list[str]:
             else:
                 current, cur_len = [], 0
             continue
-        if cur_len + _tg_len(line) + 1 > limit and current:
+        _fence_reserve = (_tg_len(open_fence) + 1) if open_fence is not None else 0
+        if cur_len + _tg_len(line) + 1 + _fence_reserve > limit and current:
             close_chunk(open_fence is not None)
         current.append(line)
         cur_len += _tg_len(line) + 1

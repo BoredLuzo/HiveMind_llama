@@ -303,9 +303,12 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             }
         elif _dt_user_eff in _DT_POS_RE:
             if _dt_mst(model):
+                from core.model_sampling import clamp_reasoning_effort_for_model as _dt_clamp_re
+                _dt_map = _dt_clamp_re(model, _dt_user_eff)
+                _dt_sfx = f" → {_dt_map}" if (_dt_map and _dt_map != _dt_user_eff) else ""
                 yield {
                     "type": "status",
-                    "content": f"🧠 Reasoning effort: {_dt_user_eff} (composer override)",
+                    "content": f"🧠 Reasoning effort: {_dt_user_eff} (composer override){_dt_sfx}",
                 }
             else:
                 yield {
@@ -1014,9 +1017,12 @@ async def _run_direct_inner(ctx):
                     })
                 elif _dir_user_eff in _DIR_POS_RE:
                     if _dir_mst(_direct_model):
+                        from core.model_sampling import clamp_reasoning_effort_for_model as _dir_clamp_re
+                        _dir_map = _dir_clamp_re(_direct_model, _dir_user_eff)
+                        _dir_sfx = f" → {_dir_map}" if (_dir_map and _dir_map != _dir_user_eff) else ""
                         yield await ctx.emit({
                             "type": "status",
-                            "content": f"🧠 Reasoning effort: {_dir_user_eff} (composer override)",
+                            "content": f"🧠 Reasoning effort: {_dir_user_eff} (composer override){_dir_sfx}",
                         })
                     else:
                         yield await ctx.emit({

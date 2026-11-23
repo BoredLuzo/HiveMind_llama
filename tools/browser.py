@@ -476,7 +476,7 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
         # containment check - "../../x.png" wrote anywhere on disk. Resolve
         # and gate like every other file tool.
         from utils.file import _inline_check_workspace as _bws_check
-        if _err := _bws_check(_out.resolve(), workspace_lock, "browser"):
+        if _err := _bws_check(_out, workspace_lock, "browser"):
             return _err
         _out.parent.mkdir(parents=True, exist_ok=True)
         full = bool(args.get("full_page", False))

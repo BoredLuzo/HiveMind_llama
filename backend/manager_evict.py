@@ -106,9 +106,11 @@ class LlamaEvictMixin:
             self._schedule_prefetch_task(slot, model, num_ctx)
 
     def can_fit(self, model_name: str, num_ctx: int,
-                safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
+                safety_margin_mib: Optional[int] = None,
                 exclude_slot_id: Optional[int] = None,
                 extra_needed_mib: float = 0.0) -> CanFitResult:
+        if safety_margin_mib is None:
+            safety_margin_mib = int(VRAM_PRE_FLIGHT_MARGIN_MIB)
 
 
         try:
@@ -153,9 +155,11 @@ class LlamaEvictMixin:
     async def _pre_flight_grace_recheck(self, model_name: str, num_ctx: int,
                                         slot: ModelSlot, grace_s: float = _VRAM_PRE_FLIGHT_GRACE_S,
                                         poll_interval: float = 2.0,
-                                        safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
+                                        safety_margin_mib: Optional[int] = None,
                                         progress_abort_s: float = 0.0,
                                         extra_needed_mib: float = 0.0) -> CanFitResult:
+        if safety_margin_mib is None:
+            safety_margin_mib = int(VRAM_PRE_FLIGHT_MARGIN_MIB)
         # RECHECK-SURCHARGE (audit 2026-11-03): the grace recheck is the
         # gate that lets a blocked load proceed after eviction. Dropping the
         # MoE-cache surcharge here made it pass while the real command still

@@ -160,6 +160,21 @@ def test_nt_mode_thinking_loop_capped():
              f"timeout={to} content_len={len(c)}")
 
 
+# ── T4: Default budget=0 caps thinking at 70% of max_tokens ────────────────
+def test_zero_budget_caps_relative_to_max_tokens():
+    # max_tokens=500 -> cap = max(256, int(500 * 0.70)) = 350 est tokens -> 1050 chars.
+    # 120 deltas of 12 chars = 1440 chars (est 480 > 350) -> aborts early.
+    _lines = [_delta_line("z%011d" % i) for i in range(120)]
+    t, c, to = _run_stream(
+        _lines, use_thinking=True, thinking_budget=0, max_tokens=500, wall_timeout=600.0,
+    )
+    if to and c == "" and t:
+        ok("zero_budget_caps_relative_to_max_tokens (70% of max_tokens guard active)")
+    else:
+        fail("zero_budget_caps_relative_to_max_tokens",
+             f"timeout={to} content_len={len(c)} thinking_len={len(t)}")
+
+
 # ── Source-Guards ───────────────────────────────────────────────────────────
 def test_source_guard_thinking_cap():
     src = (Path(__file__).parent.parent / "hive_functions" / "planner.py").read_text(encoding="utf-8")
@@ -178,6 +193,7 @@ if __name__ == "__main__":
     test_thinking_budget_cap_respects_headroom()
     test_thinking_cap_ignored_after_content_started()
     test_nt_mode_thinking_loop_capped()
+    test_zero_budget_caps_relative_to_max_tokens()
     test_source_guard_thinking_cap()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")

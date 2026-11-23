@@ -34,7 +34,11 @@ _EXPECTED_EXCLUDED = {"git_token", "_registry", "models_dir",
                       "telegram_approval_mode",
                       "telegram_gateway_enabled",
                       "mcp_client_enabled", "mcp_servers",
-                      "lsp_forward_workspace_settings", "workspace",
+                      "lsp_servers", "lsp_forward_workspace_settings",
+                      "llama_extra_args", "duo_tool_sandbox",
+                      "duo_tool_sandbox_max_mem_mb", "duo_tool_sandbox_max_procs",
+                      "duo_tool_sandbox_max_cpu_s", "debug_api_enabled",
+                      "workspace",
                       # BOOKKEEPING (2026-10-28): written by the apply path
                       # itself, never stored in a snapshot
                       "active_preset", "settings_saved_at", "preset_applied_at"}

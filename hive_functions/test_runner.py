@@ -296,11 +296,11 @@ async def run_tests(
                 )
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
+            except (asyncio.TimeoutError, asyncio.CancelledError):
                 # TREE-KILL (2026-09-13): the shared helper kills the whole
                 # tree (taskkill /T on Windows — slower binary, hence 10 s —
                 # killpg on POSIX) and reaps the wrapper.
-                await _kill_reap(proc, taskkill_timeout=10)
+                await asyncio.shield(_kill_reap(proc, taskkill_timeout=10))
                 raise
 
             return stdout.decode("utf-8", errors="replace"), proc.returncode

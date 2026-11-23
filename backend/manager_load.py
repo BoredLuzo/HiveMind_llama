@@ -832,6 +832,7 @@ class LlamaLoadMixin:
 
             try:
                 if _need_start:
+                    _saved_ro_for_load = _get_reasoning_override(self, model)
                     # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
                     # CRASHED slot carries a stale SET event from its previous
                     # load; skipping _start_process handed callers a dead port.
@@ -863,6 +864,8 @@ class LlamaLoadMixin:
                                 slot.set_pinned(pin)
                                 if hasattr(slot, "_ready_event"):
                                     slot._ready_event.clear()
+                                if _saved_ro_for_load is not None:
+                                    set_reasoning_override(self, model, _saved_ro_for_load)
                             await asyncio.sleep(5.0)
                             try:
                                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
@@ -1016,9 +1019,11 @@ class LlamaLoadMixin:
                 # CLAIM-FOR-KILL (deep audit 2026-11-08): mark the victim as
                 # loading before the lock is released so a concurrent loader
                 # cannot select and re-claim it while the kill is in flight.
+                _victim._lifecycle_gen = int(getattr(_victim, "_lifecycle_gen", 0)) + 1
                 _victim._loading = True
+                _victim.model = None
         if _victim is not None:
-            await _kill_slot_async(_victim)
+            await self._kill_claimed_slot(_victim)
 
         if _committed <= VRAM_BUDGET_GB:
             return
@@ -1033,11 +1038,13 @@ class LlamaLoadMixin:
                 )
                 _victim2 = self._evict_lru(exclude_slot=slot)
                 if _victim2 is not None:
+                    _victim2._lifecycle_gen = int(getattr(_victim2, "_lifecycle_gen", 0)) + 1
                     _victim2._loading = True
+                    _victim2.model = None
             else:
                 _victim2 = None
         if _victim2 is not None:
-            await _kill_slot_async(_victim2)
+            await self._kill_claimed_slot(_victim2)
 
     async def ensure_loaded(self, model: str, num_ctx: Optional[int] = None,
                             pin: bool = False, vision: bool = False,
@@ -1302,9 +1309,8 @@ class LlamaLoadMixin:
 
             _saved_ro_for_retry = _get_reasoning_override(self, model)
             try:
-                await self._enforce_vram_budget(slot)
-
                 if _need_start:
+                    await self._enforce_vram_budget(slot)
                     # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
                     # CRASHED slot carries a stale SET event from its previous
                     # load; skipping _start_process handed callers a dead port.

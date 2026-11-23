@@ -112,7 +112,10 @@ _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       "telegram_approval_mode",
                       "telegram_gateway_enabled",
                       "mcp_client_enabled", "mcp_servers",
-                      "lsp_forward_workspace_settings",
+                      "lsp_servers", "lsp_forward_workspace_settings",
+                      "llama_extra_args", "duo_tool_sandbox",
+                      "duo_tool_sandbox_max_mem_mb", "duo_tool_sandbox_max_procs",
+                      "duo_tool_sandbox_max_cpu_s", "debug_api_enabled",
                       "workspace",
                       # BOOKKEEPING (2026-10-28, preset audit): these three are
                       # written by the apply path itself (active_preset, both

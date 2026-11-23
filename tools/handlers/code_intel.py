@@ -277,6 +277,7 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
 
     async def _run_one(argv: list[str]):
         nonlocal _any_executed, _backend_completed
+        r = None
         try:
             r = await asyncio.create_subprocess_exec(
                 *argv,
@@ -298,7 +299,9 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
                 capped += f"\n... ({len(lines) - _LINE_CAP} more)"
             return capped
         except Exception:
-            pass
+            if r is not None and getattr(r, "returncode", 0) is None:
+                from tools.sandbox import kill_tree_and_reap as _ci_kill_reap
+                await _ci_kill_reap(r)
         return None
 
     for _argv in cmds:

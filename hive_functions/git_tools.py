@@ -138,7 +138,8 @@ def _push_url() -> str:
     _token = str(_s.get("git_token", "") or "").strip()
     if not (_repo and _user and _token) or not _repo.startswith("https://"):
         return ""
-    return f"https://{_user}:{_token}@{_repo[len('https://'):]}"
+    from urllib.parse import quote as _url_quote
+    return f"https://{_url_quote(_user, safe='')}:{_url_quote(_token, safe='')}@{_repo[len('https://'):]}"
 
 async def push_after_commit(workspace: str) -> str:
     """Auto-push HEAD after a successful hivemind commit. Fires ONLY when the
@@ -279,10 +280,10 @@ async def exec_git_checkpoint(label: str, workspace: str,
     add = await _git_run(workspace, "git", "add", "--", *_existing)
     if add.returncode != 0:
         return ""
-    cmd = ["git", "commit", "-m", f"{_checkpoint_marker()} {label}"[:72],
-           "--", *_existing]
+    cmd = ["git", "commit", "-m", f"{_checkpoint_marker()} {label}"[:72]]
     if not has_head:
         cmd.append("--allow-empty")
+    cmd.extend(["--", *_existing])
     c = await _git_run(workspace, *cmd)
     if c.returncode != 0:
         return ""
@@ -554,7 +555,7 @@ async def exec_git_undo_full(workspace: str) -> str:
         p = Path(workspace) / rel
         try:
             tracked = await _git_run(workspace, "git", "ls-files",
-                                     "--error-unmatch", rel)
+                                     "--error-unmatch", "--", rel)
             if p.is_file() and tracked.returncode != 0:
                 try:
                     _dst = _backup_root / rel

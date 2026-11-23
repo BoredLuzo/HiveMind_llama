@@ -1,3 +1,31 @@
+## [1.6.5] - 2026-11-23
+
+Template-driven reasoning effort controls, decoupled sidebar Planner Effort,
+SSE keepalive & journal reattach polish, Inkling-2-Mini / `llama.cpp b12645`
+support, hardware-autofit installer, model-discovery dedup fixes, and broad
+deep-audit waves across security, performance, and stability.
+
+### Added
+- **Template-driven Reasoning Effort & decoupled Sidebar Planner Effort (`backend/gguf_meta.py`, `core/model_sampling.py`, `core/duo_runner.py`, `core/duo_inloop_planner.py`, `hive_functions/planner.py`, `index.html`, `static/app.js`, `static/style.css`):**
+  - Inspects GGUF and external `.jinja` chat templates to determine exact reasoning capabilities (`effort`, `binary` On/Off, or `none`) and clamps payloads safely to prevent strict-template crashes.
+  - Chat composer carries a single clean Thinking effort button for Direct / Coder (showing only supported levels, transparent source/override status, and Think-Budget sliders kept independent).
+  - Planner Effort lives cleanly in the sidebar (`🧠 Thinking` in Code mode and synced in `Routing: who decides` in Auto mode), graying out unsupported levels for the Planner model and staying fully decoupled from the chat composer across pre-coder, in-loop, and same-model `--reasoning on/off` slot handoffs; removes the legacy Coder `Escalation` UI control (`ttm_off` / `ttm_on_fail`).
+  - User-controlled Planner thinking budgets (`thinking_budget = 0` by default instead of forced 750/2500 token caps) paired with a dynamic 70% `Planner Max Tokens` streaming cap and structured-step-only fallback extraction so raw thinking prose never leaks into Coder context.
+- **Inkling-2-Mini (`inkling2_loop`), Qwen3.6 MoE tuning & `llama.cpp b12645` (`deploy/llama_build_pin.txt`, `model_configs/models/inkling-2-mini.json`, `backend/llama_start_phases.py`):**
+  - Core-on-GPU looped-MoE offload (`-ot` 14 outer/edge CPU layers, `load_mode=none`, `ubatch=256`, `kv_bytes_per_token=9216`), Qwen3.6 expert-cache CPU-share tuning (`0.90/0.95`), and `b12645` fallback pin (bringing Inkling-2 tokenizer `ignore_merges` and looped-MoE host-expert fixes).
+- **Hardware-autofit installer profile & Linux CUDA autodetect (`deploy/hardware_autofit.py`, `deploy/install_linux.sh`, `backend/llama_start_phases.py`):**
+  - Recommends hardware-matched defaults during install and lifts MoE expert offload to full GPU at runtime when VRAM fits.
+
+### Fixed
+- **SSE keepalive & journal reattach (`server.py`, `static/app.js`):**
+  - Sends 15s SSE `: keepalive` heartbeats while idle during long cold prefills so browsers do not drop `/stream`; stops enqueueing orphaned frames after client detach; polls `/run/journal` immediately and updates the amber warning banner to `✓ Reattached via run journal`.
+- **Model downloader & discovery (`backend/llama_models.py`, `deploy/fetch_models.py`):**
+  - Deduplicates `models.json` overrides against parsed GGUF aliases (eliminating duplicate model picker entries on fresh installs), aligns `mmproj_dest` casing with shipped profiles, and adds case-insensitive `mmproj` lookup for Linux.
+- **Live thinking scroll, chat history speed & Windows Git Bash tooling (`static/app.js`, `routers/chats.py`, `tools/handlers/exec_tools.py`, `core/tool_executor.py`):**
+  - Allows scrolling up inside live thinking blocks mid-stream; indexes saved chats via `.chats_index.cache`; preserves chronological thinking/tool/cut order; fixes Windows `.venv`/`pip` path detection and piped `pip install` failure hints; silences desktop toasts in test runs via `HIVEMIND_NO_NOTIFY=1`.
+- **Deep-audit hardening (Waves 1–3C + full 5-subsystem pre-release sweep):**
+  - Security/containment (fail-closed secret guard, NTFS ADS stripping, preset snapshot exclusions for security keys), backend slot locking & busy-port infinite-loop guard, Windows `.cmd`/`.bat` MCP quoting fix, Telegram mirror-journal double-slice fix, UI auto-scroll/reattach/preset-staleness fixes, subprocess timeout/cancel reaping, 32 Pyright fixes, offline websearch fast-fail, planner preseed, and headless `destructive_gate` fast-deny.
+
 ## [1.6.4] - 2026-11-19
 
 Two-layer drop-in model registry & Model Profiles UI, `HIVEMIND.md` workspace

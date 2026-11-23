@@ -725,6 +725,11 @@ def _shared_tool_secret_guard(tool_name: str, args: dict) -> str | None:
             _p = _v.strip()
             break
     if _p:
+        if _is_blocked_secret(_p.replace("\\", "/")):
+            return _tool_error_response(
+                "SECRET_PATH_DENIED",
+                f"'{_p}' is a protected secret file.",
+                tool=tool_name)
         try:
             _rp = _resolve_path(_p)
         except ToolPathError:
@@ -2184,6 +2189,9 @@ class _ResourceError(Exception):
 
 def _is_blocked_secret(rel_posix: str) -> bool:
     rel = str(rel_posix or "").replace("\\", "/")
+    # Strip Windows NTFS Alternate Data Stream suffixes (e.g. settings.json:$DATA).
+    if ":" in rel:
+        rel = "/".join(seg.split(":", 1)[0] for seg in rel.split("/"))
     parts = [p.rstrip(". ").lower() for p in Path(rel).parts if p]
     if any(part in {"sessions", "chats"} for part in parts):
         return True

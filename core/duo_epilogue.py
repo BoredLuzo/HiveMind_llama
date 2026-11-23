@@ -191,38 +191,55 @@ async def _duo_session_epilogue(ctx, ps):
                               "role": "Final quality assessment"})
             _pparts, _pt = [], time.time()
             try:
-                from core.model_sampling import resolve_agent_sampling as _resolve_ep_smp
+                import contextlib as _ctxlib_ep
+                from core.model_sampling import (
+                    POSITIVE_REASONING_EFFORTS as _EP_POS_RE,
+                    model_supports_thinking as _ep_mst,
+                    normalize_reasoning_effort as _ep_norm_re,
+                    resolve_agent_sampling as _resolve_ep_smp,
+                )
                 _ep_temp, _ep_think, _ep_budget, _ep_smp = _resolve_ep_smp(
                     _pipe_synth.model, agent=_pipe_synth,
                     settings=ctx.settings, role="synthesizer",
                 )
+                _ep_user_eff = _ep_norm_re((ctx.settings or {}).get("reasoning_effort"))
+                if _ep_think and _ep_user_eff in _EP_POS_RE and _ep_mst(_pipe_synth.model):
+                    from backend.llama_client import manager as _ep_mgr
+                    from backend.manager_load import set_reasoning_override as _set_ep_ro
+                    _set_ep_ro(_ep_mgr, _pipe_synth.model, True)
                 if _ep_think:
-                    async for _chunk in ctx.pipeline_chat_stream(
-                        _pipe_synth.model, _pipe_msgs, _ep_temp, _pipe_synth.max_tokens,
-                        agent_role="synthesizer", think=True,
-                        thinking_budget=_ep_budget or None,
-                        split_thinking=True, sampler=_ep_smp,
-                    ):
-                        if is_ctx_aborted(ctx): break
-                        if isinstance(_chunk, tuple):
-                            _ec, _eth = _chunk
-                            if _eth:
-                                yield await ctx.emit({"type": "thinking_token", "content": _eth})
-                            if _ec:
-                                _pparts.append(_ec)
-                                yield await ctx.emit({"type": "token", "content": _ec})
-                        elif _chunk:
-                            _pparts.append(_chunk)
-                            yield await ctx.emit({"type": "token", "content": _chunk})
+                    async with _ctxlib_ep.aclosing(
+                        ctx.pipeline_chat_stream(
+                            _pipe_synth.model, _pipe_msgs, _ep_temp, _pipe_synth.max_tokens,
+                            agent_role="synthesizer", think=True,
+                            thinking_budget=_ep_budget or None,
+                            split_thinking=True, sampler=_ep_smp,
+                        )
+                    ) as _ep_stream:
+                        async for _chunk in _ep_stream:
+                            if is_ctx_aborted(ctx): break
+                            if isinstance(_chunk, tuple):
+                                _ec, _eth = _chunk
+                                if _eth:
+                                    yield await ctx.emit({"type": "thinking_token", "content": _eth})
+                                if _ec:
+                                    _pparts.append(_ec)
+                                    yield await ctx.emit({"type": "token", "content": _ec})
+                            elif _chunk:
+                                _pparts.append(_chunk)
+                                yield await ctx.emit({"type": "token", "content": _chunk})
                 else:
-                    async for _tok in ctx.pipeline_chat_stream(
-                        _pipe_synth.model, _pipe_msgs, _ep_temp, _pipe_synth.max_tokens,
-                        agent_role="synthesizer", think=False,
-                        thinking_budget=None, sampler=_ep_smp,
-                    ):
-                        if is_ctx_aborted(ctx): break
-                        _pparts.append(_tok)
-                        yield await ctx.emit({"type": "token", "content": _tok})
+                    async with _ctxlib_ep.aclosing(
+                        ctx.pipeline_chat_stream(
+                            _pipe_synth.model, _pipe_msgs, _ep_temp, _pipe_synth.max_tokens,
+                            agent_role="synthesizer", think=False,
+                            thinking_budget=None, sampler=_ep_smp,
+                        )
+                    ) as _ep_stream_nt:
+                        async for _tok in _ep_stream_nt:
+                            if is_ctx_aborted(ctx): break
+                            _pparts.append(_tok)
+                            yield await ctx.emit({"type": "token", "content": _tok})
             except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                     AttributeError, httpx.HTTPError, LlamaError) as _pe:
                 yield await ctx.emit({"type": "token", "content": f"[Pipeline-Error: {str(_pe)[:80]}]"})

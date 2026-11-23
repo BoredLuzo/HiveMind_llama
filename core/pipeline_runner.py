@@ -44,49 +44,56 @@ async def _stream_stage_once(
     strip_inline_think: bool = False,
 ):
     """Stream one pipeline stage call into parts_out and yield UI SSE events."""
+    import contextlib as _ctxlib_pr
     try:
         if think:
-            async for _c, _th in ctx.pipeline_chat_stream(
-                model, msgs, temp, max_tok,
-                agent_role=agent_role, think=True,
-                thinking_budget=thinking_budget or None,
-                split_thinking=True, no_cache=no_cache, sampler=sampler,
-            ):
-                if ctx.aborted():
-                    break
-                if _th:
-                    yield await ctx.emit({"type": "thinking_token", "content": _th})
-                if _c:
-                    parts_out.append(_c)
-                    if emit_tokens:
-                        yield await ctx.emit({"type": "token", "content": _c})
+            async with _ctxlib_pr.aclosing(
+                ctx.pipeline_chat_stream(
+                    model, msgs, temp, max_tok,
+                    agent_role=agent_role, think=True,
+                    thinking_budget=thinking_budget or None,
+                    split_thinking=True, no_cache=no_cache, sampler=sampler,
+                )
+            ) as _p_stream:
+                async for _c, _th in _p_stream:
+                    if ctx.aborted():
+                        break
+                    if _th:
+                        yield await ctx.emit({"type": "thinking_token", "content": _th})
+                    if _c:
+                        parts_out.append(_c)
+                        if emit_tokens:
+                            yield await ctx.emit({"type": "token", "content": _c})
         else:
             _think_open = False
-            async for tok in ctx.pipeline_chat_stream(
-                model, msgs, temp, max_tok,
-                agent_role=agent_role, think=False,
-                no_cache=no_cache, sampler=sampler,
-            ):
-                if ctx.aborted():
-                    break
-                parts_out.append(tok)
-                if not emit_tokens:
-                    continue
-                if strip_inline_think:
-                    if not _think_open and "<think>" in tok:
-                        before = tok.split("<think>")[0]
-                        if before:
-                            yield await ctx.emit({"type": "token", "content": before})
-                        _think_open = True
-                    if _think_open and "</think>" in tok:
-                        _think_open = False
-                        after = tok.split("</think>")[-1]
-                        if after:
-                            yield await ctx.emit({"type": "token", "content": after})
-                    elif not _think_open and "<think>" not in tok:
+            async with _ctxlib_pr.aclosing(
+                ctx.pipeline_chat_stream(
+                    model, msgs, temp, max_tok,
+                    agent_role=agent_role, think=False,
+                    no_cache=no_cache, sampler=sampler,
+                )
+            ) as _p_stream_nt:
+                async for tok in _p_stream_nt:
+                    if ctx.aborted():
+                        break
+                    parts_out.append(tok)
+                    if not emit_tokens:
+                        continue
+                    if strip_inline_think:
+                        if not _think_open and "<think>" in tok:
+                            before = tok.split("<think>")[0]
+                            if before:
+                                yield await ctx.emit({"type": "token", "content": before})
+                            _think_open = True
+                        if _think_open and "</think>" in tok:
+                            _think_open = False
+                            after = tok.split("</think>")[-1]
+                            if after:
+                                yield await ctx.emit({"type": "token", "content": after})
+                        elif not _think_open and "<think>" not in tok:
+                            yield await ctx.emit({"type": "token", "content": tok})
+                    else:
                         yield await ctx.emit({"type": "token", "content": tok})
-                else:
-                    yield await ctx.emit({"type": "token", "content": tok})
     except Exception as e:
         if error_label:
             err = f"[{error_label} error: {str(e)[:100]}]"
