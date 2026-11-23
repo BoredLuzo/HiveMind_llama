@@ -241,7 +241,7 @@ its comment) in either file, then re-run the generator.
 | `prefetch_lead_seconds` | float | `8.0` | yes |  |
 | `preload_workers_after_run` | bool | `False` | yes |  |
 | `read_guard_enabled` | bool | `True` | yes |  |
-| `reasoning_effort` | str | `auto` | yes | REASONING-EFFORT : composer toggle for reasoning-effort models (Inkling-2-Mini, DeepSeek V4.1, etc.) and budget-scaled thinking on others. "auto" inherits per-agent thinking + model profile defaults. |
+| `reasoning_effort` | str | `auto` | yes | REASONING-EFFORT : template-driven composer reasoning effort / thinking toggle ("auto" inherits per-agent sidebar/card settings + model profile defaults; independent of Think-Budget sliders). |
 | `routing_decider` | str | `off` | yes | ── ROUTING : two independent deciders, each switchable ── The LLM judge costs a model load into VRAM (60 s + eviction) and returns text that has to be parsed. The decider is an encoder (GLiNER2.5, CPU, ~0.5-1.2 s, no VRAM) and is optional (pip install… |
 | `routing_decider_model` | str | `fastino/GLiNER2.5-Decide` | yes |  |
 | `routing_decider_threshold` | float | `0.55` | yes | Below this confidence the decision is marked uncertain (and goes to the judge when active). Calibrated on the multi-label action labels: hits were 0.49-0.92 (median 0.72) - 0.85 would have escalated almost everything. |

@@ -21,7 +21,6 @@ from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_de
 
 _log = logging.getLogger("hivemind.tool_loop")
 from core.model_sampling import (
-    REASONING_EFFORT_BUDGETS as _RE_BUDGETS,
     get_sampling_profile,
     model_supports_thinking,
     resolve_presence_penalty,
@@ -457,14 +456,14 @@ class ToolLoop:
             if _eff == "none" or (not self.cfg.thinking and not _eff) or not _can_think:
                 _payload["thinking"] = False
                 _payload["thinking_budget"] = 0
-                if _eff == "none" or bool(self.cfg.thinking):
+                if _eff == "none":
                     _payload["reasoning_effort"] = "none"
                 else:
                     _payload.pop("reasoning_effort", None)
                 _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
             else:
                 _payload["thinking"] = True
-                _payload["thinking_budget"] = self.cfg.thinking_budget or _RE_BUDGETS.get(_eff, 0)
+                _payload["thinking_budget"] = self.cfg.thinking_budget
                 _payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = True
                 if _smp.get("preserve_thinking"):
                     _payload["chat_template_kwargs"]["preserve_thinking"] = True

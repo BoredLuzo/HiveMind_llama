@@ -346,7 +346,9 @@ function onDuoToolThinkingModeChange(v) {
 
 var _REASONING_EFFORT_LABELS = {
   auto: 'Auto',
-  none: 'None',
+  none: 'Off',
+  on: 'On',
+  minimal: 'Minimal',
   low: 'Low',
   medium: 'Medium',
   high: 'High',
@@ -356,6 +358,8 @@ var _REASONING_EFFORT_LABELS = {
 var _REASONING_EFFORT_SHORT = {
   auto: 'Auto',
   none: 'Off',
+  on: 'On',
+  minimal: 'Min',
   low: 'Low',
   medium: 'Med',
   high: 'High',
@@ -365,10 +369,10 @@ var _REASONING_EFFORT_SHORT = {
 function _normalizeReasoningEffort(v) {
   var eff = String(v || 'auto').trim().toLowerCase();
   if (eff === 'off' || eff === 'disabled' || eff === 'false' || eff === '0') return 'none';
+  if (eff === 'true' || eff === '1' || eff === 'enabled') return 'on';
   if (eff === 'med') return 'medium';
   if (eff === 'xhigh' || eff === 'maximum') return 'max';
-  if (eff === 'minimal') return 'low';
-  return (eff === 'auto' || eff === 'none' || eff === 'low' || eff === 'medium' || eff === 'high' || eff === 'max')
+  return (eff === 'auto' || eff === 'none' || eff === 'on' || eff === 'minimal' || eff === 'low' || eff === 'medium' || eff === 'high' || eff === 'max')
     ? eff
     : 'auto';
 }
@@ -378,9 +382,64 @@ function _lookupModelProfileUI(modelName) {
   return S.modelProfiles[modelName] || S.modelProfiles[String(modelName).split(':')[0]] || null;
 }
 
-function _modelSupportsThinkingUI(modelName) {
+function _getModelReasoningMetaUI(modelName) {
   var prof = _lookupModelProfileUI(modelName);
-  return prof ? Boolean(prof.thinking) : true;
+  if (!prof) {
+    return {
+      known: false,
+      mode: 'effort',
+      levels: ['none', 'minimal', 'low', 'medium', 'high', 'max'],
+      source: '',
+      profEff: '',
+    };
+  }
+  var rMode = prof.reasoning_mode || (prof.thinking ? (prof.reasoning_effort ? 'effort' : 'binary') : 'none');
+  var rLevels = Array.isArray(prof.reasoning_levels)
+    ? prof.reasoning_levels.slice()
+    : (rMode === 'effort' ? ['none', 'low', 'medium', 'high', 'max'] : (rMode === 'binary' ? ['none', 'on'] : []));
+  var profEff = (rMode === 'effort')
+    ? (prof.reasoning_effort
+      || (prof.sampling_thinking_code && prof.sampling_thinking_code.reasoning_effort)
+      || (prof.sampling_thinking && prof.sampling_thinking.reasoning_effort)
+      || '')
+    : '';
+  return {
+    known: true,
+    mode: rMode,
+    levels: rLevels,
+    source: prof.reasoning_template_source || '',
+    profEff: profEff ? _normalizeReasoningEffort(profEff) : '',
+  };
+}
+
+function _modelSupportsThinkingUI(modelName) {
+  return _getModelReasoningMetaUI(modelName).mode !== 'none';
+}
+
+function _resolveMappedEffortUI(rawEff, rMode, availLevels) {
+  if (rawEff === 'auto') return 'auto';
+  if (rMode === 'none') return '';
+  if (rMode === 'binary') return rawEff === 'none' ? 'none' : 'on';
+  if (rawEff === 'on') return 'on';
+  if (availLevels.indexOf(rawEff) >= 0) return rawEff;
+  var scale = { minimal: 0, low: 1, medium: 2, high: 3, max: 4 };
+  var pos = ['minimal', 'low', 'medium', 'high', 'max'].filter(function(l) {
+    return availLevels.indexOf(l) >= 0;
+  });
+  if (!pos.length) return '';
+  if (rawEff === 'none') return '';
+  var targetRank = scale[rawEff] !== undefined ? scale[rawEff] : 2;
+  var best = pos[0];
+  var bestDist = Math.abs(scale[best] - targetRank);
+  for (var i = 1; i < pos.length; i++) {
+    var cand = pos[i];
+    var dist = Math.abs(scale[cand] - targetRank);
+    if (dist < bestDist || (dist === bestDist && scale[cand] > scale[best])) {
+      best = cand;
+      bestDist = dist;
+    }
+  }
+  return best;
 }
 
 function _targetModelForEffortKey(agentKey) {
@@ -406,15 +465,12 @@ function _getActiveEffortState(v) {
       || '';
   }
   var shortM = m ? (typeof _shortModel === 'function' ? _shortModel(m) : m) : '';
-  var prof = _lookupModelProfileUI(m);
-  var supportsThinking = prof ? Boolean(prof.thinking) : true;
-  var profEff = (supportsThinking && prof)
-    ? (prof.reasoning_effort
-      || (prof.sampling_thinking_code && prof.sampling_thinking_code.reasoning_effort)
-      || (prof.sampling_thinking && prof.sampling_thinking.reasoning_effort)
-      || '')
-    : '';
+  var meta = _getModelReasoningMetaUI(m);
+  var rMode = meta.mode;
+  var supportsThinking = (rMode !== 'none');
+  var availLevels = meta.levels;
   var eff = _normalizeReasoningEffort(v !== undefined ? v : S.reasoningEffort);
+  var mappedEff = _resolveMappedEffortUI(eff, rMode, availLevels);
   var isSkippedOnModel = (!supportsThinking && eff !== 'auto' && eff !== 'none');
   var isOverriding = (supportsThinking && eff !== 'auto');
   var toggleOff = false;
@@ -429,10 +485,22 @@ function _getActiveEffortState(v) {
   var effectiveAutoLabel = 'Auto';
   if (!supportsThinking) {
     effectiveAutoLabel = 'No reasoning';
-  } else if (profEff) {
-    effectiveAutoLabel = 'Auto \u00b7 ' + (_REASONING_EFFORT_SHORT[profEff] || profEff);
   } else if (toggleOff) {
     effectiveAutoLabel = 'Auto \u00b7 Off';
+  } else if (rMode === 'binary') {
+    effectiveAutoLabel = 'Auto \u00b7 On';
+  } else if (meta.profEff && meta.profEff !== 'auto' && meta.profEff !== 'on') {
+    var autoMapped = _resolveMappedEffortUI(meta.profEff, rMode, availLevels) || meta.profEff;
+    effectiveAutoLabel = 'Auto \u00b7 ' + (_REASONING_EFFORT_SHORT[autoMapped] || autoMapped);
+  }
+
+  var trigEff;
+  if (!supportsThinking) {
+    trigEff = eff;
+  } else if (eff === 'auto') {
+    trigEff = 'auto';
+  } else {
+    trigEff = mappedEff || eff;
   }
 
   var trigLabel;
@@ -442,37 +510,79 @@ function _getActiveEffortState(v) {
       : 'No reasoning';
   } else if (eff === 'auto') {
     trigLabel = effectiveAutoLabel;
+  } else if (mappedEff && mappedEff !== eff) {
+    trigLabel = (_REASONING_EFFORT_LABELS[mappedEff] || mappedEff) + ' (from ' + (_REASONING_EFFORT_SHORT[eff] || eff) + ')';
   } else {
     trigLabel = _REASONING_EFFORT_LABELS[eff] || 'Auto';
+  }
+
+  var srcLabel = '';
+  if (meta.source && meta.source.indexOf('external:') === 0) {
+    srcLabel = meta.source.slice(9);
+  } else if (meta.source === 'gguf') {
+    srcLabel = 'GGUF template';
   }
 
   var ctxText;
   if (!m) {
     ctxText = 'Inherits active agent & model default';
-  } else if (!prof) {
-    ctxText = shortM + ' \u00b7 agent & model default';
+  } else if (!meta.known) {
+    ctxText = shortM + ' \u00b7 loading capabilities...';
   } else if (!supportsThinking) {
-    ctxText = shortM + ' \u00b7 no native reasoning (unchanged)';
-  } else if (profEff) {
-    ctxText = shortM + ' \u00b7 default: ' + profEff;
-  } else if (toggleOff) {
-    ctxText = shortM + ' \u00b7 thinking off in card/sidebar';
+    ctxText = shortM + ' \u00b7 no native reasoning';
+  } else if (rMode === 'binary') {
+    ctxText = shortM + ' \u00b7 On/Off only' + (srcLabel ? (' (' + srcLabel + ')') : '');
   } else {
-    ctxText = shortM + ' \u00b7 reasoning capable';
+    var defPart = (meta.profEff && meta.profEff !== 'auto' && meta.profEff !== 'on')
+      ? ('default: ' + (_REASONING_EFFORT_SHORT[meta.profEff] || meta.profEff))
+      : '';
+    ctxText = shortM + (defPart ? (' \u00b7 ' + defPart) : '') + (srcLabel ? (' \u00b7 ' + srcLabel) : '');
+  }
+
+  var ovrKind = 'none';
+  var ovrText = '';
+  var showReset = false;
+  if (isSkippedOnModel) {
+    ovrKind = 'muted';
+    ovrText = 'Skipped for ' + (shortM || 'active model') + ' (no reasoning)';
+    showReset = true;
+  } else if (isOverriding) {
+    ovrKind = 'source-composer';
+    var mapHint = (mappedEff && mappedEff !== eff)
+      ? (' \u2192 ' + (_REASONING_EFFORT_LABELS[mappedEff] || mappedEff))
+      : '';
+    var budHint = (eff === 'none') ? '' : ' \u00b7 Budget: slider';
+    ovrText = '\u26a1 Composer overrides sidebar/card' + mapHint + budHint;
+    showReset = true;
+  } else if (supportsThinking && meta.known) {
+    ovrKind = 'source-sidebar';
+    var cardDefault = toggleOff
+      ? 'Off'
+      : (meta.profEff && meta.profEff !== 'auto' && meta.profEff !== 'on'
+        ? (_REASONING_EFFORT_LABELS[meta.profEff] || meta.profEff)
+        : (rMode === 'binary' ? 'On' : 'Card/Profile'));
+    ovrText = 'Sidebar/Card controls thinking \u00b7 ' + cardDefault;
+    showReset = false;
   }
 
   return {
     eff: eff,
+    mappedEff: mappedEff,
+    trigEff: trigEff,
     model: m,
     shortModel: shortM || 'active model',
-    prof: prof,
+    rMode: rMode,
+    availLevels: availLevels,
     supportsThinking: supportsThinking,
-    profEff: profEff,
+    profEff: meta.profEff,
     isSkippedOnModel: isSkippedOnModel,
     isOverriding: isOverriding,
     effectiveAutoLabel: effectiveAutoLabel,
     trigLabel: trigLabel,
     ctxText: ctxText,
+    ovrKind: ovrKind,
+    ovrText: ovrText,
+    showReset: showReset,
   };
 }
 
@@ -493,8 +603,18 @@ function _syncReasoningOverrideBadges() {
       continue;
     }
     var key = (typeof slot.getAttribute === 'function' ? slot.getAttribute('data-agent-override') : '') || 'duo';
-    var sup = _modelSupportsThinkingUI(_targetModelForEffortKey(key));
-    var lbl = (sup || eff === 'none') ? (baseLbl + ' \u00d7') : (baseLbl + ' (n/a) \u00d7');
+    var tModel = _targetModelForEffortKey(key);
+    var tMeta = _getModelReasoningMetaUI(tModel);
+    var sup = tMeta.mode !== 'none';
+    var tMapped = _resolveMappedEffortUI(eff, tMeta.mode, tMeta.levels);
+    var lbl;
+    if (!sup && eff !== 'none') {
+      lbl = baseLbl + ' (n/a) \u00d7';
+    } else if (sup && tMapped && tMapped !== eff) {
+      lbl = baseLbl + ' \u2192 ' + (_REASONING_EFFORT_LABELS[tMapped] || tMapped) + ' \u00d7';
+    } else {
+      lbl = baseLbl + ' \u00d7';
+    }
     var btn = slot.querySelector('.reasoning-override-badge');
     if (!btn) {
       btn = document.createElement('button');
@@ -517,6 +637,7 @@ function _syncReasoningOverrideBadges() {
     var rSup = _modelSupportsThinkingUI(_targetModelForEffortKey(rKey));
     if (row.classList && typeof row.classList.toggle === 'function') {
       row.classList.toggle('reasoning-overridden', Boolean(active && rSup));
+      row.classList.toggle('reasoning-overridden-off', Boolean(active && rSup && eff === 'none'));
     }
   }
 }
@@ -549,7 +670,7 @@ function _renderReasoningEffortUI(v) {
   if (typeof document !== 'undefined') {
     var trig = document.getElementById('effort-trigger');
     if (trig) {
-      trig.setAttribute('data-effort', eff);
+      trig.setAttribute('data-effort', st.trigEff);
       trig.setAttribute('data-override', st.isOverriding ? '1' : '0');
       if (!st.supportsThinking) {
         trig.setAttribute('data-no-reasoning', '1');
@@ -559,7 +680,7 @@ function _renderReasoningEffortUI(v) {
       trig.title = st.isSkippedOnModel
         ? ('Composer set to ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ', skipped because ' + st.shortModel + ' has no native reasoning')
         : (st.isOverriding
-          ? ('Composer override: ' + (_REASONING_EFFORT_LABELS[eff] || eff) + ' (overrides sidebar & agent cards)')
+          ? ('Composer override: ' + st.trigLabel + ' (overrides sidebar & agent cards; Think-Budget slider stays independent)')
           : ('Thinking effort: ' + st.ctxText));
     }
     var lblEl = document.getElementById('effort-trig-lbl');
@@ -568,17 +689,23 @@ function _renderReasoningEffortUI(v) {
     if (ctxEl) ctxEl.textContent = st.ctxText;
     var ovrEl = document.getElementById('effort-menu-ovr');
     var ovrTxt = document.getElementById('effort-menu-ovr-txt');
+    var ovrResetBtn = document.getElementById('effort-ovr-reset-btn');
     if (ovrEl) {
-      if (st.isOverriding) {
+      if (st.ovrKind !== 'none') {
         ovrEl.hidden = false;
-        if (ovrEl.classList) ovrEl.classList.remove('muted');
-        if (ovrTxt) ovrTxt.textContent = '\u26a1 Overriding sidebar & agent cards';
-      } else if (st.isSkippedOnModel) {
-        ovrEl.hidden = false;
-        if (ovrEl.classList) ovrEl.classList.add('muted');
-        if (ovrTxt) ovrTxt.textContent = 'Skipped for ' + st.shortModel + ' (no reasoning)';
+        ovrEl.className = 'effort-menu-ovr ' + st.ovrKind;
+        if (ovrTxt) ovrTxt.textContent = st.ovrText;
+        if (ovrResetBtn) ovrResetBtn.hidden = !st.showReset;
       } else {
         ovrEl.hidden = true;
+        if (ovrResetBtn) ovrResetBtn.hidden = true;
+      }
+    }
+    var emptyEl = document.getElementById('effort-menu-empty');
+    if (emptyEl) {
+      emptyEl.hidden = st.supportsThinking;
+      if (!st.supportsThinking) {
+        emptyEl.textContent = st.shortModel + ' does not support native reasoning';
       }
     }
     var menu = document.getElementById('effort-menu');
@@ -587,16 +714,18 @@ function _renderReasoningEffortUI(v) {
       for (var i = 0; i < opts.length; i++) {
         var b = opts[i];
         var optEff = b.getAttribute('data-effort');
-        var locked = (!st.supportsThinking && optEff !== 'auto' && optEff !== 'none');
-        var on = (optEff === eff);
-        b.disabled = locked;
+        var visible = st.supportsThinking && (optEff === 'auto' || st.availLevels.indexOf(optEff) >= 0);
+        var activeOpt = visible && (
+          optEff === eff
+          || (eff !== 'auto' && st.availLevels.indexOf(eff) < 0 && optEff === st.mappedEff)
+        );
+        b.hidden = !visible;
+        b.disabled = !visible;
         if (b.classList) {
-          b.classList.toggle('disabled', locked);
-          b.classList.toggle('active', on);
+          b.classList.toggle('active', activeOpt);
         }
-        b.setAttribute('aria-disabled', locked ? 'true' : 'false');
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
-        b.title = locked ? (st.shortModel + ' does not support native reasoning') : '';
+        b.setAttribute('aria-hidden', visible ? 'false' : 'true');
+        b.setAttribute('aria-selected', activeOpt ? 'true' : 'false');
       }
     }
   }

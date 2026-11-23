@@ -392,15 +392,9 @@ def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
 _TEMPLATE_CHAIN_BASES = ("qwen3.5", "qwen3.6", "qwen3.8", "hermes3.6")
 
 
-def _append_chat_template(cmd: list, model_base: str, reg_template: str | None) -> None:
-    """Append exactly ONE --chat-template-file to the server cmd.
-
-    Registry template (explicit path or basename, model_configs-relative)
-    has priority; only when it is unset does the fallback chain
-    sharp_v22.5.0 -> chat_template22.5 -> qwen3.6 template fire.
-    """
+def resolve_chat_template_file(model_base: str, reg_template: str | None) -> Path | None:
+    """Resolve the effective external .jinja template file path, or None if GGUF-native."""
     _templates_dir = (Path(__file__).resolve().parent.parent / "model_configs").resolve()
-    # Registry template (explicit path or base name) wins.
     if reg_template:
         _raw_tpl = Path(reg_template)
         try:
@@ -412,33 +406,38 @@ def _append_chat_template(cmd: list, model_base: str, reg_template: str | None) 
             _reg_template_path.relative_to(_templates_dir)
         except (OSError, ValueError):
             logger.warning(f"Rejected chat_template outside model_configs/: {reg_template}")
-            return
+            return None
         if _reg_template_path.is_file():
-            cmd += ["--chat-template-file", str(_reg_template_path)]
-            logger.info(f"--chat-template-file (Registry): {_reg_template_path}")
-        else:
-            logger.warning(f"Registry chat template does not exist: {_reg_template_path}")
-        return  # never stack a second --chat-template-file over the registry one
+            return _reg_template_path
+        logger.warning(f"Registry chat template does not exist: {_reg_template_path}")
+        return None
     if model_base not in _TEMPLATE_CHAIN_BASES:
+        return None
+    for _cand in (
+        _templates_dir / "chat_template_sharp_v22.5.0.jinja",
+        _templates_dir / "chat_template22.5.jinja",
+        _templates_dir / "qwen3.6_chat_template.jinja",
+    ):
+        if _cand.exists():
+            return _cand
+    return None
+
+
+def _append_chat_template(cmd: list, model_base: str, reg_template: str | None) -> None:
+    """Append exactly ONE --chat-template-file to the server cmd.
+
+    Registry template (explicit path or basename, model_configs-relative)
+    has priority; only when it is unset does the fallback chain
+    sharp_v22.5.0 -> chat_template22.5 -> qwen3.6 template fire.
+    """
+    _resolved = resolve_chat_template_file(model_base, reg_template)
+    if _resolved is None:
         return
-    # Bases — reasoning_effort-Steuerung (<|think_*|>), preserve_reasoning,
-    # \n\n → KV-Cache/MTP-Draft-Gewinne) und message.reasoning-Extraktion.
-    # Fallback-Kette (Repo-relativ): v22.5 → Repo-Fallback qwen3.6_template.
-    # SHARP-TEMPLATE (2026-10-30): the froggeric/Sharp lineage ships
-    # as v22.5.0 (HF peculiar-ragdoll/Qwen-Sharp-Chat-Templates). It is
-    # the same family as our 22.5 file with the newer tool/thinking
-    # section, so it is preferred; 22.5 stays as the fallback.
-    _template_sharp = _templates_dir / "chat_template_sharp_v22.5.0.jinja"
-    _template_v25 = _templates_dir / "chat_template22.5.jinja"
-    if _template_sharp.exists():
-        _template_path = _template_sharp
-    elif _template_v25.exists():
-        _template_path = _template_v25
+    cmd += ["--chat-template-file", str(_resolved)]
+    if reg_template:
+        logger.info(f"--chat-template-file (Registry): {_resolved}")
     else:
-        _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
-    if _template_path.exists():
-        cmd += ["--chat-template-file", str(_template_path)]
-        logger.info(f"--chat-template-file: {_template_path}")
+        logger.info(f"--chat-template-file: {_resolved}")
 
 
 class LlamaLoadMixin:

@@ -287,6 +287,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         # for the P9-override model → projector-less slot → POST 500.
         _agent = ctx.pipeline.agents["direct"]
         from core.model_sampling import (
+            POSITIVE_REASONING_EFFORTS as _DT_POS_RE,
             model_supports_thinking as _dt_mst,
             normalize_reasoning_effort as _dt_norm_re,
             resolve_agent_sampling as _resolve_dt_smp,
@@ -300,7 +301,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                 "type": "status",
                 "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
             }
-        elif _dt_user_eff in ("low", "medium", "high", "max"):
+        elif _dt_user_eff in _DT_POS_RE:
             if _dt_mst(model):
                 yield {
                     "type": "status",
@@ -311,7 +312,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                     "type": "status",
                     "content": f"ℹ️ Reasoning effort ({_dt_user_eff}) skipped — {model} does not support reasoning",
                 }
-        if _think and _dt_user_eff in ("low", "medium", "high", "max") and _dt_mst(model):
+        if _think and _dt_user_eff in _DT_POS_RE and _dt_mst(model):
             _mgr._reasoning_override = {model: True}
         _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
                                          vision=vision)
@@ -995,6 +996,7 @@ async def _run_direct_inner(ctx):
             parts = [_tool_content] if _tool_content else []
         else:
             from core.model_sampling import (
+                POSITIVE_REASONING_EFFORTS as _DIR_POS_RE,
                 model_supports_thinking as _dir_mst,
                 normalize_reasoning_effort as _dir_norm_re,
             )
@@ -1005,7 +1007,7 @@ async def _run_direct_inner(ctx):
                         "type": "status",
                         "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
                     })
-                elif _dir_user_eff in ("low", "medium", "high", "max"):
+                elif _dir_user_eff in _DIR_POS_RE:
                     if _dir_mst(_direct_model):
                         yield await ctx.emit({
                             "type": "status",
@@ -1016,7 +1018,7 @@ async def _run_direct_inner(ctx):
                             "type": "status",
                             "content": f"ℹ️ Reasoning effort ({_dir_user_eff}) skipped — {_direct_model} does not support reasoning",
                         })
-            if _direct_think and _dir_user_eff in ("low", "medium", "high", "max") and _dir_mst(_direct_model):
+            if _direct_think and _dir_user_eff in _DIR_POS_RE and _dir_mst(_direct_model):
                 try:
                     from backend.llama_client import manager as _dir_mgr
                     _dir_mgr._reasoning_override = {_direct_model: True}

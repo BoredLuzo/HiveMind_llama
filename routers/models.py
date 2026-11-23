@@ -290,10 +290,21 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
             p["load_mode"] = _glm(_mname) or _reg_prof.get("load_mode") or "auto"
             _tb = _gtb(_mname)
             p["thinking_budget"] = _tb if _tb is not None else _reg_prof.get("thinking_budget")
+            _ri = _gguf_meta.get_effective_reasoning_info(_mname)
+            _r_mode = str(_ri.get("mode") or "none")
+            _r_levels = list(_ri.get("levels") or [])
+            if p.get("thinking") and _r_mode == "none" and not _ri.get("template_source", "").startswith("external:"):
+                _r_mode = "binary"
+                _r_levels = ["none", "on"]
+            elif _r_mode != "none":
+                p["thinking"] = True
+            p["reasoning_mode"] = _r_mode
+            p["reasoning_levels"] = _r_levels
+            p["reasoning_template_source"] = str(_ri.get("template_source") or "none")
             _samp = _reg_prof.get("sampling")
             _samp = _samp if isinstance(_samp, dict) else {}
             _re_val = ""
-            if p.get("thinking"):
+            if _r_mode == "effort":
                 for _cand_blk in (
                     _reg_prof,
                     _samp.get("sampling_thinking_code"),
@@ -305,8 +316,10 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
                     if isinstance(_cand_blk, dict) and _cand_blk.get("reasoning_effort"):
                         _re_val = str(_cand_blk.get("reasoning_effort") or "")
                         break
+                if not _re_val and _ri.get("template_default"):
+                    _re_val = str(_ri.get("template_default") or "")
             _re_norm = _re_val.strip().lower()
-            p["reasoning_effort"] = _re_norm if _re_norm and _re_norm != "auto" else None
+            p["reasoning_effort"] = _re_norm if (_r_mode == "effort" and _re_norm and _re_norm not in ("auto", "on")) else None
             p["source"] = _gps(_mname)
             _kv_bpt = _reg_prof.get("kv_bytes_per_token")
             if not _kv_bpt:
@@ -323,6 +336,9 @@ def _build_models_profiles(models: list[str]) -> list[dict]:
             p.setdefault("load_mode", "auto")
             p.setdefault("thinking_budget", None)
             p.setdefault("reasoning_effort", None)
+            p.setdefault("reasoning_mode", "binary" if p.get("thinking") else "none")
+            p.setdefault("reasoning_levels", ["none", "on"] if p.get("thinking") else [])
+            p.setdefault("reasoning_template_source", "none")
             p.setdefault("source", "generic")
             p.setdefault("kv_bytes_per_token", None)
     return prof_list

@@ -165,7 +165,7 @@ class LlamaClient:
         t0 = time.perf_counter()
         payload = _build_payload(messages, temperature, max_tokens, stream=False,
                                  thinking=think, thinking_budget=thinking_budget,
-                                 sampler=SIDE_CALL_SAMPLING)
+                                 sampler=SIDE_CALL_SAMPLING, model=model)
         _vision = self._has_images(messages)
         port = await manager.ensure_loaded(model, num_ctx=ctx, vision=_vision)
         # SAMPLER-PROOF (2026-10-30): log what really goes on the wire - the
@@ -341,7 +341,7 @@ class LlamaClient:
         payload = _build_payload(messages, _eff_temp, max_tokens, stream=True,
                                  cache_prompt=not no_cache, thinking=think,
                                  thinking_budget=thinking_budget,
-                                 sampler=sampler)
+                                 sampler=sampler, model=model)
         # USAGE-REPORT (2026-10-20): nur wenn der Aufrufer es anfordert, damit
         # bestehende Pfade (direct, duo) unveraendert bleiben.
         if usage_out is not None:
@@ -540,7 +540,8 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
                    stream: bool, cache_prompt: bool = True,
                    thinking: bool | None = None,
                    thinking_budget: int | None = None,
-                   sampler: dict | None = None) -> dict:
+                   sampler: dict | None = None,
+                   model: str = "") -> dict:
 
 
     payload = {
@@ -569,7 +570,7 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
     # Explicit cache_prompt=False (e.g. no_cache=True) must never be clobbered by profile defaults.
     if not cache_prompt:
         payload["cache_prompt"] = False
-    if str(payload.get("reasoning_effort") or "").strip().lower() in ("", "auto"):
+    if str(payload.get("reasoning_effort") or "").strip().lower() in ("", "auto", "on"):
         payload.pop("reasoning_effort", None)
     if "preserve_thinking" in payload:
         _pt_val = payload.pop("preserve_thinking")
@@ -580,8 +581,22 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = bool(thinking)
         if not thinking:
             payload["thinking_budget"] = 0
-            payload["reasoning_effort"] = "none"
+            if model:
+                from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_re_lc
+                if _clamp_re_lc(model, "none") == "none":
+                    payload["reasoning_effort"] = "none"
+                else:
+                    payload.pop("reasoning_effort", None)
+            else:
+                payload["reasoning_effort"] = "none"
         elif payload.get("reasoning_effort") == "none":
+            payload.pop("reasoning_effort", None)
+    if model and "reasoning_effort" in payload and payload.get("reasoning_effort") != "none":
+        from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_re_lc2
+        _clamped_re = _clamp_re_lc2(model, str(payload.get("reasoning_effort") or ""))
+        if _clamped_re:
+            payload["reasoning_effort"] = _clamped_re
+        else:
             payload.pop("reasoning_effort", None)
     if thinking_budget is not None:
         payload["thinking_budget"] = thinking_budget

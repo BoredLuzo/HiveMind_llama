@@ -447,7 +447,7 @@ def _calculate_thinking_tokens(
 ) -> int:
     _s = settings_dict or {}
     from core.model_sampling import (
-        REASONING_EFFORT_BUDGETS as _RE_BUDGETS,
+        POSITIVE_REASONING_EFFORTS as _POS_RE,
         model_supports_thinking as _mst_dh,
         normalize_reasoning_effort as _norm_re,
     )
@@ -455,12 +455,10 @@ def _calculate_thinking_tokens(
     if _user_eff == "none":
         return 0
     profile = _get_thinking_profile(model_name, _s)
+    if _user_eff in _POS_RE and not (profile.get("thinking_enabled") or _mst_dh(model_name)):
+        return 0
     base_budget = None
-    if _user_eff in ("low", "medium", "high", "max"):
-        if not (profile.get("thinking_enabled") or _mst_dh(model_name)):
-            return 0
-        base_budget = _RE_BUDGETS[_user_eff]
-    elif agent_name:
+    if agent_name:
         agent_cfg = _s.get("agents", {}).get(agent_name, {})
         if "thinking_budget" in agent_cfg:
             tb = agent_cfg.get("thinking_budget")
@@ -473,11 +471,19 @@ def _calculate_thinking_tokens(
                     pass
 
     if base_budget is None:
-        if not profile.get("thinking_enabled"):
-            return 0
-        base_budget = profile.get("thinking_budget", 2500)
-        if base_budget <= 0:
-            base_budget = 2500
+        if _user_eff in _POS_RE:
+            if _user_eff == "max":
+                available = max(0, available_ctx - input_tokens)
+                _max_thinking_share = int(available * 0.40)
+                return _max_thinking_share if _max_thinking_share >= 64 else 0
+            prof_tb = profile.get("thinking_budget", 2500)
+            base_budget = prof_tb if prof_tb > 0 else 2500
+        else:
+            if not profile.get("thinking_enabled"):
+                return 0
+            base_budget = profile.get("thinking_budget", 2500)
+            if base_budget <= 0:
+                base_budget = 2500
 
     if input_tokens > 0 and input_tokens < base_budget * 0.2:
         adaptive_budget = max(200, int(base_budget * 0.3))
@@ -496,20 +502,37 @@ def _apply_thinking_fields(
     thinking_on: bool,
     thinking_budget: int,
     reasoning_effort: str = "",
+    model_name: str = "",
 ) -> dict:
     """Apply top-level thinking, thinking_budget, chat_template_kwargs, and reasoning_effort."""
+    _mdl = str(model_name or payload.get("model") or "")
     if thinking_on:
         payload["thinking"] = True
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = True
         if thinking_budget > 0:
             payload["thinking_budget"] = max(64, thinking_budget)
-        if reasoning_effort in ("low", "medium", "high", "max"):
-            payload["reasoning_effort"] = reasoning_effort
+        if reasoning_effort and reasoning_effort != "auto":
+            if _mdl:
+                from core.model_sampling import clamp_reasoning_effort_for_model
+                _clamped = clamp_reasoning_effort_for_model(_mdl, reasoning_effort)
+                if _clamped and _clamped != "none":
+                    payload["reasoning_effort"] = _clamped
+                else:
+                    payload.pop("reasoning_effort", None)
+            elif reasoning_effort in ("minimal", "low", "medium", "high", "max"):
+                payload["reasoning_effort"] = reasoning_effort
     else:
         payload["thinking"] = False
         payload["thinking_budget"] = 0
-        payload["reasoning_effort"] = "none"
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+        if _mdl:
+            from core.model_sampling import clamp_reasoning_effort_for_model
+            if clamp_reasoning_effort_for_model(_mdl, "none") == "none":
+                payload["reasoning_effort"] = "none"
+            else:
+                payload.pop("reasoning_effort", None)
+        else:
+            payload["reasoning_effort"] = "none"
     return payload
 
 

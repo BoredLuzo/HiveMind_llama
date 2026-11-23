@@ -33,7 +33,7 @@ check(
     "DEFAULT_SETTINGS + SETTINGS_UI_META expose reasoning_effort='auto'",
     SD.DEFAULT_SETTINGS.get("reasoning_effort") == "auto"
     and SD.SETTINGS_UI_META.get("reasoning_effort", {}).get("choices")
-    == ["auto", "none", "low", "medium", "high", "max"],
+    == ["auto", "none", "on", "minimal", "low", "medium", "high", "max"],
 )
 
 check(
@@ -42,7 +42,8 @@ check(
     and MS.normalize_reasoning_effort("med") == "medium"
     and MS.normalize_reasoning_effort("xhigh") == "max"
     and MS.normalize_reasoning_effort("off") == "none"
-    and MS.normalize_reasoning_effort("minimal") == "low"
+    and MS.normalize_reasoning_effort("on") == "on"
+    and MS.normalize_reasoning_effort("minimal") == "minimal"
     and MS.normalize_reasoning_effort("bogus") == "auto",
 )
 
@@ -169,12 +170,12 @@ async def _run_tl_case(thinking: bool, settings_dict: dict) -> dict:
 _tl_off = asyncio.run(_run_tl_case(False, {"reasoning_effort": "auto"}))
 _tl_med = asyncio.run(_run_tl_case(False, {"reasoning_effort": "medium"}))
 check(
-    "ToolLoop emits reasoning_effort='none' on auto+thinking=False and overrides to medium when set",
+    "ToolLoop emits reasoning_effort='none' on auto+thinking=False and overrides to medium without touching thinking_budget",
     _tl_off.get("reasoning_effort") == "none"
     and _tl_off.get("thinking") is False
     and _tl_med.get("reasoning_effort") == "medium"
     and _tl_med.get("thinking") is True
-    and _tl_med.get("thinking_budget") == MS.REASONING_EFFORT_BUDGETS["medium"],
+    and _tl_med.get("thinking_budget") == 0,
     repr((_tl_off.get("reasoning_effort"), _tl_med.get("reasoning_effort"), _tl_med.get("thinking_budget"))),
 )
 
@@ -191,18 +192,32 @@ _t_d, _th_d, _b_d, _s_d = MS.resolve_agent_sampling(
     "inkling-2-mini-ud", agent=_DummyAgent(False, 0),
     settings={"reasoning_effort": "high"}, role="direct",
 )
+_t_d2, _th_d2, _b_d2, _s_d2 = MS.resolve_agent_sampling(
+    "inkling-2-mini-ud", agent=_DummyAgent(False, 4000),
+    settings={"reasoning_effort": "high"}, role="direct",
+)
 _t_j, _th_j, _b_j, _s_j = MS.resolve_agent_sampling(
     "lfm3:1.7b-qad", agent=_DummyAgent(False, 0),
     settings={"reasoning_effort": "high"}, role="judge",
 )
 _tok_none = _calculate_thinking_tokens("inkling-2-mini-ud", {"reasoning_effort": "none"}, input_tokens=500, available_ctx=65000, agent_name="duo_coder")
-_tok_low = _calculate_thinking_tokens("inkling-2-mini-ud", {"reasoning_effort": "low"}, input_tokens=500, available_ctx=65000, agent_name="duo_coder")
+_tok_low = _calculate_thinking_tokens(
+    "inkling-2-mini-ud",
+    {"reasoning_effort": "low", "agents": {"duo_coder": {"thinking_budget": 4000}}},
+    input_tokens=500, available_ctx=65000, agent_name="duo_coder",
+)
+_tok_max = _calculate_thinking_tokens(
+    "inkling-2-mini-ud",
+    {"reasoning_effort": "max", "agents": {"duo_coder": {"thinking_budget": 0}}},
+    input_tokens=500, available_ctx=65000, agent_name="duo_coder",
+)
 check(
-    "composer effort scales direct/duo_coder budgets while leaving internal judge untouched",
-    _th_d is True and _b_d == MS.REASONING_EFFORT_BUDGETS["high"] and _s_d.get("reasoning_effort") == "high"
-    and _th_j is False and _b_j == 0 and _s_j.get("reasoning_effort") == "none"
-    and _tok_none == 0 and _tok_low == MS.REASONING_EFFORT_BUDGETS["low"],
-    repr((_b_d, _th_j, _s_j.get("reasoning_effort"), _tok_none, _tok_low)),
+    "composer effort decouples Think-Budget sliders from effort while leaving internal binary judge untouched",
+    _th_d is True and _b_d == 0 and _s_d.get("reasoning_effort") == "high"
+    and _th_d2 is True and _b_d2 == 4000
+    and _th_j is False and _b_j == 0 and "reasoning_effort" not in _s_j
+    and _tok_none == 0 and 0 < _tok_low <= 4000 and _tok_max > 2500,
+    repr((_b_d, _b_d2, _th_j, _s_j.get("reasoning_effort"), _tok_none, _tok_low, _tok_max)),
 )
 
 
@@ -280,24 +295,34 @@ _js = (_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 _css = (_ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
 check(
-    "index.html & style.css & app.js expose #effort-trigger/#effort-menu and override badges",
+    "index.html & style.css & app.js expose #effort-trigger/#effort-menu, Option-1 show/hide & source badges",
     'id="effort-trigger"' in _idx
     and 'id="effort-menu"' in _idx
     and 'id="effort-menu-ovr"' in _idx
+    and 'id="effort-ovr-reset-btn"' in _idx
+    and 'id="effort-menu-empty"' in _idx
     and 'id="effort-bar"' not in _idx
     and 'data-effort="auto"' in _idx
     and 'data-effort="none"' in _idx
+    and 'data-effort="on"' in _idx
+    and 'data-effort="minimal"' in _idx
     and 'data-effort="low"' in _idx
     and 'data-effort="medium"' in _idx
     and 'data-effort="high"' in _idx
     and 'data-effort="max"' in _idx
+    and "~1K tokens" not in _idx
+    and "~16K tokens" not in _idx
     and "reasoning-override-slot" in _idx
     and 'data-reasoning-ovr-row="duo"' in _idx
     and ".effort-menu" in _css
+    and ".effort-dot" in _css
+    and ".effort-menu-ovr.source-sidebar" in _css
+    and ".effort-menu-ovr.source-composer" in _css
     and ".effort-opt.disabled" in _css
     and '.effort-trigger[data-no-reasoning="1"]' in _css
     and ".reasoning-override-badge" in _css
     and ".reasoning-overridden" in _css
+    and ".reasoning-overridden-off [data-budget-wrap]" in _css
     and ".effort-btn.active" not in _css
     and "reasoning_effort: S.reasoningEffort || 'auto'" in _js,
 )
@@ -319,12 +344,13 @@ function makeCls(initial) {
     contains(c) { return set.has(c); },
   };
 }
-const options = ['auto', 'none', 'low', 'medium', 'high', 'max'].map(lvl => ({
+const options = ['auto', 'none', 'on', 'minimal', 'low', 'medium', 'high', 'max'].map(lvl => ({
   _lvl: lvl,
+  hidden: false,
   disabled: false,
   title: '',
   classList: makeCls(lvl === 'auto' ? ['effort-opt', 'active'] : ['effort-opt']),
-  _attrs: { 'data-effort': lvl, 'aria-selected': lvl === 'auto' ? 'true' : 'false', 'aria-disabled': 'false' },
+  _attrs: { 'data-effort': lvl, 'aria-selected': lvl === 'auto' ? 'true' : 'false', 'aria-disabled': 'false', 'aria-hidden': 'false' },
   getAttribute(k) { return this._attrs[k] || null; },
   setAttribute(k, v) { this._attrs[k] = String(v); },
 }));
@@ -337,8 +363,19 @@ const trig = {
 };
 const lblEl = { textContent: 'Auto' };
 const ctxEl = { textContent: '' };
-const ovrEl = { hidden: true, classList: makeCls(['effort-menu-ovr']) };
+const ovrEl = {
+  hidden: true,
+  _className: 'effort-menu-ovr',
+  classList: makeCls(['effort-menu-ovr']),
+  get className() { return this._className; },
+  set className(v) {
+    this._className = String(v || '');
+    this.classList = makeCls(this._className.split(/\s+/).filter(Boolean));
+  },
+};
 const ovrTxt = { textContent: '' };
+const ovrResetBtn = { hidden: true };
+const emptyEl = { hidden: true, textContent: '' };
 const menu = {
   hidden: true,
   querySelectorAll(sel) { return sel === '.effort-opt' ? options : []; },
@@ -371,8 +408,34 @@ const ctx = {
     duoToolThinkingAlways: false,
     duoToolThinkingMode: 'on_fail',
     modelProfiles: {
-      'inkling-2-mini-ud': { thinking: true, reasoning_effort: 'medium' },
-      'lfm2.5:24b': { thinking: false, reasoning_effort: null },
+      'inkling-2-mini-ud': {
+        thinking: true,
+        reasoning_mode: 'effort',
+        reasoning_levels: ['none', 'minimal', 'low', 'medium', 'high', 'max'],
+        reasoning_template_source: 'gguf',
+        reasoning_effort: 'medium',
+      },
+      'qwen3.6:35b-a3b-mtp-ud': {
+        thinking: true,
+        reasoning_mode: 'effort',
+        reasoning_levels: ['none', 'low', 'medium', 'high'],
+        reasoning_template_source: 'external:chat_template_sharp_v22.5.0.jinja',
+        reasoning_effort: null,
+      },
+      'gemma-4:e4b-it-qat': {
+        thinking: true,
+        reasoning_mode: 'binary',
+        reasoning_levels: ['none', 'on'],
+        reasoning_template_source: 'gguf',
+        reasoning_effort: null,
+      },
+      'lfm2.5:24b': {
+        thinking: false,
+        reasoning_mode: 'none',
+        reasoning_levels: [],
+        reasoning_template_source: 'gguf',
+        reasoning_effort: null,
+      },
     },
     currentAssignments: {},
     agentsCfg: {},
@@ -387,6 +450,8 @@ const ctx = {
       if (id === 'effort-menu-ctx') return ctxEl;
       if (id === 'effort-menu-ovr') return ovrEl;
       if (id === 'effort-menu-ovr-txt') return ovrTxt;
+      if (id === 'effort-ovr-reset-btn') return ovrResetBtn;
+      if (id === 'effort-menu-empty') return emptyEl;
       if (id === 'effort-menu') return menu;
       return null;
     },
@@ -401,12 +466,23 @@ const ctx = {
 };
 vm.createContext(ctx);
 vm.runInContext(fnSrc, ctx);
+function snapOpts() {
+  return {
+    visible: options.filter(o => !o.hidden).map(o => o._lvl),
+    hidden: options.filter(o => o.hidden).map(o => o._lvl),
+    active: options.filter(o => o.classList.contains('active')).map(o => o._lvl),
+  };
+}
 ctx._renderReasoningEffortUI('auto');
 const initInkling = {
   label: lblEl.textContent,
   ovrHidden: ovrEl.hidden,
+  ovrClass: ovrEl.className,
+  ovrTxt: ovrTxt.textContent,
+  resetHidden: ovrResetBtn.hidden,
+  emptyHidden: emptyEl.hidden,
   noReasonAttr: trig.getAttribute('data-no-reasoning'),
-  disabledLvls: options.filter(o => o.disabled).map(o => o._lvl),
+  ...snapOpts(),
 };
 ctx.toggleReasoningEffortMenu({ stopPropagation() {} });
 const afterOpen = {
@@ -421,16 +497,41 @@ const afterMed = {
   state: ctx.S.reasoningEffort,
   label: lblEl.textContent,
   trigEffort: trig.getAttribute('data-effort'),
-  active: options.filter(b => b.classList.contains('active')).map(b => b._lvl),
   selected: options.find(b => b._lvl === 'medium')._attrs['aria-selected'],
   ovrHidden: ovrEl.hidden,
-  ovrMuted: ovrEl.classList.contains('muted'),
+  ovrClass: ovrEl.className,
   ovrTxt: ovrTxt.textContent,
+  resetHidden: ovrResetBtn.hidden,
   duoDimmed: ovrRows[0].classList.contains('reasoning-overridden'),
+  duoOffDimmed: ovrRows[0].classList.contains('reasoning-overridden-off'),
   badgeText: badgeSlots.map(s => s._children[0] && s._children[0].textContent),
   saved,
+  ...snapOpts(),
+};
+ctx.setReasoningEffort('none');
+const afterInklingOff = {
+  duoDimmed: ovrRows[0].classList.contains('reasoning-overridden'),
+  duoOffDimmed: ovrRows[0].classList.contains('reasoning-overridden-off'),
 };
 ctx.S.mode = 'auto';
+ctx.S.currentAssignments = { direct: { model: 'qwen3.6:35b-a3b-mtp-ud' } };
+ctx.setReasoningEffort('max');
+const afterQwenMax = {
+  label: lblEl.textContent,
+  trigEffort: trig.getAttribute('data-effort'),
+  ctxText: ctxEl.textContent,
+  ovrTxt: ovrTxt.textContent,
+  ...snapOpts(),
+};
+ctx.S.currentAssignments = { direct: { model: 'gemma-4:e4b-it-qat' } };
+ctx.setReasoningEffort('max');
+const afterGemmaMax = {
+  label: lblEl.textContent,
+  trigEffort: trig.getAttribute('data-effort'),
+  ctxText: ctxEl.textContent,
+  ovrTxt: ovrTxt.textContent,
+  ...snapOpts(),
+};
 ctx.S.currentAssignments = { direct: { model: 'lfm2.5:24b' } };
 ctx.setReasoningEffort('xhigh');
 const afterMaxNonThink = {
@@ -440,11 +541,14 @@ const afterMaxNonThink = {
   ctxText: ctxEl.textContent,
   ovrHidden: ovrEl.hidden,
   ovrMuted: ovrEl.classList.contains('muted'),
+  ovrClass: ovrEl.className,
   ovrTxt: ovrTxt.textContent,
-  disabledLvls: options.filter(o => o.disabled).map(o => o._lvl),
-  enabledLvls: options.filter(o => !o.disabled).map(o => o._lvl),
+  resetHidden: ovrResetBtn.hidden,
+  emptyHidden: emptyEl.hidden,
+  emptyTxt: emptyEl.textContent,
   directDimmed: ovrRows[1].classList.contains('reasoning-overridden'),
   badgeText: badgeSlots.map(s => s._children[0] && s._children[0].textContent),
+  ...snapOpts(),
 };
 ctx.setReasoningEffort('auto');
 const afterAutoNonThink = {
@@ -452,10 +556,11 @@ const afterAutoNonThink = {
   label: lblEl.textContent,
   noReasonAttr: trig.getAttribute('data-no-reasoning'),
   ovrHidden: ovrEl.hidden,
+  resetHidden: ovrResetBtn.hidden,
   duoDimmed: ovrRows[0].classList.contains('reasoning-overridden'),
   badgeCounts: badgeSlots.map(s => s._children.length),
 };
-console.log(JSON.stringify({ initInkling, afterOpen, afterMed, afterMaxNonThink, afterAutoNonThink }));
+console.log(JSON.stringify({ initInkling, afterOpen, afterMed, afterInklingOff, afterQwenMax, afterGemmaMax, afterMaxNonThink, afterAutoNonThink }));
 """
 _ne = subprocess.run(["node", "-e", _node_eff], cwd=_ROOT, capture_output=True, text=True)
 _ne_ok = _ne.returncode == 0
@@ -463,12 +568,18 @@ if _ne_ok:
     _nej = json.loads(_ne.stdout.strip())
     _ne_ok = (
         _nej["initInkling"]["label"] == "Auto \u00b7 Med"
-        and _nej["initInkling"]["ovrHidden"] is True
+        and _nej["initInkling"]["ovrHidden"] is False
+        and _nej["initInkling"]["ovrClass"] == "effort-menu-ovr source-sidebar"
+        and "Sidebar/Card controls thinking" in _nej["initInkling"]["ovrTxt"]
+        and _nej["initInkling"]["resetHidden"] is True
+        and _nej["initInkling"]["emptyHidden"] is True
         and _nej["initInkling"]["noReasonAttr"] is None
-        and _nej["initInkling"]["disabledLvls"] == []
+        and _nej["initInkling"]["visible"] == ["auto", "none", "minimal", "low", "medium", "high", "max"]
+        and _nej["initInkling"]["hidden"] == ["on"]
         and _nej["afterOpen"]["menuHidden"] is False
         and _nej["afterOpen"]["expanded"] == "true"
-        and "default: medium" in _nej["afterOpen"]["ctxText"]
+        and "default: Med" in _nej["afterOpen"]["ctxText"]
+        and "GGUF template" in _nej["afterOpen"]["ctxText"]
         and _nej["afterMed"]["menuHidden"] is True
         and _nej["afterMed"]["expanded"] == "false"
         and _nej["afterMed"]["state"] == "medium"
@@ -477,30 +588,53 @@ if _ne_ok:
         and _nej["afterMed"]["active"] == ["medium"]
         and _nej["afterMed"]["selected"] == "true"
         and _nej["afterMed"]["ovrHidden"] is False
-        and _nej["afterMed"]["ovrMuted"] is False
-        and "Overriding" in _nej["afterMed"]["ovrTxt"]
+        and _nej["afterMed"]["ovrClass"] == "effort-menu-ovr source-composer"
+        and "Composer overrides sidebar/card" in _nej["afterMed"]["ovrTxt"]
+        and "Budget: slider" in _nej["afterMed"]["ovrTxt"]
+        and _nej["afterMed"]["resetHidden"] is False
         and _nej["afterMed"]["duoDimmed"] is True
+        and _nej["afterMed"]["duoOffDimmed"] is False
         and _nej["afterMed"]["badgeText"] == ["Composer: Medium \u00d7", "Composer: Medium \u00d7"]
         and _nej["afterMed"]["saved"][0]["patch"] == {"reasoning_effort": "medium"}
+        and _nej["afterInklingOff"]["duoDimmed"] is True
+        and _nej["afterInklingOff"]["duoOffDimmed"] is True
+        and _nej["afterQwenMax"]["visible"] == ["auto", "none", "low", "medium", "high"]
+        and _nej["afterQwenMax"]["hidden"] == ["on", "minimal", "max"]
+        and _nej["afterQwenMax"]["label"] == "High (from Max)"
+        and _nej["afterQwenMax"]["trigEffort"] == "high"
+        and _nej["afterQwenMax"]["active"] == ["high"]
+        and "chat_template_sharp_v22.5.0.jinja" in _nej["afterQwenMax"]["ctxText"]
+        and "High" in _nej["afterQwenMax"]["ovrTxt"]
+        and _nej["afterGemmaMax"]["visible"] == ["auto", "none", "on"]
+        and _nej["afterGemmaMax"]["label"] == "On (from Max)"
+        and _nej["afterGemmaMax"]["trigEffort"] == "on"
+        and _nej["afterGemmaMax"]["active"] == ["on"]
+        and "On/Off only" in _nej["afterGemmaMax"]["ctxText"]
+        and "On" in _nej["afterGemmaMax"]["ovrTxt"]
         and _nej["afterMaxNonThink"]["state"] == "max"
         and _nej["afterMaxNonThink"]["label"] == "Max (n/a)"
         and _nej["afterMaxNonThink"]["noReasonAttr"] == "1"
         and "no native reasoning" in _nej["afterMaxNonThink"]["ctxText"]
         and _nej["afterMaxNonThink"]["ovrHidden"] is False
         and _nej["afterMaxNonThink"]["ovrMuted"] is True
+        and _nej["afterMaxNonThink"]["ovrClass"] == "effort-menu-ovr muted"
         and "Skipped" in _nej["afterMaxNonThink"]["ovrTxt"]
-        and _nej["afterMaxNonThink"]["disabledLvls"] == ["low", "medium", "high", "max"]
-        and _nej["afterMaxNonThink"]["enabledLvls"] == ["auto", "none"]
+        and _nej["afterMaxNonThink"]["resetHidden"] is False
+        and _nej["afterMaxNonThink"]["emptyHidden"] is False
+        and "does not support native reasoning" in _nej["afterMaxNonThink"]["emptyTxt"]
+        and len(_nej["afterMaxNonThink"]["hidden"]) == 8
+        and _nej["afterMaxNonThink"]["visible"] == []
         and _nej["afterMaxNonThink"]["directDimmed"] is False
         and _nej["afterMaxNonThink"]["badgeText"] == ["Composer: Max \u00d7", "Composer: Max (n/a) \u00d7"]
         and _nej["afterAutoNonThink"]["state"] == "auto"
         and _nej["afterAutoNonThink"]["label"] == "No reasoning"
         and _nej["afterAutoNonThink"]["noReasonAttr"] == "1"
         and _nej["afterAutoNonThink"]["ovrHidden"] is True
+        and _nej["afterAutoNonThink"]["resetHidden"] is True
         and _nej["afterAutoNonThink"]["duoDimmed"] is False
         and _nej["afterAutoNonThink"]["badgeCounts"] == [0, 0]
     )
-check("Node VM confirms dropdown lock/dimming, Auto label, override notices, and persistence", _ne_ok, _ne.stdout.strip() or _ne.stderr.strip())
+check("Node VM confirms Option-1 show/hide, source status, budget-slider separation, and clamping labels", _ne_ok, _ne.stdout.strip() or _ne.stderr.strip())
 
 # ── 6. Clash 1: Non-reasoning model guard ("lfm2.5:24b") ──────────────────────
 from types import SimpleNamespace as _SN  # noqa: E402
@@ -515,7 +649,7 @@ _nr_tok_hi = _calculate_thinking_tokens(
     input_tokens=500, available_ctx=65000, agent_name="duo_coder",
 )
 check(
-    "Non-reasoning model guard blocks High/Max forcing while preserving explicit None",
+    "Non-reasoning model guard blocks High/Max forcing and omits reasoning_effort",
     MS.model_supports_thinking("lfm2.5:24b") is False
     and MS.model_supports_thinking("inkling-2-mini-ud") is True
     and _nr_th_hi is False
@@ -523,7 +657,7 @@ check(
     and "reasoning_effort" not in _nr_s_hi
     and _nr_th_none is False
     and _nr_b_none == 0
-    and _nr_s_none.get("reasoning_effort") == "none"
+    and "reasoning_effort" not in _nr_s_none
     and _nr_tok_hi == 0,
     repr((_nr_th_hi, _nr_b_hi, _nr_s_hi.get("reasoning_effort"), _nr_s_none.get("reasoning_effort"), _nr_tok_hi)),
 )
@@ -657,16 +791,24 @@ try:
         settings={"reasoning_effort": "low"},
     ))
     _inloop_low = dict(_pl_post_payloads[0])
+
+    _pl_stream_payloads.clear()
+    asyncio.run(_pl_mod.run_planner(
+        task="Implement widget", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=False, thinking_budget=3000,
+        settings={"reasoning_effort": "low"},
+    ))
+    _pl_exp_bud = dict(_pl_stream_payloads[0])
 finally:
     _pl_mod.httpx = _orig_pl_httpx
 
 check(
-    "Planner run_planner & run_inloop_planner propagate reasoning_effort safely",
+    "Planner run_planner & run_inloop_planner propagate reasoning_effort safely and preserve slider budgets",
     _ps_hi.get("reasoning_effort") == "high"
     and "reasoning_effort" not in _ps_nr
     and _res_hi.used_thinking is True
     and _pl_hi.get("thinking") is True
-    and _pl_hi.get("thinking_budget") == MS.REASONING_EFFORT_BUDGETS["high"]
+    and _pl_hi.get("thinking_budget") is None
     and _pl_hi.get("reasoning_effort") == "high"
     and _res_none.used_thinking is False
     and _pl_none.get("thinking") is False
@@ -675,9 +817,11 @@ check(
     and _pl_nr.get("thinking") is False
     and _pl_nr.get("reasoning_effort") != "high"
     and _inloop_low.get("thinking") is True
-    and _inloop_low.get("thinking_budget") == MS.REASONING_EFFORT_BUDGETS["low"]
-    and _inloop_low.get("reasoning_effort") == "low",
-    repr((_ps_hi.get("reasoning_effort"), _ps_nr.get("reasoning_effort"), _pl_hi.get("thinking_budget"), _pl_none.get("reasoning_effort"), _pl_nr.get("reasoning_effort"), _inloop_low.get("thinking_budget"))),
+    and _inloop_low.get("thinking_budget") is None
+    and _inloop_low.get("reasoning_effort") == "low"
+    and _pl_exp_bud.get("reasoning_effort") == "low"
+    and _pl_exp_bud.get("thinking_budget") == 3000,
+    repr((_ps_hi.get("reasoning_effort"), _ps_nr.get("reasoning_effort"), _pl_hi.get("thinking_budget"), _pl_none.get("reasoning_effort"), _pl_nr.get("reasoning_effort"), _inloop_low.get("thinking_budget"), _pl_exp_bud.get("thinking_budget"))),
 )
 
 # ── 8. Clash 3: duo_tool_thinking_budget_cap auto-gate + 70% clamp ───────────
@@ -821,6 +965,101 @@ check(
     and "Reasoning effort: {_dt_user_eff} (composer override)" in _direct_src
     and "Reasoning effort: {_dir_user_eff} (composer override)" in _direct_src
     and "does not support reasoning" in _direct_src,
+)
+
+
+# ── 12. Template inspection, external .jinja resolution & strict crash guard ─
+from backend import gguf_meta as _gm_tpl, llama_client as _lc_tpl, manager_load as _ml_tpl  # noqa: E402
+
+_sharp_tpl_text = (_ROOT / "model_configs" / "chat_template_sharp_v22.5.0.jinja").read_text(encoding="utf-8")
+_ri_sharp = _gm_tpl.inspect_template_reasoning(_sharp_tpl_text)
+_ri_k2 = _gm_tpl.inspect_template_reasoning(
+    "{%- set _eff = reasoning_effort | default('medium') %}"
+    "{%- if reasoning_effort not in ('low', 'medium', 'high') %}{{ raise_exception('invalid') }}{% endif %}"
+)
+_ri_spark = _gm_tpl.inspect_template_reasoning(
+    "{%- if enable_thinking is defined %}{%- endif %}"
+    "{%- if reasoning_effort not in ('low', 'high') %}{{ raise_exception('invalid') }}{% endif %}"
+)
+_ri_inkling_tpl = _gm_tpl.inspect_template_reasoning(
+    "{%- set effort_map = {'none': 0, 'minimal': 1, 'low': 2, 'medium': 3, 'high': 4, 'max': 5} -%}{{ reasoning_effort }}"
+)
+_ri_binary_tpl = _gm_tpl.inspect_template_reasoning("{%- if enable_thinking %}<think>{% endif %}")
+_ri_plain_tpl = _gm_tpl.inspect_template_reasoning("{{ messages[0].content }}", has_thinking=False)
+_ext_qwen_path = _ml_tpl.resolve_chat_template_file("qwen3.6", None)
+
+check(
+    "Template inspector extracts exact effort/binary/none modes and external .jinja paths",
+    _ri_sharp["mode"] == "effort"
+    and _ri_sharp["levels"] == ["none", "low", "medium", "high"]
+    and _ri_sharp["accepts_none_effort"] is True
+    and _ri_k2["mode"] == "effort"
+    and _ri_k2["levels"] == ["low", "medium", "high"]
+    and _ri_k2["accepts_none_effort"] is False
+    and _ri_k2["template_default"] == "medium"
+    and _ri_spark["mode"] == "effort"
+    and _ri_spark["levels"] == ["none", "low", "high"]
+    and _ri_spark["accepts_none_effort"] is False
+    and _ri_inkling_tpl["mode"] == "effort"
+    and _ri_inkling_tpl["levels"] == ["none", "minimal", "low", "medium", "high", "max"]
+    and _ri_inkling_tpl["accepts_none_effort"] is True
+    and _ri_binary_tpl["mode"] == "binary"
+    and _ri_binary_tpl["levels"] == ["none", "on"]
+    and _ri_plain_tpl["mode"] == "none"
+    and _ri_plain_tpl["levels"] == []
+    and _ext_qwen_path is not None
+    and _ext_qwen_path.is_file()
+    and _ext_qwen_path.suffix == ".jinja",
+    repr((_ri_sharp, _ri_k2, _ri_spark, str(_ext_qwen_path))),
+)
+
+_SIM_INFOS = {
+    "k2-sim": {"mode": "effort", "levels": ["low", "medium", "high"], "accepts_none_effort": False, "supports_enable_thinking": False, "template_default": "medium", "template_source": "gguf"},
+    "spark-sim": {"mode": "effort", "levels": ["none", "low", "high"], "accepts_none_effort": False, "supports_enable_thinking": True, "template_default": "high", "template_source": "gguf"},
+    "bin-sim": {"mode": "binary", "levels": ["none", "on"], "accepts_none_effort": False, "supports_enable_thinking": True, "template_default": None, "template_source": "gguf"},
+    "ext-tpl-sim": {"mode": "effort", "levels": ["none", "low", "medium", "high"], "accepts_none_effort": True, "supports_enable_thinking": True, "template_default": None, "template_source": "external:chat_template_sharp_v22.5.0.jinja"},
+    "plain-sim": {"mode": "none", "levels": [], "accepts_none_effort": False, "supports_enable_thinking": False, "template_default": None, "template_source": "gguf"},
+}
+
+
+def _sim_ri(name: str) -> dict:
+    return dict(_SIM_INFOS.get(name, _SIM_INFOS["plain-sim"]))
+
+
+with mock.patch.object(_gm_tpl, "get_effective_reasoning_info", side_effect=_sim_ri):
+    _cl_k2_max = MS.clamp_reasoning_effort_for_model("k2-sim", "max")
+    _cl_k2_min = MS.clamp_reasoning_effort_for_model("k2-sim", "minimal")
+    _cl_k2_none = MS.clamp_reasoning_effort_for_model("k2-sim", "none")
+    _cl_sp_med = MS.clamp_reasoning_effort_for_model("spark-sim", "medium")
+    _cl_sp_none = MS.clamp_reasoning_effort_for_model("spark-sim", "none")
+    _cl_bin_hi = MS.clamp_reasoning_effort_for_model("bin-sim", "high")
+    _cl_bin_on = MS.clamp_reasoning_effort_for_model("bin-sim", "on")
+    _ext_sup = MS.model_supports_thinking("ext-tpl-sim")
+    _plain_sup = MS.model_supports_thinking("plain-sim")
+
+    _pl_k2_off = _lc_tpl._build_payload([{"role": "user", "content": "hi"}], 0.7, 512, False, thinking=False, model="k2-sim")
+    _pl_sp_med = _lc_tpl._build_payload([{"role": "user", "content": "hi"}], 0.7, 512, False, thinking=True, sampler={"reasoning_effort": "medium"}, model="spark-sim")
+    _pl_bin_hi = _lc_tpl._build_payload([{"role": "user", "content": "hi"}], 0.7, 512, False, thinking=True, sampler={"reasoning_effort": "high"}, model="bin-sim")
+    _pl_compat_off = _lc_tpl._build_payload([{"role": "user", "content": "hi"}], 0.7, 512, False, thinking=False)
+
+check(
+    "Strict template clamping prevents Jinja crashes while keeping model='' backward compat",
+    _cl_k2_max == "high"
+    and _cl_k2_min == "low"
+    and _cl_k2_none == ""
+    and _cl_sp_med == "high"
+    and _cl_sp_none == ""
+    and _cl_bin_hi == ""
+    and _cl_bin_on == ""
+    and _ext_sup is True
+    and _plain_sup is False
+    and "reasoning_effort" not in _pl_k2_off
+    and _pl_k2_off.get("thinking_budget") == 0
+    and _pl_k2_off.get("chat_template_kwargs", {}).get("enable_thinking") is False
+    and _pl_sp_med.get("reasoning_effort") == "high"
+    and "reasoning_effort" not in _pl_bin_hi
+    and _pl_compat_off.get("reasoning_effort") == "none",
+    repr((_cl_k2_max, _cl_k2_none, _cl_sp_med, _pl_k2_off.get("reasoning_effort"), _pl_sp_med.get("reasoning_effort"), _pl_compat_off.get("reasoning_effort"))),
 )
 
 sys.exit(h.finish("reasoning_effort_and_pip_pipe"))

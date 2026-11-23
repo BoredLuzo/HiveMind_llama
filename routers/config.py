@@ -1247,9 +1247,9 @@ def _validate_sampling_block(block: dict, prefix: str = "sampling") -> str | Non
                 return f"{prefix}.{k} must be between {lo:g} and {hi:g}"
         elif k == "reasoning_effort":
             if not isinstance(v, str) or v.strip().lower() not in (
-                "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"
+                "auto", "none", "on", "minimal", "low", "medium", "high", "xhigh", "max"
             ):
-                return f"{prefix}.{k} must be one of auto/none/minimal/low/medium/high/xhigh/max or null"
+                return f"{prefix}.{k} must be one of auto/none/on/minimal/low/medium/high/xhigh/max or null"
         elif isinstance(v, dict):
             err = _validate_sampling_block(v, f"{prefix}.{k}")
             if err:

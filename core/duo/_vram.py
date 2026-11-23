@@ -220,13 +220,14 @@ async def _phase_vram(ctx, state: dict):
             else:
                 _pc_ctx = resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), _pm, "critic")
             from core.model_sampling import (
+                POSITIVE_REASONING_EFFORTS as _PIN_POS_RE,
                 model_supports_thinking as _pin_mst,
                 normalize_reasoning_effort as _pin_norm_re,
             )
             _pin_eff = _pin_norm_re((ctx.settings or {}).get("reasoning_effort"))
             if (
                 _pm in (coder_mdl, exec_mdl)
-                and _pin_eff in ("low", "medium", "high", "max")
+                and _pin_eff in _PIN_POS_RE
                 and _pin_mst(_pm)
             ):
                 try:
@@ -282,6 +283,7 @@ async def _phase_vram(ctx, state: dict):
         and _exec_supports_thinking
     )
     from core.model_sampling import (
+        POSITIVE_REASONING_EFFORTS as _VRAM_POS_RE,
         model_supports_thinking as _mst_vram,
         normalize_reasoning_effort as _norm_re_vram,
     )
@@ -295,7 +297,7 @@ async def _phase_vram(ctx, state: dict):
             "type": "status",
             "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
         })
-    elif _user_eff in ("low", "medium", "high", "max"):
+    elif _user_eff in _VRAM_POS_RE:
         if _exec_native_think:
             _effective_tool_think_toggle = True
             _exec_supports_thinking = True
@@ -388,7 +390,7 @@ async def _phase_vram(ctx, state: dict):
     from backend.llama_server_manager import manager as _lsm_ro
     _lsm_ro._reasoning_override = (
         {exec_mdl: _coder_tool_think}
-        if (ctx.duo_config.coder_tool_thinking_explicit or (_user_eff in ("low", "medium", "high", "max") and _exec_native_think))
+        if (ctx.duo_config.coder_tool_thinking_explicit or (_user_eff in _VRAM_POS_RE and _exec_native_think))
         else None
     )
 

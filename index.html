@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261122-06">
+  <link rel="stylesheet" href="/static/style.css?v=20261122-07">
 </head>
 <body>
 <header>
@@ -58,51 +58,66 @@
               <div id="effort-menu-ctx" class="effort-menu-ctx">Inherits agent &amp; model default</div>
               <div id="effort-menu-ovr" class="effort-menu-ovr" hidden>
                 <span id="effort-menu-ovr-txt"></span>
-                <button type="button" class="effort-ovr-reset" onclick="setReasoningEffort('auto')">Reset</button>
+                <button type="button" class="effort-ovr-reset" id="effort-ovr-reset-btn" onclick="setReasoningEffort('auto')" hidden>Reset</button>
               </div>
             </div>
             <button type="button" class="effort-opt active" data-effort="auto" role="option" aria-selected="true" onclick="setReasoningEffort('auto')">
               <span class="effort-opt-main">
-                <span class="effort-opt-name">Auto</span>
-                <span class="effort-opt-desc">Inherits agent &amp; model default</span>
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Auto</span>
+                <span class="effort-opt-desc">Follows sidebar / card &amp; model default</span>
               </span>
               <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
             </button>
             <button type="button" class="effort-opt" data-effort="none" role="option" aria-selected="false" onclick="setReasoningEffort('none')">
               <span class="effort-opt-main">
-                <span class="effort-opt-name">None</span>
-                <span class="effort-opt-desc">Disable thinking tokens</span>
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Off</span>
+                <span class="effort-opt-desc">Disable thinking</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="on" role="option" aria-selected="false" onclick="setReasoningEffort('on')" hidden>
+              <span class="effort-opt-main">
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>On</span>
+                <span class="effort-opt-desc">Enable thinking (model default)</span>
+              </span>
+              <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+            </button>
+            <button type="button" class="effort-opt" data-effort="minimal" role="option" aria-selected="false" onclick="setReasoningEffort('minimal')" hidden>
+              <span class="effort-opt-main">
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Minimal</span>
+                <span class="effort-opt-desc">Very brief thinking</span>
               </span>
               <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
             </button>
             <button type="button" class="effort-opt" data-effort="low" role="option" aria-selected="false" onclick="setReasoningEffort('low')">
               <span class="effort-opt-main">
-                <span class="effort-opt-name">Low</span>
-                <span class="effort-opt-desc">Light · ~1K thinking tokens</span>
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Low</span>
+                <span class="effort-opt-desc">Quick, focused reasoning</span>
               </span>
               <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
             </button>
             <button type="button" class="effort-opt" data-effort="medium" role="option" aria-selected="false" onclick="setReasoningEffort('medium')">
               <span class="effort-opt-main">
-                <span class="effort-opt-name">Medium</span>
-                <span class="effort-opt-desc">Balanced · ~3K thinking tokens</span>
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Medium</span>
+                <span class="effort-opt-desc">Balanced reasoning</span>
               </span>
               <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
             </button>
             <button type="button" class="effort-opt" data-effort="high" role="option" aria-selected="false" onclick="setReasoningEffort('high')">
               <span class="effort-opt-main">
-                <span class="effort-opt-name">High</span>
-                <span class="effort-opt-desc">Deep reasoning · ~8K tokens</span>
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>High</span>
+                <span class="effort-opt-desc">Deep reasoning</span>
               </span>
               <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
             </button>
             <button type="button" class="effort-opt" data-effort="max" role="option" aria-selected="false" onclick="setReasoningEffort('max')">
               <span class="effort-opt-main">
-                <span class="effort-opt-name">Max</span>
-                <span class="effort-opt-desc">Maximum · ~16K tokens</span>
+                <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Max</span>
+                <span class="effort-opt-desc">Maximum reasoning effort</span>
               </span>
               <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
             </button>
+            <div id="effort-menu-empty" class="effort-menu-empty" hidden></div>
           </div>
         </div>
       </div>
@@ -2851,6 +2866,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261122-07"></script>
+        <script src="/static/app.js?v=20261122-08"></script>
 </body>
 </html>

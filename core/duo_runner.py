@@ -377,6 +377,7 @@ async def _duo_planner_phase(
     _plan_tracker = ps.plan_tracker
     try:
         from core.model_sampling import (
+            POSITIVE_REASONING_EFFORTS as _PLAN_POS_RE,
             model_supports_thinking as _mst_plan,
             normalize_reasoning_effort as _norm_re_plan,
         )
@@ -415,7 +416,7 @@ async def _duo_planner_phase(
         )
         _planner_effective_thinking = (
             True
-            if (_plan_user_eff in ("low", "medium", "high", "max") and _planner_supports_thinking)
+            if (_plan_user_eff in _PLAN_POS_RE and _planner_supports_thinking)
             else (False if _plan_user_eff == "none" else bool(_use_thinking_planner))
         )
 
@@ -506,7 +507,7 @@ async def _duo_planner_phase(
                 except Exception:
                     pass
             _lsm_plan_pre._planner_critical_phase = True
-            if _plan_user_eff in ("low", "medium", "high", "max") and _planner_supports_thinking:
+            if _plan_user_eff in _PLAN_POS_RE and _planner_supports_thinking:
                 _lsm_plan_pre._reasoning_override = {_planner_model: True}
             # PIN RESET AT RUN START (2026-10-02): stale pins from a
             # crashed previous run must not block eviction for this one.
@@ -4114,7 +4115,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # re-enable happens payload-side — mutating system
                             # messages instead killed the whole prefix cache.
                             _tool_payload["chat_template_kwargs"] = {"enable_thinking": False}
-                            _tool_payload["reasoning_effort"] = "none"
                         _tool_payload = _apply_thinking_kwargs(
                             _tool_payload, _profile, _thinking,
                             _thinking, settings=(ctx.settings if _thinking else None),
@@ -4760,9 +4760,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             coder_mdl, _plain_think_on, ctx.settings, mode="sampling_thinking_code",
                         )
                         from core.model_sampling import resolve_reasoning_effort as _res_re_plain
-                        _plain_eff = _res_re_plain(ctx.settings, _plain_coder_smp, thinking=_plain_think_on)
+                        _plain_eff = _res_re_plain(
+                            ctx.settings, _plain_coder_smp,
+                            thinking=_plain_think_on, model_name=coder_mdl,
+                        )
                         if _plain_eff:
                             _plain_coder_smp["reasoning_effort"] = _plain_eff
+                        else:
+                            _plain_coder_smp.pop("reasoning_effort", None)
                         _plain_coder_smp["presence_penalty"] = resolve_presence_penalty(
                             _plain_coder_smp, coder_mdl, _plain_think_on, ctx.settings,
                             mode="sampling_thinking_code",

@@ -42,7 +42,8 @@ _FLAT_SAMPLING_KEYS = (
     "presence_penalty", "repeat_penalty", "repetition_penalty", "seed",
 )
 
-VALID_REASONING_EFFORTS = ("auto", "none", "low", "medium", "high", "max")
+VALID_REASONING_EFFORTS = ("auto", "none", "on", "minimal", "low", "medium", "high", "max")
+POSITIVE_REASONING_EFFORTS = frozenset({"on", "minimal", "low", "medium", "high", "max"})
 REASONING_EFFORT_BUDGETS: dict[str, int] = {
     "none": 0,
     "low": 1024,
@@ -58,13 +59,40 @@ def normalize_reasoning_effort(raw: object) -> str:
     val = str(raw or "").strip().lower()
     if val in ("off", "disabled", "false", "0"):
         return "none"
+    if val in ("true", "1", "enabled"):
+        return "on"
     if val == "med":
         return "medium"
     if val in ("xhigh", "maximum"):
         return "max"
-    if val == "minimal":
-        return "low"
     return val if val in VALID_REASONING_EFFORTS else "auto"
+
+
+def clamp_reasoning_effort_for_model(model_name: str, effort: str) -> str:
+    """Map normalized reasoning_effort safely onto what model_name's template accepts."""
+    eff = normalize_reasoning_effort(effort)
+    if eff == "auto":
+        return ""
+    try:
+        from backend.gguf_meta import get_effective_reasoning_info
+        info = get_effective_reasoning_info(model_name)
+    except (ImportError, OSError, ValueError, TypeError, AttributeError):
+        return "" if eff == "on" else eff
+    if str(info.get("mode") or "none") != "effort":
+        return ""
+    levels: list[str] = list(info.get("levels") or [])
+    if eff == "none":
+        return "none" if info.get("accepts_none_effort") else ""
+    if eff == "on":
+        return ""
+    if eff in levels:
+        return eff
+    pos = [lvl for lvl in ("minimal", "low", "medium", "high", "max") if lvl in levels]
+    if not pos:
+        return ""
+    scale = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "max": 4}
+    target_rank = scale.get(eff, 2)
+    return min(pos, key=lambda cand: (abs(scale[cand] - target_rank), -scale[cand]))
 
 
 def resolve_reasoning_effort(
@@ -73,19 +101,26 @@ def resolve_reasoning_effort(
     thinking: bool | None = None,
     model_name: str = "",
 ) -> str:
-    """Resolve effective reasoning_effort ('none'|'low'|'medium'|'high'|'max' or '')."""
+    """Resolve effective reasoning_effort ('none'|'minimal'|'low'|'medium'|'high'|'max' or '')."""
     user_eff = normalize_reasoning_effort((settings or {}).get("reasoning_effort"))
     if user_eff == "none":
-        return "none"
+        return clamp_reasoning_effort_for_model(model_name, "none") if model_name else "none"
     if user_eff != "auto":
-        if model_name and not model_supports_thinking(model_name):
-            return ""
-        return user_eff
+        if model_name:
+            if not model_supports_thinking(model_name):
+                return ""
+            if user_eff == "on":
+                prof_eff = normalize_reasoning_effort((profile or {}).get("reasoning_effort"))
+                if prof_eff in ("minimal", "low", "medium", "high", "max"):
+                    return clamp_reasoning_effort_for_model(model_name, prof_eff)
+                return ""
+            return clamp_reasoning_effort_for_model(model_name, user_eff)
+        return "" if user_eff == "on" else user_eff
     if thinking is False:
-        return "none"
+        return clamp_reasoning_effort_for_model(model_name, "none") if model_name else "none"
     prof_eff = normalize_reasoning_effort((profile or {}).get("reasoning_effort"))
-    if prof_eff != "auto":
-        return prof_eff
+    if prof_eff not in ("auto", "on"):
+        return clamp_reasoning_effort_for_model(model_name, prof_eff) if model_name else prof_eff
     return ""
 
 
@@ -294,7 +329,16 @@ def _model_thinking_default(model_name: str) -> bool:
 
 def model_supports_thinking(model_name: str) -> bool:
     """Return True when model_name natively supports thinking/reasoning."""
-    return _model_thinking_default(model_name)
+    if _model_thinking_default(model_name):
+        return True
+    prof = _model_profile(model_name)
+    if prof.get("thinking") is False:
+        return False
+    try:
+        from backend.gguf_meta import get_effective_reasoning_info
+        return str(get_effective_reasoning_info(model_name).get("mode") or "none") != "none"
+    except (ImportError, OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def resolve_agent_sampling(
@@ -335,9 +379,8 @@ def resolve_agent_sampling(
     if _user_eff == "none":
         eff_think = False
         eff_budget = 0
-    elif _user_eff in ("low", "medium", "high", "max") and _supports_think:
+    elif _user_eff in POSITIVE_REASONING_EFFORTS and _supports_think:
         eff_think = True
-        eff_budget = REASONING_EFFORT_BUDGETS[_user_eff]
 
     smp = get_sampling_profile(model_name, thinking=eff_think, settings=settings, mode=mode)
     _resolved_eff = resolve_reasoning_effort(

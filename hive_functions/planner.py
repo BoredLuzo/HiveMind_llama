@@ -1354,14 +1354,14 @@ async def run_planner(
 
     settings = settings or {}
     from core.model_sampling import (
-        REASONING_EFFORT_BUDGETS as _PLAN_RE_BUDGETS,
+        POSITIVE_REASONING_EFFORTS as _PLAN_POS_RE,
         model_supports_thinking as _plan_mst,
         normalize_reasoning_effort as _norm_plan_re,
     )
     _p_user_eff = _norm_plan_re(settings.get("reasoning_effort"))
     if _p_user_eff == "none":
         use_thinking = False
-    elif _p_user_eff in ("low", "medium", "high", "max") and _plan_mst(planner_model):
+    elif _p_user_eff in _PLAN_POS_RE and _plan_mst(planner_model):
         use_thinking = True
     result = PlannerResult(
         planner_model=planner_model,
@@ -1448,8 +1448,6 @@ async def run_planner(
                 _budget_setting = 0
             if thinking_budget > 0:
                 _eff_think_budget = thinking_budget
-            elif _p_user_eff in ("low", "medium", "high", "max") and _plan_mst(planner_model):
-                _eff_think_budget = _PLAN_RE_BUDGETS[_p_user_eff]
             else:
                 _eff_think_budget = max(0, _budget_setting)
             _p_temp, _p_smp = _resolve_planner_sampling(
@@ -1673,14 +1671,14 @@ async def run_inloop_planner(
     _inloop_max_tokens = _resolve_planner_max_tokens(settings, planner_ctx)
     settings = settings or {}
     from core.model_sampling import (
-        REASONING_EFFORT_BUDGETS as _INLOOP_RE_BUDGETS,
+        POSITIVE_REASONING_EFFORTS as _INLOOP_POS_RE,
         model_supports_thinking as _inloop_mst,
         normalize_reasoning_effort as _norm_inloop_re,
     )
     _inloop_user_eff = _norm_inloop_re(settings.get("reasoning_effort"))
     if _inloop_user_eff == "none":
         use_thinking = False
-    elif _inloop_user_eff in ("low", "medium", "high", "max") and _inloop_mst(planner_model):
+    elif _inloop_user_eff in _INLOOP_POS_RE and _inloop_mst(planner_model):
         use_thinking = True
 
     _plan_user_msg = build_planner_user_prompt(
@@ -1709,8 +1707,6 @@ async def run_inloop_planner(
         _inloop_eff_budget = 0
     elif thinking_budget > 0:
         _inloop_eff_budget = thinking_budget
-    elif _inloop_user_eff in ("low", "medium", "high", "max") and _inloop_mst(planner_model):
-        _inloop_eff_budget = _INLOOP_RE_BUDGETS[_inloop_user_eff]
     else:
         _inloop_eff_budget = max(0, _inloop_budget_setting)
     _inloop_temp, _inloop_smp = _resolve_planner_sampling(

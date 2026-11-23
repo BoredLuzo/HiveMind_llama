@@ -354,9 +354,9 @@ DEFAULT_SETTINGS = {
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
     "duo_coder_tool_thinking_auto_mode": "off",
-    # REASONING-EFFORT (2026-11-22): composer toggle for reasoning-effort models
-    # (Inkling-2-Mini, DeepSeek V4.1, etc.) and budget-scaled thinking on others.
-    # "auto" inherits per-agent thinking + model profile defaults.
+    # REASONING-EFFORT (2026-11-22): template-driven composer reasoning effort /
+    # thinking toggle ("auto" inherits per-agent sidebar/card settings + model
+    # profile defaults; independent of Think-Budget sliders).
     "reasoning_effort": "auto",
     # TOOL-THINKING BUDGET CAP: upper bound for the per-round thinking budget
     # in agentic tool rounds (only has an effect when tool thinking is on via
@@ -920,7 +920,7 @@ SETTINGS_UI_META = {
     "duo_selective_tests": {"group": "testing", "apply_mode": "live"},
     "duo_tool_thinking_budget_cap": {"group": "agentic", "apply_mode": "live", "min": 0, "max": 32768, "step": 128},
     "duo_coder_tool_tier": {"group": "agentic", "apply_mode": "live", "choices": ["core", "full"]},
-    "reasoning_effort": {"group": "agentic", "apply_mode": "live", "choices": ["auto", "none", "low", "medium", "high", "max"]},
+    "reasoning_effort": {"group": "agentic", "apply_mode": "live", "choices": ["auto", "none", "on", "minimal", "low", "medium", "high", "max"]},
     "duo_coder_after_run": {"group": "agentic", "apply_mode": "live", "choices": ["keep", "evict"]},
     "direct_tools_tier": {"group": "agentic", "apply_mode": "live", "choices": ["off", "readonly", "research", "python", "mcp", "full"]},
     "mode": {"group": "general", "apply_mode": "live", "choices": ["auto", "chat", "pipeline", "code_duo"]},
