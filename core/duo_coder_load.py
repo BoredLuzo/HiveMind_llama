@@ -91,6 +91,19 @@ async def _duo_resolve_coder_port_cache(
         if _dport is None:
             for _connect_attempt in range(3):
                 try:
+                    from core.model_sampling import (
+                        POSITIVE_REASONING_EFFORTS as _CL_POS_RE,
+                        model_supports_thinking as _cl_mst,
+                        normalize_reasoning_effort as _cl_norm_re,
+                    )
+                    _cl_eff = _cl_norm_re((ctx.settings or {}).get("reasoning_effort"))
+                    _cl_wants_think = (
+                        _cl_eff in _CL_POS_RE
+                        or (_cl_eff == "auto" and bool(ctx.duo_config.coder_tool_thinking))
+                    )
+                    if _cl_wants_think and _cl_mst(exec_mdl):
+                        from backend.manager_load import set_reasoning_override as _set_cl_ro
+                        _set_cl_ro(_lsm3, exec_mdl, True)
                     # VISION RELOAD (2026-10-04): keep the mmproj
                     # when the image plan routes raw images to the
                     # coder - the cached slot may predate the plan

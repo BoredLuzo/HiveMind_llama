@@ -455,10 +455,12 @@ function _targetModelForEffortKey(agentKey) {
     return S.duoCoderModel || ((S.agentsCfg && S.agentsCfg.duo_coder && S.agentsCfg.duo_coder.model) || '');
   }
   if (agentKey === 'duo_planner') {
-    return S.duoPlannerModel
-      || (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model)
+    var coderM = S.duoCoderModel || ((S.agentsCfg && S.agentsCfg.duo_coder && S.agentsCfg.duo_coder.model) || '');
+    if (S.duoPlannerModel) return S.duoPlannerModel;
+    if (S.duoPlannerUseCoderCtx !== false && coderM) return coderM;
+    return (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model)
       || (S.agentsCfg && S.agentsCfg.duo_planner && S.agentsCfg.duo_planner.model)
-      || S.duoCoderModel
+      || coderM
       || '';
   }
   return (S.currentAssignments && S.currentAssignments[agentKey] && S.currentAssignments[agentKey].model)
@@ -492,7 +494,9 @@ function _getActiveEffortState(v) {
   var isOverriding = (supportsThinking && eff !== 'auto');
   var toggleOff = false;
   if (mode === 'code_duo') {
-    toggleOff = (!S.duoAgenticThinking && !S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off');
+    toggleOff = S.duoPlannerSeparateEffort
+      ? (!S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off')
+      : (!S.duoAgenticThinking && !S.duoToolThinkingAlways && S.duoToolThinkingMode === 'off');
   } else if (mode === 'pipeline') {
     toggleOff = Boolean(S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.thinking === false);
   } else {
@@ -793,10 +797,32 @@ function _getPlannerEffortState(v) {
   };
 }
 
+function _shouldShowPlannerEffortPill() {
+  if (!S.duoPlannerSeparateEffort) return false;
+  var mode = S.mode || 'auto';
+  if (mode === 'code_duo') return true;
+  if (mode === 'auto' && (S.routingPlanner || 'auto') !== 'never') return true;
+  return false;
+}
+
+function _syncSeparatePlannerToggleEls(checked) {
+  if (typeof document === 'undefined') return;
+  var on = Boolean(checked);
+  var t1 = document.getElementById('duo-planner-sep-effort-toggle');
+  if (t1) t1.checked = on;
+  var t2 = document.getElementById('routing-planner-sep-effort-toggle');
+  if (t2) t2.checked = on;
+  var rRow = document.getElementById('routing-planner-sep-row');
+  if (rRow && rRow.style) {
+    rRow.style.display = ((S.routingPlanner || 'auto') === 'never') ? 'none' : '';
+  }
+}
+
 function _renderPlannerReasoningEffortUI(v) {
   if (typeof document === 'undefined') return;
+  _syncSeparatePlannerToggleEls(S.duoPlannerSeparateEffort);
   var wrap = document.getElementById('planner-effort-wrap');
-  var show = ((S.mode || 'auto') === 'code_duo' && Boolean(S.duoPlannerSeparateEffort));
+  var show = _shouldShowPlannerEffortPill();
   if (wrap) wrap.hidden = !show;
   if (!show) {
     closePlannerReasoningEffortMenu();
@@ -964,12 +990,12 @@ function setPlannerReasoningEffort(level) {
 function onDuoPlannerSeparateEffortChange(checked) {
   var prev = Boolean(S.duoPlannerSeparateEffort);
   S.duoPlannerSeparateEffort = Boolean(checked);
+  _syncSeparatePlannerToggleEls(S.duoPlannerSeparateEffort);
   _renderReasoningEffortUI(S.reasoningEffort);
   if (typeof _postSettingsFF === 'function') {
     _postSettingsFF({ duo_planner_separate_effort: S.duoPlannerSeparateEffort }, function() {
       S.duoPlannerSeparateEffort = prev;
-      var el = typeof document !== 'undefined' ? document.getElementById('duo-planner-sep-effort-toggle') : null;
-      if (el) el.checked = prev;
+      _syncSeparatePlannerToggleEls(prev);
       _renderReasoningEffortUI(S.reasoningEffort);
     });
   } else if (typeof postSettings === 'function') {
@@ -1855,8 +1881,7 @@ async function loadSettings() {
   if (_ttmRb) _ttmRb.checked = true;
   S.reasoningEffort = _normalizeReasoningEffort(s.reasoning_effort || 'auto');
   S.duoPlannerSeparateEffort = Boolean(s.duo_planner_separate_effort);
-  var _dpseTog = document.getElementById('duo-planner-sep-effort-toggle');
-  if (_dpseTog) _dpseTog.checked = S.duoPlannerSeparateEffort;
+  if (typeof _syncSeparatePlannerToggleEls === 'function') _syncSeparatePlannerToggleEls(S.duoPlannerSeparateEffort);
   S.plannerReasoningEffort = _normalizeReasoningEffort(s.planner_reasoning_effort || 'auto');
   _renderReasoningEffortUI(S.reasoningEffort);
     // UNTIL-FINISHED ON BY DEFAULT (2026-10-27, owner): a coding run should
@@ -13229,6 +13254,7 @@ function togglePlannerUseCoderCtx(on) {
   }
   updateCtxScopeHint();
   if (typeof updateDuoImageUI === 'function') updateDuoImageUI();
+  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
 }
 
 // CONTEXT-SLOT (2026-10-20): die Context-Felder leben in der Advanced-Leiste,
@@ -13265,6 +13291,9 @@ function setRouting(key, value) {
   if (key === 'routing_judge') S.routingJudge = value;
   if (key === 'routing_planner') S.routingPlanner = value;
   renderRoutingStatus();
+  if (key === 'routing_planner' && typeof _renderReasoningEffortUI === 'function') {
+    _renderReasoningEffortUI(S.reasoningEffort);
+  }
   if (typeof updateModeDesc === 'function') updateModeDesc();  // UX: the auto text names the router
 }
 

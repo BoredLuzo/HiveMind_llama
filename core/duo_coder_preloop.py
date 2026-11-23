@@ -485,6 +485,19 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                         "content": f"loading with image support (mmproj), ~{max(15, int(_gguf_gb * 8))} s — one-time reload"})
                             yield await ctx.emit({"type": "status",
                                 "content": f"⏳ Loading coder ({exec_mdl.split(':')[0]}, ctx={_coder_ctx_try})…"})
+                            from core.model_sampling import (
+                                POSITIVE_REASONING_EFFORTS as _CP_POS_RE,
+                                model_supports_thinking as _cp_mst,
+                                normalize_reasoning_effort as _cp_norm_re,
+                            )
+                            _cp_eff = _cp_norm_re((ctx.settings or {}).get("reasoning_effort"))
+                            _cp_wants_think = (
+                                _cp_eff in _CP_POS_RE
+                                or (_cp_eff == "auto" and bool(ctx.duo_config.coder_tool_thinking))
+                            )
+                            if _cp_wants_think and _cp_mst(exec_mdl):
+                                from backend.manager_load import set_reasoning_override as _set_cp_ro
+                                _set_cp_ro(_lsm2, exec_mdl, True)
                             _coder_port = await asyncio.wait_for(
                                 # STRICT-CTX: the coder needs its configured
                                 # full ctx OR a clear error — never a silently

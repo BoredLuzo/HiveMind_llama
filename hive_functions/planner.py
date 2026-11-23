@@ -1510,8 +1510,9 @@ async def run_planner(
                 from core.duo_helpers import attach_images_to_last_user
                 _nt_messages = attach_images_to_last_user(_nt_messages, images)
             _nt_timeout = float(settings.get("duo_soft_planner_wall_timeout_s", 180))
+            _nt_retry_settings = dict(settings, reasoning_effort="none", duo_planner_separate_effort=False)
             _nt_temp, _nt_smp = _resolve_planner_sampling(
-                planner_model, False, settings, fallback_temp=0.1,
+                planner_model, False, _nt_retry_settings, fallback_temp=0.1,
             )
             try:
                 _plan_thinking2, _plan_content2, _ = await _llm_stream_retry(

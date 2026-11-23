@@ -81,10 +81,29 @@ async def _duo_inloop_planner(ctx, ps):
         chunking_enabled=ctx.duo_config.chunking,
     )
     if _run_thinking_now:
+        from core.model_sampling import (
+            POSITIVE_REASONING_EFFORTS as _ILP_POS_RE,
+            model_supports_thinking as _ilp_mst,
+            normalize_reasoning_effort as _ilp_norm_re,
+            resolve_planner_effort_settings as _ilp_res_cfg,
+        )
+        _ilp_eff_settings = _ilp_res_cfg(ctx.settings)
+        _ilp_user_eff = _ilp_norm_re(_ilp_eff_settings.get("reasoning_effort"))
+        _ilp_supports = bool(_exec_has_thinking or _ilp_mst(exec_mdl))
+        if not _ilp_supports or _ilp_user_eff == "none":
+            _ilp_eff_thinking = False
+        elif _ilp_user_eff in _ILP_POS_RE:
+            _ilp_eff_thinking = True
+        else:
+            _ilp_eff_thinking = bool(_exec_has_thinking)
         ctx.exec_ctrl.transition(AgentState.PLANNING)
         ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
         yield await ctx.emit({"type": "status",
-            "content": f"🧠 Planning ({coder_mdl.split(':')[0]}, Thinking)…"})
+            "content": (
+                f"🧠 Planning ({coder_mdl.split(':')[0]}, Thinking)…"
+                if _ilp_eff_thinking
+                else f"🧩 Planning ({coder_mdl.split(':')[0]})…"
+            )})
         # OUTSOURCED: Inloop planner delegated to run_inloop_planner().
         _plan_seed_task = _coder_input or ctx.user_input
         if _is_first_outer_round and _fup_task_ctx:
@@ -97,6 +116,9 @@ async def _duo_inloop_planner(ctx, ps):
         _plan_port_inloop = None
         try:
             from backend.llama_server_manager import manager as _lsm3
+            if _ilp_eff_thinking:
+                from backend.manager_load import set_reasoning_override as _set_ilp_ro
+                _set_ilp_ro(_lsm3, exec_mdl, True)
             _plan_port_inloop = await _lsm3.ensure_loaded(
                 exec_mdl, num_ctx=_dtool_ctx, n_parallel=1,
                 ctx_graceful=False, pin=True,
@@ -110,7 +132,7 @@ async def _duo_inloop_planner(ctx, ps):
             # Compute thinking budget
             _exec_thinking_budget = _calculate_thinking_tokens(
                 exec_mdl,
-                ctx.settings,
+                _ilp_eff_settings,
                 input_tokens=len((_make_duo_thinking_planner_sys(_planner_step_cap, model_name=exec_mdl) or "") + (_plan_seed_task or "")) // 3,
                 available_ctx=_dtool_ctx,
                 agent_name="planner",
@@ -125,7 +147,7 @@ async def _duo_inloop_planner(ctx, ps):
                         planner_model=exec_mdl,
                         planner_port=_plan_port_inloop,
                         step_cap=_planner_step_cap,
-                        use_thinking=_exec_has_thinking,
+                        use_thinking=_ilp_eff_thinking,
                         thinking_budget=_exec_thinking_budget,
                         planner_ctx=_dtool_ctx,
                         # Hard-cap the content budget; thinking budget comes in planner.py

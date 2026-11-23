@@ -534,7 +534,7 @@ async def _duo_planner_phase(
                 except Exception:
                     pass
             _lsm_plan_pre._planner_critical_phase = True
-            if _plan_user_eff in _PLAN_POS_RE and _planner_supports_thinking:
+            if _planner_effective_thinking:
                 from backend.manager_load import set_reasoning_override as _set_plan_ro
                 _set_plan_ro(_lsm_plan_pre, _planner_model, True)
             # PIN RESET AT RUN START (2026-10-02): stale pins from a
@@ -655,6 +655,9 @@ async def _duo_planner_phase(
         if _plan_port is None:
             try:
                 from backend.llama_server_manager import manager as _lsm_port_res
+                if _planner_effective_thinking:
+                    from backend.manager_load import set_reasoning_override as _set_plan_ro_fb
+                    _set_plan_ro_fb(_lsm_port_res, _planner_model, True)
                 _plan_port = await asyncio.wait_for(
                     _lsm_port_res.ensure_loaded(
                         _planner_model, num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final), n_parallel=1,

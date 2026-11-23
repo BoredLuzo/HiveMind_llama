@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261123-01">
+  <link rel="stylesheet" href="/static/style.css?v=20261123-02">
 </head>
 <body>
 <header>
@@ -279,6 +279,14 @@
             <option value="decider">Decider decides</option>
             <option value="never">Never plan</option>
           </select>
+        </div>
+        <div class="ctx-row" id="routing-planner-sep-row">
+          <span class="ctx-label" title="Adds a second composer reasoning dropdown for the Planner in Auto and Code modes">Separate Planner Effort</span>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="routing-planner-sep-effort-toggle"
+              onchange="onDuoPlannerSeparateEffortChange(this.checked)">
+            <span class="sl"></span>
+          </label>
         </div>
         <div class="ctx-hint">Whether an agentic run gets a plan first. The planning model itself is set in Agents.</div>
         <div id="routing-status" class="ctx-hint rt-status"></div>
@@ -2957,6 +2965,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 
         <script src="/static/feature_search_core.js?v=20261101-1"></script>
-        <script src="/static/app.js?v=20261123-01"></script>
+        <script src="/static/app.js?v=20261123-02"></script>
 </body>
 </html>
