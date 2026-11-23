@@ -1312,4 +1312,217 @@ if _nda_ok:
     )
 check("Deep-audit P1-13/14 & P2: frontend k2 Off, On-on-effort, LFM Off reset, duo_planner & revert callback hold", _nda_ok, _nda.stdout.strip() or _nda.stderr.strip())
 
+# ── 14. Separate Planner Reasoning Effort & Composer Button Sizing ───────────
+from settings_defaults import DEFAULT_SETTINGS as _DEF_S, SETTINGS_UI_META as _UI_META  # noqa: E402
+
+_sep_meta_ok = (
+    _DEF_S.get("duo_planner_separate_effort") is False
+    and _DEF_S.get("planner_reasoning_effort") == "auto"
+    and "duo_planner_separate_effort" in _UI_META
+    and "planner_reasoning_effort" in _UI_META
+    and set(_UI_META["planner_reasoning_effort"].get("choices") or ()) == set(MS.VALID_REASONING_EFFORTS)
+)
+_orig_cfg = {"reasoning_effort": "none", "duo_planner_separate_effort": True, "planner_reasoning_effort": "high"}
+_eff_on = MS.resolve_planner_effort_settings(_orig_cfg)
+_eff_off = MS.resolve_planner_effort_settings({"reasoning_effort": "low", "duo_planner_separate_effort": False, "planner_reasoning_effort": "max"})
+_eff_bad = MS.resolve_planner_effort_settings({"reasoning_effort": "high", "duo_planner_separate_effort": True, "planner_reasoning_effort": "bogus"})
+
+_pl_mod.httpx = _SN(
+    AsyncClient=_PlFakeClient,
+    Limits=_orig_pl_httpx.Limits,
+    Timeout=_orig_pl_httpx.Timeout,
+    HTTPError=_orig_pl_httpx.HTTPError,
+    ConnectError=_orig_pl_httpx.ConnectError,
+)
+try:
+    # Case A: Coder='none', Separate Planner='high' -> Planner runs WITH thinking=True & effort='high'
+    _pl_stream_payloads.clear()
+    _res_sep_hi = asyncio.run(_pl_mod.run_planner(
+        task="Plan Pac-Man", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=False, thinking_budget=0,
+        settings={"reasoning_effort": "none", "duo_planner_separate_effort": True, "planner_reasoning_effort": "high"},
+    ))
+    _pl_sep_hi = dict(_pl_stream_payloads[0])
+
+    # Case B: Coder='high', Separate Planner='none' -> Planner runs WITH thinking=False & effort='none'
+    _pl_stream_payloads.clear()
+    _res_sep_none = asyncio.run(_pl_mod.run_planner(
+        task="Plan Pac-Man", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=True, thinking_budget=0,
+        settings={"reasoning_effort": "high", "duo_planner_separate_effort": True, "planner_reasoning_effort": "none"},
+    ))
+    _pl_sep_none = dict(_pl_stream_payloads[0])
+
+    # Case C: In-loop planner with separate='max' while Coder='low'
+    _pl_post_payloads.clear()
+    asyncio.run(_pl_mod.run_inloop_planner(
+        task="Refine", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=False, thinking_budget=0,
+        settings={"reasoning_effort": "low", "duo_planner_separate_effort": True, "planner_reasoning_effort": "max"},
+    ))
+    _inloop_sep_max = dict(_pl_post_payloads[0])
+
+    # Case D: Separate toggle OFF -> planner_reasoning_effort='max' is ignored; follows Coder 'low'
+    _pl_post_payloads.clear()
+    asyncio.run(_pl_mod.run_inloop_planner(
+        task="Refine", explore_ctx="ctx", planner_model="inkling-2-mini-ud",
+        planner_port=18081, use_thinking=False, thinking_budget=0,
+        settings={"reasoning_effort": "low", "duo_planner_separate_effort": False, "planner_reasoning_effort": "max"},
+    ))
+    _inloop_sep_off = dict(_pl_post_payloads[0])
+finally:
+    _pl_mod.httpx = _orig_pl_httpx
+
+_srv_src = (_ROOT / "server.py").read_text(encoding="utf-8")
+_cfg_src = (_ROOT / "routers" / "config.py").read_text(encoding="utf-8")
+_html_src = (_ROOT / "index.html").read_text(encoding="utf-8")
+_css_src = (_ROOT / "static" / "style.css").read_text(encoding="utf-8")
+
+check(
+    "Separate Planner effort settings, resolver, planner payloads, /stream wiring & CSS button sizing hold",
+    _sep_meta_ok
+    and _eff_on["reasoning_effort"] == "high"
+    and _orig_cfg["reasoning_effort"] == "none"
+    and _eff_off["reasoning_effort"] == "low"
+    and _eff_bad["reasoning_effort"] == "auto"
+    and _res_sep_hi.used_thinking is True
+    and _pl_sep_hi.get("thinking") is True
+    and _pl_sep_hi.get("reasoning_effort") == "high"
+    and _res_sep_none.used_thinking is False
+    and _pl_sep_none.get("thinking") is False
+    and _pl_sep_none.get("reasoning_effort") == "none"
+    and _inloop_sep_max.get("thinking") is True
+    and _inloop_sep_max.get("reasoning_effort") == "max"
+    and _inloop_sep_off.get("reasoning_effort") == "low"
+    and '"duo_planner_separate_effort" in body' in _srv_src
+    and '"planner_reasoning_effort" in body' in _srv_src
+    and '"planner_reasoning_effort"' in _cfg_src
+    and 'id="planner-effort-wrap"' in _html_src
+    and 'id="planner-effort-trigger"' in _html_src
+    and 'id="duo-planner-sep-effort-toggle"' in _html_src
+    and 'id="effort-trig-role"' in _html_src
+    and "min-width:96px;height:28px" in _css_src
+    and ".planner-effort-trigger{min-width:112px" in _css_src,
+    repr((_sep_meta_ok, _eff_on.get("reasoning_effort"), _pl_sep_hi.get("reasoning_effort"), _pl_sep_none.get("reasoning_effort"), _inloop_sep_max.get("reasoning_effort"), _inloop_sep_off.get("reasoning_effort"))),
+)
+
+_node_sep = r"""
+const fs = require('fs');
+const vm = require('vm');
+const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
+const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
+const fnSrc = appSrc.slice(s, e);
+function makeCls(init) { const set = new Set(init || []); return { add(c){set.add(c);}, remove(c){set.delete(c);}, toggle(c,f){if(f===undefined){set.has(c)?set.delete(c):set.add(c);}else if(f)set.add(c);else set.delete(c);}, contains(c){return set.has(c);} }; }
+function mkOpts(){ return ['auto', 'none', 'on', 'minimal', 'low', 'medium', 'high', 'max'].map(l => ({
+  _lvl: l, hidden: false, disabled: false, classList: makeCls(['effort-opt']),
+  _a: { 'data-effort': l }, getAttribute(k){return this._a[k]||null;}, setAttribute(k,v){this._a[k]=String(v);}
+})); }
+const mainOpts = mkOpts(), planOpts = mkOpts();
+function mkEl(extra){ return Object.assign({ hidden: false, textContent: '', className: '', title: '', checked: false, _a: {}, setAttribute(k,v){this._a[k]=String(v);}, getAttribute(k){return this._a[k]||null;}, removeAttribute(k){delete this._a[k];} }, extra || {}); }
+const byId = {
+  'effort-trigger': mkEl(), 'effort-trig-role': mkEl({ hidden: true }), 'effort-trig-lbl': mkEl(),
+  'effort-menu-ctx': mkEl(), 'effort-menu-ovr': mkEl({ hidden: true }), 'effort-menu-ovr-txt': mkEl(),
+  'effort-ovr-reset-btn': mkEl({ hidden: true }), 'effort-menu-empty': mkEl({ hidden: true }),
+  'effort-menu': mkEl({ hidden: true, querySelectorAll(sel){ return sel === '.effort-opt' ? mainOpts : []; } }),
+  'planner-effort-wrap': mkEl({ hidden: true }), 'planner-effort-trigger': mkEl(), 'planner-effort-trig-lbl': mkEl(),
+  'planner-effort-menu-ctx': mkEl(), 'planner-effort-menu-ovr': mkEl({ hidden: true }), 'planner-effort-menu-ovr-txt': mkEl(),
+  'planner-effort-ovr-reset-btn': mkEl({ hidden: true }), 'planner-effort-menu-empty': mkEl({ hidden: true }),
+  'planner-effort-menu': mkEl({ hidden: true, querySelectorAll(sel){ return sel === '.effort-opt' ? planOpts : []; } }),
+  'duo-planner-sep-effort-toggle': mkEl({ checked: false }),
+};
+function mkSlot(k){ return { _ch: [], getAttribute(a){return a==='data-agent-override'?k:null;}, set innerHTML(v){if(!v)this._ch=[];}, querySelector(){return this._ch[0]||null;}, appendChild(c){this._ch.push(c);} }; }
+const slots = [mkSlot('duo'), mkSlot('duo_planner')];
+let lastPatch = null, lastRevert = null;
+const ctx = {
+  S: {
+    reasoningEffort: 'low', duoPlannerSeparateEffort: false, plannerReasoningEffort: 'auto',
+    mode: 'code_duo', duoCoderModel: 'inkling-2-mini-ud', duoPlannerModel: 'inkling-2-mini-ud',
+    duoAgenticThinking: true, duoToolThinkingAlways: false, duoToolThinkingMode: 'on_fail',
+    modelProfiles: {
+      'inkling-2-mini-ud': { thinking: true, reasoning_mode: 'effort', reasoning_levels: ['none', 'minimal', 'low', 'medium', 'high', 'max'], reasoning_template_source: 'gguf', reasoning_effort: 'medium' },
+    },
+    currentAssignments: {}, agentsCfg: {},
+  },
+  document: {
+    createElement(tag){ return { tag, type: '', className: '', title: '', textContent: '', _a: {}, setAttribute(k,v){this._a[k]=String(v);}, getAttribute(k){return this._a[k]||null;} }; },
+    getElementById(id){ return byId[id] || null; },
+    querySelectorAll(sel){ return sel === '.reasoning-override-slot' ? slots : []; },
+  },
+  _shortModel: m => m,
+  _postSettingsFF: (p, cb) => { lastPatch = p; lastRevert = cb; },
+};
+vm.createContext(ctx);
+vm.runInContext(fnSrc, ctx);
+
+// 1. Default coupled state: planner pill & coder role tag hidden; both badges show Composer: Low
+ctx._renderReasoningEffortUI('low');
+const s1 = {
+  planHidden: byId['planner-effort-wrap'].hidden,
+  roleHidden: byId['effort-trig-role'].hidden,
+  coderBadge: slots[0]._ch[0] && slots[0]._ch[0].textContent,
+  planBadge: slots[1]._ch[0] && slots[1]._ch[0].textContent,
+};
+
+// 2. Enable separate planner effort: planner pill & coder role tag shown; planner badge clears (auto)
+ctx.onDuoPlannerSeparateEffortChange(true);
+const s2 = {
+  patch: lastPatch,
+  planHidden: byId['planner-effort-wrap'].hidden,
+  roleHidden: byId['effort-trig-role'].hidden,
+  planLbl: byId['planner-effort-trig-lbl'].textContent,
+  coderBadge: slots[0]._ch[0] && slots[0]._ch[0].textContent,
+  planBadgeEmpty: slots[1]._ch.length === 0,
+};
+
+// 3. Set planner effort to High while Coder stays Low
+ctx.setPlannerReasoningEffort('high');
+const s3 = {
+  patch: lastPatch,
+  planLbl: byId['planner-effort-trig-lbl'].textContent,
+  coderLbl: byId['effort-trig-lbl'].textContent,
+  coderBadge: slots[0]._ch[0] && { txt: slots[0]._ch[0].textContent, oc: slots[0]._ch[0].getAttribute('onclick') },
+  planBadge: slots[1]._ch[0] && { txt: slots[1]._ch[0].textContent, oc: slots[1]._ch[0].getAttribute('onclick') },
+};
+
+// 4. Revert callback restores planner effort to 'auto'
+lastRevert();
+const s4 = { afterRevert: ctx.S.plannerReasoningEffort, planBadgeEmpty: slots[1]._ch.length === 0 };
+
+// 5. Switching mode to 'auto' hides planner pill & coder role tag
+ctx.S.mode = 'auto';
+ctx._renderReasoningEffortUI('low');
+const s5 = { planHidden: byId['planner-effort-wrap'].hidden, roleHidden: byId['effort-trig-role'].hidden };
+
+console.log(JSON.stringify({ s1, s2, s3, s4, s5 }));
+"""
+_nsep = subprocess.run(["node", "-e", _node_sep], cwd=_ROOT, capture_output=True, text=True)
+_nsep_ok = _nsep.returncode == 0
+if _nsep_ok:
+    _nsep_j = json.loads(_nsep.stdout.strip())
+    _nsep_ok = (
+        _nsep_j["s1"]["planHidden"] is True
+        and _nsep_j["s1"]["roleHidden"] is True
+        and _nsep_j["s1"]["coderBadge"] == "Composer: Low \u00d7"
+        and _nsep_j["s1"]["planBadge"] == "Composer: Low \u00d7"
+        and _nsep_j["s2"]["patch"] == {"duo_planner_separate_effort": True}
+        and _nsep_j["s2"]["planHidden"] is False
+        and _nsep_j["s2"]["roleHidden"] is False
+        and _nsep_j["s2"]["planLbl"] == "Auto \u00b7 Med"
+        and _nsep_j["s2"]["coderBadge"] == "Composer: Low \u00d7"
+        and _nsep_j["s2"]["planBadgeEmpty"] is True
+        and _nsep_j["s3"]["patch"] == {"planner_reasoning_effort": "high"}
+        and _nsep_j["s3"]["planLbl"] == "High"
+        and _nsep_j["s3"]["coderLbl"] == "Low"
+        and _nsep_j["s3"]["coderBadge"]["txt"] == "Composer: Low \u00d7"
+        and _nsep_j["s3"]["coderBadge"]["oc"] == "setReasoningEffort('auto')"
+        and _nsep_j["s3"]["planBadge"]["txt"] == "Planner: High \u00d7"
+        and _nsep_j["s3"]["planBadge"]["oc"] == "setPlannerReasoningEffort('auto')"
+        and _nsep_j["s4"]["afterRevert"] == "auto"
+        and _nsep_j["s4"]["planBadgeEmpty"] is True
+        and _nsep_j["s5"]["planHidden"] is True
+        and _nsep_j["s5"]["roleHidden"] is True
+    )
+check("Node VM confirms separate Planner effort dropdown, Coder/Planner badge decoupling, revert & mode gating", _nsep_ok, _nsep.stdout.strip() or _nsep.stderr.strip())
+
 sys.exit(h.finish("reasoning_effort_and_pip_pipe"))

@@ -278,7 +278,7 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
                 if warnings is not None:
                     warnings.append(_warn)
                 continue
-        if key == "reasoning_effort":
+        if key in ("reasoning_effort", "planner_reasoning_effort"):
             from core.model_sampling import normalize_reasoning_effort as _norm_preset_re
             settings[key] = _norm_preset_re(value)
             _applied_keys.add(key)
@@ -966,9 +966,13 @@ async def post_settings(req: Request):
             _ctx_ov_roles.pop("duo_coder", None)
         if "duo_critic_ctx" in data:
             _ctx_ov_roles.pop("duo_critic", None)
-    if isinstance(data, dict) and "reasoning_effort" in data:
-        from core.model_sampling import normalize_reasoning_effort as _norm_post_re
-        data["reasoning_effort"] = _norm_post_re(data.get("reasoning_effort"))
+    if isinstance(data, dict):
+        if "reasoning_effort" in data or "planner_reasoning_effort" in data:
+            from core.model_sampling import normalize_reasoning_effort as _norm_post_re
+            if "reasoning_effort" in data:
+                data["reasoning_effort"] = _norm_post_re(data.get("reasoning_effort"))
+            if "planner_reasoning_effort" in data:
+                data["planner_reasoning_effort"] = _norm_post_re(data.get("planner_reasoning_effort"))
     settings.update(data)
     # UI-SAVE-FLAG-SYNC: sync all runtime flags (ubatch, cache, checkpoints,
     # vram_preflight_gate, KV cache, spec decode, sampling, compression) live.

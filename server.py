@@ -1057,6 +1057,11 @@ _RUN_JOURNAL_MAX_RUNS = 6
 _RUN_JOURNAL_MAX_FRAMES = 20000
 _RUN_JOURNAL_MAX_BYTES = 8 * 1024 * 1024   # per run, frames are raw SSE strings
 _RUN_JOURNAL_MAX_PENDING = 2000            # frames before run_id is known
+# SSE-KEEPALIVE (2026-11-23): emit a comment frame every 15 s while the stream
+# waits on long cold prefills / model loads so Firefox/Chromium/TCP never drops
+# an idle chunked HTTP response mid-run (live log showed 169 s silent prefill ->
+# client disconnect -> premature journal reattach).
+_SSE_KEEPALIVE_INTERVAL_S = 15.0
 
 
 def _run_journal_touch(run_id: str) -> dict:
@@ -1349,6 +1354,14 @@ async def stream(req: Request):
     if "reasoning_effort" in body:
         from core.model_sampling import normalize_reasoning_effort as _norm_re
         _model_overrides["reasoning_effort"] = _norm_re(body.get("reasoning_effort"))
+    if "duo_planner_separate_effort" in body:
+        _model_overrides["duo_planner_separate_effort"] = _as_bool(
+            body.get("duo_planner_separate_effort"),
+            default=bool(settings.get("duo_planner_separate_effort", False)),
+        )
+    if "planner_reasoning_effort" in body:
+        from core.model_sampling import normalize_reasoning_effort as _norm_pre
+        _model_overrides["planner_reasoning_effort"] = _norm_pre(body.get("planner_reasoning_effort"))
     chat_id                = body.get("chat_id") or None
     # B1 (audit 2026-11-03): the same shape check routers/chats.py applies.
     # A garbage id fed the adoption glob (*_{id}.json) and the sessions path
@@ -1437,7 +1450,7 @@ async def stream(req: Request):
         # working detached, the journal keeps filling, and a page reload
         # reattaches to a still-running run instead of finding it parked.
         _q: asyncio.Queue = asyncio.Queue()
-        _state = {"events": 0, "saw_done": False, "jr_id": "", "jr_reg": None, "jr_pending": [], "aborted": False, "error": None}
+        _state = {"events": 0, "saw_done": False, "jr_id": "", "jr_reg": None, "jr_pending": [], "aborted": False, "error": None, "detached": False}
 
         def _jr_record(_chunk):
             try:
@@ -1506,7 +1519,11 @@ async def stream(req: Request):
                         if _state["jr_reg"] is not None:
                             _state["jr_reg"]["done"] = True
                     _jr_record(_chunk)
-                    # backpressure cap for a detached run nobody watches
+                    # Once the SSE consumer has detached, keep recording into the
+                    # journal only — do not pile up frames in the orphaned queue.
+                    if _state.get("detached"):
+                        continue
+                    # backpressure cap for a slow consumer
                     if _q.qsize() < 5000:
                         if _state.get("dropped"):
                             # P0 (edge audit 2026-11-03): tell the consumer
@@ -1545,7 +1562,8 @@ async def stream(req: Request):
                         _state["jr_reg"]["aborted"] = True
                         _state["jr_reg"]["done"] = True
                         _state["jr_reg"]["ts"] = time.time()
-                    await _q.put(("aborted", None))
+                    if not _state.get("detached"):
+                        await _q.put(("aborted", None))
                 else:
                     _state["error"] = _se
                     # TRACEBACK-KEEP (2026-10-20): der Handler loggt in einem
@@ -1556,9 +1574,11 @@ async def stream(req: Request):
                         _state["jr_reg"]["aborted"] = True
                         _state["jr_reg"]["done"] = True
                         _state["jr_reg"]["ts"] = time.time()
-                    await _q.put(("error", _se))
+                    if not _state.get("detached"):
+                        await _q.put(("error", _se))
             else:
-                await _q.put(("done", None))
+                if not _state.get("detached"):
+                    await _q.put(("done", None))
             finally:
                 if _ka_release:
                     try:
@@ -1580,7 +1600,13 @@ async def stream(req: Request):
         _producer = spawn(_produce(), name=f"stream-producer-{chat_id or mode}")
         try:
             while True:
-                _kind, _payload = await _q.get()
+                try:
+                    _kind, _payload = await asyncio.wait_for(
+                        _q.get(), timeout=_SSE_KEEPALIVE_INTERVAL_S,
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
                 if _kind == "chunk":
                     _sse_events = _state["events"]
                     _saw_done = _state["saw_done"]
@@ -1614,6 +1640,12 @@ async def stream(req: Request):
             # DETACH: never cancel the producer here. If the client is gone,
             # the run drains to completion detached and the journal keeps
             # recording; spawn() keeps the strong task ref and logs errors.
+            _state["detached"] = True
+            while not _q.empty():
+                try:
+                    _q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
             if not _producer.done():
                 logger.info(
                     "/stream client gone — run continues detached (journal replay available) chat=%s events=%d",

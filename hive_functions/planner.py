@@ -1282,12 +1282,14 @@ def _resolve_planner_sampling(
     """Resolve (temp, sampler) for planner calls; honors model JSON / UI overrides."""
     from core.model_sampling import (
         get_sampling_profile,
+        resolve_planner_effort_settings,
         resolve_presence_penalty,
         resolve_reasoning_effort,
         _registry_sampling,
         _settings_sampling_override,
         _select_override_mode_dict,
     )
+    settings = resolve_planner_effort_settings(settings)
     _mode = "sampling_thinking_code" if use_thinking else "sampling_text"
     smp = get_sampling_profile(model_name, thinking=use_thinking, settings=settings, mode=_mode)
     smp["presence_penalty"] = resolve_presence_penalty(
@@ -1357,7 +1359,9 @@ async def run_planner(
         POSITIVE_REASONING_EFFORTS as _PLAN_POS_RE,
         model_supports_thinking as _plan_mst,
         normalize_reasoning_effort as _norm_plan_re,
+        resolve_planner_effort_settings as _res_plan_cfg,
     )
+    settings = _res_plan_cfg(settings)
     _p_user_eff = _norm_plan_re(settings.get("reasoning_effort"))
     _p_supports = _plan_mst(planner_model)
     if not _p_supports or _p_user_eff == "none":
@@ -1675,7 +1679,9 @@ async def run_inloop_planner(
         POSITIVE_REASONING_EFFORTS as _INLOOP_POS_RE,
         model_supports_thinking as _inloop_mst,
         normalize_reasoning_effort as _norm_inloop_re,
+        resolve_planner_effort_settings as _res_inloop_cfg,
     )
+    settings = _res_inloop_cfg(settings)
     _inloop_user_eff = _norm_inloop_re(settings.get("reasoning_effort"))
     _inloop_supports = _inloop_mst(planner_model)
     if not _inloop_supports or _inloop_user_eff == "none":

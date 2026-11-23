@@ -62,6 +62,14 @@ def normalize_reasoning_effort(raw: object) -> str:
     return val if val in VALID_REASONING_EFFORTS else "auto"
 
 
+def resolve_planner_effort_settings(settings: dict | None) -> dict:
+    """Return settings with Planner's effective reasoning_effort when separate Planner effort is enabled."""
+    s = dict(settings or {})
+    if s.get("duo_planner_separate_effort"):
+        s["reasoning_effort"] = normalize_reasoning_effort(s.get("planner_reasoning_effort"))
+    return s
+
+
 def clamp_reasoning_effort_for_model(model_name: str, effort: str) -> str:
     """Map normalized reasoning_effort safely onto what model_name's template accepts."""
     eff = normalize_reasoning_effort(effort)

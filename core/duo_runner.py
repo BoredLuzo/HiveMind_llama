@@ -378,10 +378,14 @@ async def _duo_planner_phase(
     try:
         from core.model_sampling import (
             POSITIVE_REASONING_EFFORTS as _PLAN_POS_RE,
+            clamp_reasoning_effort_for_model as _clamp_plan_re,
             model_supports_thinking as _mst_plan,
             normalize_reasoning_effort as _norm_re_plan,
+            resolve_planner_effort_settings as _res_plan_eff_cfg,
         )
-        _plan_user_eff = _norm_re_plan((ctx.settings or {}).get("reasoning_effort"))
+        _plan_eff_settings = _res_plan_eff_cfg(ctx.settings)
+        _plan_sep_effort = bool((ctx.settings or {}).get("duo_planner_separate_effort", False))
+        _plan_user_eff = _norm_re_plan(_plan_eff_settings.get("reasoning_effort"))
         _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
         _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
         _explicit_planner_think = "duo_agentic_thinking" in (ctx.settings or {})
@@ -423,6 +427,25 @@ async def _duo_planner_phase(
                 else (bool(_use_thinking_planner) and _planner_supports_thinking)
             )
         )
+        if _plan_sep_effort:
+            if _plan_user_eff == "none":
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": "🧠 Planner reasoning effort: none (separate override — planner thinking disabled)",
+                })
+            elif _plan_user_eff in _PLAN_POS_RE:
+                if _planner_supports_thinking:
+                    _pm_map = _clamp_plan_re(_planner_model, _plan_user_eff)
+                    _pm_sfx = f" → {_pm_map}" if (_pm_map and _pm_map != _plan_user_eff) else ""
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": f"🧠 Planner reasoning effort: {_plan_user_eff} (separate override){_pm_sfx}",
+                    })
+                else:
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": f"ℹ️ Planner reasoning effort ({_plan_user_eff}) skipped — {_planner_model} does not support reasoning",
+                    })
 
         _planner_ctx_cap_cfg = int(ctx.settings.get("duo_planner_ctx_cap", 0) or 0)
         _planner_ctx_target = int(ctx.settings.get("duo_planner_ctx_target", 0) or 0)
@@ -836,7 +859,7 @@ async def _duo_planner_phase(
             _planner_sys_est = make_planner_analysis_sys(model_name=_planner_model)
         _planner_thinking_budget = _calculate_thinking_tokens(
             _planner_model,
-            ctx.settings,
+            _plan_eff_settings,
             input_tokens=(len(_planner_sys_est) + len(_planner_ctx) + len(ctx.user_input) + 500) // 3,
             available_ctx=_plan_ctx_final,
             agent_name="planner",

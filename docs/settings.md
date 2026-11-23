@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**310 settings keys.**
+**312 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -106,6 +106,7 @@ its comment) in either file, then re-run the generator.
 | `duo_planner_max_steps` | int | `0` | yes |  |
 | `duo_planner_max_tokens` | int | `8000` | yes | PLANNER-OUTPUT-BUDGET (0.99.2, user decision): visible task budget |
 | `duo_planner_model` | null | `None` | yes |  |
+| `duo_planner_separate_effort` | bool | `False` | yes | SEPARATE-PLANNER-EFFORT : optional independent reasoning effort for the Code Duo Planner (adds a second planner effort dropdown in Code Duo). |
 | `duo_planner_thinking_budget` | int | `8000` | yes | Thinking → hermes-MoE thought until the 600s wall timeout and delivered empty output. 4k was too tight for complex plans → 8k default . |
 | `duo_planner_thinking_timeout_s` | int | `600` | yes |  |
 | `duo_planner_ttl_seconds` | int | `0` | yes | 0 = auto (450s), >0 = Override |
@@ -236,6 +237,7 @@ its comment) in either file, then re-run the generator.
 | `pipeline_vision_roles` | object | `{}` | yes | Per-role direct-image flags, e.g. {"analyst": true}. |
 | `pipeline_websearch_enabled` | bool | `True` | yes |  |
 | `plan_tracker_classifier` | str | `heuristic` | - |  |
+| `planner_reasoning_effort` | str | `auto` | yes |  |
 | `prefer_smaller_models` | bool | `True` | yes |  |
 | `prefetch_agent_avgs` | object | `{}` | - |  |
 | `prefetch_lead_seconds` | float | `8.0` | yes |  |

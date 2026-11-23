@@ -613,4 +613,165 @@ check(
     and _scroll_btm_slice.count("if (!_chatFollow) return;") >= 2,
 )
 
+# ── 7. SSE keepalive heartbeat, detached queue short-circuit & reattach banner UX ──
+import asyncio as _aio_sse  # noqa: E402
+from unittest import mock as _mock_sse  # noqa: E402
+import server as _srv_mod  # noqa: E402
+
+_srv_text = (_ROOT / "server.py").read_text(encoding="utf-8")
+check(
+    "server.py emits SSE keepalive comments on idle wait and stops queueing after detach",
+    "_SSE_KEEPALIVE_INTERVAL_S" in _srv_text
+    and 'yield ": keepalive\\n\\n"' in _srv_text
+    and '_state["detached"] = True' in _srv_text
+    and 'if _state.get("detached"):' in _srv_text,
+)
+
+
+class _FakeReq:
+    def __init__(self, body: dict):
+        self._body = body
+        self.headers = {}
+
+    async def json(self):
+        return dict(self._body)
+
+
+async def _test_sse_keepalive_and_detach():
+    _captured_overrides = {}
+
+    # Case A: slow prefill (> keepalive interval) emits ': keepalive\n\n' before real frame
+    async def _slow_gen(*_a, **kw):
+        _captured_overrides.update(kw.get("model_overrides") or {})
+        yield 'data: {"type": "run_id", "run_id": "test-ka-1"}\n\n'
+        await _aio_sse.sleep(0.065)
+        yield 'data: {"type": "token", "content": "hello"}\n\n'
+        yield 'data: {"type": "done"}\n\n'
+
+    with _mock_sse.patch.object(_srv_mod, "run_stream", side_effect=_slow_gen), \
+         _mock_sse.patch.object(_srv_mod, "_SSE_KEEPALIVE_INTERVAL_S", 0.02):
+        resp = await _srv_mod.stream(_FakeReq({
+            "q": "hi",
+            "mode": "simple",
+            "duo_planner_separate_effort": True,
+            "planner_reasoning_effort": "HIGH",
+        }))
+        chunks = []
+        async for ch in resp.body_iterator:
+            chunks.append(ch if isinstance(ch, str) else ch.decode("utf-8"))
+
+    # Case B: consumer disconnects early -> producer finishes detached and records all frames in _RUN_JOURNAL
+    _detach_done = _aio_sse.Event()
+
+    async def _detach_gen(*_a, **_kw):
+        yield 'data: {"type": "run_id", "run_id": "test-det-2"}\n\n'
+        await _aio_sse.sleep(0.03)
+        yield 'data: {"type": "token", "content": "after-detach-1"}\n\n'
+        yield 'data: {"type": "token", "content": "after-detach-2"}\n\n'
+        yield 'data: {"type": "done"}\n\n'
+        _detach_done.set()
+
+    with _mock_sse.patch.object(_srv_mod, "run_stream", side_effect=_detach_gen), \
+         _mock_sse.patch.object(_srv_mod, "_SSE_KEEPALIVE_INTERVAL_S", 0.05):
+        resp2 = await _srv_mod.stream(_FakeReq({"q": "hi", "mode": "simple"}))
+        it2 = resp2.body_iterator
+        first = await it2.__anext__()
+        await it2.aclose()
+        await _aio_sse.wait_for(_detach_done.wait(), timeout=2.0)
+        await _aio_sse.sleep(0.02)
+        jentry = dict(_srv_mod._RUN_JOURNAL.get("test-det-2") or {})
+        _srv_mod._RUN_JOURNAL.pop("test-ka-1", None)
+        _srv_mod._RUN_JOURNAL.pop("test-det-2", None)
+
+    return chunks, first, jentry, _captured_overrides
+
+
+_ka_chunks, _det_first, _det_j, _cap_ovr = _aio_sse.run(_test_sse_keepalive_and_detach())
+check(
+    "Live /stream yields ': keepalive\\n\\n' during slow prefill, forwards planner effort overrides & journals detached frames cleanly",
+    ": keepalive\n\n" in _ka_chunks
+    and any('"hello"' in c for c in _ka_chunks)
+    and any('"done"' in c for c in _ka_chunks)
+    and _cap_ovr.get("duo_planner_separate_effort") is True
+    and _cap_ovr.get("planner_reasoning_effort") == "high"
+    and '"test-det-2"' in (str(_det_first) if isinstance(_det_first, str) else _det_first.decode("utf-8"))
+    and _det_j.get("done") is True
+    and len(_det_j.get("frames") or []) == 4,
+    repr((_ka_chunks, _cap_ovr, len(_det_j.get("frames") or []), _det_j.get("done"))),
+)
+
+_node_sse = r"""
+const fs = require('fs');
+const vm = require('vm');
+const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const s = appSrc.indexOf('function _sseFeedLines(text)');
+const e = appSrc.indexOf('\nfunction _journalInitAttach()', s);
+if (s < 0 || e < 0) throw new Error('missing sse/journal helpers');
+const fnSrc = appSrc.slice(s, e);
+const handled = [];
+const chatCh = [];
+const chatEl = {
+  children: chatCh,
+  appendChild(c){ c.parentNode = this; chatCh.push(c); },
+  removeChild(c){ const i = chatCh.indexOf(c); if (i >= 0) chatCh.splice(i, 1); c.parentNode = null; },
+};
+let fetchCalls = 0;
+const ctx = {
+  S: { _sseBuf: '', _sseFrameSeq: 0, _journalTailing: null, _reattachBannerEl: null },
+  window: { _journalTailIv: null },
+  document: {
+    hidden: false,
+    getElementById(id){ return id === 'chat' ? chatEl : null; },
+    createElement(tag){ return { tag, className: '', style: { cssText: '' }, textContent: '', parentNode: null }; },
+  },
+  handleEvent: d => handled.push(d),
+  scrollBtmIfNearBottom: () => {},
+  _finalizeStreamUi: () => {},
+  setInterval: () => 99,
+  clearInterval: () => {},
+  fetch: () => { fetchCalls++; return new Promise(() => {}); },
+};
+vm.createContext(ctx);
+vm.runInContext(fnSrc, ctx);
+
+// 1. ': keepalive' comment lines must NOT increment _sseFrameSeq or dispatch events
+ctx._sseFeedLines(': keepalive\n\n: keepalive\n\ndata: {"type":"token","content":"ok"}\n\n');
+const seqAfterKa = ctx.S._sseFrameSeq;
+const handledCount = handled.length;
+
+// 2. Reattach banner updates to green checkmark when frames arrive
+const b1 = ctx._journalNote('Connection lost - reattaching via the run journal ...', { reattachBanner: true });
+const beforeTxt = b1.textContent;
+ctx._journalClearReattachBanner(true);
+const afterTxt = b1.textContent;
+const clearedRef = ctx.S._reattachBannerEl === null;
+
+// 3. Unresolved banner is removed on _journalStopTail
+const b2 = ctx._journalNote('Connection lost - reattaching via the run journal ...', { reattachBanner: true });
+const inChatBefore = chatCh.includes(b2);
+ctx._journalStopTail();
+const inChatAfter = chatCh.includes(b2);
+
+// 4. _journalStartTail triggers immediate poll without waiting 2000ms
+ctx._journalStartTail('run-imm-1');
+const immFetch = fetchCalls;
+
+console.log(JSON.stringify({ seqAfterKa, handledCount, beforeTxt, afterTxt, clearedRef, inChatBefore, inChatAfter, immFetch }));
+"""
+_nsse = subprocess.run(["node", "-e", _node_sse], cwd=_ROOT, capture_output=True, text=True)
+_nsse_ok = _nsse.returncode == 0
+if _nsse_ok:
+    _nsse_j = json.loads(_nsse.stdout.strip())
+    _nsse_ok = (
+        _nsse_j["seqAfterKa"] == 1
+        and _nsse_j["handledCount"] == 1
+        and "Connection lost" in _nsse_j["beforeTxt"]
+        and "Reattached via run journal" in _nsse_j["afterTxt"]
+        and _nsse_j["clearedRef"] is True
+        and _nsse_j["inChatBefore"] is True
+        and _nsse_j["inChatAfter"] is False
+        and _nsse_j["immFetch"] == 1
+    )
+check("Node VM confirms ': keepalive' preserves _sseFrameSeq, reattach banner transitions & immediate journal poll", _nsse_ok, _nsse.stdout.strip() or _nsse.stderr.strip())
+
 sys.exit(h.finish("notify_chats_speed_and_think_order"))
