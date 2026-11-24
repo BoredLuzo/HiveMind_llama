@@ -20,7 +20,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-APP = ROOT / "static" / "app.js"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tests.ui_sources import all_static_js_files, read_all_ui_js  # noqa: E402
+
 IDX = ROOT / "index.html"
 
 passed = 0
@@ -44,15 +48,17 @@ def test_js_syntax():
     if not node:
         print("  SKIP  node not available — syntax check skipped")
         return
-    r = subprocess.run([node, "--check", str(APP)], capture_output=True, text=True)
-    if r.returncode == 0:
-        ok("node --check static/app.js: Syntax ok")
-    else:
-        fail("js_syntax", r.stderr[:300])
+    for jf in all_static_js_files():
+        r = subprocess.run([node, "--check", str(jf)], capture_output=True, text=True)
+        rel = jf.relative_to(ROOT).as_posix()
+        if r.returncode == 0:
+            ok(f"node --check {rel}: Syntax ok")
+        else:
+            fail(f"js_syntax ({rel})", r.stderr[:300])
 
 
 def test_global_net_installed():
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     checks = [
         "addEventListener('error'", "addEventListener('unhandledrejection'",
         "_showErrorToast", "GLOBAL ERROR NET",
@@ -65,7 +71,7 @@ def test_global_net_installed():
 
 
 def test_toast_throttle_and_benign_filter():
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     if "8000" in src and "_suppressed" in src and "ResizeObserver loop" in src:
         ok("toast throttled (8s) + suppression counter + benign filter")
     else:
@@ -73,7 +79,7 @@ def test_toast_throttle_and_benign_filter():
 
 
 def test_boot_hardened():
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     checks = ["_step('loadModels'", "_step('clear_session'", "_step('loadSettings'",
               "BOOT-HARDENING (2026-09-15)"]
     missing = [c for c in checks if c not in src]
@@ -89,7 +95,7 @@ def test_boot_hardened():
 
 
 def test_settings_saves_visible():
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     n = src.count("_postSettingsFF(")
     # helper def + keepalive/exploration/soul/intent-enabled call sites
     if "function _postSettingsFF(" in src and n >= 5 and "Setting could NOT be saved" in src:
@@ -103,7 +109,7 @@ def test_settings_saves_visible():
 
 
 def test_sse_death_always_visible():
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     if "SSE-DEATH-VISIBILITY (2026-09-15)" in src and "if (!_isAbort) {" in src:
         ok("SSE error line always shown (no _hadBody suppression anymore)")
     else:
@@ -122,7 +128,7 @@ def test_cache_bust():
 def test_storage_guarded():
     """Blocked cookies/storage in Firefox throws SecurityError on
     localStorage; every direct access must sit behind the safe helpers."""
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     if "function _hmStorageGet(" not in src or "function _hmStorageSet(" not in src:
         fail("storage_guard", "safe localStorage helpers missing")
         return
@@ -139,7 +145,7 @@ def test_storage_guarded():
 def test_tool_tiers_pinned():
     """The new tool tiers must ride the request, not only the async
     settings.json write (a just-changed dropdown would otherwise race)."""
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     html = IDX.read_text(encoding="utf-8")
     checks = [
         "direct_tools_enabled: S.directToolsEnabled !== false",

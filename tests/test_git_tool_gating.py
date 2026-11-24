@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
@@ -133,7 +134,7 @@ finally:
 
 # ── (f) UI exposure (owner rule: settings belong in the frontend) ───────────
 _html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_js = read_all_ui_js()
 check("index.html has the git-tools toggle", 'id="git-tools-toggle"' in _html)
 check("old git-tools-mode-sel select removed", 'id="git-tools-mode-sel"' not in _html)
 check("the toggle calls onGitToolsToggle(this.checked)",

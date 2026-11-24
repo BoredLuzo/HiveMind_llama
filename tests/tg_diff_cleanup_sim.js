@@ -2,8 +2,8 @@
 // file-header lines dropped, hunk headers humanized. Extracts the REAL
 // _cleanDiffBody from static/app.js — no regex copy drift.
 // Run: node tests/tg_diff_cleanup_sim.js   (exit 1 on failure)
-var fs = require('fs');
-var src = fs.readFileSync(__dirname + '/../static/app.js', 'utf8');
+var { readAllUiJs } = require(__dirname + '/ui_sources.cjs');
+var src = readAllUiJs();
 var m = src.match(/function _cleanDiffBody[\s\S]*?\n}/);
 if (!m) { console.log('  FAIL  _cleanDiffBody not found in static/app.js'); process.exit(1); }
 eval(m[0]);

@@ -32,6 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 passed = 0
 failed = 0
@@ -250,7 +251,7 @@ def test_backend_transcript_sanitization() -> None:
 
 
 def test_frontend_history_extractor_and_header_rate() -> None:
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app = read_all_ui_js()
 
     check("app.js defines _HISTORY_CHROME_SEL", "var _HISTORY_CHROME_SEL" in app)
     check("app.js defines _historyTextOnly", "function _historyTextOnly(" in app)

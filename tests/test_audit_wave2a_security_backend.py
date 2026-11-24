@@ -32,6 +32,7 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -181,7 +182,7 @@ def test_skills_traversal_and_walk() -> None:
 # ── 5. Frontend XSS, detached DOM & stray call checks ───────────────────────
 
 def test_frontend_app_js_fixes() -> None:
-    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    js = read_all_ui_js()
     html = (ROOT / "index.html").read_text(encoding="utf-8")
 
     # Verify loadSkillsUI uses addEventListener instead of inline onchange

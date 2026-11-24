@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js, read_ui_module  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -33,7 +34,7 @@ h = Harness(pad=True, style="summary")
 check = h.check
 
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-app = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+app = read_all_ui_js()
 server = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
 from settings_source import settings_source as _settings_src
 settings = _settings_src()
@@ -141,10 +142,11 @@ check("it is a red circle", "#mic-btn{" in _css)
 check("recording state pulses", "_micPulse" in _css)
 check("the toggle records", "async function voiceToggleMic" in app
       and "new MediaRecorder(_micStream)" in app)
-_mic_seg = (app.split("function _micInsertTranscript", 1)[1].split("\nfunction ", 1)[0]
-            if "function _micInsertTranscript" in app else "")
+_voice_mod = read_ui_module("static/js/voice.js", normalize_newlines=True)
+_mic_seg = (re.split(r"\n(?:async\s+)?function ", _voice_mod.split("function _micInsertTranscript", 1)[1], maxsplit=1)[0]
+            if "function _micInsertTranscript" in _voice_mod else "")
 check("the transcript is appended, not sent",
-      "_micInsertTranscript(j.text)" in app and "sendMsg()" not in _mic_seg)
+      "_micInsertTranscript(j.text)" in app and bool(_mic_seg) and "sendMsg()" not in _mic_seg)
 check("escape cancels a recording", "ev.key !== 'Escape'" in app)
 check("visibility follows stt_enabled",
       "btn.style.display = (S && S.sttEnabled) ? 'flex' : 'none'" in app)

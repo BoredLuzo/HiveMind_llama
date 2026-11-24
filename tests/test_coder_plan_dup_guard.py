@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 RUN = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
@@ -157,7 +158,7 @@ check("6e the plan-format template stays with the real planners only",
 # ── 7. planner completely off: no chunking, no plan, only the user prompt ──
 check("7a a stale chunking setting is cleared when the planner is off",
       "[PLANNER-OFF] chunking disabled" in RUN)
-_appjs = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_appjs = read_all_ui_js()
 check("7b the UI clears chunking when the planner is switched off",
       "S.duoChunking = false" in _appjs
       and "postSettings({duo_chunking: false})" in _appjs)

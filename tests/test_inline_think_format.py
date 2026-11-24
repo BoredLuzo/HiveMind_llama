@@ -23,6 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
@@ -33,7 +34,7 @@ h = Harness(pad=True, style="summary")
 check = h.check
 
 
-_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_js = read_all_ui_js()
 _css = (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
 _html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 

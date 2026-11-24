@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
@@ -24,7 +25,7 @@ h = Harness(pad=True, style="summary")
 check = h.check
 
 
-APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+APP = read_all_ui_js()
 CORE = (ROOT / "static" / "feature_search_core.js").read_text(encoding="utf-8", errors="replace")
 
 # ── 1. Alias-Expansion unter node ───────────────────────────────────────

@@ -31,6 +31,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -76,7 +77,7 @@ def test_cp_syntax_highlight() -> None:
     if not node:
         check("cpSyntaxHighlight: node skipped", True)
         return
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
     idx_esc = app_js.index("function _escHtml(")
     idx_hl = app_js.index("function _cpSyntaxHighlight(")
     end_hl = app_js.index("\n// Findet den _cpFiles-Key", idx_hl)

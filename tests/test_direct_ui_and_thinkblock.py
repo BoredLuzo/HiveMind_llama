@@ -28,6 +28,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -35,7 +36,7 @@ from tests._harness import Harness  # noqa: E402
 h = Harness(pad=True, style="summary")
 check = h.check
 
-_app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_app_js = read_all_ui_js()
 _html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 
 # ── 1) No duplicate top-level JS function names (hoisting overwrite guard) ──

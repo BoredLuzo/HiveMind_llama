@@ -160,10 +160,19 @@ try {
 }
 Check "n) pyright baseline" $pyrightOk
 
-# -- n2) static/app.js syntax & bench/*.sh LF endings ------------------------
+# -- n2) static/app.js + static/js/*.js syntax & bench/*.sh LF endings --------
 if (Get-Command node -ErrorAction SilentlyContinue) {
-    & node --check static/app.js *> $null
-    Check "n2) static/app.js syntax (node --check)" ($LASTEXITCODE -eq 0)
+    $jsTargets = @("static/app.js")
+    if (Test-Path "static/feature_search_core.js") { $jsTargets += "static/feature_search_core.js" }
+    if (Test-Path "static/js") {
+        $jsTargets += @(Get-ChildItem -Path "static/js" -Filter "*.js" -File | Sort-Object Name | ForEach-Object { "static/js/" + $_.Name })
+    }
+    $jsFail = @()
+    foreach ($jf in $jsTargets) {
+        & node --check $jf *> $null
+        if ($LASTEXITCODE -ne 0) { $jsFail += $jf }
+    }
+    Check "n2) static JS syntax (node --check)" ($jsFail.Count -eq 0) ($jsFail -join ", ")
 }
 $crlfSh = @(git ls-files "*.sh" | ForEach-Object {
     if ((Test-Path $_) -and ([System.IO.File]::ReadAllText($_).Contains("`r`n"))) { $_ }

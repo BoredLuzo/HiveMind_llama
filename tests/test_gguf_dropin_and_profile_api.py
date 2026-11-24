@@ -18,6 +18,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -384,7 +385,7 @@ check("duo critic unified payload forwards min_p, cache_prompt, seed, and thinki
 
 # UI controls & slider bounds
 _idx_src = (ROOT / "index.html").read_text(encoding="utf-8")
-_app_src = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+_app_src = read_all_ui_js()
 check("UI exposes Defaults tab + 0..2.0 temp slider + duo_critic Follow Coder option",
       "cfgtab-defaults" in _idx_src
       and "cfg-defaults-panel" in _idx_src

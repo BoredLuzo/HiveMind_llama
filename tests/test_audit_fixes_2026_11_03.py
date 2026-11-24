@@ -16,6 +16,7 @@ from infra.mcp_server import _is_safe_git          # noqa: E402
 from tools.runner import _parse_approval_answer    # noqa: E402
 from utils.file import _is_protected_path          # noqa: E402
 from routers import config as RC                   # noqa: E402
+from tests.ui_sources import read_all_ui_js          # noqa: E402
 
 ML = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
       + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
@@ -112,9 +113,10 @@ check("7b every row says installed or missing",
 check("7c /lsp/status endpoint exists", '@app.get("/lsp/status"' in SRV)
 check("7d the UI has the status list container",
       'id="lsp-status-list"' in (ROOT / "index.html").read_text(encoding="utf-8"))
+_UI_JS = read_all_ui_js()
 check("7e the UI fetches and renders it",
-      "function loadLspStatus" in (ROOT / "static" / "app.js").read_text(encoding="utf-8")
-      and "fetch('/lsp/status')" in (ROOT / "static" / "app.js").read_text(encoding="utf-8"))
+      "function loadLspStatus" in _UI_JS
+      and "fetch('/lsp/status')" in _UI_JS)
 _INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 check("7f the server list is collapsible",
       "<details id=\"lsp-status-details\"" in _INDEX)

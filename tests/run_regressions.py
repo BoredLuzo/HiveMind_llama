@@ -474,6 +474,8 @@ SUITES = [
     ("live_pip_think_codepanel_fixes", "tests/test_live_pip_think_codepanel_fixes.py", 45),
     ("notify_chats_speed_and_think_order", "tests/test_notify_chats_speed_and_think_order.py", 45),
     ("reasoning_effort_and_pip_pipe", "tests/test_reasoning_effort_and_pip_pipe.py", 45),
+    ("ui_sources_harness", "tests/test_ui_sources_harness.py", 30),
+    ("ui_playwright_smoke", "tests/test_ui_playwright_smoke.py", 90),
 
 ]
 
@@ -484,7 +486,7 @@ SUITES = [
 # for the same reason (CI runners are slower and share two cores).
 _EXCLUSIVE_SUITES = {
     "mcp_client", "mcp_client_budgets", "lsp_client", "wait_ready", "wait_ready_abort",
-    "lsp_real_pyright", "lsp_real_rust",
+    "lsp_real_pyright", "lsp_real_rust", "ui_playwright_smoke",
 }
 
 # Suites that spawn git/nested python subprocesses or stage temp workspaces
@@ -590,6 +592,11 @@ def _change_patterns(rel: str) -> list[str]:
     """
     low = rel.lower().replace("\\", "/").rstrip("/")
     pats = {low}
+    if low == "index.html":
+        pats.add("ui_sources")
+        pats.add("app.js")
+    if low == "tests/ui_sources.cjs":
+        pats.add("ui_sources")
     if low.endswith(".py"):
         mod = low[:-3]
         pats.add(mod)  # core/duo_runner
@@ -600,6 +607,9 @@ def _change_patterns(rel: str) -> list[str]:
     elif "/" in low:
         d, base = low.rsplit("/", 1)
         pats.add(base)  # app.js
+        if low == "static/app.js" or low.startswith("static/js/"):
+            pats.add("ui_sources")
+            pats.add("app.js")
         # A changed test fixture/data file must not select every suite via the
         # "tests" directory pattern (B9, 2026-11-07: tests/quarantine.json
         # matched 253/331 suites). Docs are already filtered before selection,

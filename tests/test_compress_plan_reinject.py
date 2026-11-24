@@ -268,10 +268,10 @@ def test_source_structure():
     else:
         fail("D4: plan pin missing")
     # FIX (2026-08-31): JS was moved out of index.html into static/app.js.
-    # checklist functions are now checked in static/app.js.
+    # checklist functions are now checked across index.html + UI JS sources.
+    from tests.ui_sources import read_all_ui_js
     _root = Path(__file__).parent.parent
-    _candidates = [_root / "index.html", _root / "static" / "app.js"]
-    text_i = "\n".join(p.read_text(encoding="utf-8") for p in _candidates if p.exists())
+    text_i = ((_root / "index.html").read_text(encoding="utf-8") if (_root / "index.html").exists() else "") + "\n" + read_all_ui_js()
     if "_renderPlanChecklist" in text_i and "_updatePlanChecklist" in text_i:
         ok("D5: index.html/app.js has the checklist functions")
     else:

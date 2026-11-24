@@ -25,6 +25,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -422,7 +423,7 @@ def test_dtool_setup_dedup() -> None:
 
 # ── 8. static/app.js + index.html performance invariants ─────────────────────
 def test_frontend_perf_invariants() -> None:
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
     idx_html = (ROOT / "index.html").read_text(encoding="utf-8")
 
     autosave_start = app_js.index("function _autosaveChatMessage()")

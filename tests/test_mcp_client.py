@@ -19,6 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -530,7 +531,7 @@ check("17e the tool list survives the reload", _paged_after == _paged_names,
 # The beta had no UI at all: mcp_client_enabled could only be set by editing
 # settings.json. These pins keep the card wired.
 _HTML = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-_APPJS = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_APPJS = read_all_ui_js()
 check("18a the card exists", 'id="mcp-client-toggle"' in _HTML)
 check("18b the toggle posts mcp_client_enabled",
       "onFlagToggle('mcp_client_enabled'" in _HTML)
@@ -865,7 +866,7 @@ check("22f settings docs list the knobs",
 
 # ── 23. Stats-Tooltips und until_finished-Default (2026-10-27) ────────
 _HTML2 = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-_JS2 = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_JS2 = read_all_ui_js()
 _CSS2 = (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
 _TIPS = ("pbb-ctx", "pbb-ctxreuse", "pbb-tok", "pbb-rate", "pbb-decode",
          "pbb-in", "pbb-cached", "pbb-new", "pbb-reqs", "pbb-tools")

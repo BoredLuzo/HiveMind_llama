@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 from tests._harness import Harness  # noqa: E402
 
@@ -15,7 +16,7 @@ h = Harness(style="results", pad=True)
 check = h.check
 
 # ── 1. Fresh-install mode="chat" routes to simple + normalized in app.js ─────
-JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+JS = read_all_ui_js()
 check("1a app.js normalizes mode='chat' to 'simple'",
       "s.mode === 'chat' ? 'simple'" in JS)
 check("1b chat_route_decision accepts mode in ('simple', 'chat')",
@@ -179,7 +180,7 @@ import core.llm_transport as T  # noqa: E402
 import deploy.fetch_models as fm  # noqa: E402
 import model_configs.models_registry as _mr_ref  # noqa: E402
 
-_app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+_app_js = read_all_ui_js()
 _dis_with_pt = T.disable_thinking_in_payload(
     {"thinking": True, "chat_template_kwargs": {"enable_thinking": True, "preserve_thinking": True}}
 )

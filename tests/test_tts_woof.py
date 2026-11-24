@@ -25,6 +25,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core import tts_audio, tts_engine, tts_woof  # noqa: E402
@@ -232,7 +233,7 @@ def main() -> int:
             settings_src = _settings_src()
             server_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
             html_src = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-            app_src = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+            app_src = read_all_ui_js()
             bat_src = (ROOT / "deploy" / "setup_voice.bat").read_text(encoding="utf-8", errors="replace")
             updater_src = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace")
             prune_src = (ROOT / "deploy" / "update_prune.ps1").read_text(encoding="utf-8", errors="replace")

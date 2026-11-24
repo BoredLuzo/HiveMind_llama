@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 passed = 0
@@ -44,7 +45,7 @@ def read(rel: str) -> str:
 
 server = read("server.py")
 html = read("index.html")
-app = read("static/app.js")
+app = read_all_ui_js()
 css = read("static/style.css")
 settings = read("settings.py")
 docs = read("docs/settings.md")

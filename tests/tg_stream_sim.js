@@ -1,7 +1,7 @@
 // Isolated exercise of the tool-gen stream card helpers from static/app.js.
 // Run: node tests/tg_stream_sim.js   (exit 1 on failure)
-var fs = require('fs');
-var src = fs.readFileSync(__dirname + '/../static/app.js', 'utf8');
+var { readAllUiJs } = require(__dirname + '/ui_sources.cjs');
+var src = readAllUiJs();
 var m1 = src.match(/function _tgUnescape[\s\S]*?\n}/)[0];
 var m3 = src.match(/function _tgFieldSpan[\s\S]*?\n}/)[0];
 var m2 = src.match(/function _tgExtractField[\s\S]*?\n}/)[0];

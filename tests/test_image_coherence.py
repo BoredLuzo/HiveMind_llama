@@ -10,6 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 passed = 0
 failed = 0
@@ -346,7 +347,7 @@ def test_backend_source_invariants() -> None:
 
 def test_ui_coherence_invariants() -> None:
     html = (ROOT / "index.html").read_text(encoding="utf-8")
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
 
     # Single coder-always-vision toggle inside #duo-image-sec (legacy id removed).
     check("no duplicate legacy coder-always-vision-toggle id", 'id="coder-always-vision-toggle"' not in html)

@@ -18,7 +18,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tests.ui_sources import read_all_ui_js  # noqa: E402
+
+APP = read_all_ui_js()
 
 passed = failed = 0
 
@@ -39,16 +44,16 @@ check("1a a new run clears the route flag",
       "S._routeMultiAgent = false;" in APP[_start:_start + 600])
 
 # ── 2. the route is learned from the engine ────────────────────────────────
-_cx = APP.index("else if (d.type === 'complexity') {")
+_cx = APP.index("'complexity': function(d) {")
 _cx_block = APP[_cx:_cx + 700]
 check("2a code_duo marks the run multi-agent", "code_duo" in _cx_block)
 check("2b complex (pipeline) marks it too", "'complex'" in _cx_block)
 check("2c the flag is assigned in the complexity handler",
       "S._routeMultiAgent =" in _cx_block)
 
-_pipe = APP.index("else if (d.type === 'pipeline_start') {")
+_pipe = APP.index("'pipeline_start': function(d) {")
 check("2d pipeline_start marks the run", "S._routeMultiAgent = true;" in APP[_pipe:_pipe + 300])
-_duo = APP.index("else if (d.type === 'duo_start') {")
+_duo = APP.index("'duo_start': function(d) {")
 check("2e duo_start marks the run", "S._routeMultiAgent = true;" in APP[_duo:_duo + 400])
 
 # ── 3. the final answer uses the flag ──────────────────────────────────────

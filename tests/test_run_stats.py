@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -24,7 +25,7 @@ def _read(rel):
 
 chat_run = _read("core/chat_run.py")
 direct = _read("core/direct_runner.py")
-app = _read("static/app.js")
+app = read_all_ui_js()
 css = _read("static/style.css")
 
 # ── engine: the done event names the model ────────────────────────────────

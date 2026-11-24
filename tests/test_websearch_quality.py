@@ -33,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -330,7 +331,7 @@ def _test_quality_filters():
               f"engines={loaded.get('searxng_engines')!r} lang={loaded.get('searxng_language')!r}")
 
     # UI badge counts numbered [N] results rather than line count
-    app_src = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    app_src = read_all_ui_js()
     check("web_search UI pill counts [N] results instead of line count",
           "_wsHits = (_trFull.match(/^\\[\\d+\\]\\s/gm)" in app_src)
 

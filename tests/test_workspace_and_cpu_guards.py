@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -167,7 +168,7 @@ check("an explicit invalid request is still refused",
                         request_workspace=_bad)[1] == "request_invalid")
 check("the UI really sends the global field",
       "workspace: S.workspace || ''" in
-      (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace"))
+      read_all_ui_js())
 
 check("chat_run gates the fallback on an interactive chat",
       '_ws_src == "request_invalid" and chat_id' in _src_cr)

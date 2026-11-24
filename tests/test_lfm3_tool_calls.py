@@ -16,6 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 from routing.model_automap import MODEL_PROFILES         # noqa: E402
 from backend.llama_config import BINARY_MIN_BUILD        # noqa: E402
@@ -60,7 +61,7 @@ check("3a lfm3 requires a recent build", BINARY_MIN_BUILD.get("lfm3", 0) >= 1200
 check("3b the omni variant is gated too", BINARY_MIN_BUILD.get("lfm3-omni", 0) >= 12001)
 
 # ── 4. the UI badge follows the profile ────────────────────────────────────
-APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+APP = read_all_ui_js()
 check("4a the UI trusts the profile flag",
       "prof.tool_call === 'boolean'" in APP or "prof.tool_call === 'boolean'" in APP
       or "typeof prof.tool_call === 'boolean'" in APP)

@@ -228,7 +228,9 @@ check(
 
 
 # ── 4. Frontend boot order + Think/Tool/Cut DOM order ────────────────────────
-_js = (_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+from tests.ui_sources import read_all_ui_js  # noqa: E402
+
+_js = read_all_ui_js()
 _css = (_ROOT / "static" / "style.css").read_text(encoding="utf-8")
 _html = (_ROOT / "index.html").read_text(encoding="utf-8")
 _atl = (_ROOT / "core" / "agentic_tool_loop.py").read_text(encoding="utf-8")
@@ -256,26 +258,25 @@ check(
 
 # Real Node VM DOM test using the exact app.js handlers for status, tool_gen_reset, thinking_token, tool_call, tool_result
 _node_test = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 
-function sliceBetween(startNeedle, endNeedle) {
-  const s = appSrc.indexOf(startNeedle);
-  if (s < 0) throw new Error('missing ' + startNeedle);
-  const e = appSrc.indexOf(endNeedle, s);
-  if (e < 0) throw new Error('missing end ' + endNeedle);
-  return appSrc.slice(s, e);
+function sliceHandler(name) {
+  const needle = "  '" + name + "': function(d) {";
+  const s = appSrc.indexOf(needle);
+  if (s < 0) throw new Error('missing ' + needle);
+  const e = appSrc.indexOf("\n  },", s);
+  if (e < 0) throw new Error('missing end ' + needle);
+  return appSrc.slice(s, e + 5);
 }
 
-// Extract the handleEvent-style SSE branches + _createThinkBlock + _appendToolEl/_toolClusterAnchor
-const statusBranch = sliceBetween("  else if (d.type === 'status') {", "  else if (d.type === 'planner_start')");
-const resetBranch = sliceBetween("  else if (d.type === 'tool_gen_reset') {", "  else if (d.type === 'complexity')");
-const thinkBranch = sliceBetween("  else if (d.type === 'thinking_token') {", "  else if (d.type === 'agent_done')");
-const tcStart = appSrc.indexOf("  else if (d.type === 'tool_call') {");
-const trEnd = appSrc.indexOf("\n  }\n}", appSrc.indexOf("  else if (d.type === 'tool_result') {"));
-if (tcStart < 0 || trEnd < 0) throw new Error('missing tool_call/tool_result boundaries');
-const tcTrBranches = appSrc.slice(tcStart, trEnd + 4);
+// Extract the EVENT_HANDLERS entries + _createThinkBlock + _appendToolEl/_toolClusterAnchor
+const statusHandler = sliceHandler('status');
+const resetHandler = sliceHandler('tool_gen_reset');
+const thinkHandler = sliceHandler('thinking_token');
+const tcHandler = sliceHandler('tool_call');
+const trHandler = sliceHandler('tool_result');
 
 function makeClassList(el) {
   const s = new Set();
@@ -366,12 +367,18 @@ const statusEl = new Elem('div'); statusEl.id = 'status-el';
 chatEl.appendChild(statusEl);
 
 const fnSrc = `
+const TEST_EVENT_HANDLERS = {
+${statusHandler}
+${resetHandler}
+${thinkHandler}
+${tcHandler}
+${trHandler}
+};
 function handleTestEvent(d) {
-  if (false) {}
-${statusBranch}
-${resetBranch}
-${thinkBranch}
-${tcTrBranches}
+  const fn = (d && d.type && Object.prototype.hasOwnProperty.call(TEST_EVENT_HANDLERS, d.type))
+    ? TEST_EVENT_HANDLERS[d.type]
+    : null;
+  if (typeof fn === 'function') fn(d);
 }
 `;
 
@@ -474,9 +481,9 @@ check(
 )
 
 _node_san = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 const s = appSrc.indexOf('function _sanitizeRuntimeToken(t)');
 const e = appSrc.indexOf('\n}\n', s);
 const fnSrc = appSrc.slice(s, e + 3);
@@ -508,11 +515,12 @@ check(
 
 # ── 6. Per-element think-body mid-stream scroll follow ──────────────────────────
 _node_scroll = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 const s = appSrc.indexOf('function _elEnsureFollowListener(el)');
-const e = appSrc.indexOf('\nfunction rmEl(', s);
+const _endScroll = appSrc.indexOf('\n// END_SCROLL_HELPERS', s);
+const e = _endScroll >= 0 ? _endScroll : appSrc.indexOf('\nfunction rmEl(', s);
 if (s < 0 || e < 0) throw new Error('missing follow helpers');
 const fnSrc = appSrc.slice(s, e);
 let rafQueue = [];
@@ -605,7 +613,7 @@ check(
     _nsc.stdout.strip() or _nsc.stderr.strip(),
 )
 
-_planner_think_slice = _js[_js.index("else if (d.type === 'planner_thinking_token')"):_js.index("else if (d.type === 'planner_plan_token')")]
+_planner_think_slice = _js[_js.index("'planner_thinking_token': function(d)"):_js.index("'planner_plan_token': function(d)")]
 _scroll_btm_slice = _js[_js.index("function scrollBtmIfNearBottom("):_js.index("function _elEnsureFollowListener(")]
 check(
     "planner thinking uses _scrollElToBottomSoon and scrollBtmIfNearBottom re-checks _chatFollow in rAF",
@@ -699,9 +707,9 @@ check(
 )
 
 _node_sse = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 const s = appSrc.indexOf('function _sseFeedLines(text)');
 const e = appSrc.indexOf('\nfunction _journalInitAttach()', s);
 if (s < 0 || e < 0) throw new Error('missing sse/journal helpers');

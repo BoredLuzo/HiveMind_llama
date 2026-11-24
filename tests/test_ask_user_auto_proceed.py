@@ -30,6 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 passed = 0
 failed = 0
@@ -216,7 +217,7 @@ def test_start_timeout_unit():
 
 def test_ui_single_source():
     """A5: the engine is the only auto-answer source; the card runs no timer."""
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    app = read_all_ui_js()
     start = app.index("var _tg = document.createElement('label')")
     end = app.index("_inp.addEventListener('keydown'", start)
     card = app[start:end]

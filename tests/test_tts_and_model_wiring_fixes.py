@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -23,7 +24,7 @@ h = Harness(style="summary", pad=True)
 check = h.check
 
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+app_js = read_all_ui_js()
 
 # ── (a) TTS speed & volume UI/JS wiring ─────────────────────────────────────
 check("app.js defines _clampTtsSpeed and _ttsApplyVolume",

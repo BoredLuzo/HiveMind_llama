@@ -6,12 +6,12 @@ for two consumers:
 
   * `deploy/gen_settings_docs.py` - the "UI" column in docs/settings.md
   * `tests/test_settings_ui.py` - fails when a new key joins DEFAULT_SETTINGS
-    without either a UI control (index.html/static/app.js or /settings/schema)
+    without either a UI control (index.html / static/js/*.js / static/app.js or /settings/schema)
     or an entry in `settings_ui_exempt.txt`
 
-A key counts as exposed when its exact name appears in index.html or
-static/app.js OR when it is exposed by GET /settings/schema (i.e. a user-
-configurable DEFAULT_SETTINGS key not excluded by SETTINGS_SCHEMA_EXCLUDED_KEYS
+A key counts as exposed when its exact name appears in index.html,
+static/js/*.js, or static/app.js OR when it is exposed by GET /settings/schema
+(i.e. a user-configurable DEFAULT_SETTINGS key not excluded by SETTINGS_SCHEMA_EXCLUDED_KEYS
 or `settings_ui_exempt.txt`).
 """
 from __future__ import annotations
@@ -19,14 +19,23 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-UI_FILES = (ROOT / "index.html", ROOT / "static" / "app.js")
 EXEMPT_FILE = ROOT / "deploy" / "settings_ui_exempt.txt"
+
+
+def ui_files() -> tuple[Path, ...]:
+    """All static UI sources (`index.html`, `static/js/*.js`, `static/app.js`)."""
+    js_dir = ROOT / "static" / "js"
+    modular = sorted(js_dir.glob("*.js")) if js_dir.is_dir() else []
+    return (ROOT / "index.html", *modular, ROOT / "static" / "app.js")
+
+
+UI_FILES = ui_files()
 
 
 def ui_text() -> str:
     """Concatenated UI sources (missing files count as empty)."""
     parts = []
-    for path in UI_FILES:
+    for path in ui_files():
         try:
             parts.append(path.read_text(encoding="utf-8", errors="replace"))
         except OSError:
@@ -35,7 +44,7 @@ def ui_text() -> str:
 
 
 def in_dom(keys) -> set[str]:
-    """Subset of `keys` whose name appears directly in index.html or static/app.js."""
+    """Subset of `keys` whose name appears directly in index.html, static/js/*.js, or static/app.js."""
     text = ui_text()
     return {k for k in keys if k in text}
 

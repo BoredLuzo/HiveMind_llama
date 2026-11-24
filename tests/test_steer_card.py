@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 passed = 0
 failed = 0
@@ -60,8 +61,8 @@ def test_duo_sites_emit_steer():
 
 
 def test_appjs_card_and_persistence():
-    src = _src("static/app.js")
-    handler = "d.type === 'steer'" in src
+    src = read_all_ui_js()
+    handler = "'steer': function(d)" in src
     card = "steer-note" in src
     save = src.count("steer-note") >= 2
     if handler and card and save:

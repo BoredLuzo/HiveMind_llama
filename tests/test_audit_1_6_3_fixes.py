@@ -14,6 +14,7 @@ import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -482,7 +483,7 @@ async def _test_remaining_fixes():
     check("utils/tool.py passes model (not _vname) to resolve_write_char_limits",
           "resolve_write_char_limits(model, token_budget" in tool_util_src)
 
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
     check("static/app.js fixes supervisor interval stack, refreshTgSupStatus, _lh attach, hm_run_id & visibility guards",
           "window.refreshTgSupStatus = gatewaySupervisorTick;" in app_js
           and "clearInterval(window._tgSupIv)" in app_js
@@ -504,7 +505,7 @@ def _test_ui_and_metrics_points():
           and 'id="duo-critic-model-sel"' in idx_html
           and 'onchange="onDuoCriticModelChange(this.value)"' in idx_html)
 
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
     check("static/app.js wires Critic selector in duo-pair-row, live decode fallback, and multi-turn msg-stats",
           "function onDuoCriticModelChange(model)" in app_js
           and "duoCriticModel: ''," in app_js
@@ -513,7 +514,7 @@ def _test_ui_and_metrics_points():
           and "el.setAttribute('data-turn-done', '1');" in app_js
           and "var lastBlock = blocks[blocks.length - 1];" in app_js
           and "lastBlock.querySelector(':scope > .amsg-foot')" in app_js
-          and "else if (d.type === 'planner_token') {\n    _perfOnToken(d.content);" in app_js
+          and "'planner_token': function(d) {\n    _perfOnToken(d.content);" in app_js
           and "var _liveDec = _perfRealRate() || Number(S.perfTokRate || 0);" in app_js)
 
     # Verify startDuoAgent appends a footer element (.amsg-foot)
@@ -642,7 +643,7 @@ async def _test_wave_1_to_3_fixes():
                                           _apply_pre_decision, _consume_budget,
                                           _check_edit_shrink, _check_edit_symbol_loss)))
 
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
     check("static/app.js applyAgent syncs duoCtxAgentic/Normal/Critic and engine twin inputs",
           "if (ctx > 0 && key === 'duo_coder')" in app_js
           and "else if (ctx > 0 && key === 'duo_critic')" in app_js

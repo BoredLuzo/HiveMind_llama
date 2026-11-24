@@ -31,6 +31,7 @@ import httpx
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -653,7 +654,7 @@ def test_frontend_wave2b1_js_behavior() -> None:
         check("Node.js available for app.js VM behavioral checks", False)
         return
 
-    js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    js = read_all_ui_js()
 
     # Extract exact slices/functions from static/app.js so Node vm executes real production code!
     settings_slice = js[

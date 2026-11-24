@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 from tools import taint as T          # noqa: E402
 import tools.runner as R              # noqa: E402
@@ -22,7 +23,7 @@ DQ = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
 ATL = (ROOT / "core" / "agentic_tool_loop.py").read_text(encoding="utf-8")
 TE = (ROOT / "core" / "tool_executor.py").read_text(encoding="utf-8")
 SRV = (ROOT / "server.py").read_text(encoding="utf-8")
-APPJS = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+APPJS = read_all_ui_js()
 
 passed = failed = 0
 
@@ -197,7 +198,7 @@ check("5e the third ladder hit accepts", _g3 == "allow" and _res_obj.task_comple
 check("6a the done frame bypasses the queue cap",
       "DONE-ALWAYS" in SRV and 'elif isinstance(_chunk, str) and \'"type": "done"\' in _chunk:' in SRV)
 check("6b the server emits a stream_gap frame", '"type": "stream_gap"' in SRV)
-check("6c the web UI handles stream_gap", "d.type === 'stream_gap'" in APPJS)
+check("6c the web UI handles stream_gap", "'stream_gap': function(d)" in APPJS)
 check("6d the journal carries and filters the chat id",
       '"chat_id": str(reg.get("chat_id")' in SRV
       and "j.chat_id && (!S.currentChatId" in APPJS)

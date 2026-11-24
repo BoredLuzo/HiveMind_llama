@@ -26,11 +26,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-APP = ROOT / "static" / "app.js"
 SIM = ROOT / "tests" / "tg_stream_sim.js"
 DIFF_SIM = ROOT / "tests" / "tg_diff_cleanup_sim.js"
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 
 from tests._harness import Harness  # noqa: E402
 
@@ -43,7 +43,7 @@ fail = h.fail
 
 
 def test_static_wiring():
-    src = APP.read_text(encoding="utf-8")
+    src = read_all_ui_js()
     check("card state keyed by index (_tgCards)", "_tgCards" in src)
     check("path extracted from streaming args", '"path"\\s*:\\s*"' in src.replace("\\\\", "\\"))
     check("edit_file streams new_text into panel", "'new_text'" in src)
@@ -75,8 +75,8 @@ def test_static_wiring():
           "'/approval/pending/'" in src and "_renderApprovalCard" in src)
     check("no inline stream pre left in chat", "tg-pre" not in src)
     # Cleanup: without this the streaming chip duplicates the real chip.
-    tc_idx = src.find("d.type === 'tool_call'")
-    tr_idx = src.find("d.type === 'tool_result'")
+    tc_idx = src.find("'tool_call': function(d)")
+    tr_idx = src.find("'tool_result': function(d)")
     check("tool_call handler found", tc_idx >= 0)
     check("tool_result handler found", tr_idx >= 0)
     check("_toolGenDone called in tool_call handler",

@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 passed = failed = 0
@@ -92,7 +93,7 @@ def main() -> int:
           "log.close()" in seg and "except OSError as exc:" in seg)
 
     print("\n=== anchors: frontend git line ===\n")
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app = read_all_ui_js()
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     check("C1: jumpToGitConfig targets the existing configs tab",
           '.tab[data-p="configs"]' in app and "config']" not in

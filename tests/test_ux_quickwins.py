@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -13,7 +14,7 @@ from tests._harness import Harness  # noqa: E402
 h = Harness(pad=True, style="summary")
 check = h.check
 
-app = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+app = read_all_ui_js()
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 srv = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
 bat = (ROOT / "start_hivemind.bat").read_text(encoding="utf-8", errors="replace")

@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
@@ -69,7 +70,7 @@ _DEAD = ("automap_code_duo_enabled", "automap_duo_pre_explore",
          "startup_preload_coder", "startup_preload_judge_in_agentic")
 _still = [k for k in _DEAD if k in _D]
 check("dead settings are gone from DEFAULT_SETTINGS", not _still, f"({_still})")
-appjs = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+appjs = read_all_ui_js()
 _uses = [k for k in _DEAD if f"postSettings({{{k}:" in appjs]
 check("the UI no longer writes them", not _uses, f"({_uses})")
 check("Automap pre-explore drives the real key",

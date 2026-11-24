@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
+from tests.ui_sources import all_static_js_files, read_all_ui_js  # noqa: E402
 
 h = Harness(pad=True, style="summary")
 check = h.check
@@ -358,7 +359,7 @@ def _test_models_profile_api() -> None:
 
 # ── 2. Frontend static & Node VM tests ─────────────────────────────────────
 def _test_frontend_sources() -> None:
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = read_all_ui_js()
     idx_html = (ROOT / "index.html").read_text(encoding="utf-8")
 
     # 2a: DOMParser sanitizer structure
@@ -434,8 +435,12 @@ def _test_frontend_sources() -> None:
         h.skip("2g node syntax & VM behavioral checks", "node binary not on PATH")
         return
 
-    syn = subprocess.run([node, "--check", str(ROOT / "static" / "app.js")], capture_output=True, text=True)
-    check("2g node --check static/app.js passes", syn.returncode == 0, syn.stderr[:300])
+    _syn_bad = []
+    for _jf in all_static_js_files():
+        _r = subprocess.run([node, "--check", str(_jf)], capture_output=True, text=True)
+        if _r.returncode != 0:
+            _syn_bad.append(f"{_jf.name}: {_r.stderr[:200]}")
+    check("2g node --check static JS files pass", not _syn_bad, "; ".join(_syn_bad))
 
     # Extract functions from static/app.js for behavioral Node checks
     def _slice_block(start_sig: str, end_sig: str) -> str:
@@ -453,7 +458,7 @@ def _test_frontend_sources() -> None:
 
     sanitize_bundle = "\n\n".join([
         _extract_fn("function _escHtml(s)"),
-        _slice_block("var _CHAT_DROP_TAGS = new Set([", "function _workerBaseModelName("),
+        _slice_block("var _CHAT_DROP_TAGS = new Set([", "// END_CHAT_SANITIZER"),
     ])
 
     sanitize_js = sanitize_bundle + r"""
@@ -560,11 +565,12 @@ console.log(JSON.stringify({ fallbackOut, domOut }));
           f"rc={p_san.returncode} stderr={p_san.stderr[:200]} out={san_out}")
 
     # 2i: Node VM test for rAF coalescing + final flush + _liveMdTrailT cleanup
+    _tg_end = "// END_TOOLGEN_STREAM" if "// END_TOOLGEN_STREAM" in app_js else "function _flushTokenQueueSync()"
     stream_bundle = "\n\n".join([
         _extract_fn("function _escHtml(s)"),
         "var esc = _escHtml;",
         _slice_block("var _liveMdMaxLen", "var _tokenQueue = [];"),
-        _slice_block("var _tgCards = {};", "function _flushTokenQueueSync()"),
+        _slice_block("var _tgCards = {};", _tg_end),
     ])
     stream_js = stream_bundle + r"""
 let scheduledRafs = [];

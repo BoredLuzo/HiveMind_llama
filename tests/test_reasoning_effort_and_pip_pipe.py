@@ -291,7 +291,9 @@ check(
 
 # ── 7. Frontend composer Reasoning Effort bar & Node VM test ──────────────────
 _idx = (_ROOT / "index.html").read_text(encoding="utf-8")
-_js = (_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+from tests.ui_sources import read_all_ui_js  # noqa: E402
+
+_js = read_all_ui_js()
 _css = (_ROOT / "static" / "style.css").read_text(encoding="utf-8")
 
 check(
@@ -328,9 +330,9 @@ check(
 )
 
 _node_eff = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
 const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
 const fnSrc = appSrc.slice(s, e);
@@ -1230,9 +1232,9 @@ check(
 
 # P1-13/14 & P2: Frontend Node VM deep-audit edge cases (k2 Off visible, 'on' on effort, 'none' on lfm, duo_planner model, revert cb)
 _node_da = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
 const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
 const fnSrc = appSrc.slice(s, e);
@@ -1482,9 +1484,9 @@ check(
 )
 
 _node_sep = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8').replace(/\r\n/g, '\n');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs({ normalizeNewlines: true });
 const s = appSrc.indexOf('var _REASONING_EFFORT_LABELS =');
 const e = appSrc.indexOf('\n// removed: updateToolThinkingModeVis', s);
 const fnSrc = appSrc.slice(s, e);

@@ -108,7 +108,9 @@ check(
 
 # ── 2. CSS + JS + SSE thinking collapse & Code Panel resilience ─────────
 _css = (_ROOT / "static" / "style.css").read_text(encoding="utf-8")
-_js = (_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+from tests.ui_sources import read_all_ui_js  # noqa: E402
+
+_js = read_all_ui_js()
 _html = (_ROOT / "index.html").read_text(encoding="utf-8")
 _atl = (_ROOT / "core" / "agentic_tool_loop.py").read_text(encoding="utf-8")
 
@@ -138,7 +140,7 @@ check(
 )
 check(
     "app.js handles tool_gen_reset, call_id rollover, active pending rekey, and rAF follow scroll",
-    "d.type === 'tool_gen_reset'" in _js
+    "'tool_gen_reset': function(d)" in _js
     and "_cid !== st.callId" in _js
     and "var _wasActive = (_cpActive === _k);" in _js
     and "job.plain && _cpFollowStream && document.body.classList.contains('code-panel-open')" in _js,
@@ -153,9 +155,9 @@ check(
 
 # Run a real Node DOM test for _toggleThinkBlock + userToggled + _tgPendingRekey
 _node_harness = r"""
-const fs = require('fs');
 const vm = require('vm');
-const appSrc = fs.readFileSync('static/app.js', 'utf8');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const appSrc = readAllUiJs();
 
 function extractFn(name) {
   const idx = appSrc.indexOf('function ' + name + '(');

@@ -27,6 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from tests._harness import Harness  # noqa: E402
@@ -215,7 +216,7 @@ check("P2-4 core/stream.py uses spawn() instead of bare create_task",
 
 
 # ── P2-5: static/app.js XSS quote escaping & decisionId preservation ─────────
-_app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+_app_js = read_all_ui_js()
 check("P2-5a esc() escapes double and single quotes",
       '.replace(/"/g,\'&quot;\').replace(/\'/g,\'&#39;\')' in _app_js)
 check("P2-5b VRAM tooltip escapes short model name",

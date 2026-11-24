@@ -21,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from tests.ui_sources import read_all_ui_js  # noqa: E402
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 passed = failed = 0
@@ -36,7 +37,7 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+APP = read_all_ui_js()
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
 
 

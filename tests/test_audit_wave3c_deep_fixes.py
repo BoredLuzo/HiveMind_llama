@@ -285,7 +285,9 @@ with mock.patch.object(TB, "_terminate") as _mterm:
     check("stop_all_background terminates registered entries", _cnt >= 1 and _mterm.called and "__w3c_test__" not in TB._REGISTRY)
 check("server.py invokes stop_all_background in shutdown", "stop_all_background" in _read("server.py"))
 
-_app_js = _read("static/app.js")
+from tests.ui_sources import read_all_ui_js  # noqa: E402
+
+_app_js = read_all_ui_js()
 _idx_html = _read("index.html")
 check("app.js uses Object.keys(_mm.cp).length > 0 guard", "typeof _mm.cp === 'object' && Object.keys(_mm.cp).length > 0" in _app_js)
 check("app.js escapes soloModel with esc()", "esc(soloModel)" in _app_js)
@@ -298,9 +300,9 @@ check(
 _node = shutil.which("node")
 if _node:
     _js_test = r"""
-const fs = require('fs');
 const vm = require('vm');
-const src = fs.readFileSync('static/app.js', 'utf8');
+const { readAllUiJs } = require('./tests/ui_sources.cjs');
+const src = readAllUiJs();
 const m = src.match(/let _settingsPatchQueue[\s\S]*?\nfunction _flushQueuedSettings\(\) \{[\s\S]*?\n\}/);
 if (!m) { console.error('block not found'); process.exit(2); }
 let fetchCount = 0;
