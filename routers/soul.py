@@ -1,4 +1,5 @@
 """Soul API-Router."""
+import asyncio
 import logging
 import re
 import time
@@ -268,7 +269,18 @@ async def reset_soul_insights():
 
 @router.get("/token-stats")
 async def get_token_stats(days: int = 30):
-    stats = _load_token_stats()
+    try:
+        days = max(1, min(365, int(days)))
+    except (TypeError, ValueError):
+        days = 30
+
+    def _read_locked():
+        if _ts._token_stats_lock is not None:
+            with _ts._token_stats_lock:
+                return _load_token_stats()
+        return _load_token_stats()
+
+    stats = await asyncio.to_thread(_read_locked)
     daily = stats.get("daily", {})
     sorted_days = sorted(daily.keys(), reverse=True)[:days]
     limited_daily = {d: daily[d] for d in sorted_days}
@@ -296,6 +308,10 @@ async def get_token_stats(days: int = 30):
 async def reset_token_stats():
     if _ts._token_stats_lock is None:
         return {"ok": False, "error": "token stats not initialized"}
-    with _ts._token_stats_lock:
-        _save_token_stats({"total_tokens": 0, "total_runs": 0, "daily": {}})
+
+    def _reset_locked():
+        with _ts._token_stats_lock:
+            _save_token_stats({"total_tokens": 0, "total_runs": 0, "daily": {}})
+
+    await asyncio.to_thread(_reset_locked)
     return {"ok": True}

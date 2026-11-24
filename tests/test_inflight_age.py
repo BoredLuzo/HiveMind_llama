@@ -45,15 +45,19 @@ old.in_flight = 1
 old.in_flight_since = 0.0
 check("6 an unstamped mark stays protected", old.in_flight_active())
 
-# P1 (deep audit 2026-11-03): after a stale mark ages out, the NEXT mark must
-# refresh the stamp, otherwise the slot looks free while a round is running.
+# P1 (deep audit 2026-11-03; hardened 2026-11-24): after a stale mark ages out,
+# the next mark resets the leaked counter to 1 and refreshes the stamp so the slot
+# protects the active round without staying non-evictable after clear.
 s2 = ModelSlot(2)
 with mock.patch("time.monotonic", return_value=10_000.0):
     s2.mark_in_flight()
     s2.in_flight_since = 10_000.0 - 1801
     check("7 a stale mark is treated as leaked", not s2.in_flight_active())
     s2.mark_in_flight()
-    check("8 a fresh mark after a stale one is active again",
-          s2.in_flight == 2 and s2.in_flight_active() and not s2.evictable)
+    check("8 a fresh mark after a stale one resets leaked count and is active again",
+          s2.in_flight == 1 and s2.in_flight_active() and not s2.evictable)
+    s2.clear_in_flight()
+    check("9 clearing a refreshed mark restores evictability",
+          s2.in_flight == 0 and s2.evictable)
 
 sys.exit(h.finish())

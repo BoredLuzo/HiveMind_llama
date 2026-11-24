@@ -70,8 +70,8 @@ echo  HOW TO PROCEED
 echo  ====================================================================
 echo.
 echo    [E]  essential set - the 4 recommended default models above (~11.4 GB + sidecars)
-echo    [S]  pick single models from the full catalog [1]-[11] (any model can be tried)
-echo    [D]  everything missing from the catalog (all 11 models, ~63 GB)
+echo    [S]  pick single models from the full catalog [1]-[12] (any model can be tried)
+echo    [D]  everything missing from the catalog (all 12 models, ~75 GB)
 echo    [C]  add your own model, with a config
 echo    [R]  register an existing models folder, no download
 echo    [A]  abort

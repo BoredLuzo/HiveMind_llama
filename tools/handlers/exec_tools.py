@@ -305,61 +305,19 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         if _env.get("PYTHONPATH"):
             _py_parts.append(_env["PYTHONPATH"])
         _env["PYTHONPATH"] = os.pathsep.join(_py_parts)
-        from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree_and_reap as _kill_tree_and_reap
-        if bench_cmd:
-            r = await asyncio.create_subprocess_exec(
-                *bench_cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(workspace),
-                env=_env,
-                **_spawn_kwargs())
-        else:
-            r = await asyncio.create_subprocess_exec(
-                _py_cmd,
-                fname,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(workspace),
-                env=_env,
-                **_spawn_kwargs())
-        _job = _ToolJob.confine(r)
-        try:
-            try:
-                out, err = await asyncio.wait_for(r.communicate(), 60 if bench_cmd else 45)
-            except asyncio.TimeoutError:
-                if _job is not None:
-                    _job.terminate()
-                try:
-                    await _kill_tree_and_reap(r)
-                except (OSError, RuntimeError, asyncio.CancelledError):
-                    try:
-                        r.kill()
-                    except OSError:
-                        pass
-                return _tool_error_response(
-                    "RUN_PYTHON_TIMEOUT",
-                    "Python execution timed out.",
-                    tool="run_python" )
-            except asyncio.CancelledError:
-                if _job is not None:
-                    _job.terminate()
-                try:
-                    await asyncio.shield(_kill_tree_and_reap(r))
-                except (OSError, RuntimeError, asyncio.CancelledError):
-                    try:
-                        r.kill()
-                    except OSError:
-                        pass
-                raise
-        finally:
-            if _job is not None:
-                _job.close()
-
-        stdout = out.decode(errors="replace").replace("\r\n", "\n").replace("\r", "").strip()
-        stderr = err.decode(errors="replace").replace("\r\n", "\n").replace("\r", "").strip()
+        _py_argv = list(bench_cmd) if bench_cmd else [_py_cmd, str(fname)]
+        _py_timeout = 60 if bench_cmd else 45
+        stdout_raw, stderr_raw, _rc, _timed_out = await _stream_proc(
+            _py_argv, _py_timeout, str(workspace), _env, line_cap=300
+        )
+        if _timed_out:
+            return _tool_error_response(
+                "RUN_PYTHON_TIMEOUT",
+                "Python execution timed out.",
+                tool="run_python",
+            )
+        stdout = stdout_raw.replace("\r\n", "\n").replace("\r", "").strip()
+        stderr = stderr_raw.replace("\r\n", "\n").replace("\r", "").strip()
         if stderr and not stdout:
             return _tool_error_response(
                 "RUN_PYTHON_EXEC_ERROR",
@@ -378,12 +336,12 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
                 if len(result) > 4000
                 else result
             )
-            return _capped + f"\n[exit code: {r.returncode}]"
-        if r.returncode == 0:
+            return _capped + f"\n[exit code: {_rc}]"
+        if _rc == 0:
             return "[run_python: executed successfully — no output produced]"
         return _tool_error_response(
             "RUN_PYTHON_FAILED",
-            f"Script exited with code {r.returncode} and no output. "
+            f"Script exited with code {_rc} and no output. "
             "Check for silent exceptions or import errors.",
             tool="run_python")
     except Exception as e:
@@ -1307,8 +1265,18 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
 
         return "\n".join(stdout_buf), "\n".join(stderr_buf), proc.returncode or 0, False
     finally:
+        _tr = getattr(proc, "_transport", None)
+        if _tr is not None:
+            _tr.close()
         if _job is not None:
             _job.close()
+
+
+_DANGEROUS_RM_ROOT_RE = re.compile(
+    r"\brm\s+(?:[^|&;\n]*\s)?(?:-[a-z]*[rR][a-z]*|--recursive)\s+"
+    r"(?:-[a-z]+\s+|--\S+\s+)*(?:/(?:\*|\s|$)|~(?:/\*|\s|$)|\.(?:/\*|\s|$))",
+    re.IGNORECASE,
+)
 
 
 def _bash_blocklisted(cmd: str) -> str | None:
@@ -1317,6 +1285,8 @@ def _bash_blocklisted(cmd: str) -> str | None:
     for _d in pats:
         if _d in _c:
             return _d
+    if _DANGEROUS_RM_ROOT_RE.search(_c):
+        return "rm -r <root/home/cwd>"
     return None
 
 

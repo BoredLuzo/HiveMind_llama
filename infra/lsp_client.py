@@ -254,22 +254,31 @@ def path_to_uri(path: str | Path) -> str:
     """Local path -> file URI. as_uri() produces the correct
     file:///C:/... shape for Windows drive paths (and %XX-encodes spaces,
     umlauts and friends)."""
-    return Path(str(path)).resolve().as_uri()
+    text = str(path)
+    if text.startswith(("\\\\", "//")):
+        raise ValueError(f"UNC paths are not supported: {text}")
+    return Path(text).resolve().as_uri()
 
 
 def uri_to_path(uri: str) -> str:
     """file URI -> local path (url2pathname knows Windows drive letters).
-    Non-file schemes (untitled:, jdt:, ...) have no local path - they pass
-    through unchanged so the caller still sees something useful."""
+    Non-file schemes (untitled:, jdt:, ...) or UNC file:// URIs have no safe
+    local path - they pass through unchanged."""
     parsed = urlparse(str(uri))
     if parsed.scheme != "file":
         return str(uri)
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        return str(uri)
     raw = url2pathname(parsed.path)
+    if raw.startswith(("\\\\", "//")):
+        return str(uri)
     # Pyright encodes the drive colon ("file:///c%3A/..."), which
     # url2pathname turns into "\\c:\\...". Strip the extra separator so the
     # path is a real Windows drive path again.
     if sys.platform == "win32" and re.match(r"^[/\\][A-Za-z]:[/\\]", raw):
         raw = raw[1:]
+    if raw.startswith(("\\\\", "//")):
+        return str(uri)
     return raw
 
 
@@ -280,13 +289,17 @@ def canonical_uri(uri: str) -> str:
     ``file:///c%3A/Users/...`` while the client opens
     ``file:///C:/Users/...``. Both name the same file; without
     normalization the diagnostics land under a key nobody reads.
-    Non-file schemes and unresolvable paths are returned unchanged."""
+    Non-file schemes, UNC hosts, and unresolvable paths are returned unchanged."""
     text = str(uri or "")
     parsed = urlparse(text)
     if parsed.scheme != "file":
         return text
+    if parsed.netloc and parsed.netloc.lower() != "localhost":
+        return text
     try:
         raw = uri_to_path(text)
+        if raw.startswith(("\\\\", "//")) or raw == text:
+            return text
         path = Path(raw)
         if not path.is_absolute():
             return text
@@ -442,10 +455,12 @@ class _LspConnection:
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         try:
             await self._initialize()
-        except (LspError, asyncio.TimeoutError, OSError) as exc:
+        except (LspError, asyncio.CancelledError, asyncio.TimeoutError, OSError, RuntimeError) as exc:
             await self.close()
-            raise LspError(f"initializing {self.language_id} server failed: "
-                           f"{exc}") from exc
+            if isinstance(exc, (LspError, asyncio.TimeoutError, OSError)):
+                raise LspError(f"initializing {self.language_id} server failed: "
+                               f"{exc}") from exc
+            raise
 
     async def _initialize(self) -> None:
         root_uri = path_to_uri(self.workspace)
@@ -501,12 +516,17 @@ class _LspConnection:
         async with self._stdin_lock:
             proc = self._proc
             if proc is None or proc.stdin is None or proc.returncode is not None:
+                self._die(f"{self.language_id} server is not running")
                 raise LspError(f"{self.language_id} server is not running")
             try:
                 # one frame = header block + JSON body, LSP Content-Length style
                 proc.stdin.write(frame)
-                await proc.stdin.drain()
-            except (OSError, ValueError) as exc:
+                await asyncio.wait_for(
+                    proc.stdin.drain(),
+                    timeout=min(float(self.timeout_s), 10.0),
+                )
+            except (OSError, ValueError, asyncio.TimeoutError) as exc:
+                self._die(f"write to {self.language_id} server failed: {exc}")
                 raise LspError(f"write to {self.language_id} server failed: "
                                f"{exc}") from exc
 
@@ -573,7 +593,8 @@ class _LspConnection:
         try:
             header = await proc.stdout.readuntil(b"\r\n\r\n")
         except asyncio.IncompleteReadError:
-            return None                       # clean EOF: the server is gone
+            self._die(f"{self.language_id} server closed stdout (EOF)")
+            return None                       # EOF: the server is gone
         except (asyncio.LimitOverrunError, ValueError):
             self._die(f"{self.language_id} server sent an oversized or "
                       f"malformed header block")
@@ -762,9 +783,17 @@ class _LspConnection:
         return None
 
     def _read_doc(self, path: Path) -> str:
+        max_bytes = MAX_DOC_CHARS * 4
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise LspError(f"cannot stat {path}: {exc}") from exc
+        if size > max_bytes:
+            raise LspError(f"{path} is over {max_bytes // (1024 * 1024)} MiB "
+                           f"- too large to sync with a language server")
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise LspError(f"cannot read {path}: {exc}") from exc
         if len(text) > MAX_DOC_CHARS:
             raise LspError(f"{path} is over {MAX_DOC_CHARS // 1024} Ki chars "
@@ -941,6 +970,7 @@ class _LspConnection:
                     return
                 except (asyncio.TimeoutError, ProcessLookupError, OSError):
                     pass
+                await kill_tree(proc, force=True)
                 try:
                     proc.kill()
                 except (ProcessLookupError, OSError):
@@ -974,7 +1004,7 @@ class _LspConnection:
             await asyncio.sleep(0)
 
 
-async def kill_tree(proc) -> None:
+async def kill_tree(proc, *, force: bool = False) -> None:
     """Best effort kill of the whole child process tree.
 
     Mirrors infra/mcp_client._kill_tree (audit C6, 2026-10-31) but is kept
@@ -993,7 +1023,8 @@ async def kill_tree(proc) -> None:
                 capture_output=True, timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            sig = signal.SIGKILL if force else signal.SIGTERM
+            os.killpg(os.getpgid(pid), sig)
     except (OSError, subprocess.SubprocessError, ProcessLookupError):
         pass
 
@@ -1060,7 +1091,18 @@ class LspManager:
             conn = self._conns.get(language_id)
             self._last_used[language_id] = self._now()
             if conn is not None:
-                if not conn.dead:
+                if isinstance(conn, _LspConnection):
+                    _proc = conn._proc
+                    _rtask = conn._reader_task
+                    _alive = (
+                        not conn.dead
+                        and _proc is not None
+                        and _proc.returncode is None
+                        and (_rtask is None or not _rtask.done())
+                    )
+                else:
+                    _alive = not conn.dead
+                if _alive:
                     return conn
                 self._conns.pop(language_id, None)
                 self._last_used.pop(language_id, None)

@@ -383,11 +383,16 @@ def apply_hardware_profile(
     existing: dict[str, object] = {}
     if not is_new_file:
         try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing = loaded
-        except (OSError, ValueError, TypeError):
-            existing = {}
+            loaded = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise RuntimeError(
+                f"Refusing to overwrite unreadable/invalid settings file {settings_path}: {exc}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise RuntimeError(
+                f"Refusing to overwrite non-object settings file {settings_path}"
+            )
+        existing = loaded
 
     if vram_gb is not None:
         eff_vram = float(vram_gb)

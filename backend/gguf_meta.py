@@ -432,9 +432,12 @@ def _parse_gguf_file(path: Path, size_bytes: int) -> dict[str, Any]:
     has_vision = bool(has_embedded_vision or siblings.get("mmproj"))
     eff_blocks = block_count
     eff_swa = swa_pattern if isinstance(swa_pattern, list) else None
+    _MAX_LOOP_COUNT = 256
+    _MAX_BLOCK_COUNT = 4096
     if (
-        loop_count > 1
+        1 < loop_count <= _MAX_LOOP_COUNT
         and isinstance(block_count, int)
+        and 0 < block_count <= _MAX_BLOCK_COUNT
         and loop_start is not None
         and loop_end is not None
         and 0 <= loop_start < loop_end <= block_count

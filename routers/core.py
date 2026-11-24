@@ -255,11 +255,31 @@ async def approval_decide(run_id: str, req: Request):
     if _d_sent and _prev_resolved and _d_sent == _prev_resolved:
         return {"routed": "duplicate", "run_id": run_id}
     _ans, _, _note = answer.partition("|")
+    _ans_clean = _ans.strip()
+    _pend = _tr._pending_approvals.get(str(run_id)) or {}
     # G2: store WHICH tool this decision was made for, so the gate's
     # tool-match guard can drop a late decision that answers a DIFFERENT
     # (newer) card. Empty = unknown (legacy payloads) → compatible.
-    _tool = str(body.get("tool", "") or "")
-    _tr._approval_pre_decisions[str(run_id)] = {"answer": _ans.strip(), "note": _note.strip(), "tool": _tool}
+    _tool = str(body.get("tool", "") or (_pend.get("tool", "") if isinstance(_pend, dict) else "") or "")
+    _seen_hash = str(body.get("args_hash") or (_pend.get("args_hash") if isinstance(_pend, dict) else "") or "")
+    _seen_key = str(body.get("approval_key") or (_pend.get("approval_key") if isinstance(_pend, dict) else "") or "")
+    _ans_kind = _tr._parse_approval_answer(_ans_clean)
+    if (
+        _ans_kind in ("once", "repo")
+        and isinstance(_pend, dict)
+        and _pend
+        and not _seen_hash
+        and not _seen_key
+    ):
+        # Refuse blind approval while arguments are still streaming (full args unseen).
+        return {"routed": "awaiting_args", "run_id": run_id}
+    _tr._approval_pre_decisions[str(run_id)] = {
+        "answer": _ans_clean,
+        "note": _note.strip(),
+        "tool": _tool,
+        "args_hash": _seen_hash,
+        "approval_key": _seen_key,
+    }
     _tr._pending_approvals.pop(str(run_id), None)
     return {"routed": "preview", "run_id": run_id}
 

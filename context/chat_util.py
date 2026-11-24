@@ -91,7 +91,8 @@ def _make_messages(pipeline, system, user, images, use_session, use_memory, cach
         "context - trust this date, not the history.")
     user_labeled += (
         "\n\n[System note: today is " + _today_str + "; 'tomorrow' = "
-        + _tomorrow_str + ". History claiming another current date is "
+        + _tomorrow_str + "; local time = " + _trail_now.strftime("%H:%M")
+        + ". History claiming another current date is "
         "outdated.]")
     trail_msg = {"role": "system", "content": _date_trail}
 

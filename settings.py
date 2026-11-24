@@ -234,9 +234,51 @@ def save_settings(settings: dict, *, saved_at: str | None = None):
         _write_settings_unlocked(settings, saved_at=saved_at)
 
 
+def is_settings_file_corrupt(path: Path | None = None) -> bool:
+    """Return True when `settings.json` exists on disk but fails strict JSON dict parsing."""
+    target = path if path is not None else SETTINGS_FILE
+    if not target.exists():
+        return False
+    try:
+        raw = target.read_text(encoding="utf-8-sig")
+        parsed = json.loads(raw)
+        return not isinstance(parsed, dict)
+    except OSError as exc:
+        _logger.warning("[settings] could not read %s during corruption check: %s", target.name, exc)
+        return False
+    except (ValueError, UnicodeDecodeError):
+        return True
+
+
+def _backup_corrupt_settings_unlocked() -> Path | None:
+    """Preserve any unparseable `SETTINGS_FILE` as `settings.json.corrupt-*` before overwriting."""
+    if not is_settings_file_corrupt(SETTINGS_FILE):
+        return None
+    stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
+    backup = SETTINGS_FILE.with_name(f"{SETTINGS_FILE.name}.corrupt-{stamp}")
+    suffix = 1
+    while backup.exists():
+        backup = SETTINGS_FILE.with_name(f"{SETTINGS_FILE.name}.corrupt-{stamp}-{suffix}")
+        suffix += 1
+    try:
+        backup.write_bytes(SETTINGS_FILE.read_bytes())
+        _logger.error(
+            "[settings] CORRUPT %s backed up to %s before overwrite",
+            SETTINGS_FILE.name, backup.name,
+        )
+        return backup
+    except OSError as exc:
+        _logger.error(
+            "[settings] failed to back up corrupt %s to %s: %s",
+            SETTINGS_FILE.name, backup.name, exc,
+        )
+        return None
+
+
 def _write_settings_unlocked(settings: dict, *, saved_at: str | None = None) -> None:
     """One atomic write. Callers hold _settings_write_lock."""
     global _last_sync_stat, _load_cache_key, _load_cache_data
+    _backup_corrupt_settings_unlocked()
     settings["settings_saved_at"] = saved_at or _now_iso()
     _data = json.dumps(settings, ensure_ascii=False, indent=2)
     # PID in the name: two processes can carry the same thread id, and two

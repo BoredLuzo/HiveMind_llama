@@ -45,6 +45,7 @@ def system_commit_gb() -> tuple[float, float] | None:
         return None
     try:
         import ctypes
+        from ctypes import wintypes
 
         class _MEMORYSTATUSEX(ctypes.Structure):
             _fields_ = [
@@ -59,9 +60,12 @@ def system_commit_gb() -> tuple[float, float] | None:
                 ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
             ]
 
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_MEMORYSTATUSEX)]
+        kernel32.GlobalMemoryStatusEx.restype = wintypes.BOOL
         ms = _MEMORYSTATUSEX()
         ms.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+        if not kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
             return None
         gb = 1024 ** 3
         used = (ms.ullTotalPageFile - ms.ullAvailPageFile) / gb
@@ -78,9 +82,6 @@ def process_commit_mb(pid: int) -> tuple[float, float] | None:
         import ctypes
         from ctypes import wintypes
 
-        kernel32 = ctypes.windll.kernel32
-        psapi = ctypes.windll.psapi
-
         class _COUNTERS(ctypes.Structure):
             _fields_ = [
                 ("cb", wintypes.DWORD),
@@ -95,6 +96,17 @@ def process_commit_mb(pid: int) -> tuple[float, float] | None:
                 ("PeakPagefileUsage", ctypes.c_size_t),
                 ("PrivateUsage", ctypes.c_size_t),
             ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(_COUNTERS), wintypes.DWORD,
+        ]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
 
         pmc = _COUNTERS()
         pmc.cb = ctypes.sizeof(_COUNTERS)
@@ -147,7 +159,7 @@ def _lsp_children() -> list[tuple[str, int]]:
         from tools.handlers.lsp import _MANAGERS
         for mgr in list((_MANAGERS or {}).values()):
             conns = getattr(mgr, "_conns", None) or {}
-            for lang, conn in conns.items():
+            for lang, conn in list(conns.items()):
                 proc = getattr(conn, "_proc", None)
                 if proc is not None and getattr(proc, "pid", None):
                     out.append((f"lsp[{lang}]", int(proc.pid)))

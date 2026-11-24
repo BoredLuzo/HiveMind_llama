@@ -195,7 +195,8 @@ def test_c5_approval_staging() -> None:
     check("1c truncated/malformed JSON args clears staged pre-decision",
           "c5-run" not in pre_b and "c5-run" not in staged_b and "c5-run" not in pend_b)
 
-    # 1d: clean stream binds pre-decision & card_staged to canonical args hash; mismatched args rejected
+    # 1d: unbound early approve ("1") while args still streaming is dropped (never retroactively bound),
+    # whereas early deny ("3") or a bound pre-decision binds to canonical args hash and rejects mutated args.
     clean_chunks = [
         {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "run_bash", "arguments": '{"cmd":'}}]}}]},
         {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": ' "echo safe"}'}}]}}],
@@ -205,23 +206,29 @@ def test_c5_approval_staging() -> None:
     _res_ok, em_ok, pre_ok, staged_ok, pend_ok = _run_c5_stream(clean_chunks, on_chunk=_inject_bash_pre)
     expected_hash = tr._canonical_args_hash("run_bash", {"cmd": "echo safe"})
     expected_key = tr._canonical_approval_key("run_bash", {"cmd": "echo safe"})
-    check("1d1 clean stream binds staged card and pre-decision to canonical hash",
-          staged_ok.get("c5-run", {}).get("args_hash") == expected_hash
-          and staged_ok.get("c5-run", {}).get("approval_key") == expected_key
-          and pre_ok.get("c5-run", {}).get("args_hash") == expected_hash
-          and pre_ok.get("c5-run", {}).get("approval_key") == expected_key,
+    check("1d1 unbound early approve dropped while staged card binds canonical hash",
+          "c5-run" not in pre_ok
+          and staged_ok.get("c5-run", {}).get("args_hash") == expected_hash
+          and staged_ok.get("c5-run", {}).get("approval_key") == expected_key,
           f"staged={staged_ok} pre={pre_ok}")
 
-    # Verify _pre_decision_matches accepts exact args and rejects mutated args
-    check("1d2 _pre_decision_matches accepts exact hash and rejects mutated args",
-          tr._pre_decision_matches("run_bash", expected_hash, expected_key, pre_ok["c5-run"], staged_ok["c5-run"])
+    def _inject_bash_deny_or_bound(idx, _ch):
+        if idx == 0:
+            tr._approval_pre_decisions["c5-run"] = {"answer": "0|check note", "note": "check note", "tool": "run_bash"}
+
+    _res_d2, _em_d2, pre_d2, staged_d2, _pend_d2 = _run_c5_stream(clean_chunks, on_chunk=_inject_bash_deny_or_bound)
+    check("1d2 non-approve early pre-decision binds canonical hash and _pre_decision_matches rejects mutated args",
+          pre_d2.get("c5-run", {}).get("args_hash") == expected_hash
+          and pre_d2.get("c5-run", {}).get("approval_key") == expected_key
+          and tr._pre_decision_matches("run_bash", expected_hash, expected_key, pre_d2["c5-run"], staged_d2["c5-run"])
           and not tr._pre_decision_matches(
               "run_bash",
               tr._canonical_args_hash("run_bash", {"cmd": "rm -rf /tmp/evil"}),
               tr._canonical_approval_key("run_bash", {"cmd": "rm -rf /tmp/evil"}),
-              pre_ok["c5-run"],
-              staged_ok["c5-run"],
-          ))
+              pre_d2["c5-run"],
+              staged_d2["c5-run"],
+          ),
+          f"staged={staged_d2} pre={pre_d2}")
 
     # 1e: without pre-decision, pending card is refreshed with real preview & approval_key
     _res_p, em_p, _pre_p, staged_p, pend_p = _run_c5_stream(clean_chunks)

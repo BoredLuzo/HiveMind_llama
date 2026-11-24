@@ -563,8 +563,15 @@ def _kill_port_sync(port: int):
             if parts[0].upper() != "TCP":
                 continue
             local_addr = parts[1]
+            foreign_addr = parts[2].upper()
             state = parts[3].upper()
-            if state != "LISTENING":
+            # Match LISTENING regardless of Windows UI locale (e.g. German "ABHÖREN" or OEM codepage artifacts).
+            is_listening = (
+                state in ("LISTENING", "LISTEN", "ABHÖREN", "ABHOREN")
+                or state.startswith("ABH")
+                or foreign_addr in ("0.0.0.0:0", "[::]:0", "*:*")
+            )
+            if not is_listening:
                 continue
             if not local_addr.endswith(f":{port}"):
                 continue

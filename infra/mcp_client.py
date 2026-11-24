@@ -40,6 +40,7 @@ import sys
 import time
 from collections import deque
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger("hivemind.mcp_client")
 
@@ -324,16 +325,17 @@ def _redact_url(url: str) -> str:
     the browser-readable server list (audit C7): with a password only the
     username stays, a bare userinfo (token-in-username style) is masked
     completely."""
-    scheme = url.find("://")
-    at = url.rfind("@")
-    if scheme == -1 or at == -1 or at < scheme:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
         return url
-    userinfo = url[scheme + 3:at]
-    if not userinfo or "/" in userinfo:
-        return url  # the "@" belongs to the path or query, not to userinfo
-    masked = (f"{userinfo.split(':', 1)[0]}:***"
-              if ":" in userinfo else "***")
-    return f"{url[:scheme + 3]}{masked}{url[at:]}"
+    if parts.username is None and parts.password is None and "@" not in (parts.netloc or ""):
+        return url
+    if "@" not in parts.netloc:
+        return url
+    _userinfo, _, hostport = parts.netloc.rpartition("@")
+    masked = f"{parts.username}:***" if (parts.password is not None and parts.username) else "***"
+    return urlunsplit((parts.scheme, f"{masked}@{hostport}", parts.path, parts.query, parts.fragment))
 
 
 def _resolve_bearer(spec: ServerSpec) -> str:
@@ -433,7 +435,7 @@ class ServerConn:
         self._drainer = asyncio.create_task(self._drain_stderr())
         try:
             await self._handshake()
-        except McpError:
+        except (McpError, asyncio.CancelledError, asyncio.TimeoutError, OSError, RuntimeError):
             await self.close()
             raise
 
@@ -471,8 +473,9 @@ class ServerConn:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
         try:
             proc.stdin.write(data)
-            await proc.stdin.drain()
-        except (OSError, ValueError) as exc:
+            await asyncio.wait_for(proc.stdin.drain(), timeout=min(float(self.timeout_s), 10.0))
+        except (OSError, ValueError, asyncio.TimeoutError) as exc:
+            self._die(f"write to {self.spec.name} failed: {exc}")
             raise McpError(f"write to {self.spec.name} failed: {exc}") from exc
 
     async def _notify(self, method: str, params: dict | None = None) -> None:
@@ -606,6 +609,7 @@ class ServerConn:
         # close_all (shutdown) therefore waits for in-flight calls too,
         # each bounded by its own timeout.
         async with self._guard:
+            self.dead = True
             if self._drainer is not None:
                 self._drainer.cancel()
                 self._drainer = None
@@ -637,6 +641,7 @@ class ServerConn:
             return
         except (asyncio.TimeoutError, ProcessLookupError, OSError):
             pass
+        await _kill_tree(proc, force=True)
         try:
             proc.kill()
         except (ProcessLookupError, OSError):
@@ -647,7 +652,7 @@ class ServerConn:
             pass
 
 
-async def _kill_tree(proc) -> None:
+async def _kill_tree(proc, *, force: bool = False) -> None:
     """Best effort: kill the whole process tree of the child.
 
     C6 (2026-10-31): taskkill ran as a blocking subprocess.run inside the
@@ -665,7 +670,8 @@ async def _kill_tree(proc) -> None:
                 capture_output=True, timeout=10,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            sig = signal.SIGKILL if force else signal.SIGTERM
+            os.killpg(os.getpgid(pid), sig)
     except (OSError, subprocess.SubprocessError, ProcessLookupError):
         pass
 
@@ -771,10 +777,10 @@ class HttpConn:
             raise
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=self.timeout_s,
-                                             follow_redirects=True)
+                                             follow_redirects=False)
         try:
             await self._handshake()
-        except McpError:
+        except (McpError, asyncio.CancelledError, asyncio.TimeoutError, OSError, RuntimeError):
             await self.close()
             raise
 
@@ -790,11 +796,14 @@ class HttpConn:
         # C11: the guard waits for an in-flight call before session and
         # client are torn down under it.
         async with self._guard:
+            self.dead = True
             if self._session_id and self._client is not None:
                 try:
-                    await self._client.delete(self.spec.url,
-                                              headers=self._headers())
-                except (OSError, RuntimeError, httpx.HTTPError):
+                    await asyncio.wait_for(
+                        self._client.delete(self.spec.url, headers=self._headers()),
+                        timeout=CANCEL_TIMEOUT_S,
+                    )
+                except (OSError, RuntimeError, httpx.HTTPError, asyncio.TimeoutError):
                     pass
             self._session_id = ""
             if self._client is not None:
@@ -829,7 +838,7 @@ class HttpConn:
         leaks the connection; _drop() is the best-effort closer."""
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=timeout,
-                                             follow_redirects=True)
+                                             follow_redirects=False)
         req = self._client.build_request("POST", self.spec.url, json=payload,
                                          headers=self._headers(),
                                          timeout=timeout)
@@ -990,13 +999,16 @@ class HttpConn:
                 await self._handshake()
                 return await self.request(method, params, timeout=timeout,
                                           _recovered=True)
+            if 300 <= resp.status_code < 400:
+                self._die(f"{self.spec.name} answered unexpected HTTP redirect {resp.status_code}")
+                raise McpError(f"{self.spec.name}: unexpected redirect HTTP {resp.status_code}")
             if resp.status_code >= 400:
                 self._die(f"{self.spec.name} answered HTTP {resp.status_code}")
                 raise McpError(f"{self.spec.name}: HTTP {resp.status_code}")
             ctype = resp.headers.get("content-type", "")
             if "text/event-stream" in ctype:
                 return await self._read_sse(resp, rid, limit)
-            body = await self._read_body_bounded(resp, MAX_HTTP_BODY_BYTES)
+            body = await self._read_body_bounded(resp, MAX_HTTP_BODY_BYTES, limit=limit)
             try:
                 msg = json.loads(body)
             except ValueError:
@@ -1022,23 +1034,30 @@ class HttpConn:
         result = msg.get("result")
         return result if isinstance(result, dict) else {"value": result}
 
-    async def _read_body_bounded(self, resp: httpx.Response, cap: int) -> bytes:
-        """The whole JSON body, read with a cap: an endless body must not
-        become an unbounded buffer (audit C2, same cap class as the stdio
-        MAX_LINE_BYTES)."""
+    async def _read_body_bounded(self, resp: httpx.Response, cap: int,
+                                   limit: float | None = None) -> bytes:
+        """The whole JSON body, read with size cap and total wall-clock timeout."""
         buf = bytearray()
-        try:
+        timeout_s = float(limit if limit is not None else self.timeout_s)
+
+        async def _collect() -> bytes:
             async for chunk in resp.aiter_bytes():
-                buf += chunk
+                buf.extend(chunk)
                 if len(buf) > cap:
                     self._die(f"{self.spec.name} sent a body over "
                               f"{cap // (1024 * 1024)} MiB")
                     raise McpError(f"{self.spec.name} sent a body that is "
                                    f"too large")
+            return bytes(buf)
+
+        try:
+            return await asyncio.wait_for(_collect(), timeout=timeout_s)
+        except asyncio.TimeoutError as exc:
+            self._die(f"{self.spec.name} body timed out after {timeout_s:.1f}s")
+            raise McpError(f"{self.spec.name} timed out after {timeout_s:.1f}s") from exc
         except (httpx.HTTPError, OSError) as exc:
             self._die(f"{self.spec.name} unreachable: {exc}")
             raise McpError(f"{self.spec.name} unreachable: {exc}") from exc
-        return bytes(buf)
 
     async def _read_sse(self, resp: httpx.Response, rid: int,
                         limit: float) -> dict:
@@ -1407,6 +1426,7 @@ class McpClient:
                 except McpError as exc:
                     conn._die(str(exc))
                     self._conns.pop(spec.name, None)
+                    await conn.close()
                     raise
                 conn.timeout_s = timeout_s
                 return conn
@@ -1630,6 +1650,12 @@ class McpClient:
             return (f"[TOOL_ERROR: MCP_CALL_FAILED]\n{server} is busy with "
                     f"another call (waited {limit:.1f}s)")
         try:
+            # Post-guard recheck: reload/close may have marked conn dead while
+            # this call waited on _guard.
+            if conn.dead or self._conns.get(server) is not conn:
+                return (f"[TOOL_ERROR: MCP_SERVER_DOWN]\n{server} is not running"
+                        f"{': ' + conn.last_error if conn.last_error else ''}. "
+                        f"Fix the server config or disable it.")
             # per-server call budget: checked AFTER acquiring the guard so a
             # guard-busy timeout never burns a call slot.
             budget_err = await self._budget_gate(server)

@@ -491,7 +491,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
         if count == 0 and not _fuzzy_applied:
             try:
                 from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
-                _p2_result = _p2_fzr(_cnorm, _onorm, _nnorm)
+                _p2_result = await asyncio.to_thread(_p2_fzr, _cnorm, _onorm, _nnorm)
             except Exception:
                 _p2_result = None
             if _p2_result is not None:
@@ -982,10 +982,11 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     _ws_replaced: str | None = None
     _used_fuzzy = False
     if count == 0:
-        _ws_replaced, _used_fuzzy, _stale_note = _tolerant_replace(
-            p, working, old_n, new_n, args, workspace)
+        _ws_replaced, _used_fuzzy, _stale_note = await asyncio.to_thread(
+            _tolerant_replace, p, working, old_n, new_n, args, workspace)
         if _ws_replaced is None:
-            _anchor = _build_edit_mismatch_anchor(p, working, old_n)
+            _anchor = await asyncio.to_thread(
+                _build_edit_mismatch_anchor, p, working, old_n)
             return _tool_error_response(
                 "EDIT_FILE_OLD_TEXT_NOT_FOUND",
                 f"old_text not found in '{p}' (exact or fuzzy).\n"
@@ -1151,12 +1152,13 @@ async def _inline_tool_edit_file_batch(args: dict, p: Path, workspace: Path,
         count = working.count(old_n)
         _first_hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
         if count == 0:
-            _rep, _, _stale_note = _tolerant_replace(
-                p, working, old_n, new_n, args, workspace)
+            _rep, _, _stale_note = await asyncio.to_thread(
+                _tolerant_replace, p, working, old_n, new_n, args, workspace)
             if _rep is not None:
                 working = _rep
                 continue
-            _anchor = _build_edit_mismatch_anchor(p, working, old_n)
+            _anchor = await asyncio.to_thread(
+                _build_edit_mismatch_anchor, p, working, old_n)
             return _tool_error_response(
                 "EDIT_FILE_OLD_TEXT_NOT_FOUND",
                 f"edits[{i}]: old_text not found in '{p}' (exact or whitespace-normalized match). "

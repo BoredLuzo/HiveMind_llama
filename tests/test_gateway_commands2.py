@@ -83,7 +83,7 @@ class FakeHive:
         return {"ok": True, "id": f"chat{len(self.created)}", "rev": 1,
                 "chat": {"created_at": "2026-10-05T12:00:00"}}
 
-    async def journal(self):
+    async def journal(self, run_id="", after=0):
         return dict(self.journal_body)
 
     async def decide_approval(self, run_id, answer, decision_id="",

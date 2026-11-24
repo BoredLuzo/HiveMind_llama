@@ -2135,7 +2135,9 @@ async def _duo_coder_post_wait(
                 _cleanup_pause_state(ctx.run_id)
                 if ctx.chat_id:
                     _clear_pause_state(ctx.chat_id)
-                _cleanup_governor(ctx.chat_id or ctx.run_id)
+                _cleanup_governor(ctx.run_id or ctx.chat_id)
+                if ctx.chat_id and ctx.chat_id != ctx.run_id:
+                    _cleanup_governor(ctx.chat_id)
                 ctx.duo_stop_reason = "aborted"
                 yield await ctx.emit(ctx.done_event(
                     round(time.time() - ctx.t_total, 1),
@@ -2161,7 +2163,9 @@ async def _duo_coder_post_wait(
                 _cleanup_pause_state(ctx.run_id)
                 if ctx.chat_id:
                     _clear_pause_state(ctx.chat_id)
-                _cleanup_governor(ctx.chat_id or ctx.run_id)
+                _cleanup_governor(ctx.run_id or ctx.chat_id)
+                if ctx.chat_id and ctx.chat_id != ctx.run_id:
+                    _cleanup_governor(ctx.chat_id)
                 ctx.duo_stop_reason = "runtime_error"
                 yield await ctx.emit(ctx.done_event(
                     round(time.time() - ctx.t_total, 1),
@@ -2283,7 +2287,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _cleanup_pause_state(ctx.run_id)
         if ctx.chat_id:
             _clear_pause_state(ctx.chat_id)
-        _cleanup_governor(ctx.chat_id or ctx.run_id)
+        _cleanup_governor(ctx.run_id or ctx.chat_id)
+        if ctx.chat_id and ctx.chat_id != ctx.run_id:
+            _cleanup_governor(ctx.chat_id)
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)
         # VRAM-GUARD-DONE (2026-09-15): this used to be a silent return — no

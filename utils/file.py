@@ -11,8 +11,20 @@ import re
 import sys as _sys
 
 
+def _strip_win_extended_prefix(path_str: str) -> str:
+    """Strip Windows \\\\?\\ / \\\\.\\ device prefixes to normalize path checks."""
+    raw = str(path_str or "")
+    for pfx in ("\\\\?\\UNC\\", "//?/UNC/", "\\\\.\\UNC\\", "//./UNC/"):
+        if raw.upper().startswith(pfx):
+            return "\\\\" + raw[len(pfx):]
+    for pfx in ("\\\\?\\", "//?/", "\\\\.\\", "//./"):
+        if raw.startswith(pfx):
+            return raw[len(pfx):]
+    return raw
+
+
 # HiveMind source root — two levels up from utils/file.py
-_HIVEMIND_ROOT = Path(__file__).parent.parent.resolve()
+_HIVEMIND_ROOT = Path(_strip_win_extended_prefix(str(Path(__file__).parent.parent.resolve()))).resolve()
 
 # Files the coder must never overwrite regardless of workspace setting
 _PROTECTED_PATHS: frozenset = frozenset({
@@ -25,15 +37,24 @@ _PROTECTED_PATHS: frozenset = frozenset({
 # to the install dir, an agent write to the served UI or transcripts becomes a
 # persistent same-origin XSS / engine compromise. These stay read-only for
 # file tools no matter the workspace.
-_PROTECTED_DIRS = frozenset({"static", "sessions", "llama", ".git", ".venv",
-                             "deploy", "hivemind_gateway", "backend", "core",
-                             "tools", "infra", "routers", "model_configs"})
+_PROTECTED_DIRS = frozenset({
+    "static", "sessions", "llama", ".git", ".venv", "venv",
+    "deploy", "hivemind_gateway", "backend", "core", "tools", "infra",
+    "routers", "model_configs", "stt", "voice_models", "utils", "context",
+    "routing", "hive_functions", "learning", "scheduler", "sse", "explore",
+    "vram", "scripts", "searxng-config", ".github", "logs",
+})
 _PROTECTED_ROOT_FILES = frozenset({
     "index.html", "gateway.toml", "gateway.toml.example", "build_info.txt",
     "update.bat", "install.bat", "start_hivemind.bat", "run.py", "server.py",
-    "memory.json", "automations.json", "presets.json", "runtime_models.json", "vision_model.json",
+    "memory.json", "automations.json", "presets.json", "runtime_models.json",
+    "vision_model.json", "pyproject.toml", "uv.lock", "requirements.txt",
+    "agents.md", "token_stats.json", "run_counter.json",
 })
-_PROTECTED_SUFFIXES = (".py", ".pyc", ".bat", ".sh", ".ps1", ".service")
+_PROTECTED_SUFFIXES = (
+    ".py", ".pyc", ".bat", ".sh", ".ps1", ".service",
+    ".exe", ".dll", ".pyd", ".pth", ".so", ".dylib", ".cmd", ".vbs",
+)
 
 _SECRET_PATH_RE = re.compile(
     r"(^|/)("
@@ -44,6 +65,9 @@ _SECRET_PATH_RE = re.compile(
     r")$",
     re.IGNORECASE,
 )
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def _normalize_secret_part(part: str) -> str:
@@ -60,27 +84,64 @@ def _normalize_secret_part(part: str) -> str:
     return s.rstrip(". ")
 
 
+def _matches_secret_parts(path_str: str) -> bool:
+    raw_posix = str(path_str or "").replace("\\", "/")
+    norm_parts = [_normalize_secret_part(part) for part in Path(path_str).parts]
+    rel_parts = [part.lower() for part in norm_parts if part]
+    if any(part in {"sessions", "chats"} for part in rel_parts):
+        return True
+    norm_rel = "/".join(seg.strip("\\/") for seg in norm_parts if seg and seg not in ("/", "\\"))
+    if _SECRET_PATH_RE.search(raw_posix) or _SECRET_PATH_RE.search(norm_rel):
+        return True
+    raw_name = Path(path_str).name
+    norm_name = _normalize_secret_part(raw_name)
+    if len(norm_name) >= 2 and norm_name[1] == ":" and norm_name[0].isalpha():
+        norm_name = norm_name[2:]
+    return bool(_SECRET_PATH_RE.search(raw_name) or _SECRET_PATH_RE.search(norm_name))
+
+
 def is_secret_path(p: Path | str, workspace_lock: Path | str | None = None) -> bool:
     """Return True if *p* matches the secret/credential denylist (.env, keys, credentials, etc.)."""
+    raw = _strip_win_extended_prefix(str(p))
     try:
-        path_obj = Path(p)
-        rel = path_obj.as_posix().replace("\\", "/")
+        path_obj = Path(raw)
         if workspace_lock:
+            ws_clean = _strip_win_extended_prefix(str(workspace_lock))
+            ws_res = Path(ws_clean).resolve()
+            ws_res_norm = Path(_strip_win_extended_prefix(str(ws_res)))
+            cand = path_obj if path_obj.is_absolute() else (ws_res_norm / path_obj)
+            # Check lexical path inside workspace if contained (ignores ws parent dirs).
             try:
-                rel = path_obj.resolve().relative_to(Path(workspace_lock).resolve()).as_posix()
+                lex_abs = Path(os.path.abspath(_strip_win_extended_prefix(str(cand))))
+                lex_rel = lex_abs.relative_to(ws_res_norm).as_posix()
+                if _matches_secret_parts(lex_rel):
+                    return True
             except (OSError, ValueError):
-                rel = path_obj.as_posix().replace("\\", "/")
+                pass
+            # Resolve symlinks/junctions and re-check against workspace or full target.
+            try:
+                resolved = Path(_strip_win_extended_prefix(str(cand.resolve())))
+                try:
+                    res_rel = resolved.relative_to(ws_res_norm).as_posix()
+                    return _matches_secret_parts(res_rel)
+                except ValueError:
+                    return _matches_secret_parts(resolved.as_posix()) or _matches_secret_parts(raw.replace("\\", "/"))
+            except (OSError, RuntimeError, ValueError):
+                return _matches_secret_parts(raw.replace("\\", "/"))
+        # No workspace_lock: check provided path parts and resolved filename/symlink target.
+        if _matches_secret_parts(path_obj.as_posix().replace("\\", "/")):
+            return True
+        try:
+            resolved = Path(_strip_win_extended_prefix(str(path_obj.resolve())))
+            if path_obj.is_symlink():
+                return _matches_secret_parts(resolved.as_posix())
+            if _SECRET_PATH_RE.search(_normalize_secret_part(resolved.name)):
+                return True
+        except (OSError, RuntimeError, ValueError):
+            pass
+        return False
     except (TypeError, ValueError):
-        rel = str(p).replace("\\", "/")
-    _norm_parts = [_normalize_secret_part(part) for part in Path(rel).parts]
-    _rel_parts = [part.lower() for part in _norm_parts if part]
-    if any(part in {"sessions", "chats"} for part in _rel_parts):
-        return True
-    _norm_rel = "/".join(seg.strip("\\/") for seg in _norm_parts if seg and seg not in ("/", "\\"))
-    if _SECRET_PATH_RE.search(_norm_rel):
-        return True
-    _norm_name = _normalize_secret_part(Path(str(p)).name)
-    return bool(_SECRET_PATH_RE.search(_norm_name))
+        return _matches_secret_parts(raw.replace("\\", "/"))
 
 
 def filter_secret_search_rows(output: str) -> str:
@@ -89,7 +150,8 @@ def filter_secret_search_rows(output: str) -> str:
         return output
     kept: list[str] = []
     for line in output.splitlines():
-        m = re.match(r"^([A-Za-z]:[^\r\n:]+|[^\r\n:]+?):(?:\d+:|$)", line)
+        clean = _ANSI_ESCAPE_RE.sub("", line)
+        m = re.match(r"^(.+):(?:\d+:|$)", clean)
         if m and is_secret_path(m.group(1)):
             continue
         kept.append(line)
@@ -98,34 +160,41 @@ def filter_secret_search_rows(output: str) -> str:
 
 def _is_protected_path(p: Path) -> bool:
     """Check if a path targets a HiveMind internal file that must not be modified."""
+    raw_p = Path(_strip_win_extended_prefix(str(p)))
     try:
-        _resolved = p.resolve()
-    except Exception:
-        _resolved = p
+        _resolved = Path(_strip_win_extended_prefix(str(raw_p.resolve())))
+    except (OSError, RuntimeError, ValueError):
+        _resolved = raw_p
     if _resolved in _PROTECTED_PATHS:
         return True
     # H-audit: Win32 strips trailing dots/spaces on open and compares
     # case-insensitively - normalize before matching or 'settings.json.'
-    # overwrites the real settings.json.
-    if _resolved.name.rstrip(". ").lower() in {_pp.name.rstrip(". ").lower() for _pp in _PROTECTED_PATHS}:
+    # overwrites the real settings.json. Also strip NTFS ':stream' ADS.
+    _norm_leaf = _normalize_secret_part(_resolved.name).lower()
+    if _norm_leaf in {_pp.name.rstrip(". ").lower() for _pp in _PROTECTED_PATHS}:
         return True
-    if _resolved.name.rstrip(". ").lower().endswith(".context.json"):
+    if _norm_leaf.endswith(".context.json"):
         return True
     try:
         _rel = _resolved.relative_to(_HIVEMIND_ROOT)
-        if _rel.parts and _rel.parts[0].lower() in _PROTECTED_DIRS:
+        _rel_norm = [_normalize_secret_part(part).lower() for part in _rel.parts]
+        if _rel_norm and _rel_norm[0] in _PROTECTED_DIRS:
             return True
-        if len(_rel.parts) == 1 and _rel.parts[0].rstrip(". ").lower() in _PROTECTED_ROOT_FILES:
-            return True
+        if len(_rel_norm) == 1:
+            _root_name = _rel_norm[0]
+            if _root_name in _PROTECTED_ROOT_FILES or (
+                _root_name.startswith("requirements") and _root_name.endswith(".txt")
+            ):
+                return True
         _in_default_ws = False
-        if _rel.parts and _rel.parts[0].lower() == "default_workspace":
+        if _rel_norm and _rel_norm[0] == "default_workspace":
             _default_ws = (_HIVEMIND_ROOT / "default_workspace").resolve()
             try:
                 _dw_rel = _resolved.relative_to(_default_ws)
                 _in_default_ws = bool(_dw_rel.parts)
             except ValueError:
                 _in_default_ws = False
-        if not _in_default_ws and _resolved.suffix.lower() in _PROTECTED_SUFFIXES:
+        if not _in_default_ws and any(_norm_leaf.endswith(sfx) for sfx in _PROTECTED_SUFFIXES):
             return True
     except ValueError:
         pass
@@ -215,6 +284,26 @@ def _is_junction(p: Path) -> bool:
 
 
 def _inline_check_workspace(p: Path, workspace_lock, tool_name=""):
+    _raw_str = _strip_win_extended_prefix(str(p))
+    if str(p).startswith(("\\\\?\\", "//?/", "\\\\.\\", "//./")):
+        from tools.errors import tool_error_response as _tool_error_response
+        return _tool_error_response(
+            "PATH_OUTSIDE_WORKSPACE",
+            f"Refusing device/extended path '{p}'.",
+            tool=tool_name,
+            details={"path": str(p)},
+        )
+    for _idx, _part in enumerate(Path(_raw_str).parts):
+        if _idx == 0 and (len(_part) >= 2 and _part[1] == ":" and _part[0].isalpha() or _part in ("\\", "/")):
+            continue
+        if ":" in _part or (_part not in (".", "..") and _part != _part.rstrip(". ")):
+            from tools.errors import tool_error_response as _tool_error_response
+            return _tool_error_response(
+                "PATH_OUTSIDE_WORKSPACE",
+                f"Refusing ambiguous path component '{_part}' in '{p}'.",
+                tool=tool_name,
+                details={"path": str(p), "component": _part},
+            )
     if _is_protected_path(p):
         from tools.errors import tool_error_response as _tool_error_response
         return _tool_error_response(
@@ -287,24 +376,46 @@ def normalize_tool_path(file_path: str, workspace: str | Path | None = None) -> 
 
 
 def fuzzy_resolve_path(requested_path: str, workspace: str) -> str | None:
-    p = Path(requested_path)
-    if p.exists():
-        return requested_path
+    req_clean = _strip_win_extended_prefix(str(requested_path or ""))
+    ws_clean = _strip_win_extended_prefix(str(workspace or ""))
+    if not req_clean or not ws_clean:
+        return None
+    ws = Path(ws_clean).resolve()
+    p = Path(req_clean)
+    cand = p if p.is_absolute() else (ws / p)
+    try:
+        cand_res = Path(_strip_win_extended_prefix(str(cand.resolve())))
+        cand_res.relative_to(ws)
+    except (OSError, ValueError):
+        return None
 
-    ws = Path(workspace)
+    if cand.exists():
+        if _is_protected_path(cand_res) or is_secret_path(cand_res, ws):
+            return None
+        return requested_path if not p.is_absolute() else str(cand_res)
+
     search_name = p.name
-    search_dir = ws / p.parent if not p.is_absolute() else ws
-
-    if not search_dir.exists():
-        search_dir = ws
+    search_dir = (ws / p.parent) if not p.is_absolute() else ws
+    try:
+        search_dir_res = Path(_strip_win_extended_prefix(str(search_dir.resolve())))
+        search_dir_res.relative_to(ws)
+        if not search_dir_res.is_dir():
+            search_dir_res = ws
+    except (OSError, ValueError):
+        search_dir_res = ws
 
     try:
-        all_files = [f.name for f in search_dir.iterdir() if f.is_file()]
+        all_files = [
+            f.name for f in search_dir_res.iterdir()
+            if f.is_file() and not is_secret_path(f, ws) and not _is_protected_path(f)
+        ]
         matches = get_close_matches(search_name, all_files, n=1, cutoff=0.6)
         if matches:
-            corrected = search_dir / matches[0]
-            return str(corrected)
-    except OSError:
+            corrected = (search_dir_res / matches[0]).resolve()
+            corrected.relative_to(ws)
+            if not is_secret_path(corrected, ws) and not _is_protected_path(corrected):
+                return str(corrected)
+    except (OSError, ValueError):
         pass
 
     return None

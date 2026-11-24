@@ -12,6 +12,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shlex
 import sys
 import threading
 import tempfile
@@ -86,8 +87,11 @@ MCP_REQUEST_TIMEOUT_S = float(os.environ.get("MCP_REQUEST_TIMEOUT_S", "300") or 
 # were capped by _HTTP_SEM.
 MCP_BODY_TIMEOUT_S = max(1.0, float(os.environ.get("MCP_BODY_TIMEOUT_S", "30") or 30))
 MCP_MAX_CONNECTIONS = max(1, int(os.environ.get("MCP_MAX_CONNECTIONS", "32")))
+MCP_MAX_SSE = max(1, int(os.environ.get("MCP_MAX_SSE", "8")))
+MCP_WRITE_TIMEOUT_S = max(1.0, float(os.environ.get("MCP_WRITE_TIMEOUT_S", "5") or 5))
 _CONN_SEM = asyncio.Semaphore(MCP_MAX_CONNECTIONS)
 _HTTP_SEM = asyncio.Semaphore(MCP_MAX_CONCURRENCY)
+_SSE_SEM = asyncio.Semaphore(MCP_MAX_SSE)
 MCP_HTTP_TOKEN = os.environ.get("MCP_HTTP_TOKEN", "").strip()
 
 # ── Phase 2 (2026-10-31): resources + bounded-output limits ──────────────────
@@ -171,10 +175,19 @@ def _host_allowed(host_header: str) -> bool:
     return host in allowed
 
 
-def _auth_ok(headers: dict) -> bool:
+def _is_loopback_peer(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    if h.startswith("::ffff:"):
+        h = h[len("::ffff:"):]
+    return h.split("%", 1)[0] in _LOOPBACK_HOSTS
+
+
+def _auth_ok(headers: dict, *, require_token: bool = False) -> bool:
     token = (os.environ.get("MCP_HTTP_TOKEN", "") or "").strip()
     if not token:
-        return True
+        return not require_token
     auth = headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
         return False
@@ -196,10 +209,14 @@ def _origin_allowed(headers: dict) -> bool:
     if origin in configured:
         return True
     try:
-        host = (urlparse(origin).hostname or "").strip().lower().strip("[]")
+        parsed = urlparse(origin)
     except ValueError:
         return False
-    return host in _LOOPBACK_HOSTS
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False
+    origin_netloc = (parsed.netloc or "").strip().lower()
+    host_hdr = (headers.get("host", "") or "").strip().lower()
+    return bool(origin_netloc and host_hdr and origin_netloc == host_hdr)
 
 
 def _cors_headers(origin: str) -> str:
@@ -379,6 +396,29 @@ def _has_link_inside(raw_path: Path, root_raw: Path, root_resolved: Path) -> boo
     return False
 
 
+_WIN_DEVICE_NAME_RE = re.compile(
+    r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)",
+    re.IGNORECASE,
+)
+
+
+def _is_unc_or_device(raw: str) -> bool:
+    """Reject UNC network paths (\\\\server\\share) and Windows DOS/device names before resolve()."""
+    s = str(raw or "").strip()
+    if not s:
+        return False
+    if s.startswith(("\\\\", "//")):
+        return True
+    if IS_WINDOWS:
+        for seg in re.split(r"[\\/]+", s):
+            if not seg:
+                continue
+            seg_clean = seg.split(":", 1)[0].rstrip(". ")
+            if seg_clean and _WIN_DEVICE_NAME_RE.match(seg_clean):
+                return True
+    return False
+
+
 def _resolve_path(path: str) -> Path:
     """Resolve *path* inside WORKSPACE or raise ToolPathError."""
     raw = str(path or "").strip().strip("'\"")
@@ -386,6 +426,8 @@ def _resolve_path(path: str) -> Path:
         raise ToolPathError("empty path", path=raw)
     if "\x00" in raw:
         raise ToolPathError("path contains a NUL byte", path=raw)
+    if _is_unc_or_device(raw):
+        raise ToolPathError("UNC and device paths are not allowed", path=raw)
     p = Path(raw)
     if not p.is_absolute():
         p = WORKSPACE / p
@@ -394,6 +436,8 @@ def _resolve_path(path: str) -> Path:
         resolved = p.resolve()
     except (OSError, RuntimeError) as exc:     # Symlink-Loop, kaputte Pfade
         raise ToolPathError(f"cannot resolve path: {exc}", path=raw) from exc
+    if _is_unc_or_device(str(resolved)):
+        raise ToolPathError("UNC and device paths are not allowed", path=raw)
     try:
         resolved.relative_to(ws_root)
     except ValueError:
@@ -850,6 +894,112 @@ _SCRUBBED_SHELL_ENV_RE = re.compile(
 )
 
 
+async def _drain_pipe(
+    stream,
+    max_bytes: int = 256 * 1024,
+    *,
+    keep_tail: bool = False,
+) -> tuple[bytes, bool]:
+    """Drain an async subprocess pipe while keeping buffered bytes capped."""
+    if stream is None:
+        return b"", False
+    chunks: deque[bytes] = deque()
+    total = 0
+    truncated = False
+    while True:
+        chunk = await stream.read(16384)
+        if not chunk:
+            break
+        if keep_tail:
+            chunks.append(chunk)
+            total += len(chunk)
+            while total > max_bytes and len(chunks) > 1:
+                dropped = chunks.popleft()
+                total -= len(dropped)
+                truncated = True
+            if total > max_bytes and len(chunks) == 1:
+                only = chunks[0]
+                chunks[0] = only[-max_bytes:]
+                total = len(chunks[0])
+                truncated = True
+        elif not truncated:
+            room = max_bytes - total
+            if len(chunk) > room:
+                if room > 0:
+                    chunks.append(chunk[:room])
+                    total += room
+                truncated = True
+            else:
+                chunks.append(chunk)
+                total += len(chunk)
+    return b"".join(chunks), truncated
+
+
+async def _kill_async_proc(proc: asyncio.subprocess.Process | None) -> None:
+    """Terminate an async subprocess and its POSIX process group cleanly."""
+    if proc is None:
+        return
+    try:
+        if not IS_WINDOWS:
+            _killpg = getattr(os, "killpg", None)
+            _getpgid = getattr(os, "getpgid", None)
+            _sigkill = getattr(__import__("signal"), "SIGKILL", None)
+            if _killpg and _getpgid and _sigkill:
+                _killpg(_getpgid(proc.pid), _sigkill)
+            else:
+                proc.kill()
+        else:
+            proc.kill()
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except (asyncio.TimeoutError, OSError, ProcessLookupError):
+        pass
+    _tr = getattr(proc, "_transport", None)
+    if _tr is not None:
+        with contextlib.suppress(OSError, RuntimeError):
+            _tr.close()
+
+
+async def _run_bounded_proc(
+    proc: asyncio.subprocess.Process,
+    timeout: float,
+    *,
+    max_bytes: int = 512 * 1024,
+    keep_tail: bool = False,
+) -> tuple[bytes, bool, bytes, bool, int]:
+    """Drain stdout/stderr within total *timeout* and reap/kill on timeout."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + float(timeout)
+    try:
+        if (getattr(proc, "stdout", None) is None
+                and getattr(proc, "stderr", None) is None
+                and callable(getattr(proc, "communicate", None))):
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=float(timeout))
+            _rc = proc.returncode
+            rc = _rc if _rc is not None else -1
+            return out or b"", False, err or b"", False, rc
+        (out, out_trunc), (err, err_trunc) = await asyncio.wait_for(
+            asyncio.gather(
+                _drain_pipe(proc.stdout, max_bytes=max_bytes, keep_tail=keep_tail),
+                _drain_pipe(proc.stderr, max_bytes=max_bytes, keep_tail=keep_tail),
+            ),
+            timeout=float(timeout),
+        )
+        rem = max(0.05, deadline - loop.time())
+        await asyncio.wait_for(proc.wait(), timeout=rem)
+    except asyncio.TimeoutError:
+        await _kill_async_proc(proc)
+        raise
+    _tr = getattr(proc, "_transport", None)
+    if _tr is not None:
+        with contextlib.suppress(OSError, RuntimeError):
+            _tr.close()
+    rc = proc.returncode if proc.returncode is not None else -1
+    return out, out_trunc, err, err_trunc, rc
+
+
 async def tool_shell(cmd: str, timeout: int = 30) -> str:
     safe   = bool(SAFE_SHELL_RE.match(cmd.strip()))
     prefix = "" if safe else "⚠ Unsafe command: "
@@ -875,27 +1025,16 @@ async def tool_shell(cmd: str, timeout: int = 30) -> str:
                 # kill the whole tree instead of orphaning grandchildren.
                 start_new_session=True,
             )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        result = _decode(out) + (f"\n[stderr]: {_decode(err)}" if err.strip() else "")
+        out, out_trunc, err, err_trunc, _rc = await _run_bounded_proc(proc, float(timeout))
+        result = _decode(out)
+        if out_trunc:
+            result += "\n... [output truncated]"
+        if err.strip():
+            result += f"\n[stderr]: {_decode(err)}"
+            if err_trunc:
+                result += "\n... [stderr truncated]"
         return prefix + (result.strip() or "(no output)")
     except asyncio.TimeoutError:
-        try:
-            if proc is not None:
-                if not IS_WINDOWS:
-                    # killpg/getpgid/SIGKILL exist on POSIX only - resolve them
-                    # dynamically so the Windows-platform analysis stays valid;
-                    # on POSIX the same call as before runs.
-                    import os as _os_kill
-                    import signal as _sig_kill
-                    _killpg = getattr(_os_kill, "killpg", None)
-                    _getpgid = getattr(_os_kill, "getpgid", None)
-                    _sigkill = getattr(_sig_kill, "SIGKILL", None)
-                    if _killpg and _getpgid and _sigkill:
-                        _killpg(_getpgid(proc.pid), _sigkill)
-                else:
-                    proc.kill()
-        except (OSError, ProcessLookupError):
-            pass
         return _tool_error_response(
             "RUN_BASH_TIMEOUT",
             f"Command timed out after {timeout}s.",
@@ -1049,9 +1188,10 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=_sc_env,
+            start_new_session=not IS_WINDOWS,
         )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        if proc.returncode in (0, 1):
+        out, _t1, _err, _t2, rc = await _run_bounded_proc(proc, 15.0)
+        if rc in (0, 1):
             result = _decode(out).strip()
             return _cap_rows(result) if result else "(no matches)"
     except FileNotFoundError:
@@ -1070,7 +1210,7 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
                 cwd=str(p.parent if p.is_file() else p),
                 env=_sc_env,
             )
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+            out, _t1, _err, _t2, _rc = await _run_bounded_proc(proc, 15.0)
             return _cap_rows(_decode(out))
         except FileNotFoundError:
             pass
@@ -1083,8 +1223,9 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_sc_env,
+                start_new_session=True,
             )
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+            out, _t1, _err, _t2, _rc = await _run_bounded_proc(proc, 15.0)
             return _cap_rows(out.decode("utf-8", errors="replace"))
         except FileNotFoundError:
             pass
@@ -1350,33 +1491,72 @@ async def tool_memory_set(key: str, value: str) -> str:
         )
 
 
-_GIT_SAFE_RE = re.compile(r"^git\s+(status|diff|log|show|blame)\b", re.IGNORECASE)
+_GIT_SAFE_SUBCMDS = frozenset({"status", "diff", "log", "show", "blame"})
 _GIT_META_CHARS = set(";|&<>\n\r`")
-_GIT_FORBIDDEN = ("--output", "--ext-diff", "--textconv", "--exec",
-                  "--upload-pack", "--config", "--open-files-in-pager")
+_GIT_FORBIDDEN = (
+    "--output", "--ext-diff", "--textconv", "--exec",
+    "--upload-pack", "--config", "--open-files-in-pager",
+    "--no-index", "--contents", "--git-dir", "--work-tree",
+    "--paginate", "--exec-path",
+)
+
+
+def _strip_pair_quotes(tok: str) -> str:
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ('"', "'"):
+        return tok[1:-1]
+    return tok
+
+
+def _safe_git_argv(cmd: str) -> list[str] | None:
+    """Parse and validate a read-only git command string into a safe argv list (without leading 'git')."""
+    c = (cmd or "").strip()
+    if not c:
+        return None
+    if any(ch in _GIT_META_CHARS for ch in c):
+        return None
+    if "$(" in c or "%" in c:
+        return None
+    try:
+        raw_tokens = shlex.split(c, posix=not IS_WINDOWS)
+    except ValueError:
+        return None
+    tokens = [_strip_pair_quotes(t) for t in raw_tokens if t]
+    if len(tokens) < 2:
+        return None
+    if tokens[0].lower() not in ("git", "git.exe"):
+        return None
+    subcmd = tokens[1].lower()
+    if subcmd not in _GIT_SAFE_SUBCMDS:
+        return None
+    rest: list[str] = []
+    for tok in tokens[2:]:
+        low = tok.lower()
+        if any(forb in low for forb in _GIT_FORBIDDEN):
+            return None
+        if low in ("-c", "-o", "-p") or low.startswith(("-c=", "-o=")) or low == "--pager":
+            return None
+        if not tok.startswith("-") and tok != "--":
+            if _is_unc_or_device(tok):
+                return None
+            if ":" in tok:
+                _rev, _rev_path = tok.split(":", 1)
+                if _rev_path and _is_blocked_secret(_rev_path):
+                    return None
+            elif _is_blocked_secret(tok):
+                return None
+        rest.append(tok)
+    if subcmd in ("diff", "show"):
+        return [subcmd, "--no-color", "--no-ext-diff", "--no-textconv", *rest]
+    return [subcmd, *rest]
 
 
 def _is_safe_git(cmd: str) -> bool:
-
-
-    c = (cmd or "").strip()
-    if not _GIT_SAFE_RE.match(c):
-        return False
-    if any(ch in _GIT_META_CHARS for ch in c):
-        return False
-    # READ-TIER-WRITE (audit 2026-11-03): git diff --output=<path> writes an
-    # arbitrary file; external diff drivers/textconv execute programs from an
-    # untrusted repo. Read tier must not reach either.
-    _low = c.lower()
-    if any(tok in _low for tok in _GIT_FORBIDDEN):
-        return False
-    if "$(" in c or "%" in c:  # Subshell / cmd-Variablenexpansion
-        return False
-    return True
+    return _safe_git_argv(cmd) is not None
 
 
 async def tool_git_status(cmd: str = "git status") -> str:
-    if not _is_safe_git(cmd):
+    argv = _safe_git_argv(cmd)
+    if argv is None:
         return _tool_error_response(
             "INVALID_ARGUMENT",
             "Only read-only git commands are allowed for git_status "
@@ -1384,12 +1564,41 @@ async def tool_git_status(cmd: str = "git status") -> str:
             tool="git_status",
             retryable=True,
         )
-    return await tool_shell(cmd)
+    try:
+        rc, out, err = await _run_git(argv, WORKSPACE.resolve(), timeout=30.0)
+    except asyncio.TimeoutError:
+        return _tool_error_response(
+            "GIT_STATUS_TIMEOUT",
+            "git command timed out after 30s.",
+            tool="git_status",
+            retryable=True,
+        )
+    except (OSError, ValueError) as exc:
+        return _tool_error_response(
+            "GIT_STATUS_FAILED",
+            f"git command failed: {type(exc).__name__}: {str(exc)[:200]}",
+            tool="git_status",
+            retryable=True,
+        )
+    if argv[0] in ("diff", "show"):
+        out = _filter_diff_secrets(out)
+    else:
+        out = _filter_secret_rows(out)
+    text = out.strip()
+    if err.strip():
+        text = f"{text}\n[stderr]: {err.strip()}".strip() if text else f"[stderr]: {err.strip()}"
+    if rc != 0 and not text:
+        return _tool_error_response(
+            "GIT_STATUS_FAILED",
+            f"git {argv[0]} exited {rc}.",
+            tool="git_status",
+            retryable=True,
+            details={"exit_code": rc},
+        )
+    return text or "(no output)"
 
 
 async def tool_run_python(code: str, timeout: int = 15) -> str:
-
-
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", encoding="utf-8", delete=False) as f:
         f.write(code)
         tmp = f.name
@@ -1401,21 +1610,18 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(WORKSPACE),
             env=_scrubbed_env(),
+            start_new_session=not IS_WINDOWS,
         )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out, out_trunc, err, err_trunc, _rc = await _run_bounded_proc(proc, float(timeout), max_bytes=256 * 1024)
         result = _decode(out)
+        if out_trunc:
+            result += "\n... [output truncated]"
         if err.strip():
             result += f"\n[stderr]:\n{_decode(err)}"
+            if err_trunc:
+                result += "\n... [stderr truncated]"
         return result.strip() or "(no output)"
     except asyncio.TimeoutError:
-        # TIMEOUT-KILL (audit 2026-11-03): the child used to keep running
-        # after the tool reported a timeout.
-        try:
-            if proc is not None:
-                proc.kill()
-                await proc.wait()
-        except (ProcessLookupError, OSError):
-            pass
         return _tool_error_response(
             "RUN_PYTHON_TIMEOUT",
             f"Python snippet timed out after {timeout}s.",
@@ -1436,25 +1642,25 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
 # ── Phase 2 tools (2026-10-31): git_diff, git_commit, run_tests, model_status ─
 
 async def _run_git(argv: list[str], cwd: Path, timeout: float = 60.0) -> tuple[int, str, str]:
-    """One git invocation, argv-only (no shell), bounded by a timeout.
-
-    Returns (returncode, stdout, stderr) decoded via _decode().
-    """
+    """One git invocation, argv-only (no shell), bounded output and timeout."""
+    safe_argv = [
+        "-c", "core.fsmonitor=false",
+        "-c", "diff.external=",
+        "-c", "protocol.ext.allow=never",
+        *argv,
+    ]
     proc = await asyncio.create_subprocess_exec(
-        "git", *argv,
+        "git", *safe_argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(cwd),
         env=_scrubbed_env(),
+        start_new_session=not IS_WINDOWS,
     )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError, OSError):
-            proc.kill()
-        raise
-    return (proc.returncode if proc.returncode is not None else -1,
-            _decode(out), _decode(err))
+    out, out_trunc, err, err_trunc, rc = await _run_bounded_proc(proc, float(timeout), max_bytes=512 * 1024)
+    out_str = _decode(out) + ("\n... [output truncated]" if out_trunc else "")
+    err_str = _decode(err) + ("\n... [stderr truncated]" if err_trunc else "")
+    return rc, out_str, err_str
 
 
 def _git_root(workspace: str, tool: str) -> tuple[Path | None, str]:
@@ -1494,7 +1700,7 @@ async def tool_git_diff(path: str = "", ref: str = "", workspace: str = "",
     base, err_env = _git_root(workspace, "git_diff")
     if base is None:
         return err_env
-    argv = ["diff", "--no-color", "--no-ext-diff"]
+    argv = ["diff", "--no-color", "--no-ext-diff", "--no-textconv"]
     ref_raw = str(ref or "").strip()
     ref_clean = ""  # prebound: only read when ref_raw is set (guarded below)
     if ref_raw:
@@ -1513,6 +1719,8 @@ async def tool_git_diff(path: str = "", ref: str = "", workspace: str = "",
             return _tool_error_response(
                 "PATH_OUTSIDE_WORKSPACE", str(exc), tool="git_diff",
                 retryable=False, details={"path": getattr(exc, "path", "")[:200]})
+        if _guard := _secret_path_guard(p, "git_diff"):
+            return _guard
         try:
             rel = p.relative_to(base).as_posix()
         except ValueError:
@@ -1537,7 +1745,7 @@ async def tool_git_diff(path: str = "", ref: str = "", workspace: str = "",
             "GIT_DIFF_FAILED",
             f"git diff exited {code}: {(errtxt or out).strip()[:300]}",
             tool="git_diff", retryable=True, details={"exit_code": code})
-    diff = out.strip()
+    diff = _filter_diff_secrets(out.strip())
     if not diff:
         return f"(no diff{' vs ' + ref_clean if ref_raw else ''})"
     if len(diff) > cap:
@@ -1582,6 +1790,8 @@ async def tool_git_commit(message: str, paths: list | None = None,
             return _tool_error_response(
                 "PATH_OUTSIDE_WORKSPACE", str(exc), tool="git_commit",
                 retryable=False, details={"path": getattr(exc, "path", "")[:200]})
+        if _guard := _secret_path_guard(p, "git_commit"):
+            return _guard
         if p == base:
             return _tool_error_response(
                 "INVALID_ARGUMENT",
@@ -1593,6 +1803,11 @@ async def tool_git_commit(message: str, paths: list | None = None,
         except ValueError:
             return _tool_error_response(
                 "INVALID_ARGUMENT", f"path is outside the git root {base}: {raw[:120]}",
+                tool="git_commit", retryable=False)
+        if _is_blocked_secret(rel):
+            return _tool_error_response(
+                "SECRET_PATH_DENIED",
+                f"'{raw[:120]}' is a protected secret file and cannot be committed.",
                 tool="git_commit", retryable=False)
         if p.exists():
             rel_paths.append(rel)
@@ -1714,12 +1929,15 @@ async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> 
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(base),
                 env=_scrubbed_env(),
+                start_new_session=True,
             )
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        out, _ot, err, _et, rc = await _run_bounded_proc(
+            proc,
+            float(timeout),
+            max_bytes=max(256 * 1024, MCP_TEST_OUTPUT_MAX_CHARS * 4),
+            keep_tail=True,
+        )
     except asyncio.TimeoutError:
-        with contextlib.suppress(ProcessLookupError, OSError):
-            if proc is not None:
-                proc.kill()
         return _tool_error_response(
             "RUN_TESTS_TIMEOUT", f"Tests timed out after {timeout}s.",
             tool="run_tests", retryable=True)
@@ -1734,7 +1952,6 @@ async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> 
     if len(output) > MCP_TEST_OUTPUT_MAX_CHARS:
         output = ("[...output truncated (kept the tail)...]\n"
                   + output[-MCP_TEST_OUTPUT_MAX_CHARS:])
-    rc = proc.returncode if proc.returncode is not None else -1
     status = "passed" if rc == 0 else f"FAILED (exit {rc})"
     return (f"[TEST-RUN] cmd: {run_cmd}\nstatus: {status} ({elapsed:.1f}s)\n\n"
             + (output or "(no output)"))
@@ -2173,10 +2390,12 @@ _RESOURCE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
 
 _RESOURCE_SECRET_RE = re.compile(
     r"(^|/)(\.env|\.env\..*|settings\.json|gateway\.toml|\.git-credentials|"
+    r"\.git/config|\.git/hooks/.*|"
     r"\.netrc|\.npmrc|\.pypirc|\.kube/config|.*\.kdbx|.*\.pem|.*\.key|"
     r"id_rsa.*|id_ed25519.*|id_ecdsa.*|"
     r"credentials.*|secrets?\..*)$",
     re.IGNORECASE)
+_ANSI_ESC_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 class _ResourceError(Exception):
@@ -2187,16 +2406,36 @@ class _ResourceError(Exception):
         self.code = int(code)
 
 
+def _norm_secret_seg(seg: str) -> str:
+    s = str(seg or "")
+    # Preserve Windows drive designator ("C:") while stripping ":stream" ADS.
+    if len(s) >= 2 and s[1] == ":" and s[0].isalpha():
+        head, tail = s[:2], s[2:]
+        if ":" in tail:
+            tail = tail.split(":", 1)[0]
+        s = head + tail
+    elif ":" in s:
+        s = s.split(":", 1)[0]
+    return s.rstrip(". ")
+
+
 def _is_blocked_secret(rel_posix: str) -> bool:
     rel = str(rel_posix or "").replace("\\", "/")
-    # Strip Windows NTFS Alternate Data Stream suffixes (e.g. settings.json:$DATA).
-    if ":" in rel:
-        rel = "/".join(seg.split(":", 1)[0] for seg in rel.split("/"))
-    parts = [p.rstrip(". ").lower() for p in Path(rel).parts if p]
-    if any(part in {"sessions", "chats"} for part in parts):
+    norm_segs = [_norm_secret_seg(seg) for seg in rel.split("/") if seg]
+    parts_low = [seg.lower() for seg in Path(rel).parts if seg]
+    norm_parts_low = [_norm_secret_seg(seg).lower() for seg in Path(rel).parts if seg]
+    if any(part in {"sessions", "chats"} for part in (*parts_low, *norm_parts_low)):
         return True
-    norm_rel = "/".join(p.rstrip(". ") for p in rel.split("/") if p)
-    return bool(_RESOURCE_SECRET_RE.search(rel) or _RESOURCE_SECRET_RE.search(norm_rel))
+    norm_rel = "/".join(seg for seg in norm_segs if seg)
+    if _RESOURCE_SECRET_RE.search(rel) or _RESOURCE_SECRET_RE.search(norm_rel):
+        return True
+    if norm_segs:
+        leaf = norm_segs[-1]
+        if len(leaf) >= 2 and leaf[1] == ":" and leaf[0].isalpha():
+            leaf = leaf[2:]
+        if leaf and _RESOURCE_SECRET_RE.search(leaf):
+            return True
+    return False
 
 
 def _secret_path_guard(p: Path, tool: str) -> str | None:
@@ -2210,14 +2449,13 @@ def _secret_path_guard(p: Path, tool: str) -> str | None:
         rel = p.resolve().relative_to(WORKSPACE.resolve()).as_posix()
     except (OSError, ValueError):
         rel = p.as_posix()
-    # P2 (security audit 2026-11-03): transcripts of other chats are not
-    # install secrets but equally private; resources/* already prunes them.
-    if any(part in {"sessions", "chats"} for part in Path(rel).parts):
+    parts_norm = [_norm_secret_seg(part).lower() for part in Path(rel).parts]
+    if any(part in {"sessions", "chats"} for part in parts_norm):
         return _tool_error_response(
             "SECRET_PATH_DENIED",
             f"'{p.name}' is inside a private transcript directory.",
             tool=tool)
-    if _is_blocked_secret(rel):
+    if _is_blocked_secret(rel) or _is_blocked_secret(p.name):
         return _tool_error_response(
             "SECRET_PATH_DENIED",
             f"'{p.name}' is a protected secret file and cannot be read or "
@@ -2230,11 +2468,35 @@ def _filter_secret_rows(text: str) -> str:
     """Drop search hits whose file part is a protected secret (B3)."""
     kept = []
     for line in (text or "").splitlines():
-        m = re.match(r"^(.*?):\d+:", line)
+        clean = _ANSI_ESC_RE.sub("", line)
+        m = re.match(r"^(.+):(?:\d+:|$)", clean)
         if m and _is_blocked_secret(m.group(1).replace("\\", "/")):
             continue
         kept.append(line)
     return "\n".join(kept)
+
+
+def _filter_diff_secrets(diff_text: str) -> str:
+    """Strip git diff sections targeting protected secret/transcript paths."""
+    if not diff_text:
+        return diff_text
+    kept_blocks: list[str] = []
+    cur_block: list[str] = []
+    cur_blocked = False
+    for line in diff_text.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            if cur_block and not cur_blocked:
+                kept_blocks.extend(cur_block)
+            cur_block = [line]
+            cur_blocked = False
+            m = re.match(r"^diff --git a/(.+?) b/(.+?)\r?\n?$", line)
+            if m and (_is_blocked_secret(m.group(1)) or _is_blocked_secret(m.group(2))):
+                cur_blocked = True
+        else:
+            cur_block.append(line)
+    if cur_block and not cur_blocked:
+        kept_blocks.extend(cur_block)
+    return "".join(kept_blocks).strip()
 
 
 def _guess_mime(p: Path) -> str:
@@ -2794,32 +3056,35 @@ def _make_stdio_notifier():
 
 
 async def _stdio_loop():
+    loop = asyncio.get_running_loop()
+    buf = ""
+    buf_lines = 0
+    _buf_max = MCP_MAX_BODY_BYTES
 
-
-    loop = asyncio.get_event_loop()
-
-    def _readline() -> bytes:
-        return sys.stdin.buffer.readline()
+    def _readline_bounded() -> tuple[bytes, bool]:
+        line = sys.stdin.buffer.readline(_buf_max + 1)
+        if not line:
+            return b"", False
+        if len(line) > _buf_max:
+            if not line.endswith(b"\n"):
+                while True:
+                    tail = sys.stdin.buffer.readline(65536)
+                    if not tail or tail.endswith(b"\n"):
+                        break
+            return b"", True
+        return line, False
 
     def _writeline(data: bytes):
         sys.stdout.buffer.write(data)
         sys.stdout.buffer.flush()
 
-    buf = ""
-    # S12 (2026-10-31 audit): the 512 KB line cap rejected big write_file
-    # payloads that the HTTP transport (MCP_MAX_BODY_BYTES, 2 MB) accepts -
-    # the same IDE call failed cryptically over stdio and went through over
-    # HTTP. Both transports now share the same limit.
-    _buf_max = MCP_MAX_BODY_BYTES
     while True:
         try:
-            line = await loop.run_in_executor(None, _readline)
-            if not line:
+            line, too_large = await loop.run_in_executor(None, _readline_bounded)
+            if not line and not too_large:
                 break
-            text = line.decode("utf-8", errors="replace")
-            if len(text.encode("utf-8")) > _buf_max:
-                # HARDENING: eine zu lange Zeile wird verworfen und beantwortet -
-                # frueher wurde der Puffer komplett resettet (Request verloren).
+            text = "" if too_large else line.decode("utf-8", errors="replace")
+            if too_large or len(text.encode("utf-8")) > _buf_max:
                 print(f"[MCP-stdio] request line too long ({len(text)} bytes) - dropped",
                       file=sys.stderr)
                 _bad = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
@@ -2827,31 +3092,39 @@ async def _stdio_loop():
                 await loop.run_in_executor(None, _writeline,
                                            (_bad + "\n").encode("utf-8"))
                 buf = ""
+                buf_lines = 0
                 continue
             buf += text
-            # B8 (audit 2026-11-03): the per-line cap did not bound the
-            # accumulated buffer - split JSON could grow it without limit
-            # (and re-parse it every line). Same 2 MB budget, total.
+            buf_lines += 1
             if len(buf.encode("utf-8")) > _buf_max:
-                print(f"[MCP-stdio] accumulated request too large "
-                      f"({len(buf)} bytes) - dropped", file=sys.stderr)
+                print(f"[MCP-stdio] accumulated request too large ({len(buf)} bytes) - dropped",
+                      file=sys.stderr)
                 _bad = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
                     "code": -32600,
                     "message": f"request too large (max {_buf_max} bytes)"}})
                 await loop.run_in_executor(None, _writeline,
                                            (_bad + "\n").encode("utf-8"))
                 buf = ""
+                buf_lines = 0
                 continue
             try:
                 req = json.loads(buf.strip())
                 buf = ""
+                buf_lines = 0
             except json.JSONDecodeError:
+                if not buf.lstrip():
+                    buf = ""
+                    buf_lines = 0
+                elif not buf.lstrip().startswith(("{", "[")) or buf_lines >= 64:
+                    buf = ""
+                    buf_lines = 0
+                    _bad_json = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                        "code": -32700, "message": "Parse error"}})
+                    await loop.run_in_executor(None, _writeline,
+                                               (_bad_json + "\n").encode("utf-8"))
                 continue
             try:
                 if MCP_REQUEST_TIMEOUT_S > 0:
-                    # S8: stdio had no request timeout - a hung call blocked
-                    # the sequential loop forever. The client can also
-                    # cancel via notifications/cancelled (registry above).
                     response = await asyncio.wait_for(handle_request(req),
                                                       timeout=MCP_REQUEST_TIMEOUT_S)
                 else:
@@ -2874,7 +3147,6 @@ async def _stdio_loop():
                 await loop.run_in_executor(None, _writeline, out)
         except Exception as e:
             print(f"[MCP-stdio] Error: {e}", file=sys.stderr)
-            buf = ""
 
 
 # ── HTTP Transport ─────────────────────────────────────────────────────────────
@@ -2913,17 +3185,41 @@ async def _handle_rpc_item(item: Any, session: "_Session | None" = None) -> dict
                           "message": f"request timed out after {MCP_REQUEST_TIMEOUT_S:.0f}s"}}
 
 
+_SINGLE_VALUE_HTTP_HEADERS = frozenset({
+    "content-length", "transfer-encoding", "host",
+    "authorization", "origin", "sec-fetch-site", "mcp-session-id",
+})
+
+
+async def _send_http(
+    writer: asyncio.StreamWriter,
+    status: str,
+    extra_headers: str = "",
+    body: bytes = b"",
+) -> None:
+    """Write a complete non-SSE HTTP/1.1 response with Connection: close and drain timeout."""
+    head = (
+        f"HTTP/1.1 {status}\r\n"
+        f"{extra_headers}"
+        "Connection: close\r\n"
+        f"Content-Length: {len(body)}\r\n\r\n"
+    ).encode("ascii", "replace")
+    try:
+        writer.write(head + body)
+        await asyncio.wait_for(writer.drain(), timeout=MCP_WRITE_TIMEOUT_S)
+    except (ConnectionError, OSError, asyncio.TimeoutError):
+        pass
+    finally:
+        with contextlib.suppress(OSError, RuntimeError):
+            writer.close()
+
+
 async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     """S13 (2026-10-31 audit): caps the number of open connections before any
     byte is read. _HTTP_SEM only bounds in-flight requests - unboundedly many
     (half-)open sockets used to be possible."""
     if _CONN_SEM.locked():
-        try:
-            writer.write(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
-            await writer.drain()
-        except (ConnectionError, OSError):
-            pass
-        writer.close()
+        await _send_http(writer, "503 Service Unavailable")
         return
     await _CONN_SEM.acquire()
     try:
@@ -2934,21 +3230,18 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 async def _handle_sse_stream(session: "_Session", writer: asyncio.StreamWriter,
                              cors: str, last_event_id: str = "") -> None:
-    """GET /mcp for a 2025+ session: the SSE stream with server->client
-    messages. Replays ring events newer than Last-Event-ID, then follows the
-    ring live and sends `: keep-alive` comments (the heartbeat) whenever
-    nothing arrived for MCP_SSE_KEEPALIVE_S. Ends when the client disconnects
-    or the session is deleted/expired/evicted. POSTs are answered on their own
-    connections - they only fan their notifications out to the stream."""
+    """GET /mcp for a 2025+ session: the SSE stream with server->client messages."""
     try:
         writer.write(
             f"HTTP/1.1 200 OK\r\n{cors}"
-            f"Content-Type: text/event-stream\r\n"
-            f"Cache-Control: no-cache\r\n\r\n".encode()
+            "Content-Type: text/event-stream\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Connection: close\r\n\r\n".encode()
         )
-        await writer.drain()
-    except (ConnectionError, OSError):
-        writer.close()
+        await asyncio.wait_for(writer.drain(), timeout=MCP_WRITE_TIMEOUT_S)
+    except (ConnectionError, OSError, asyncio.TimeoutError):
+        with contextlib.suppress(OSError, RuntimeError):
+            writer.close()
         return
 
     since = -1
@@ -2956,8 +3249,6 @@ async def _handle_sse_stream(session: "_Session", writer: asyncio.StreamWriter,
     if _raw.isdigit():
         since = int(_raw)
     if since >= session.next_event_id:
-        # An id this session never emitted (stale from another session) -
-        # ignore it and stream live from now.
         since = -1
     cursor = since if since >= 0 else 0
     session.event_available.clear()
@@ -2966,17 +3257,19 @@ async def _handle_sse_stream(session: "_Session", writer: asyncio.StreamWriter,
             continue
         try:
             writer.write(f"id: {seq}\n{frame}".encode("utf-8", "replace"))
-            await writer.drain()
-        except (ConnectionError, OSError):
-            writer.close()
+            await asyncio.wait_for(writer.drain(), timeout=MCP_WRITE_TIMEOUT_S)
+        except (ConnectionError, OSError, asyncio.TimeoutError):
+            with contextlib.suppress(OSError, RuntimeError):
+                writer.close()
             return
         cursor = seq
+        session.last_seen = _session_clock()
 
     while not session.ended:
         try:
             await asyncio.wait_for(session.event_available.wait(),
                                    timeout=MCP_SSE_KEEPALIVE_S)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             pass                      # idle tick -> keep-alive comment below
         session.event_available.clear()
         if session.ended:
@@ -2990,110 +3283,133 @@ async def _handle_sse_stream(session: "_Session", writer: asyncio.StreamWriter,
                     wrote = True
             if not wrote:
                 writer.write(b": keep-alive\n\n")
-            await writer.drain()
-            session.last_seen = _session_clock()
-        except (ConnectionError, OSError):
+            await asyncio.wait_for(writer.drain(), timeout=MCP_WRITE_TIMEOUT_S)
+            if wrote:
+                session.last_seen = _session_clock()
+        except (ConnectionError, OSError, asyncio.TimeoutError):
             break
-    writer.close()
+    with contextlib.suppress(OSError, RuntimeError):
+        writer.close()
 
 
 async def _http_handle_connection(reader: asyncio.StreamReader,
                                   writer: asyncio.StreamWriter):
+    loop = asyncio.get_running_loop()
     try:
         raw = b""
+        hdr_deadline = loop.time() + 10.0
         try:
             while b"\r\n\r\n" not in raw:
-                chunk = await asyncio.wait_for(reader.read(4096), timeout=10.0)
+                rem = hdr_deadline - loop.time()
+                if rem <= 0:
+                    raise asyncio.TimeoutError
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=rem)
                 if not chunk:
                     break
                 raw += chunk
                 if len(raw) > MCP_MAX_HEADER_BYTES:
                     print(f"[MCP-HTTP] header block too large ({len(raw)} bytes) - closing",
                           file=sys.stderr)
-                    writer.write(b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
-                                 b"Content-Length: 0\r\n\r\n")
-                    await writer.drain()
-                    writer.close()
+                    await _send_http(writer, "431 Request Header Fields Too Large")
                     return
         except asyncio.TimeoutError:
-            writer.close()
+            await _send_http(writer, "408 Request Timeout")
             return
 
         try:
             header_part, _, body_part = raw.partition(b"\r\n\r\n")
             first_line, *rest = header_part.decode(errors="replace").split("\r\n")
             method, path, _ = first_line.split(" ", 2)
-            headers = {}
-            for l in rest:
-                if ":" in l:
-                    k, v = l.split(":", 1)
-                    headers[k.strip().lower()] = v.strip()
-        except Exception:
-            writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-            await writer.drain()
-            writer.close()
+            headers: dict[str, str] = {}
+            for hdr_line in rest:
+                if not hdr_line:
+                    continue
+                if ":" not in hdr_line:
+                    raise ValueError("malformed header")
+                k, v = hdr_line.split(":", 1)
+                k_low = k.strip().lower()
+                if not k_low or any(ch.isspace() for ch in k_low):
+                    raise ValueError("invalid header name")
+                if k_low in _SINGLE_VALUE_HTTP_HEADERS and k_low in headers:
+                    raise ValueError(f"duplicate header {k_low}")
+                headers[k_low] = v.strip()
+        except ValueError:
+            await _send_http(writer, "400 Bad Request")
+            return
+
+        if "transfer-encoding" in headers:
+            await _send_http(writer, "400 Bad Request")
             return
 
         path = path.split("?")[0]
 
         # ── Tier 0.1 Hardening (2026-08-24) ───────────────────────────────
         if not _host_allowed(headers.get("host", "")) or not _origin_allowed(headers):
-            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-            await writer.drain(); writer.close(); return
-        if not _auth_ok(headers):
+            await _send_http(writer, "403 Forbidden")
+            return
+        cors = _cors_headers(headers.get("origin", ""))
+        if method == "OPTIONS":
+            await _send_http(writer, "204 No Content", extra_headers=cors)
+            return
+
+        _bind_host = (os.environ.get("MCP_HTTP_BIND", "") or MCP_HTTP_BIND).strip().lower() or "127.0.0.1"
+        _peer = (writer.get_extra_info("peername") or ("",))[0]
+        _require_tok = (
+            _bind_host not in ("127.0.0.1", "localhost", "::1", "[::1]")
+        ) or (bool(_peer) and not _is_loopback_peer(str(_peer)))
+        if not _auth_ok(headers, require_token=_require_tok):
             body = json.dumps({"error": "unauthorized",
                                "hint": "Authorization: Bearer <MCP_HTTP_TOKEN> required"}).encode()
-            writer.write(
-                f"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer\r\n"
-                f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
+            await _send_http(
+                writer,
+                "401 Unauthorized",
+                extra_headers="WWW-Authenticate: Bearer\r\nContent-Type: application/json\r\n",
+                body=body,
             )
-            await writer.drain(); writer.close(); return
-        cors = _cors_headers(headers.get("origin", ""))
-
-        if method == "OPTIONS":
-            writer.write(f"HTTP/1.1 204 No Content\r\n{cors}Content-Length: 0\r\n\r\n".encode())
-            await writer.drain(); writer.close(); return
+            return
 
         if method == "GET" and path in ("/mcp/health", "/health"):
             body = json.dumps({
                 "status": "ok", "server": "hivemind-mcp", "version": "2.0.0",
                 "platform": "windows" if IS_WINDOWS else "unix",
             }).encode()
-            writer.write(
-                f"HTTP/1.1 200 OK\r\n{cors}Content-Type: application/json\r\n"
-                f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+            await _send_http(
+                writer,
+                "200 OK",
+                extra_headers=f"{cors}Content-Type: application/json\r\n",
+                body=body,
             )
-            await writer.drain(); writer.close(); return
+            return
 
         if method == "GET" and path == "/mcp":
-            # 2025-06-18: the per-session SSE stream (server->client). No or
-            # unknown session -> the generic 404 below (legacy shape).
             _sessions_sweep()
             _gsess = _session_get_alive(headers.get("mcp-session-id", ""))
             if _gsess is not None:
+                if _SSE_SEM.locked():
+                    await _send_http(writer, "503 Service Unavailable", extra_headers=cors)
+                    return
                 _gsess.last_seen = _session_clock()
-                await _handle_sse_stream(_gsess, writer, cors,
-                                         headers.get("last-event-id", ""))
+                async with _SSE_SEM:
+                    await _handle_sse_stream(_gsess, writer, cors,
+                                             headers.get("last-event-id", ""))
                 return
 
         if method == "DELETE" and path == "/mcp":
-            # 2025-06-18: end the session. Idempotent - always 204, also for
-            # unknown or already-ended ids.
             _sessions_sweep()
             _session_end(headers.get("mcp-session-id", ""))
-            writer.write(f"HTTP/1.1 204 No Content\r\n{cors}Content-Length: 0\r\n\r\n".encode())
-            await writer.drain(); writer.close(); return
+            await _send_http(writer, "204 No Content", extra_headers=cors)
+            return
 
         if method == "POST" and path == "/mcp":
             _ct_raw = (headers.get("content-type", "") or "").split(";", 1)[0].strip().lower()
             if _ct_raw and _ct_raw != "application/json":
-                writer.write(b"HTTP/1.1 415 Unsupported Media Type\r\nContent-Length: 0\r\n\r\n")
-                await writer.drain(); writer.close(); return
+                await _send_http(writer, "415 Unsupported Media Type")
+                return
             try:
                 content_length = int(headers.get("content-length", len(body_part)) or 0)
             except (TypeError, ValueError):
-                writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-                await writer.drain(); writer.close(); return
+                await _send_http(writer, "400 Bad Request")
+                return
             if content_length < 0 or content_length > MCP_MAX_BODY_BYTES:
                 resp_body = json.dumps({
                     "jsonrpc": "2.0",
@@ -3103,52 +3419,48 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
                         "message": f"Request body too large (max {MCP_MAX_BODY_BYTES} bytes)",
                     },
                 }).encode()
-                writer.write(
-                    f"HTTP/1.1 413 Payload Too Large\r\n{cors}Content-Type: application/json\r\n"
-                    f"Content-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body
+                await _send_http(
+                    writer,
+                    "413 Payload Too Large",
+                    extra_headers=f"{cors}Content-Type: application/json\r\n",
+                    body=resp_body,
                 )
-                await writer.drain(); writer.close(); return
-            body_bytes = body_part
-            if len(body_bytes) > MCP_MAX_BODY_BYTES:
-                writer.write(f"HTTP/1.1 413 Payload Too Large\r\n{cors}Content-Length: 0\r\n\r\n".encode())
-                await writer.drain(); writer.close(); return
+                return
+            body_bytes = body_part[:content_length]
+            body_deadline = loop.time() + MCP_BODY_TIMEOUT_S
             while len(body_bytes) < content_length:
-                # S13: every body read has a timeout - a client that opens
-                # the connection but never finishes the body used to hold
-                # the slot forever.
+                rem = body_deadline - loop.time()
+                if rem <= 0:
+                    await _send_http(writer, "408 Request Timeout")
+                    return
                 try:
                     more = await asyncio.wait_for(
-                        reader.read(content_length - len(body_bytes)),
-                        timeout=MCP_BODY_TIMEOUT_S)
+                        reader.read(min(65536, content_length - len(body_bytes))),
+                        timeout=rem,
+                    )
                 except asyncio.TimeoutError:
-                    writer.write(b"HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\n\r\n")
-                    await writer.drain(); writer.close(); return
+                    await _send_http(writer, "408 Request Timeout")
+                    return
                 if not more:
                     break
                 body_bytes += more
                 if len(body_bytes) > MCP_MAX_BODY_BYTES:
-                    writer.write(f"HTTP/1.1 413 Payload Too Large\r\n{cors}Content-Length: 0\r\n\r\n".encode())
-                    await writer.drain(); writer.close(); return
+                    await _send_http(writer, "413 Payload Too Large", extra_headers=cors)
+                    return
 
             try:
                 req = json.loads(body_bytes.decode("utf-8", errors="replace"))
             except json.JSONDecodeError:
                 resp_body = json.dumps({"jsonrpc": "2.0", "id": None,
                                         "error": {"code": -32700, "message": "Parse error"}}).encode()
-                writer.write(
-                    f"HTTP/1.1 400 Bad Request\r\n{cors}Content-Type: application/json\r\n"
-                    f"Content-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body
+                await _send_http(
+                    writer,
+                    "400 Bad Request",
+                    extra_headers=f"{cors}Content-Type: application/json\r\n",
+                    body=resp_body,
                 )
-                await writer.drain(); writer.close(); return
+                return
 
-            # ── Protocol 2025-06-18: session handling ──────────────────────
-            # A 2025+ initialize creates a session (id returned as the
-            # Mcp-Session-Id header). Every other request of that generation
-            # (any Mcp-Session-Id header, or a 2025 MCP-Protocol-Version
-            # header) REQUIRES a valid session id - missing/unknown -> 404
-            # with a JSON-RPC error body. A headerless POST without a 2025
-            # protocol header is a legacy 2024-11-05 request and stays
-            # byte-identical.
             _mcp_sid = headers.get("mcp-session-id", "")
             _mcp_proto = headers.get("mcp-protocol-version", "")
             http_session = None
@@ -3171,11 +3483,13 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
                                   "message": "session not found or expired "
                                              "(re-initialize for a new Mcp-Session-Id)"},
                     }).encode()
-                    writer.write(
-                        f"HTTP/1.1 404 Not Found\r\n{cors}Content-Type: application/json\r\n"
-                        f"Content-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body
+                    await _send_http(
+                        writer,
+                        "404 Not Found",
+                        extra_headers=f"{cors}Content-Type: application/json\r\n",
+                        body=resp_body,
                     )
-                    await writer.drain(); writer.close(); return
+                    return
                 http_session.last_seen = _session_clock()
 
             if isinstance(req, list):
@@ -3195,36 +3509,37 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
                 async with _HTTP_SEM:
                     resp = await _handle_rpc_item(req, session=http_session)
                 if resp is None:
-                    writer.write(f"HTTP/1.1 202 Accepted\r\n{cors}Content-Length: 0\r\n\r\n".encode())
-                    await writer.drain(); writer.close(); return
+                    await _send_http(writer, "202 Accepted", extra_headers=cors)
+                    return
                 resp_body = json.dumps(resp, ensure_ascii=False).encode()
 
             _sess_hdr = f"Mcp-Session-Id: {new_session_id}\r\n" if new_session_id else ""
-            writer.write(
-                f"HTTP/1.1 200 OK\r\n{cors}{_sess_hdr}Content-Type: application/json\r\n"
-                f"Content-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body
+            await _send_http(
+                writer,
+                "200 OK",
+                extra_headers=f"{cors}{_sess_hdr}Content-Type: application/json\r\n",
+                body=resp_body,
             )
-            await writer.drain(); writer.close(); return
+            return
 
-        writer.write(f"HTTP/1.1 404 Not Found\r\n{cors}Content-Length: 0\r\n\r\n".encode())
-        await writer.drain(); writer.close()
+        await _send_http(writer, "404 Not Found", extra_headers=cors)
 
     except Exception as e:
         print(f"[MCP-HTTP] Error: {e}", file=sys.stderr)
-        try:
+        with contextlib.suppress(OSError, RuntimeError):
             writer.close()
-        except Exception:
-            pass
 
 
 async def _http_server(port: int):
     bind = (os.environ.get("MCP_HTTP_BIND", "") or MCP_HTTP_BIND).strip() or "127.0.0.1"
-    if bind not in ("127.0.0.1", "localhost", "::1", "[::1]") and not MCP_HTTP_TOKEN:
-        print(
-            f"[MCP-HTTP] WARNING: bind on {bind} WITHOUT MCP_HTTP_TOKEN - "
-            "anyone on the network can call tools. Set a token or bind to loopback!",
-            file=sys.stderr,
+    _tok = (os.environ.get("MCP_HTTP_TOKEN", "") or MCP_HTTP_TOKEN).strip()
+    if bind.lower() not in ("127.0.0.1", "localhost", "::1", "[::1]") and not _tok:
+        msg = (
+            f"[MCP-HTTP] ERROR: refusing bind on {bind} WITHOUT MCP_HTTP_TOKEN - "
+            "set MCP_HTTP_TOKEN or bind to loopback."
         )
+        print(msg, file=sys.stderr)
+        raise RuntimeError(f"Refusing non-loopback MCP HTTP bind on {bind} without MCP_HTTP_TOKEN")
     server = await asyncio.start_server(_http_handler, bind, port)
     print(f"[MCP-HTTP] Lauscht auf http://{bind}:{port}/mcp", file=sys.stderr)
     print(f"[MCP-HTTP] Health:  http://localhost:{port}/mcp/health", file=sys.stderr)

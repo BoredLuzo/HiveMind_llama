@@ -31,6 +31,7 @@ from httpx import HTTPError
 
 from . import auth as gw_auth
 from . import commands as gw_commands
+from . import render as gw_render
 from . import send as gw_send
 from . import state as gw_state
 from .bridge import RunBridge
@@ -323,8 +324,9 @@ class Gateway:
         self.pairing = gw_auth.PairingManager()
         self.limiter = RateLimiter(cfg.rate_limit_per_min)
         self.owner_id: int | None = state.owner_telegram_id
-        self._redaction = attach_redaction_to_root([os.environ.get(
-            TOKEN_ENV_VAR, "")])
+        _env_tok = os.environ.get(TOKEN_ENV_VAR, "")
+        self._redaction = attach_redaction_to_root([_env_tok])
+        gw_render.register_secret(_env_tok)
         self.hive = HiveClient(cfg.hive_base_url)
         self.bridge = RunBridge(self.hive, state, cfg, self)
         # Set by the startup health probe: True only when the engine's
@@ -1616,6 +1618,7 @@ async def run() -> int:
     # list. Feed the RESOLVED token to the same filter (its docstring
     # promised exactly this).
     gw._redaction.add_secret(token)
+    gw_render.register_secret(token)
 
     # audit F3 + version-skew detection: probe the engine once. Not fatal
     # (runs report engine problems readably), but the console should say

@@ -60,7 +60,7 @@ def _schedule_from(body: dict) -> dict | None:
                 return None
             if interval <= 0:
                 return None
-            return {"kind": kind, "interval_s": interval}
+            return {"kind": kind, "interval_s": max(60, interval)}
         return None
     text = str(body.get("schedule_text") or "").strip()
     return spec.parse_schedule(text) if text else None

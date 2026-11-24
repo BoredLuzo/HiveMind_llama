@@ -1,30 +1,36 @@
-## [1.6.5] - 2026-11-23
+## [1.6.5] - 2026-11-24
 
 Template-driven reasoning effort controls, decoupled sidebar Planner Effort,
-SSE keepalive & journal reattach polish, Inkling-2-Mini / `llama.cpp b12645`
-support, hardware-autofit installer, model-discovery dedup fixes, and broad
-deep-audit waves across security, performance, and stability.
+modularized `static/js/` frontend, Inkling-2-Mini (`inkling2_loop`) & `llama.cpp b12676`
+support (incl. optional Tier-4 installer entry), hardware-autofit installer,
+model-discovery dedup fixes, and full pre-release audit hardening across
+security, performance, agentic loops, and stability.
 
 ### Added
-- **Template-driven Reasoning Effort & decoupled Sidebar Planner Effort (`backend/gguf_meta.py`, `core/model_sampling.py`, `core/duo_runner.py`, `core/duo_inloop_planner.py`, `hive_functions/planner.py`, `index.html`, `static/app.js`, `static/style.css`):**
+- **Template-driven Reasoning Effort & decoupled Sidebar Planner Effort (`backend/gguf_meta.py`, `core/model_sampling.py`, `core/duo_runner.py`, `core/duo_inloop_planner.py`, `hive_functions/planner.py`, `index.html`, `static/js/*`, `static/style.css`):**
   - Inspects GGUF and external `.jinja` chat templates to determine exact reasoning capabilities (`effort`, `binary` On/Off, or `none`) and clamps payloads safely to prevent strict-template crashes.
   - Chat composer carries a single clean Thinking effort button for Direct / Coder (showing only supported levels, transparent source/override status, and Think-Budget sliders kept independent).
   - Planner Effort lives cleanly in the sidebar (`🧠 Thinking` in Code mode and synced in `Routing: who decides` in Auto mode), graying out unsupported levels for the Planner model and staying fully decoupled from the chat composer across pre-coder, in-loop, and same-model `--reasoning on/off` slot handoffs; removes the legacy Coder `Escalation` UI control (`ttm_off` / `ttm_on_fail`).
   - User-controlled Planner thinking budgets (`thinking_budget = 0` by default instead of forced 750/2500 token caps) paired with a dynamic 70% `Planner Max Tokens` streaming cap and structured-step-only fallback extraction so raw thinking prose never leaks into Coder context.
-- **Inkling-2-Mini (`inkling2_loop`), Qwen3.6 MoE tuning & `llama.cpp b12645` (`deploy/llama_build_pin.txt`, `model_configs/models/inkling-2-mini.json`, `backend/llama_start_phases.py`):**
-  - Core-on-GPU looped-MoE offload (`-ot` 14 outer/edge CPU layers, `load_mode=none`, `ubatch=256`, `kv_bytes_per_token=9216`), Qwen3.6 expert-cache CPU-share tuning (`0.90/0.95`), and `b12645` fallback pin (bringing Inkling-2 tokenizer `ignore_merges` and looped-MoE host-expert fixes).
+- **Modularized `static/js/` UI architecture (`static/app.js`, `static/js/*`, `tests/test_ui_playwright_smoke.py`):**
+  - Split monolithic UI logic into 16 focused `static/js/` ES modules covered by a headless Playwright UI smoke suite.
+- **Inkling-2-Mini (`inkling2_loop`), Qwen3.6 MoE tuning & `llama.cpp b12676` (`deploy/llama_build_pin.txt`, `deploy/fetch_models.py`, `model_configs/models/inkling-2-mini.json`, `model_configs/arch_compat.json`, `backend/llama_start_phases.py`):**
+  - Core-on-GPU looped-MoE offload (`ot15` outer/edge CPU layers, `load_mode=none`, `ubatch=512`, `moe_cache_mib=0`, `kv_bytes_per_token=9216`), `binary_min_build: 12600` guard, Qwen3.6 expert-cache CPU-share tuning (`0.90/0.95`), and `b12676` pin (verified A/B parity + faster load/Qwen3.5-MTP decode).
+  - Added `inkling-2-mini` (`Inkling-2-Mini-UD-IQ3_XXS.gguf` + `mmproj-Inkling-2-Mini-F16.gguf`) as optional Tier-4 Hybrid-MoE model `#12` in `setup_models.bat` / `deploy/fetch_models.py` (with canonical filename tag mapping & backwards-compatible `inkling-2-mini-ud` resolution).
 - **Hardware-autofit installer profile & Linux CUDA autodetect (`deploy/hardware_autofit.py`, `deploy/install_linux.sh`, `backend/llama_start_phases.py`):**
   - Recommends hardware-matched defaults during install and lifts MoE expert offload to full GPU at runtime when VRAM fits.
 
 ### Fixed
-- **SSE keepalive & journal reattach (`server.py`, `static/app.js`):**
-  - Sends 15s SSE `: keepalive` heartbeats while idle during long cold prefills so browsers do not drop `/stream`; stops enqueueing orphaned frames after client detach; polls `/run/journal` immediately and updates the amber warning banner to `✓ Reattached via run journal`.
+- **SSE keepalive, journal reattach & frontend transport (`server.py`, `static/js/stream_transport.js`, `static/js/settings_io.js`):**
+  - Sends 15s SSE `: keepalive` heartbeats while idle during long cold prefills so browsers do not drop `/stream`; stops enqueueing orphaned frames after client detach; polls `/run/journal` immediately and updates the amber warning banner to `✓ Reattached via run journal`; hardens stream reconnect & settings save error surfacing.
 - **Model downloader & discovery (`backend/llama_models.py`, `deploy/fetch_models.py`):**
-  - Deduplicates `models.json` overrides against parsed GGUF aliases (eliminating duplicate model picker entries on fresh installs), aligns `mmproj_dest` casing with shipped profiles, and adds case-insensitive `mmproj` lookup for Linux.
-- **Live thinking scroll, chat history speed & Windows Git Bash tooling (`static/app.js`, `routers/chats.py`, `tools/handlers/exec_tools.py`, `core/tool_executor.py`):**
-  - Allows scrolling up inside live thinking blocks mid-stream; indexes saved chats via `.chats_index.cache`; preserves chronological thinking/tool/cut order; fixes Windows `.venv`/`pip` path detection and piped `pip install` failure hints; silences desktop toasts in test runs via `HIVEMIND_NO_NOTIFY=1`.
-- **Deep-audit hardening (Waves 1–3C + full 5-subsystem pre-release sweep):**
-  - Security/containment (fail-closed secret guard, NTFS ADS stripping, preset snapshot exclusions for security keys), backend slot locking & busy-port infinite-loop guard, Windows `.cmd`/`.bat` MCP quoting fix, Telegram mirror-journal double-slice fix, UI auto-scroll/reattach/preset-staleness fixes, subprocess timeout/cancel reaping, 32 Pyright fixes, offline websearch fast-fail, planner preseed, and headless `destructive_gate` fast-deny.
+  - Deduplicates `models.json` overrides against parsed GGUF aliases (eliminating duplicate model picker entries on fresh installs), aligns `mmproj_dest` casing with shipped profiles, adds case-insensitive `mmproj` lookup for Linux, and strips `Authorization` headers on cross-origin HF redirects.
+- **Tooling, containment & event-loop latency (`infra/mcp_server.py`, `tools/runner.py`, `tools/handlers/code_intel.py`, `tools/handlers/exec_tools.py`, `tools/patch_2_fuzzy_edit.py`, `utils/file.py`, `routing/agent_intent.py`):**
+  - Closes destructive-gate flag-order/alias bypasses; eliminates event-loop freezes in `edit_file` fuzzy matching, ReDoS-vulnerable `search_code`/`detect_tool_request` regexes, and `find_files`; bounds `run_python` and MCP stdio/HTTP/pipe buffers; closes secret-path UNC/prefix/normalization bypasses and git-diff secret leaks.
+- **Agentic loops, prompt cache & backend slot safety (`core/toolcall_sanitize.py`, `core/tool_loop.py`, `core/subagent_lite.py`, `core/direct_runner.py`, `core/agentic_tool_loop.py`, `context/chat_util.py`, `context/compression.py`, `backend/llama_client.py`, `backend/llama_slots.py`, `backend/gguf_meta.py`):**
+  - Sanitizes malformed JSON `tool_call` history before POST (preventing `llama-server` HTTP 500 loops) and aborts cleanly on `finish_reason == "length"` truncation; keeps per-minute clock out of Direct system prompt prefixes to preserve KV cache reuse; reuses cached session compression summaries; blocks blind approvals while args are still streaming; balances slot `in_flight` counts and resets expired leaks; caps malformed GGUF `loop_count` allocations.
+- **Windows / Live stability & deep-audit hardening (`backend/llama_manager_utils.py`, `watchdog_engine.bat`, `deploy/hardware_autofit.py`, `scheduler/manager.py`, `routers/automations.py`, `learning/peer_ratings.py`, `infra/notify.py`, `routers/chats.py`):**
+  - Supports localized Windows `ABHÖREN` netstat states in port cleanup; fixes detached headless restart in `watchdog_engine.bat`; handles UTF-8 BOM / corrupt `settings.json` in `hardware_autofit.py`; fixes scheduler `once`/busy-lane next-run state and minimum intervals; fixes chronological peer-rating trend order; silences test desktop toasts via `HIVEMIND_NO_NOTIFY=1`; keeps clean Pyright baseline.
 
 ## [1.6.4] - 2026-11-19
 

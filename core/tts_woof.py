@@ -34,6 +34,7 @@ WOOF_ATTRIBUTION = (
 )
 
 _lock = threading.RLock()
+_download_lock = threading.Lock()
 _instances: dict[tuple[str, str], object] = {}
 _last_used: float = 0.0
 
@@ -79,10 +80,12 @@ def stop() -> None:
 
 def maybe_idle_stop(idle_stop_s: float) -> None:
     """Release warm instances if idle longer than ``idle_stop_s``."""
+    global _last_used
     with _lock:
         if _instances and _last_used and (time.time() - _last_used) > idle_stop_s:
             logger.info("[TTS-WOOF] idle for %.0fs - unloading model", time.time() - _last_used)
             _instances.clear()
+            _last_used = 0.0
             return
 
 
@@ -93,8 +96,10 @@ def _load_instance(voice: str, *, auto_download: bool = True):
     if not fetch_woof.is_installed(root):
         if not auto_download:
             raise FileNotFoundError(f"Underdog Woof is not installed in {root}")
-        logger.info("[TTS-WOOF] downloading ConwayResearch/Underdog-Woof to %s ...", root)
-        fetch_woof.download(root)
+        with _download_lock:
+            if not fetch_woof.is_installed(root):
+                logger.info("[TTS-WOOF] downloading ConwayResearch/Underdog-Woof to %s ...", root)
+                fetch_woof.download(root)
     key = (str(root), voice)
     with _lock:
         inst = _instances.get(key)
@@ -138,6 +143,11 @@ def synthesize_wav(text: str, voice: str = "", *, auto_download: bool = True) ->
         inst, np = _load_instance(v, auto_download=auto_download)
         wav_f32 = inst(text)
         sr = int(getattr(inst, "sr", 24000) or 24000)
-        samples = np.asarray(wav_f32, dtype="float64") * 32767.0
+        samples = np.nan_to_num(
+            np.asarray(wav_f32, dtype="float64"),
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        ) * 32767.0
         _last_used = time.time()
     return tts_audio.samples_to_wav(samples, sr)

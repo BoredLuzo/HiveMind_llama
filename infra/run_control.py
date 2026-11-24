@@ -200,8 +200,10 @@ async def wait_for_resume(run_id: str, timeout_s: int = 600) -> str:
     else:
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout_s)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
             cleanup_pause(run_id)
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             return f"[ask_user TIMEOUT: no response after {timeout_s}s]"
     answer = _user_answers.pop(run_id, "")
     # STALE-PAUSE-CLEANUP (2026-09-19): a resolved pause must leave the
@@ -298,6 +300,7 @@ def _register_abort(run_id: str) -> asyncio.Event:
         _user_answers.pop(rid, None)
         _user_questions.pop(rid, None)
         _pause_events.pop(rid, None)
+        _decision_ids.pop(rid, None)
         # edge audit 2026-11-03: these maps grew for runs that never reached
         # the cleanup path; is_pause_pending could stay true forever.
         _graceful_stop_flags.pop(rid, None)
@@ -313,6 +316,8 @@ def _register_abort(run_id: str) -> asyncio.Event:
 def _unregister_abort(run_id: str):
     _run_abort_registry.pop(run_id, None)
     _run_abort_registry_ts.pop(run_id, None)
+    _steer_queue.pop(run_id, None)
+    _decision_ids.pop(run_id, None)
     for _cid, _rid in list(_chat_active_run.items()):
         if _rid == run_id:
             _chat_active_run.pop(_cid, None)
@@ -453,6 +458,7 @@ async def abort_chat_run(chat_id: str) -> str:
 # registry (a run_id only exists there while its generator is live).
 
 _steer_queue: dict[str, list[dict]] = {}
+_MAX_STEER_PER_RUN = 16
 
 
 def queue_steer(run_id: str, text: str, images=None) -> bool:
@@ -467,7 +473,10 @@ def queue_steer(run_id: str, text: str, images=None) -> bool:
     if _rid not in _run_abort_registry:
         return False
     _imgs = [str(b).strip() for b in (images or []) if str(b or "").strip()]
-    _steer_queue.setdefault(_rid, []).append({"text": _txt, "images": _imgs})
+    q = _steer_queue.setdefault(_rid, [])
+    if len(q) >= _MAX_STEER_PER_RUN:
+        return False
+    q.append({"text": _txt, "images": _imgs})
     return True
 
 

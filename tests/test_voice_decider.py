@@ -93,7 +93,7 @@ class _Hive:
     async def settings(self):
         return dict(self.settings_body)
 
-    async def journal(self, run_id=""):
+    async def journal(self, run_id="", after=0):
         return {}
 
     async def get_models(self):

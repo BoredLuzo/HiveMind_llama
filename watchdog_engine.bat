@@ -51,11 +51,12 @@ echo [%date% %time%] > "%WDMARK%"
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }" >nul 2>&1
 if errorlevel 1 goto wait
 echo [%date% %time%] engine down on %PORT% - restarting (headless) >> "%WDLOG%"
-call start_engine_headless.bat
-echo [%date% %time%] engine exited again - watchdog stays on duty >> "%WDLOG%"
+set "WDHEAD=%~dp0start_engine_headless.bat"
+powershell -NoProfile -Command "Start-Process -FilePath $env:WDHEAD -WorkingDirectory $PWD.Path -WindowStyle Hidden" >nul 2>&1
+echo [%date% %time%] engine restart launched (headless) - watchdog stays on duty >> "%WDLOG%"
 
 :wait
-timeout /t 20 /nobreak >nul
+ping -n 21 127.0.0.1 >nul 2>&1
 goto loop
 
 :stopped

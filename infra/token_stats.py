@@ -16,18 +16,39 @@ def init_token_stats(stats_file=None, lock=None):
     if lock is not None:
         _token_stats_lock = lock
 
+def _empty_stats() -> dict:
+    return {"total_tokens": 0, "total_runs": 0, "daily": {}}
+
+
 def _load_token_stats() -> dict:
     """Load token stats from disk. Returns {total_tokens, total_runs, daily: {...}}.
 
     1.1.0: zusaetzlich total_prompt_tokens / total_cached_tokens sowie
     prompt/cached-Felder je Day-Entry und Run (backward-compat via .get)."""
     if _TOKEN_STATS_FILE is None or not _TOKEN_STATS_FILE.exists():
-        return {"total_tokens": 0, "total_runs": 0, "daily": {}}
+        return _empty_stats()
     try:
-        return json.loads(_TOKEN_STATS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {"total_tokens": 0, "total_runs": 0, "daily": {}}
+        data = json.loads(_TOKEN_STATS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+        logger.warning("[TOKEN-STATS] invalid JSON root type (%s)", type(data).__name__)
+    except (OSError, ValueError) as exc:
+        logger.warning("[TOKEN-STATS] failed reading stats file: %s", exc)
+    return _empty_stats()
+
+
+def _load_token_stats_strict() -> dict:
+    """Load stats strictly for mutating writes: missing -> empty, corrupt/unreadable raises."""
+    if _TOKEN_STATS_FILE is None:
+        return _empty_stats()
+    try:
+        raw = _TOKEN_STATS_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return _empty_stats()
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError(f"expected dict in {_TOKEN_STATS_FILE}, got {type(data).__name__}")
+    return data
 
 
 def _save_token_stats(stats: dict):
@@ -66,7 +87,11 @@ def _record_run(run_record: dict) -> None:
     if tokens <= 0 and prompt <= 0 and cached <= 0 and requests <= 0:
         return
     with _token_stats_lock:
-        stats = _load_token_stats()
+        try:
+            stats = _load_token_stats_strict()
+        except (OSError, ValueError) as exc:
+            logger.warning("[TOKEN-STATS] skipping record update to preserve unreadable/corrupt file: %s", exc)
+            return
         stats["total_tokens"] = stats.get("total_tokens", 0) + max(tokens, 0)
         stats["total_runs"] = stats.get("total_runs", 0) + 1
         stats["total_prompt_tokens"] = stats.get("total_prompt_tokens", 0) + prompt
@@ -111,7 +136,7 @@ def _record_run(run_record: dict) -> None:
             _sorted_days = sorted(daily.keys(), reverse=True)
             for _old_day in _sorted_days[90:]:
                 del daily[_old_day]
-        except Exception:
+        except (TypeError, KeyError):
             pass
         _save_token_stats(stats)
 

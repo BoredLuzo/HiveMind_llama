@@ -165,7 +165,7 @@ def test_misc_guards():
         bad.append("critic_verify lock")
     if "PIP_NO_WORKSPACE_VENV" not in src_exec:
         bad.append("pip venv guard")
-    if "[exit code: {r.returncode}]" not in src_exec:
+    if "[exit code: {r.returncode}]" not in src_exec and "[exit code: {_rc}]" not in src_exec:
         bad.append("run_python exit marker")
     if '"build: blocked" in str(_dresult).lower()' not in src_te:
         bad.append("tc_blocked marker")

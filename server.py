@@ -199,7 +199,7 @@ _MAX_TREE_DEPTH = 4
 _MAX_TREE_FILES = 200
 from hive_functions.language_config import LANGUAGE_RUNNERS as _LANGUAGE_RUNNERS, detect_language as _detect_language
 from settings import (
-    load_settings, save_settings
+    is_settings_file_corrupt, load_settings, save_settings
 )
 from model_configs import (
     init_base_configs, get_effective_config
@@ -540,10 +540,15 @@ async def _shutdown():
         except (ImportError, OSError, ValueError):
             pass
 # Flush pending writes on shutdown (preserve settings_saved_at so clean exit does not mark preset stale).
-    try:
-        save_settings(settings, saved_at=settings.get("settings_saved_at"))
-    except Exception as _e:
-        _logger.debug("[Hivemind] flush_settings error: %s", _e)
+    if is_settings_file_corrupt():
+        _logger.error(
+            "[Hivemind] settings.json on disk is corrupt JSON — skipping shutdown save "
+            "to preserve the existing file for manual recovery.")
+    else:
+        try:
+            save_settings(settings, saved_at=settings.get("settings_saved_at"))
+        except Exception as _e:
+            _logger.debug("[Hivemind] flush_settings error: %s", _e)
     if _WEBSEARCH_AVAILABLE and _websearch is not None:
         try:
             await _websearch.shutdown()
@@ -671,10 +676,15 @@ async def _startup():
                         "— set to unconfigured (runtime re-picks from disk)",
                         _name, _m)
             if _changed:
-                save_settings(_s)
+                if is_settings_file_corrupt():
+                    logger.error(
+                        "[AGENT-MODEL-SANITIZE] settings.json on disk is corrupt JSON — "
+                        "skipping automatic overwrite")
+                else:
+                    save_settings(_s)
+                    logger.warning("[AGENT-MODEL-SANITIZE] settings.json updated")
                 if isinstance(_s.get("agents"), dict):
                     settings["agents"] = _s["agents"]
-                logger.warning("[AGENT-MODEL-SANITIZE] settings.json updated")
             _auto_resolve_empty_model_defaults(settings)
             apply_settings_to_pipeline(settings)
         except (ImportError, OSError, ValueError) as _san_exc:
@@ -1017,7 +1027,12 @@ def _flush_prefetch_settings(run_prefetch_state: dict | None = None):
             except Exception:
                 pass
 
-        save_settings(settings, saved_at=settings.get("settings_saved_at"))
+        if is_settings_file_corrupt():
+            _logger.error(
+                "[prefetch] settings.json on disk is corrupt JSON — skipping "
+                "automatic prefetch save to preserve file")
+        else:
+            save_settings(settings, saved_at=settings.get("settings_saved_at"))
 
 
 # -- SSE Stream ------------------------------------------------
@@ -2131,7 +2146,7 @@ async def stt_status():
     """What the Voice card shows: engine/model presence, tier, defaults."""
     try:
         from core import stt_engine
-        return stt_engine.status(load_settings())
+        return await asyncio.to_thread(stt_engine.status, load_settings())
     except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
         return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
 
@@ -2145,7 +2160,7 @@ async def tts_status():
     """Voice card status: enabled, sidecar running, voice, speed, uv present."""
     try:
         from core import tts_engine
-        return tts_engine.status(load_settings())
+        return await asyncio.to_thread(tts_engine.status, load_settings())
     except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
         return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
 
@@ -2187,8 +2202,9 @@ async def tts_preload():
     if not settings.get("tts_enabled", False):
         return JSONResponse({"warm": False, "reason": "TTS_DISABLED"}, status_code=200)
     warm = await asyncio.to_thread(tts_engine.preload, settings)
+    running = await asyncio.to_thread(tts_engine.is_running, settings)
     return JSONResponse({"warm": bool(warm),
-                         "running": tts_engine.is_running(settings)}, status_code=200)
+                         "running": bool(running)}, status_code=200)
 
 
 @app.post("/tts/fetch")
@@ -2324,7 +2340,32 @@ async def stt_transcribe(request: Request):
         max_seconds = stt_audio.DEFAULT_MAX_SECONDS
     wav_path = None
     try:
+        cl_raw = request.headers.get("content-length")
+        if cl_raw is not None:
+            try:
+                cl_val = int(cl_raw)
+            except ValueError:
+                return JSONResponse(
+                    stt_engine.SttError("STT_DECODE_FAILED", "invalid Content-Length header").as_dict(),
+                    status_code=400,
+                )
+            if cl_val < 0 or cl_val > stt_audio.MAX_BYTES:
+                return JSONResponse(
+                    stt_engine.SttError(
+                        "STT_DECODE_FAILED",
+                        f"audio is larger than {stt_audio.MAX_BYTES // (1024 * 1024)} MB",
+                    ).as_dict(),
+                    status_code=413,
+                )
         raw = await request.body()
+        if len(raw) > stt_audio.MAX_BYTES:
+            return JSONResponse(
+                stt_engine.SttError(
+                    "STT_DECODE_FAILED",
+                    f"audio is larger than {stt_audio.MAX_BYTES // (1024 * 1024)} MB",
+                ).as_dict(),
+                status_code=413,
+            )
         # THREAD (audit 2026-10-17): decoding + the CLI/model run must not block
         # the event loop (a long clip blocked SSE and every other request).
         wav_path, duration = await asyncio.to_thread(

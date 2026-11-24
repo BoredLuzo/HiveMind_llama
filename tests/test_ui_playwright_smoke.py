@@ -573,7 +573,7 @@ def main() -> int:
             context = None
             try:
                 try:
-                    browser = p.chromium.launch(headless=True)
+                    browser = p.chromium.launch(headless=True, args=["--mute-audio"])
                 except PlaywrightError as launch_exc:
                     err_msg = str(launch_exc)
                     if "Executable doesn't exist" in err_msg or "Please run" in err_msg:

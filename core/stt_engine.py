@@ -253,8 +253,10 @@ def is_wav_file(path) -> bool:
 
 
 def _stt_subprocess_env(exe: Path | str) -> dict[str, str]:
-    """Build subprocess env adding `exe` parent to LD_LIBRARY_PATH on POSIX."""
-    env = dict(os.environ)
+    """Build scrubbed subprocess env adding `exe` parent to LD_LIBRARY_PATH on POSIX."""
+    from infra.child_env import scrubbed_env
+
+    env = scrubbed_env()
     if os.name != "nt":
         try:
             bin_dir = str(Path(exe).parent)
@@ -342,9 +344,18 @@ def transcribe(wav_path: str | Path, *, settings: dict | None = None,
                       translate=_translate)
     env = _stt_subprocess_env(exe)
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=resolve_timeout(settings),
-                              env=env, check=False)
+        _run_kwargs: dict = {
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "timeout": resolve_timeout(settings),
+            "env": env,
+            "check": False,
+        }
+        if os.name == "nt":
+            _run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        proc = subprocess.run(argv, **_run_kwargs)
     except subprocess.TimeoutExpired as exc:
         raise SttError("STT_TIMEOUT",
                        f"transcription took longer than {resolve_timeout(settings):.0f}s") from exc
@@ -361,52 +372,58 @@ def transcribe(wav_path: str | Path, *, settings: dict | None = None,
 
 
 # ── optional warm whisper-server ────────────────────────────────────────────
-_WARM: dict = {"proc": None, "port": 0, "model": ""}
+_WARM_LOCK = __import__("threading").Lock()
+_WARM: dict = {"proc": None, "port": 0, "model": "", "log": None}
+_WARM_ATEXIT_REGISTERED = False
 
 
 def warm_is_active(model_key: str = "") -> bool:
-    proc = _WARM.get("proc")
-    if proc is None or proc.poll() is not None:
-        return False
-    return not model_key or _WARM.get("model") == model_key
+    with _WARM_LOCK:
+        proc = _WARM.get("proc")
+        poll = getattr(proc, "poll", None)
+        if proc is None or (callable(poll) and poll() is not None):
+            return False
+        return not model_key or _WARM.get("model") == model_key
 
 
 def stop_warm() -> None:
     """Stop the preloaded whisper-server (idempotent, never raises)."""
-    proc = _WARM.get("proc")
-    _WARM.update({"proc": None, "port": 0, "model": ""})
-    if proc is None:
-        return
-    try:
-        proc.terminate()
-        proc.wait(timeout=10)
-    except (OSError, subprocess.SubprocessError):
+    with _WARM_LOCK:
+        proc = _WARM.get("proc")
+        log = _WARM.get("log")
+        _WARM.update({"proc": None, "port": 0, "model": "", "log": None})
+    if proc is not None:
         try:
-            proc.kill()
+            proc.terminate()
+            proc.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except (OSError, subprocess.SubprocessError):
+                pass
+    if log is not None:
+        try:
+            log.close()
         except OSError:
             pass
 
 
 def transcribe_via_warm_server(model_key: str, wav: Path,
                                settings: dict | None) -> str | None:
-    """Warm-server path for the preloaded whisper-server (audit B4).
-
-    preload() spawned the server since 1.3.11 but transcribe() always paid
-    the CLI's per-request model load — the warm feature was dead ware.
-    Returns the transcript, or None when the warm path is unavailable so
-    the caller falls back to the CLI. A warm-server timeout raises
-    STT_TIMEOUT (the CLI would only be slower); every other transport or
-    server error falls back, so preloading can never make things worse
-    (the module's own contract, previously only promised in prose)."""
+    """Warm-server path for the preloaded whisper-server (audit B4)."""
     if not warm_is_active(model_key):
         return None
-    port = int(_WARM.get("port") or 0)
+    with _WARM_LOCK:
+        port = int(_WARM.get("port") or 0)
     if not port:
         return None
     budget = resolve_timeout(settings)
     try:
-        with httpx.Client(timeout=httpx.Timeout(
-                connect=5.0, read=float(budget), write=30.0, pool=5.0)) as _c:
+        with httpx.Client(
+                timeout=httpx.Timeout(
+                    connect=5.0, read=float(budget), write=30.0, pool=5.0),
+                follow_redirects=False) as _c:
             r = _c.post(
                 f"http://127.0.0.1:{port}/inference",
                 files={"file": (wav.name, wav.read_bytes(), "audio/wav")},
@@ -429,11 +446,8 @@ def transcribe_via_warm_server(model_key: str, wav: Path,
 
 
 def preload(settings: dict | None = None, *, model_key: str | None = None) -> bool:
-    """Start a warm ``whisper-server`` for whisper models. Best effort.
-
-    Returns True when a warm server is (now) serving this model. Parakeet has no
-    server binary, so preloading it is a no-op that returns False.
-    """
+    """Start a warm ``whisper-server`` for whisper models. Best effort."""
+    global _WARM_ATEXIT_REGISTERED
     settings = settings or {}
     key = model_key or resolve_model(settings)
     m = MODELS.get(key)
@@ -449,20 +463,34 @@ def preload(settings: dict | None = None, *, model_key: str | None = None) -> bo
         return False
     port = _free_port()
     log = open(os.path.join(tempfile.gettempdir(), "hivemind_stt_warm.log"),
-               "w", encoding="utf-8")  # noqa: SIM115 - closed in stop_warm via GC
+               "w", encoding="utf-8")
     try:
+        _popen_kwargs: dict = {
+            "stdout": log,
+            "stderr": log,
+            "stdin": subprocess.DEVNULL,
+            "env": _stt_subprocess_env(exe),
+        }
+        if os.name == "nt":
+            _popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         proc = subprocess.Popen(
             [str(exe), "-m", str(mp), "--host", "127.0.0.1", "--port", str(port),
              "-t", str(resolve_threads(settings)), "--language", resolve_language(settings)],
-            stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-            env=_stt_subprocess_env(exe),
+            **_popen_kwargs,
         )
     except OSError as exc:
+        try:
+            log.close()
+        except OSError:
+            pass
         logger.warning("[STT] preload failed to start: %s", exc)
         return False
-    _WARM.update({"proc": proc, "port": port, "model": key})
-    import atexit as _stt_atexit
-    _stt_atexit.register(stop_warm)
+    with _WARM_LOCK:
+        _WARM.update({"proc": proc, "port": port, "model": key, "log": log})
+        if not _WARM_ATEXIT_REGISTERED:
+            import atexit as _stt_atexit
+            _stt_atexit.register(stop_warm)
+            _WARM_ATEXIT_REGISTERED = True
     logger.info("[STT] preloaded %s (whisper-server on 127.0.0.1:%d)", key, port)
     return True
 

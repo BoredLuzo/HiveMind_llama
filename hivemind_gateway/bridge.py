@@ -2027,7 +2027,7 @@ class RunBridge:
         # done/abort branch below still receives the tail frames it parses
         # (they lie AFTER the cursor by definition).
         j = await self.hive.journal(m["run_id"], after=int(m.get("after") or 0)) \
-            if m["run_id"] else await self.hive.journal()
+            if m["run_id"] else await self.hive.journal(after=JOURNAL_META_ONLY_AFTER)
         if not isinstance(j, dict) or not j.get("active") \
                 or j.get("done") or j.get("aborted"):
             # nothing active: end a session, report how it ended
@@ -2055,6 +2055,10 @@ class RunBridge:
                         and _lr_id not in self._late_relayed
                         and _lr_id != str(self._own_run_id() or "")):
                     self._late_relayed.add(_lr_id)
+                    if not j.get("frames") and int(j.get("n") or 0) > 0:
+                        _full = await self.hive.journal(_lr_id, after=0)
+                        if isinstance(_full, dict):
+                            j = _full
                     _lr_ans, _ = self._accumulate_frames(j.get("frames") or [])
                     await self._mirror_fazit(
                         _lr_id, _lr_ans,
@@ -2075,6 +2079,10 @@ class RunBridge:
             return  # our own run reports natively; do not double-mirror
         fresh = m["run_id"] != rid
         if fresh:
+            if not j.get("frames") and int(j.get("n") or 0) > 0:
+                _full = await self.hive.journal(rid, after=0)
+                if isinstance(_full, dict):
+                    j = _full
             # VOICE-PRELOAD for mirrored runs: the phone gets a voice note for a
             # desktop run too, so the sidecar must be warm BEFORE the answer is
             # done (a cold start here cost 48 s on 2026-10-18).
@@ -2425,6 +2433,14 @@ class RunBridge:
         pend = await self.hive.pending_approval(rid)
         body = pend.json() if hasattr(pend, "json") else {}
         if getattr(pend, "status_code", 200) == 200 and body.get("active"):
+            if (
+                str(body.get("kind") or "approval") != "ask"
+                and not body.get("decision_id")
+                and not body.get("approval_key")
+                and not body.get("args_hash")
+                and str(body.get("preview") or "").strip().lower().startswith("(generating")
+            ):
+                return
             sig = f"{body.get('decision_id') or ''}|{body.get('preview') or ''}"
             if sig != m["approval_sig"]:
                 m["approval_sig"] = sig

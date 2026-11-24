@@ -272,6 +272,11 @@ _LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
 # page in from NVMe under RAM pressure. Small models keep the mlock intent.
 LARGE_MOE_MLOCK_SKIP_GB = 12.0
 
+# Mid-sized MoEs (<= LARGE_MOE_MLOCK_SKIP_GB, e.g. Inkling-2-Mini ~10.9 GB)
+# keep ~4.8 GB in VRAM and ~6 GB in RAM; requiring the full 8 GB 35B headroom
+# silently downgraded profile load_mode="none" to "mmap" on 32 GB Windows boxes.
+_MOE_PROFILE_NONE_HEADROOM_GB = 4.5
+
 
 def _mlock_skip_large_moe_enabled() -> bool:
     """Setting `llama_mlock_skip_large_moe` (default True). Read live so a
@@ -325,13 +330,19 @@ def _gguf_size_gb(model: str) -> float:
     return _impl(model)
 
 
-def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
+def _ram_guard_blocks(
+    model: str,
+    free_ram_gb: float,
+    headroom_gb: float | None = None,
+) -> bool:
     """True when a none load must be rejected: free RAM unknown, or below
-    GGUF size + 8 GB headroom. RATIONALE (live 2026-10-28): a none load
-    commits the FULL model as private memory; three stacked hermes commits
+    GGUF size + headroom (default 8 GB). RATIONALE (live 2026-10-28): a none
+    load commits the FULL model as private memory; three stacked hermes commits
     (engine slot + two bench processes) pushed the commit to 56 GB on a
     32 GB machine - SSD at 100 %, system frozen."""
     from backend.llama_preflight import ram_guard_blocks as _impl
+    if headroom_gb is not None:
+        return _impl(model, free_ram_gb, headroom_gb=headroom_gb)
     return _impl(model, free_ram_gb)
 
 
@@ -415,7 +426,14 @@ def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
     if spec_planned and large_moe:
         return profile if profile == "mmap+mlock" else "mmap"
     if (not spec_planned and moe_cpu_offload and profile == "none"):
-        return "mmap" if _ram_guard_blocks(model, free_ram_gb) else "none"
+        _blocked = (
+            _ram_guard_blocks(model, free_ram_gb)
+            if large_moe
+            else _ram_guard_blocks(
+                model, free_ram_gb, headroom_gb=_MOE_PROFILE_NONE_HEADROOM_GB,
+            )
+        )
+        return "mmap" if _blocked else "none"
     if spec_planned or (mlock_now and not large_moe):
         return "mmap+mlock"
     if profile and not (profile == "none"
@@ -1941,8 +1959,13 @@ class LlamaLoadMixin:
                 logger.info("--load-mode %s via profile override (model=%s)",
                             _load_mode, model)
             else:
-                logger.info("--load-mode %s (mlock=%s, spec=%s)",
-                            _load_mode, bool(_mlock_now), _spec_planned)
+                _lm_note = (
+                    "; profile=none downgraded by RAM guard"
+                    if _profile_lm == "none" and _load_mode == "mmap"
+                    else ""
+                )
+                logger.info("--load-mode %s (mlock=%s, spec=%s%s)",
+                            _load_mode, bool(_mlock_now), _spec_planned, _lm_note)
             # PROCESS-COUNT GUARD (2026-10-30, audit): llama_preflight
             # documents "no second llama process alongside" but nothing in
             # the engine ever called it - the check was test-only. Enforced

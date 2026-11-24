@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from tests._harness import Harness  # noqa: E402
+from tests._silent_choice import ensure_silent_choice_dir  # noqa: E402
 
 h = Harness(style="results", pad=True)
 check = h.check
@@ -125,11 +126,15 @@ with _tempfile.TemporaryDirectory(prefix="hvm_opt_") as _td:
 
     _env = dict(_os.environ)
     _windir = _os.environ.get("WINDIR", r"C:\Windows")
-    _env["PATH"] = _os.pathsep.join([
+    _silent_dir = ensure_silent_choice_dir()
+    _path_parts = [
         str(Path(sys.executable).parent),
         rf"{_windir}\System32",
         rf"{_windir}\System32\WindowsPowerShell\v1.0",
-    ])
+    ]
+    if _silent_dir:
+        _path_parts.insert(0, _silent_dir)
+    _env["PATH"] = _os.pathsep.join(_path_parts)
     _env["PYTHONPATH"] = str(_fake_pylib)
     _env["USERPROFILE"] = str(_fake_prof)
     _env["HF_HOME"] = str(_fake_prof / "hf_home")

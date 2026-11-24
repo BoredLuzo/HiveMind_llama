@@ -144,13 +144,16 @@ def test_tool_loop_pairing_and_overflow() -> None:
     asyncio.run(_run_batch())
     msgs_after = sent_payloads[1]["messages"] if len(sent_payloads) >= 2 else []
     roles_after = [m.get("role") for m in msgs_after]
-    # Expected sequence: user, assistant, tool(tc_bad_1), tool(tc_good_2), user(parse_error feedback)
-    check("ToolLoop multi-tool invalid JSON emits ALL role='tool' before deferred user feedback",
-          roles_after == ["user", "assistant", "tool", "tool", "user"]
-          and msgs_after[2].get("tool_call_id") == "tc_bad_1"
-          and "INVALID_JSON" in msgs_after[2].get("content", "")
-          and msgs_after[3].get("tool_call_id") == "tc_good_2",
-          f"roles={roles_after}")
+    kept_tc_ids = [tc.get("id") for tc in (msgs_after[1].get("tool_calls") or [])] if len(msgs_after) >= 2 else []
+    # Malformed tc_bad_1 + orphan tool result are stripped before POST (real llama-server
+    # returns HTTP 500 otherwise); tc_good_2 + its role="tool" result stay paired before the single user feedback turn.
+    check("ToolLoop multi-tool invalid JSON strips bad call before POST and keeps valid role='tool' before single user feedback",
+          roles_after == ["user", "assistant", "tool", "user"]
+          and kept_tc_ids == ["tc_good_2"]
+          and len(msgs_after) >= 4
+          and msgs_after[2].get("tool_call_id") == "tc_good_2"
+          and "[REMOVED]" in str(msgs_after[3].get("content") or ""),
+          f"roles={roles_after} tcs={kept_tc_ids}")
 
     # 2b: ctx_overflow 400 actually invokes _on_compress, retries with shrunk payload, and syncs
     overflow_payloads: list[dict] = []

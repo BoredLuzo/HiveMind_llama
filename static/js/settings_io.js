@@ -1080,7 +1080,10 @@ async function loadSettings() {
     S.duoCompressLocal = s.duo_compress_local_only === true;
     // MCP client (beta): off unless enabled in settings.
     S.mcpClientEnabled = s.mcp_client_enabled === true;
-    S.settingsRev = parseInt(s.settings_rev || 0, 10) || S.settingsRev || 0;
+    if (s.settings_rev !== undefined && s.settings_rev !== null) {
+      var _loadedRev = parseInt(s.settings_rev, 10);
+      if (!isNaN(_loadedRev) && _loadedRev >= 0) S.settingsRev = _loadedRev;
+    }
     var _dcmsEl = document.getElementById('duo-compress-model-sel');
     if (_dcmsEl) {
       var _storedModel = (S.duoCompressModel && _dcmsEl.querySelector('option[value="' + S.duoCompressModel + '"]')) ? S.duoCompressModel : 'auto';
@@ -1428,27 +1431,45 @@ async function _doFlushQueuedSettings() {
       } else {
         // UI-REV (2026-09-09): tag the patch with the loaded settings revision —
         // the server strips protected keys from stale revisions (old tabs).
-        if (S.settingsRev > 0) _payload.ui_rev = S.settingsRev;
+        if (typeof S.settingsRev === 'number' && !isNaN(S.settingsRev) && S.settingsRev >= 0) {
+          _payload.ui_rev = S.settingsRev;
+        }
         try {
           var _resp = await fetch('/settings', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify(_payload)
           });
-          try {
-            var _rj = await _resp.json();
-            if (_rj && _rj.settings_rev) S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
-            if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
-            // STALE-SNAPSHOT WARNING (2026-10-07, user feedback: git fields must not reset on save): the server strips protected keys from an
-            // older tab's patch - the user must know the save did NOT take.
-            if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
-              S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
-              var _msg = 'Stale tab state: ' + _rj.stripped.join(', ')
-                + ' was NOT saved (a newer value was set elsewhere). '
-                + 'Reload the page (F5) and save again.';
-              if (window._showErrorToast) window._showErrorToast(_msg);
-              else alert(_msg);
-            }
-          } catch (_je) {}
+          if (_resp && _resp.ok === false) {
+            var _errDetail = 'HTTP ' + (_resp.status || 'error');
+            try {
+              var _ej = await _resp.json();
+              if (_ej && (_ej.error || _ej.detail)) _errDetail = String(_ej.error || _ej.detail);
+            } catch (_eje) {}
+            console.warn('postSettings HTTP error:', _errDetail);
+            try { showInfo('⚠ Settings change could NOT be saved (' + _errDetail + ').'); } catch (_se) {}
+          } else {
+            try {
+              var _rj = await _resp.json();
+              if (_rj && _rj.settings_rev !== undefined && _rj.settings_rev !== null) {
+                var _nextRev = parseInt(_rj.settings_rev, 10);
+                if (!isNaN(_nextRev) && _nextRev >= 0) S.settingsRev = _nextRev;
+              }
+              if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
+              // STALE-SNAPSHOT WARNING (2026-10-07, user feedback: git fields must not reset on save): the server strips protected keys from an
+              // older tab's patch - the user must know the save did NOT take.
+              if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
+                if (_rj.settings_rev !== undefined && _rj.settings_rev !== null) {
+                  var _sRev = parseInt(_rj.settings_rev, 10);
+                  if (!isNaN(_sRev) && _sRev >= 0) S.settingsRev = _sRev;
+                }
+                var _msg = 'Stale tab state: ' + _rj.stripped.join(', ')
+                  + ' was NOT saved (a newer value was set elsewhere). '
+                  + 'Reload the page (F5) and save again.';
+                if (window._showErrorToast) window._showErrorToast(_msg);
+                else alert(_msg);
+              }
+            } catch (_je) {}
+          }
         } catch(e) {
           console.warn('postSettings flush failed:', e);
           try { showInfo('⚠ Settings change could NOT be saved (' + (e && e.message || e) + ').'); } catch (_se) {}

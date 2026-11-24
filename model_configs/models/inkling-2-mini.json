@@ -15,9 +15,9 @@
   "reasoning": "on",
   "distilled": false,
   "moe": true,
-  "moe_cpu_experts": 14,
+  "moe_cpu_experts": 15,
   "moe_cache_mib": 0,
-  "ubatch": 256,
+  "ubatch": 512,
   "load_mode": "none",
   "cache_ram_mib": 2048,
   "kv_cache_type": "q4_0",
@@ -83,5 +83,5 @@
       "cache_prompt": true
     }
   },
-  "_notes": "Inkling-2-Mini (inkling2_loop: 24 physical MoE blocks, core 6..18 looped 3x -> 48 logical passes, 8 full-attn + 40 SWA-1024 layers = 9216 B/tok q4_0 KV). Requires llama.cpp b12600+ (PR #32704+). Clean-VRAM RX 6600 Vulkan (b12631, @16k q4_0 KV, ubatch=256, load_mode=none, moe_cache_mib=0, -ot 14 outer/edge CPU layers): load 5.39s, CODE 16.25 t/s, TEXT 16.21 t/s (beating -ot 12 at 12.00/12.05 t/s and nc24+cache at 9.90-11.86 t/s)."
+  "_notes": "Inkling-2-Mini (inkling2_loop: 24 physical MoE blocks, core 6..18 looped 3x -> 48 logical passes, 8 full-attn + 40 SWA-1024 layers = 9216 B/tok q4_0 KV). Requires llama.cpp b12600+ (PR #32704+). Measured RX 6600 Vulkan (b12651, q4_0 KV, ubatch=512, load_mode=none, moe_cache_mib=0, -ot outer/edge CPU layers): ot15 (4834 MiB model) hits pp1406 112.3-113.3 t/s, tg31 13.8-14.0 t/s @65k and pp 110.0 t/s, tg 13.7 t/s @32k (vs 74 t/s at ub=256 and 89 t/s with mmap); ot16 auto-step (4403 MiB) sustains pp 103.0 t/s, tg 12.8 t/s @65k without shared-VRAM spill. Verified b12676 A/B parity (ctx=32768, ot15): load 8.43s (vs 8.92s), pp1883 108.6 t/s (vs 108.7), pp5607 92.5 t/s (vs 92.6), tg 15.5-16.4 t/s (vs 15.5-16.3)."
 }

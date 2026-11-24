@@ -99,12 +99,18 @@ def _engine_log_path() -> Path:
 
 def _engine_failure_hint() -> str:
     """Last error line from the sidecar log, shortened for the UI."""
+    from collections import deque
+
     try:
         path = _engine_log_path()
         if not path.exists():
             return ""
+        size = path.stat().st_size
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            tail = fh.readlines()[-_LOG_TAIL_LINES:]
+            if size > 65536:
+                fh.seek(size - 65536)
+                fh.readline()  # discard partial line at seek offset
+            tail = list(deque(fh, maxlen=_LOG_TAIL_LINES))
     except OSError:
         return ""
     for line in reversed(tail):
@@ -154,6 +160,7 @@ _state: dict = {
     "broken_reason": "",
 }
 _lock = threading.RLock()
+_client_lock = threading.Lock()
 _http_client = None
 
 
@@ -238,12 +245,20 @@ def is_running(settings: dict | None = None) -> bool:
 
 def stop(force: bool = False) -> None:
     """Stop the sidecar and unload any warm CPU TTS model (idempotent)."""
+    global _http_client
     tts_woof.stop()
     with _lock:
         proc = _state.get("proc")
         log = _state.get("log")
         _state.update({"proc": None, "port": 0, "voice": "", "log": None,
                        "ready": False})
+    with _client_lock:
+        client, _http_client = _http_client, None
+    if client is not None:
+        try:
+            client.close()
+        except OSError:
+            pass
     if log is not None:
         try:
             log.close()
@@ -283,9 +298,11 @@ def _wait_healthy(url: str, timeout_s: float, require_proc: bool = True) -> bool
     import urllib.error
     import urllib.request
 
+    if not str(url or "").lower().startswith(("http://", "https://")):
+        return False
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        if require_proc and not is_running():
+        if require_proc and not _pocket_running():
             return False
         try:
             with urllib.request.urlopen(f"{url}/health", timeout=3) as resp:
@@ -365,10 +382,27 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
         log_path = Path(__file__).resolve().parent.parent / "logs" / "pocket_tts.log"
         log = None
         try:
+            from infra.child_env import scrubbed_env
+
+            hf_extra = {
+                k: os.environ[k]
+                for k in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
+                if os.environ.get(k)
+            }
+            popen_env = scrubbed_env(extra=hf_extra or None)
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log = open(log_path, "a", encoding="utf-8")
-            proc = subprocess.Popen(cmd, stdout=log, stderr=log,
-                                    stdin=subprocess.DEVNULL)
+            popen_kwargs: dict = {
+                "stdout": log,
+                "stderr": log,
+                "stdin": subprocess.DEVNULL,
+                "env": popen_env,
+            }
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            else:
+                popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as exc:
             if log is not None:
                 try:
@@ -383,14 +417,17 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
         url = base_url()
     logger.info("[TTS] sidecar starting on %s (voice=%s, pid=%s)", url, voice, proc.pid)
     if not _wait_healthy(url, START_TIMEOUT_S):
-        _state["failures"] = int(_state.get("failures", 0)) + 1
-        _state["failures_at"] = time.time()
+        with _lock:
+            _state["failures"] = int(_state.get("failures", 0)) + 1
+            _state["failures_at"] = time.time()
         stop(force=True)
         raise TtsError("TTS_FAILED",
                        "the TTS engine did not answer /health in time - see logs/pocket_tts.log")
-    _state["failures"] = 0          # a healthy start clears the budget
-    _state["ready"] = True          # START-RACE: fast path may return now
-    logger.info("[TTS] sidecar ready after %.1fs", time.time() - _state["started_at"])
+    with _lock:
+        _state["failures"] = 0          # a healthy start clears the budget
+        _state["ready"] = True          # START-RACE: fast path may return now
+        started_at = float(_state.get("started_at") or time.time())
+    logger.info("[TTS] sidecar ready after %.1fs", time.time() - started_at)
     return url
 
 
@@ -428,12 +465,14 @@ def _cache_put(key, value) -> None:
 def _client():
     """One keep-alive httpx client for the sidecar (created lazily)."""
     global _http_client
-    if _http_client is None:
-        import httpx
-        _http_client = httpx.Client(
-            timeout=httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=5.0),
-            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8))
-    return _http_client
+    with _client_lock:
+        if _http_client is None:
+            import httpx
+            _http_client = httpx.Client(
+                timeout=httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=5.0),
+                limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+                follow_redirects=False)
+        return _http_client
 
 
 def touch() -> None:
@@ -460,7 +499,7 @@ def preload(settings: dict | None = None) -> bool:
         return False
     if resolve_backend(settings) == "woof":
         return tts_woof.preload(resolve_voice(settings, backend="woof"))
-    if is_running():
+    if _pocket_running() and _state.get("ready"):
         _state["last_used"] = time.time()
         return True
     try:
@@ -504,7 +543,7 @@ def synthesize(text: str, settings: dict | None = None, *,
     text = (text or "").strip()
     if not text:
         raise TtsError("TTS_EMPTY", "nothing to say")
-    spoken = tts_audio.clean_for_speech(text) or text
+    spoken = tts_audio.clean_for_speech(text)
     chunks = tts_audio.split_speech_chunks(
         spoken,
         chunk_chars=tts_audio.MAX_CHARS,
@@ -543,16 +582,11 @@ def synthesize(text: str, settings: dict | None = None, *,
     deadline = time.monotonic() + timeout
     wav_parts = []
     for ch in chunks:
-        rem = max(0.5, deadline - time.monotonic())
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            raise TtsError("TTS_TIMEOUT", f"the engine took longer than {timeout:.0f}s")
         try:
-            # CLIENT-REUSE (2026-10-18): a fresh httpx.Client per request threw the
-            # connection away every time (20-50 ms on top of the model). The read-aloud
-            # asks for one sentence at a time now, so that overhead was a visible part
-            # of the delay before the first sound.
             import httpx as _httpx_call
-            # the client is shared (keep-alive), but the TIMEOUT is per request: the
-            # settings value must still cut a hanging synthesis (test_tts_engine pins
-            # it with tts_timeout_s=1 against a slow stub).
             resp = _client().post(
                 f"{url}/tts",
                 data={"text": ch, "voice_url": voice},
@@ -560,6 +594,8 @@ def synthesize(text: str, settings: dict | None = None, *,
                                             write=10.0, pool=5.0))
             resp.raise_for_status()
             part_wav = resp.content
+            if len(part_wav) > 32 * 1024 * 1024:
+                raise TtsError("TTS_FAILED", "engine returned an oversized audio payload")
         except httpx.TimeoutException as exc:
             raise TtsError("TTS_TIMEOUT", f"the engine took longer than {timeout:.0f}s") from exc
         except httpx.HTTPError as exc:

@@ -178,8 +178,9 @@ async def _inline_tool_apply_patch(args: dict, workspace: Path,
                 is_new_file=fp.is_new_file, is_delete=fp.is_delete)
         except PatchError as e:
             _anchor = (
-                _build_patch_mismatch_anchor(
-                    rel, current_content.replace("\r\n", "\n"), fp.hunks
+                await asyncio.to_thread(
+                    _build_patch_mismatch_anchor,
+                    rel, current_content.replace("\r\n", "\n"), fp.hunks,
                 )
                 if e.code == "PATCH_CONTEXT_NOT_FOUND"
                 else ""

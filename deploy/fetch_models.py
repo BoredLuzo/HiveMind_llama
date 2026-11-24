@@ -429,6 +429,21 @@ SPECS: list[dict] = [
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
         "mmproj_dest": "mmproj-qwen3.6-35b-a3b-mtp-f16.gguf",
     },
+    {
+        "key": "inkling-2-mini",
+        "tag": "inkling-2-mini",
+        "tier": "Hybrid MoE / 16+ GB VRAM or 8 GB+32 GB RAM (Looped MoE Vision Coder)",
+        "disk_gb": "~11.5 GB",
+        "hw_req": "16+ GB VRAM  OR  8 GB VRAM + 32+ GB RAM (Looped CPU-MoE Offload, b12600+)",
+        "role_hint": "Upgrade: Looped-MoE Agentic Coder + Vision (~15-16 tok/s on 8GB+32GB)",
+        "desc": "Inkling-2-Mini UD-IQ3_XXS (looped MoE coder/reasoning + vision, ~10.9GB + mmproj, needs b12600+)",
+        "repo": "unsloth/Inkling-2-Mini-GGUF",
+        "file_regex": [
+            r"(?i)^inkling-2-mini-ud-iq3_xxs\.gguf$",
+        ],
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-Inkling-2-Mini-F16.gguf",
+    },
 ]
 
 # Hardware-tier recommendation plan (VRAM x System RAM) shared by
@@ -467,7 +482,7 @@ HARDWARE_TIERS: list[dict] = [
         "label": "8 GB VRAM + 32+ GB RAM (Hybrid CPU-MoE Capable)",
         "summary": "8 GB defaults run 100% in GPU VRAM (fast). 26B/35B MoEs work ONLY because your 32+ GB System RAM holds CPU-offloaded experts.",
         "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default, 100% GPU]",
             "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default, 100% GPU]",
@@ -481,7 +496,7 @@ HARDWARE_TIERS: list[dict] = [
         "label": "12-16 GB VRAM",
         "summary": "Heavy 8B-9B models stay 100% GPU-resident with huge context; 26B-35B MoEs offload minimally.",
         "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default] or qwen3.5:9b-mtp",
             "duo_coder / planner": "qwen3.5:4b-mtp (fast GPU) or qwen3.6:35b-a3b-mtp",
@@ -495,7 +510,7 @@ HARDWARE_TIERS: list[dict] = [
         "label": "24+ GB VRAM",
         "summary": "Flagship 26B-35B MoEs run with maximum GPU offload alongside fast dense defaults.",
         "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["qwen3.6:35b-a3b-mtp", "air:26b-a4b", "nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
+        "upgrades": ["qwen3.6:35b-a3b-mtp", "inkling-2-mini", "air:26b-a4b", "nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) or qwen3.5:9b-mtp",
             "duo_coder / planner": "qwen3.6:35b-a3b-mtp (or qwen3.5:4b-mtp for max speed)",
@@ -600,7 +615,7 @@ def model_fit_badge(spec: dict, vram_gb: float, ram_gb: float) -> str:
     """Return a clear ASCII fit/guidance badge for a catalog model on this hardware."""
     key = str(spec.get("key") or "")
     is_ess = key in ESSENTIAL_KEYS
-    if key in ("air:26b-a4b", "qwen3.6:35b-a3b-mtp"):
+    if key in ("air:26b-a4b", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"):
         if vram_gb >= 16.0:
             return "[FITS VRAM / HIGH-VRAM MOE]"
         if vram_gb >= 6.8 and ram_gb >= 28.0:
@@ -654,7 +669,7 @@ def format_hardware_plan(vram_gb: float | None = None, ram_gb: float | None = No
     lines.append("  Default Recommended Roles (100% GPU VRAM - Fast):")
     for role, rec in tier["roles"].items():
         lines.append(f"    {role:<20} -> {rec}")
-    lines.append("  Note: All recommendations are visual guidance only - you can download and try any model [1]-[11].")
+    lines.append(f"  Note: All recommendations are visual guidance only - you can download and try any model [1]-[{len(SPECS)}].")
     return "\n".join(lines)
 
 
@@ -715,6 +730,19 @@ def disk_space_free_gb(path: Path) -> float:
         return -1.0
 
 
+def _origin_tuple(url: str) -> tuple[str, str, int | None]:
+    parsed = urllib.parse.urlsplit(str(url or ""))
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    port = parsed.port
+    if port is None:
+        if scheme == "https":
+            port = 443
+        elif scheme == "http":
+            port = 80
+    return scheme, host, port
+
+
 class _EtagRedirectHandler(urllib.request.HTTPRedirectHandler):
     """B7: Hugging Face puts X-Linked-Etag on the 302, not on the CDN answer.
 
@@ -733,7 +761,13 @@ class _EtagRedirectHandler(urllib.request.HTTPRedirectHandler):
                 if _val:
                     self.etag = str(_val).strip()
                     break
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None and _origin_tuple(req.full_url) != _origin_tuple(new_req.full_url):
+            for hdr_map in (getattr(new_req, "headers", None), getattr(new_req, "unredirected_hdrs", None)):
+                if isinstance(hdr_map, dict):
+                    for k in [hk for hk in hdr_map if hk.lower() == "authorization"]:
+                        hdr_map.pop(k, None)
+        return new_req
 
 
 def _sha256_file(path: Path) -> str:
@@ -1198,7 +1232,7 @@ def main() -> int:
         print(format_hardware_plan(v_gb, r_gb, g_name))
         print()
         _rest = [sp for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS]
-        print("  ALSO AVAILABLE - OPTIONAL UPGRADES (choose [S] to pick any [1]-[11])")
+        print(f"  ALSO AVAILABLE - OPTIONAL UPGRADES (choose [S] to pick any [1]-[{len(SPECS)}])")
         print("  " + "-" * 72)
         for _sp in _rest:
             _idx = next((i + 1 for i, item in enumerate(SPECS) if item['key'] == _sp['key']), 0)
@@ -1213,7 +1247,7 @@ def main() -> int:
         v_gb, r_gb, g_name = probe_hardware()
         hw_str = f"{g_name} ({v_gb:.1f} GB VRAM)" if (g_name and v_gb > 0) else f"{v_gb:.1f} GB VRAM"
         print(f"  Detected hardware: {hw_str}, {r_gb:.1f} GB RAM")
-        print("  Visual guidance only - you can pick and test ANY model number [1]-[11] below.")
+        print(f"  Visual guidance only - you can pick and test ANY model number [1]-[{len(SPECS)}] below.")
         print()
         groups = [
             ("--- [A] CORE RECOMMENDED DEFAULTS (100% GPU VRAM, Fast) ---",
@@ -1223,7 +1257,7 @@ def main() -> int:
             ("--- [C] 8-12 GB DENSE POWER UPGRADES (100% GPU VRAM) ---",
              lambda s: s["key"] in ("nvidia-nemotron-3.5-bolt:e4b", "twil:8b", "qwen3.5:9b-mtp")),
             ("--- [D] HYBRID CPU-MoE FLAGSHIPS (Work on 8 GB GPU ONLY via 32+ GB System RAM) ---",
-             lambda s: s["key"] in ("air:26b-a4b", "qwen3.6:35b-a3b-mtp")),
+             lambda s: s["key"] in ("air:26b-a4b", "qwen3.6:35b-a3b-mtp", "inkling-2-mini")),
         ]
         for banner, pred in groups:
             print(f"  {banner}")

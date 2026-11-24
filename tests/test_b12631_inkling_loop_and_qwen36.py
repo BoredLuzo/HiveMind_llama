@@ -63,7 +63,9 @@ def _build_synthetic_inkling_gguf(path: Path) -> None:
 # ── Step 1: Pinned llama.cpp build ─────────────────────────────────────
 print("-- Step 1: Pinned build tag --")
 import deploy.fetch_llamacpp as FL  # noqa: E402
-check("deploy/llama_build_pin.txt pins >= b12645", FL._read_pinned_tag() == "b12645", repr(FL._read_pinned_tag()))
+check("deploy/llama_build_pin.txt pins >= b12645",
+      (_tag := FL._read_pinned_tag()).startswith("b") and _tag[1:].isdigit() and int(_tag[1:]) >= 12645,
+      repr(FL._read_pinned_tag()))
 
 
 # ── Step 2: GGUF metadata for inkling2_loop & reasoning_effort ─────────
@@ -288,23 +290,76 @@ check("strip_payload_extras strips reasoning_effort",
 # ── Step 5: Model profiles & arch_compat ───────────────────────────────
 print("-- Step 5: Shipped Inkling & Qwen3.6 configs --")
 _ink_prof = MR.get_profile("inkling-2-mini") or {}
-check("inkling-2-mini profile shipped with moe_cpu_experts=14, moe_cache_mib=0, ubatch=256, kv=9216",
+check("inkling-2-mini profile shipped with moe_cpu_experts=15, moe_cache_mib=0, ubatch=512, kv=9216",
       MR.get_profile_source("inkling-2-mini") == "shipped"
-      and _ink_prof.get("moe_cpu_experts") == 14
+      and _ink_prof.get("moe_cpu_experts") == 15
       and _ink_prof.get("moe_cache_mib") == 0
       and _ink_prof.get("load_mode") == "none"
-      and _ink_prof.get("ubatch") == 256
+      and _ink_prof.get("ubatch") == 512
       and _ink_prof.get("kv_bytes_per_token") == 9216
       and _ink_prof.get("mmproj_filename") == "mmproj-Inkling-2-Mini-F16.gguf",
       repr(_ink_prof))
 
 _ac = json.loads((_ROOT / "model_configs" / "arch_compat.json").read_text(encoding="utf-8"))
-check("arch_compat registers inkling-2-mini and calibrates qwen3.6-mtp at ncmoe=40",
-      _ac["moe_expert_counts"].get("inkling-2-mini") == 14
-      and _ac["moe_table"].get("inkling-2-mini", {}).get("calibrated_n_cpu_moe") == 14
+check("arch_compat registers inkling-2-mini (ncmoe=15, active_gpu_gb=5.4) and qwen3.6-mtp at ncmoe=40",
+      _ac["moe_expert_counts"].get("inkling-2-mini") == 15
+      and _ac["moe_table"].get("inkling-2-mini", {}).get("calibrated_n_cpu_moe") == 15
+      and _ac["moe_table"].get("inkling-2-mini", {}).get("active_gpu_gb") == 5.4
       and _ac["model_profiles"].get("inkling-2-mini", {}).get("vision") is True
       and _ac["moe_expert_counts"].get("qwen3.6:35b-a3b-mtp") == 40
       and _ac["moe_table"].get("qwen3.6:35b-a3b-mtp", {}).get("calibrated_n_cpu_moe") == 40)
+
+# ── Step 6: Mid-sized MoE load_mode=none headroom, ubatch & VRAM calibration ─
+print("-- Step 6: Mid-sized MoE load_mode, ubatch & VRAM calibration --")
+from backend.llama_config import resolve_model_ubatch  # noqa: E402
+from backend.llama_vram_table import vram_of_moe  # noqa: E402
+
+with mock.patch("backend.llama_preflight.gguf_size_gb", return_value=10.86):
+    _lm_17 = ML._resolve_load_mode(
+        "inkling-2-mini-ud", spec_planned=False, mlock_now=True,
+        profile_lm="none", free_ram_gb=17.0,
+        large_moe=False, moe_cpu_offload=True,
+    )
+    _lm_14 = ML._resolve_load_mode(
+        "inkling-2-mini-ud", spec_planned=False, mlock_now=True,
+        profile_lm="none", free_ram_gb=14.0,
+        large_moe=False, moe_cpu_offload=True,
+    )
+    _lm_unk = ML._resolve_load_mode(
+        "inkling-2-mini-ud", spec_planned=False, mlock_now=True,
+        profile_lm="none", free_ram_gb=-1.0,
+        large_moe=False, moe_cpu_offload=True,
+    )
+check("mid-sized MoE profile load_mode='none' allowed at 17 GB free, blocked at 14 GB / -1 GB",
+      _lm_17 == "none" and _lm_14 == "mmap" and _lm_unk == "mmap",
+      repr((_lm_17, _lm_14, _lm_unk)))
+
+with mock.patch("backend.llama_preflight.gguf_size_gb", return_value=18.0):
+    _lm_big_25 = ML._resolve_load_mode(
+        "hermes3.6:35b-a3b", spec_planned=False, mlock_now=True,
+        profile_lm="none", free_ram_gb=25.0,
+        large_moe=True, moe_cpu_offload=True,
+    )
+    _lm_big_26 = ML._resolve_load_mode(
+        "hermes3.6:35b-a3b", spec_planned=False, mlock_now=True,
+        profile_lm="none", free_ram_gb=26.5,
+        large_moe=True, moe_cpu_offload=True,
+    )
+check("large MoE still enforces full 8 GB headroom for profile load_mode='none'",
+      _lm_big_25 == "mmap" and _lm_big_26 == "none",
+      repr((_lm_big_25, _lm_big_26)))
+
+_ub_ink = resolve_model_ubatch("inkling-2-mini-ud", 256, 0)
+check("resolve_model_ubatch('inkling-2-mini-ud', 256, 0) -> (512, 'profile')",
+      _ub_ink == (512, "profile"), repr(_ub_ink))
+
+_vram_65k_15 = vram_of_moe("inkling-2-mini-ud", 65000)
+with mock.patch("backend.gguf_meta.read_gguf_metadata",
+                return_value={"file_size_gb": 10.86, "block_count": 24}):
+    _vram_65k_16 = vram_of_moe("inkling-2-mini-ud", 65000, n_cpu_moe=16)
+check("vram_of_moe('inkling-2-mini-ud', 65000) == 5.96 and steps < 5.75 at ncmoe=16",
+      _vram_65k_15 == 5.96 and _vram_65k_16 < 5.75,
+      repr((_vram_65k_15, _vram_65k_16)))
 
 _q36_mtp = json.loads((_ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-mtp.json").read_text(encoding="utf-8"))
 _q36_ud = json.loads((_ROOT / "model_configs" / "models" / "qwen3.6_35b-a3b-ud.json").read_text(encoding="utf-8"))

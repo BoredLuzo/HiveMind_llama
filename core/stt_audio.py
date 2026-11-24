@@ -96,6 +96,8 @@ def to_wav16k(data: bytes | str | Path, *, max_seconds: int = DEFAULT_MAX_SECOND
 
     if int(rate) != SAMPLE_RATE:
         target = int(round(n * SAMPLE_RATE / float(rate)))
+        if target <= 0:
+            raise SttError("STT_DECODE_FAILED", "audio contains no usable samples")
         idx = np.linspace(0.0, float(n - 1), target)
         samples = np.interp(idx, np.arange(n, dtype="float64"),
                             samples.astype("float64")).astype("int16")
@@ -124,11 +126,15 @@ def to_wav16k(data: bytes | str | Path, *, max_seconds: int = DEFAULT_MAX_SECOND
         raise OSError("could not create the STT temp file")
     os.close(_fd)
     out = Path(_tmp_name)
-    with wave.open(str(out), "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(samples.tobytes())
+    try:
+        with wave.open(str(out), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(samples.tobytes())
+    except (OSError, wave.Error, RuntimeError):
+        cleanup(out)
+        raise
     logger.info("[STT] decoded %.1fs audio -> %s (%.0f KB)",
                 duration, out.name, out.stat().st_size / 1024)
     return out, duration

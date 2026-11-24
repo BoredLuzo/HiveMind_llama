@@ -18,6 +18,7 @@ from tools.definitions import get_tools_for_phase, _tool_names_for_mode
 from tools.runner import _run_inline_tool, _current_run_id, _tool_loop_emit
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, build_steer_user_message as _build_steer_user_message
+from core.toolcall_sanitize import sanitize_invalid_tool_call_history
 
 _log = logging.getLogger("hivemind.tool_loop")
 from core.model_sampling import (
@@ -325,6 +326,7 @@ class ToolLoop:
         self._usage_gen_ms = 0.0
         self._usage_decode_tps = 0.0
         self._last_compressed_messages: list[dict] | None = None
+        self._last_finish_reason: str = ""
 
     async def run(self, messages: list[dict]) -> AsyncIterator[dict]:
         """Run the tool-calling loop, yielding events."""
@@ -339,6 +341,7 @@ class ToolLoop:
         self._usage_gen_ms = 0.0
         self._usage_decode_tps = 0.0
         self._last_compressed_messages: list[dict] | None = None
+        self._last_finish_reason = ""
         if self._run_id:
             _current_run_id.set(self._run_id)
 
@@ -346,6 +349,7 @@ class ToolLoop:
         _tool_names_for_guard = {"patch_file", "edit_file", "write_file", "write_file_append", "replace_lines", "apply_patch"}
         _MAX_FEEDBACK_ROUNDS = 3
         _feedback_injected_count = 0
+        _sanitize_upto = 0
 
         _exhausted = False
         for _round in range(self.cfg.max_rounds):
@@ -491,8 +495,36 @@ class ToolLoop:
             # ── Compress if enabled ──
             _on_compress = self._on_compress
             if self.cfg.compress_enabled and _on_compress is not None:
-                _tool_messages = await _on_compress(_tool_messages, _round)
-                _payload["messages"] = _tool_messages
+                _len_before_cmp = len(_tool_messages)
+                _cmp_msgs = await _on_compress(_tool_messages, _round)
+                if _cmp_msgs is not _tool_messages or len(_cmp_msgs) != _len_before_cmp:
+                    _sanitize_upto = 0
+                _tool_messages = _cmp_msgs
+                _payload["messages"] = normalize_system_messages(_msgs_to_parts(_tool_messages))
+
+            _san_removed = sanitize_invalid_tool_call_history(_tool_messages, start=_sanitize_upto)
+            if (
+                _san_removed
+                and len(_tool_messages) >= 2
+                and isinstance(_tool_messages[-1], dict)
+                and isinstance(_tool_messages[-2], dict)
+                and _tool_messages[-1].get("role") == "user"
+                and _tool_messages[-2].get("role") == "user"
+                and isinstance(_tool_messages[-1].get("content"), str)
+                and isinstance(_tool_messages[-2].get("content"), str)
+                and _tool_messages[-1]["content"].startswith("[REMOVED]")
+            ):
+                _rem_note = _tool_messages.pop()["content"]
+                _prev_user = dict(_tool_messages[-1])
+                _prev_user["content"] = (
+                    (_prev_user["content"] + "\n\n" + _rem_note)
+                    if _prev_user["content"]
+                    else _rem_note
+                )
+                _tool_messages[-1] = _prev_user
+            _sanitize_upto = len(_tool_messages)
+            if _san_removed:
+                _payload["messages"] = normalize_system_messages(_msgs_to_parts(_tool_messages))
 
             # IMAGES-IN-REQUEST (2026-10-04): the tool loop is the
             # coder's real per-round caller and used to bypass the pipeline
@@ -504,6 +536,7 @@ class ToolLoop:
 
             # ── POST + parse with retry ──
             self._last_compressed_messages = None
+            self._last_finish_reason = ""
             _msg = _content_text = None
             _tool_calls = []
             if self.cfg.stream:
@@ -522,6 +555,7 @@ class ToolLoop:
             _compressed_msgs = self._last_compressed_messages
             if _compressed_msgs is not None:
                 _tool_messages = _compressed_msgs
+                _sanitize_upto = 0
                 self._last_compressed_messages = None
 
             if not _msg:
@@ -537,12 +571,38 @@ class ToolLoop:
                     _tool_calls = _fallback_tcs
                     _msg["tool_calls"] = _tool_calls
 
+            _fr = str(getattr(self, "_last_finish_reason", "") or "").strip().lower()
+            if _fr == "length" and _tool_calls:
+                state.tool_errors += 1
+                if _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
+                    _tool_messages.append({
+                        "role": "user",
+                        "content": (
+                            "[TRUNCATED] Your previous tool call was cut off by max_tokens "
+                            "(finish_reason=length) and was NOT executed. Retry with "
+                            "smaller/concise arguments or split the work."
+                        ),
+                    })
+                    _feedback_injected_count += 1
+                    continue
+                state.stop_reason = "length"
+                break
+
             # ── No tool calls → K2 feedback or done ──
             if not _tool_calls:
                 _content = (_msg.get("content") or "").strip()
                 # think-strip fallback
                 if _content and "<think" in _content:
                     _content = _RE_THINK_CLEANUP.sub("", _content).strip()
+
+                if _fr == "length":
+                    if _content:
+                        state.content_parts.append(_content)
+                        if not self.cfg.stream:
+                            yield {"type": "token", "content": _content}
+                    yield {"type": "status", "content": "⚠ Response truncated (max_tokens reached)"}
+                    state.stop_reason = "length"
+                    break
 
                 # K2: inject no_tool_call feedback and retry — only when a tool
                 # call is required (tool-agent / openai_agent / coder). Chat
@@ -634,6 +694,8 @@ class ToolLoop:
                         "name": _name,
                     })
                     continue
+                if isinstance(_raw_args, str) and _raw_args.strip() in ("", "null", "none") and isinstance(_fn, dict):
+                    _fn["arguments"] = "{}"
 
                 state.tool_calls_made += 1
 

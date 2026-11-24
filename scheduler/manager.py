@@ -254,8 +254,15 @@ class SchedulerManager:
                         "pending_fire": job.get("pending_fire"),
                         "last_status": "queued"})
                 else:
-                    self.store.update(job.get("id"), {
-                        "last_status": "skipped_busy"})
+                    upd: dict = {"last_status": "skipped_busy"}
+                    if reason == "due":
+                        upd["next_ts"] = spec.advance_fire_ts(
+                            job.get("schedule") or {},
+                            float(job.get("next_ts") or now),
+                            now,
+                            job.get("timezone") or "",
+                        )
+                    self.store.update(job.get("id"), upd)
                     self.store.append_history({
                         "job_id": job.get("id"), "status": "skipped_busy",
                         "ts": now, "reason": reason})
@@ -273,12 +280,17 @@ class SchedulerManager:
             prompt = str(job.get("prompt") or "")
             await self._append_turn(chat_id, "user", prompt, job)
             # Persist the slot before the run: a crash must not refire it.
-            nxt = spec.advance_fire_ts(schedule, float(job.get("next_ts") or now),
-                                       now, job.get("timezone") or "")
-            self.store.update(job_id, {
+            # Manual "Run Now" must NOT advance/destroy the scheduled next_ts.
+            slot_upd: dict = {
                 "fires": int(job.get("fires") or 0) + 1,
                 "last_fired_ts": started,
-                "next_ts": nxt})
+            }
+            if reason != "manual":
+                slot_upd["next_ts"] = spec.advance_fire_ts(
+                    schedule, float(job.get("next_ts") or now),
+                    now, job.get("timezone") or "",
+                )
+            self.store.update(job_id, slot_upd)
             self._active_run_id = ""
             self._last_ask_preview = ""
             self._last_sent_files = []

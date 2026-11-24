@@ -3,16 +3,62 @@
 
 from __future__ import annotations
 
-
+from collections import Counter
 import difflib
+import time
 
 
 def _norm(s: str) -> str:
-    """Normalisiere Whitespace fuer Fuzzy-Vergleich."""
+    """Normalize trailing whitespace per line for fuzzy comparison."""
     return "\n".join(l.rstrip() for l in s.splitlines())
 
 
-def best_match_location(content: str, old_str: str) -> tuple[int, float] | None:
+def _sliding_line_overlaps(c_lines: list[str], old_lines: list[str]):
+    """Yield ``(start, quick_ratio)`` in O(1) per window slide via multiset overlap.
+
+    Because every candidate slice ``c_lines[start:start + len(old_lines)]`` has
+    the exact same length ``o_len`` as ``old_lines``, ``overlap / o_len`` equals
+    ``difflib.SequenceMatcher(None, old_lines, slice).quick_ratio()`` without
+    allocating a SequenceMatcher per position.
+    """
+    o_len = len(old_lines)
+    limit = len(c_lines) - o_len
+    if limit < 0 or o_len <= 0:
+        return
+    old_counts = Counter(old_lines)
+    win_counts: dict[str, int] = {}
+    overlap = 0
+    for elem in c_lines[:o_len]:
+        prev = win_counts.get(elem, 0)
+        if prev < old_counts.get(elem, 0):
+            overlap += 1
+        win_counts[elem] = prev + 1
+
+    for start in range(limit + 1):
+        yield start, overlap / o_len
+        if start < limit:
+            out_elem = c_lines[start]
+            in_elem = c_lines[start + o_len]
+            if out_elem != in_elem:
+                prev_out = win_counts[out_elem]
+                if prev_out <= old_counts.get(out_elem, 0):
+                    overlap -= 1
+                if prev_out <= 1:
+                    win_counts.pop(out_elem, None)
+                else:
+                    win_counts[out_elem] = prev_out - 1
+                prev_in = win_counts.get(in_elem, 0)
+                if prev_in < old_counts.get(in_elem, 0):
+                    overlap += 1
+                win_counts[in_elem] = prev_in + 1
+
+
+def best_match_location(
+    content: str,
+    old_str: str,
+    *,
+    max_seconds: float = 2.0,
+) -> tuple[int, float] | None:
     """Approximate location of the closest old_str window in content.
 
     Audit phase 5 (2026-10-14): the edit_file failure anchor used to attach a
@@ -35,32 +81,46 @@ def best_match_location(content: str, old_str: str) -> tuple[int, float] | None:
     large_block = o_len >= 20
     best_start = -1
     best_ratio = 0.0
-    for start in range(max(0, c_len - o_len + 1)):
-        if not large_block and first_search and c_lines[start].strip() != first_search:
-            continue
-        if large_block:
+    deadline = time.monotonic() + max_seconds
+    if large_block:
+        for start, qr in _sliding_line_overlaps(c_lines, old_lines):
+            if (start & 255) == 0 and (max_seconds <= 0.0 or time.monotonic() > deadline):
+                break
             # AUTOJUNK-OFF (2026-10-15): autojunk purges every element that
-            # occurs in >1% of b once len(b) >= 200. For SEARCH blocks made of
-            # many identical lines that purges EVERY character/line of the
-            # candidate window and the ratio collapses (measured 0.07 vs 0.95
-            # for a 19-identical-line block with one drifted line) -> the edit
-            # fails although the window is nearly perfect. Matching accuracy
-            # beats the autojunk speed heuristic here; windows are small.
-            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len], autojunk=False)
-            if sm.quick_ratio() < 0.5:
+            # occurs in >1% of b once len(b) >= 200.
+            if qr < 0.5 or qr <= best_ratio:
+                continue
+            ratio = difflib.SequenceMatcher(
+                None, old_lines, c_lines[start:start + o_len], autojunk=False
+            ).ratio()
+            if ratio > best_ratio:
+                best_start = start
+                best_ratio = ratio
+    else:
+        for start in range(max(0, c_len - o_len + 1)):
+            if (start & 255) == 0 and (max_seconds <= 0.0 or time.monotonic() > deadline):
+                break
+            if first_search and c_lines[start].strip() != first_search:
+                continue
+            sm = difflib.SequenceMatcher(
+                None, o_norm, "\n".join(c_lines[start:start + o_len]), autojunk=False
+            )
+            if sm.quick_ratio() <= best_ratio:
                 continue
             ratio = sm.ratio()
-        else:
-            ratio = difflib.SequenceMatcher(
-                None, o_norm, "\n".join(c_lines[start:start + o_len]), autojunk=False).ratio()
-        if ratio > best_ratio:
-            best_start = start
-            best_ratio = ratio
+            if ratio > best_ratio:
+                best_start = start
+                best_ratio = ratio
     return (best_start, best_ratio) if best_start >= 0 else None
 
 
-def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
-
+def fuzzy_replace(
+    content: str,
+    old_str: str,
+    new_str: str,
+    *,
+    max_seconds: float = 2.0,
+) -> str | None:
 
     if not old_str or not content:
         return None
@@ -93,27 +153,38 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
     # neighboring lines. Small blocks keep the strict first-line + char-ratio
     # 0.85 path.
     large_block = o_len >= 20
+    deadline = time.monotonic() + max_seconds
 
-    for start in range(max(0, c_len - o_len + 1)):
-        if not large_block and first_search and c_lines[start].strip() != first_search:
-            continue
-
-        if large_block:
-            # AUTOJUNK-OFF (2026-10-15): see best_match_location — popular-
-            # element purging collapses the ratio on identical-line blocks.
-            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len], autojunk=False)
-            if sm.quick_ratio() < 0.7:
+    if large_block:
+        for start, qr in _sliding_line_overlaps(c_lines, old_lines):
+            if (start & 255) == 0 and (max_seconds <= 0.0 or time.monotonic() > deadline):
+                return None  # fail safe: never apply partial scan without ambiguity check
+            if qr < 0.7:
+                continue
+            ratio = difflib.SequenceMatcher(
+                None, old_lines, c_lines[start:start + o_len], autojunk=False
+            ).ratio()
+            if ratio >= 0.80:
+                candidates.append((start, ratio))
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_start = start
+    else:
+        for start in range(max(0, c_len - o_len + 1)):
+            if (start & 255) == 0 and (max_seconds <= 0.0 or time.monotonic() > deadline):
+                return None
+            if first_search and c_lines[start].strip() != first_search:
+                continue
+            cand = "\n".join(c_lines[start:start + o_len])
+            sm = difflib.SequenceMatcher(None, o_norm, cand, autojunk=False)
+            if sm.quick_ratio() < 0.80:
                 continue
             ratio = sm.ratio()
-        else:
-            cand = "\n".join(c_lines[start:start + o_len])
-            ratio = difflib.SequenceMatcher(None, o_norm, cand, autojunk=False).ratio()
-
-        if ratio >= 0.80:
-            candidates.append((start, ratio))
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_start = start
+            if ratio >= 0.80:
+                candidates.append((start, ratio))
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_start = start
 
     # AMBIGUITY (2026-09-17, margin rule + overlap scoping):
     # Check every OTHER candidate regardless of scan order (before OR after

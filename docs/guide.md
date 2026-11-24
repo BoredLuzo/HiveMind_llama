@@ -553,7 +553,7 @@ base config plus your agent settings. Deleting the folder resets the learning.
 
 ## Download catalog
 
-`setup_models.bat` offers a condensed catalog of 11 performance-class models
+`setup_models.bat` offers a condensed catalog of 12 performance-class models
 (every repo is pinned - no fuzzy search) plus an auto-detected hardware tier plan
 matching your GPU VRAM and system RAM. The list lives in `deploy/fetch_models.py`;
 `python deploy\fetch_models.py --list-only` and
@@ -572,20 +572,21 @@ matching your GPU VRAM and system RAM. The list lives in `deploy/fetch_models.py
 | `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | 8–12 GB power tier: heavy dense vision coder (MTP) | 5.9 GB + 0.9 GB mmproj |
 | `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | Hybrid MoE / 16+ GB tier: 26B/4B active Gemma 4 reasoning (128K ctx, q4_0 KV) | 12.6 GB |
 | `qwen3.6:35b-a3b-mtp` | unsloth/Qwen3.6-35B-A3B-MTP-GGUF | Flagship MoE / 24+ GB or 8 GB+32 GB RAM tier: 35B/3B coder (`UD-IQ4_XS` + MTP) | 17.0 GB + 0.9 GB mmproj |
+| `inkling-2-mini` | unsloth/Inkling-2-Mini-GGUF | Hybrid MoE / 16+ GB or 8 GB+32 GB RAM tier: looped-MoE coder / reasoning + vision (`UD-IQ3_XXS`, needs b12600+) | 10.9 GB + 0.6 GB mmproj |
 
 **Hardware tier recommendations (`deploy/recommend_models.py --plan`):**
 
 - **4–6 GB VRAM / CPU-only:** start with `lfm3:1.7b-qad`, `lfm3-omni:2b`, `minicpm5:2b-sharp`, and `qwen3.5:4b-mtp` at 8K–16K ctx.
 - **8 GB VRAM + <=24 GB RAM:** use the 4 Essential models plus 8 GB dense upgrades (`nvidia-nemotron-3.5-bolt:e4b`, `twil:8b`, `qwen3.5:9b-mtp`); skip >12 GB MoEs.
-- **8 GB VRAM + 32+ GB RAM:** ideal hybrid CPU-MoE setup — add `air:26b-a4b` and `qwen3.6:35b-a3b-mtp` alongside `nvidia-nemotron-3.5-bolt:e4b`.
-- **12–16 GB / 24+ GB VRAM:** keep 8B–9B dense models GPU-resident and run `qwen3.6:35b-a3b-mtp` / `air:26b-a4b` with higher GPU offload.
+- **8 GB VRAM + 32+ GB RAM:** ideal hybrid CPU-MoE setup — add `air:26b-a4b`, `qwen3.6:35b-a3b-mtp`, and `inkling-2-mini` alongside `nvidia-nemotron-3.5-bolt:e4b`.
+- **12–16 GB / 24+ GB VRAM:** keep 8B–9B dense models GPU-resident and run `qwen3.6:35b-a3b-mtp` / `inkling-2-mini` / `air:26b-a4b` with higher GPU offload.
 
-Text-only models (`lfm3`, `nvidia-nemotron-3.5-bolt:e4b`, `twil:8b`, `air:26b-a4b`, `minicpm5:2b-sharp`) download GGUF weights (plus `chat_template.jinja` on `minicpm5:2b-sharp`). Multimodal models (`gemma-4:e4b-it-qat`, `qwen3.5:4b-mtp`, `qwen3.5:9b-mtp`, `lfm3-omni:2b`, `qwen3.6:35b-a3b-mtp`) pull their paired `mmproj` projector automatically. Speculative drafters are downloaded automatically alongside `gemma-4:e4b-it-qat` (~60 MB MTP sidecar), `minicpm5:2b-sharp` (DSpark), and `nvidia-nemotron-3.5-bolt:e4b` (DFlash Q8_0) and are never registered as standalone models. Other local GGUFs (such as custom/unlisted fine-tunes or larger MoEs) keep their profiles in `model_configs/models/` and can still be registered via `[R]` or `[C]`.
+Text-only models (`lfm3`, `nvidia-nemotron-3.5-bolt:e4b`, `twil:8b`, `air:26b-a4b`, `minicpm5:2b-sharp`) download GGUF weights (plus `chat_template.jinja` on `minicpm5:2b-sharp`). Multimodal models (`gemma-4:e4b-it-qat`, `qwen3.5:4b-mtp`, `qwen3.5:9b-mtp`, `lfm3-omni:2b`, `qwen3.6:35b-a3b-mtp`, `inkling-2-mini`) pull their paired `mmproj` projector automatically. Speculative drafters are downloaded automatically alongside `gemma-4:e4b-it-qat` (~60 MB MTP sidecar), `minicpm5:2b-sharp` (DSpark), and `nvidia-nemotron-3.5-bolt:e4b` (DFlash Q8_0) and are never registered as standalone models. Other local GGUFs (such as custom/unlisted fine-tunes or larger MoEs) keep their profiles in `model_configs/models/` and can still be registered via `[R]` or `[C]`.
 
 GGUFs already on disk can be registered without downloading anything
 (`setup_models.bat` -> `[R]`) or given a full config via `[C]`.
 
-Multimodal: `gemma-4`, `qwen3.5`, `qwen3.6`, and `lfm3-omni` load their paired
+Multimodal: `gemma-4`, `qwen3.5`, `qwen3.6`, `inkling-2-mini`, and `lfm3-omni` load their paired
 `mmproj` projector (auto-downloaded with vision models) on demand when images
 are attached. Non-multimodal models use the `Describe first` Vision-Agent path.
 

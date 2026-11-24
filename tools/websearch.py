@@ -790,6 +790,10 @@ async def _guard_fetch_target(url: str) -> str | None:
     return None
 
 
+_MAX_FETCH_BYTES = 5 * 1024 * 1024
+_MAX_FETCH_CHARS = 500_000
+
+
 async def web_fetch(url: str, max_chars: int = 4000) -> str:
     if not _HAS_HTTPX:
         return "[web_fetch: httpx not installed]"
@@ -803,7 +807,7 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
         _req_headers = {"User-Agent": _ua} if _ua else None
         try:
             _hop_url = url
-            resp = None
+            _redirect_exhausted = True
             for _hop in range(6):
                 _gerr = await _guard_fetch_target(_hop_url)
                 if _gerr:
@@ -820,27 +824,38 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
                     _gerr = await _guard_fetch_resolved(_final_host)
                     if _gerr:
                         return f"[web_fetch blocked pre-connect] {_gerr}"
-                resp = await client.get(
+                async with client.stream(
+                    "GET",
                     _hop_url,
                     headers=_req_headers,
                     timeout=_httpx.Timeout(
                         connect=5.0, read=_FETCH_TIMEOUT, write=10.0, pool=5.0
                     ),
                     follow_redirects=False,
-                )
-                if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
-                    from urllib.parse import urljoin as _urljoin
-                    _hop_url = str(_urljoin(_hop_url, resp.headers["location"]))
-                    continue
-                break
-            else:
+                ) as resp:
+                    if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
+                        from urllib.parse import urljoin as _urljoin
+                        _hop_url = str(_urljoin(_hop_url, resp.headers["location"]))
+                        continue
+                    resp.raise_for_status()
+                    _cl_hdr = resp.headers.get("content-length")
+                    if _cl_hdr and _cl_hdr.isdigit() and int(_cl_hdr) > _MAX_FETCH_BYTES:
+                        return f"[web_fetch: response too large ({int(_cl_hdr)} bytes) - {url}]"
+                    _chunks = bytearray()
+                    async for _chunk in resp.aiter_bytes(chunk_size=65536):
+                        if len(_chunks) + len(_chunk) > _MAX_FETCH_BYTES:
+                            return f"[web_fetch: response too large (>{_MAX_FETCH_BYTES} bytes) - {url}]"
+                        _chunks.extend(_chunk)
+                    _enc = getattr(resp, "encoding", None) or "utf-8"
+                    try:
+                        body = bytes(_chunks).decode(_enc, errors="replace")[:_MAX_FETCH_CHARS]
+                    except LookupError:
+                        body = bytes(_chunks).decode("utf-8", errors="replace")[:_MAX_FETCH_CHARS]
+                    _content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+                    _redirect_exhausted = False
+                    break
+            if _redirect_exhausted:
                 return f"[web_fetch: too many redirects (>5) - {url}]"
-            resp.raise_for_status()
-            _cl_hdr = resp.headers.get("content-length")
-            if _cl_hdr and _cl_hdr.isdigit() and int(_cl_hdr) > 5 * 1024 * 1024:
-                return f"[web_fetch: response too large ({int(_cl_hdr)} bytes) - {url}]"
-            body = resp.text[:500_000]
-            _content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
             break
         except _httpx.ConnectError:
             return f"[web_fetch: connection error - {url}]"

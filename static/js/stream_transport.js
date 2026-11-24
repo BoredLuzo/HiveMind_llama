@@ -369,8 +369,19 @@ function _apAutoBox(card, d) {
         card.dataset.apLocked = '1';
         fetch('/approval/decide/' + encodeURIComponent(_rid), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ answer: '1|auto-approved (card timer)' })
-        }).then(function() {
+          body: JSON.stringify({
+            answer: '1|auto-approved (card timer)',
+            decision_id: (card.dataset.decisionId || ''),
+            tool: (card.dataset.tool || ''),
+            approval_key: (card.dataset.approvalKey || '')
+          })
+        }).then(function(resp) {
+          return resp && typeof resp.json === 'function' ? resp.json().catch(function() { return {}; }) : {};
+        }).then(function(rj) {
+          if (rj && rj.routed === 'awaiting_args') {
+            card.dataset.apLocked = '';
+            return;
+          }
           var _gone = document.getElementById('approval-request-card');
           if (_gone) { _apprClearedAt = Date.now(); _gone.remove(); }
         }).catch(function(e) { if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e); });
@@ -401,6 +412,7 @@ function _renderApprovalCard(d) {
     if (_el) _readAloud('gate', _el.innerText);
   }, 60);
   var _runId = d.run_id || S.currentRunId || '';
+  var _isArgsPending = !d.approval_key && !d.decision_id && /^\(generating\b/i.test(String(d.preview || '').trim());
   var _apOld = document.getElementById('approval-request-card');
   // UPDATE-IN-PLACE (2026-09-18): the card is emitted twice per gated call
   // (staged the moment the tool name streams in + again when the execution
@@ -415,8 +427,17 @@ function _renderApprovalCard(d) {
       var _preUp = _apOld.querySelector('[data-ap-preview]');
       if (_lblUp) _lblUp.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run. Your approval is needed';
       if (_preUp && _preUp.textContent !== (d.preview || '')) _preUp.textContent = d.preview || '';
+      if (d.tool) _apOld.dataset.tool = d.tool;
+      if (d.approval_key) _apOld.dataset.approvalKey = d.approval_key;
       if (d.decision_id) _apOld.dataset.decisionId = d.decision_id;
-      _apOld.dataset.apStaged = '';  // real preview known — the arg feed stops
+      if (!_isArgsPending) {
+        _apOld.dataset.apStaged = '';  // real preview known — the arg feed stops
+        _apOld.querySelectorAll('button[data-ap-approve="1"]').forEach(function(btn) {
+          btn.disabled = false;
+          btn.style.opacity = '';
+          btn.title = '';
+        });
+      }
       _apAutoBox(_apOld, d);  // pause emit carries auto_timeout_s — start countdown
       return;
     }
@@ -428,8 +449,10 @@ function _renderApprovalCard(d) {
   _ap.id = 'approval-request-card';
   _ap.className = 'msg divider';
   _ap.dataset.runId = _runId;
+  _ap.dataset.tool = d.tool || '';
+  _ap.dataset.approvalKey = d.approval_key || '';
   _ap.dataset.decisionId = d.decision_id || '';
-  _ap.dataset.apStaged = '1';
+  _ap.dataset.apStaged = _isArgsPending ? '1' : '';
   _ap.style.cssText = 'border-color:rgba(240,173,78,.4);background:rgba(240,173,78,.06);padding:9px 13px';
   var _apLbl = document.createElement('div');
   _apLbl.setAttribute('data-ap-label', '1');
@@ -455,6 +478,14 @@ function _renderApprovalCard(d) {
     btn.className = 'ghost';
     btn.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid ' + b[2] + '55;color:' + b[2];
     btn.textContent = b[1];
+    if (b[0] === '1' || b[0] === '2') {
+      btn.dataset.apApprove = '1';
+      if (_isArgsPending) {
+        btn.disabled = true;
+        btn.style.opacity = .45;
+        btn.title = 'Waiting for full arguments before approval\u2026';
+      }
+    }
     btn.onclick = function() {
       var _n = (_apNote.value || '').trim();
       if (b[0] === '0' && !_n) { _apNote.focus(); _apNote.style.borderColor = '#e06060'; return; }
@@ -468,8 +499,28 @@ function _renderApprovalCard(d) {
       fetch('/approval/decide/' + encodeURIComponent(d.run_id || S.currentRunId || ''), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer: _ans, decision_id: (_ap.dataset.decisionId || d.decision_id || '') })
-      }).then(function() {
+        body: JSON.stringify({
+          answer: _ans,
+          decision_id: (_ap.dataset.decisionId || d.decision_id || ''),
+          tool: (_ap.dataset.tool || d.tool || ''),
+          approval_key: (_ap.dataset.approvalKey || d.approval_key || '')
+        })
+      }).then(function(resp) {
+        return resp && typeof resp.json === 'function' ? resp.json().catch(function() { return {}; }) : {};
+      }).then(function(rj) {
+        if (rj && rj.routed === 'awaiting_args') {
+          _ap.dataset.apLocked = '';
+          _apRow.querySelectorAll('button').forEach(function(x) {
+            if (x.dataset.apApprove === '1' && _ap.dataset.apStaged === '1') {
+              x.disabled = true;
+              x.style.opacity = .45;
+            } else {
+              x.disabled = false;
+              x.style.opacity = '';
+            }
+          });
+          return;
+        }
         // INSTANT-CLEAR (2026-09-19): die Entscheidung ist registriert — die
         // Card fliegt sofort, nicht erst wenn agent_resumed/poll dazu kommen
         // (der naechste Prefill kann auf langsamer Hardware Minuten dauern).
@@ -477,7 +528,15 @@ function _renderApprovalCard(d) {
         if (_gone && _gone.dataset.apLocked === '1') { _apprClearedAt = Date.now(); _gone.remove(); }
       }).catch(function(e) {
         _ap.dataset.apLocked = '';
-        _apRow.querySelectorAll('button').forEach(function(x) { x.disabled = false; x.style.opacity = ''; });
+        _apRow.querySelectorAll('button').forEach(function(x) {
+          if (x.dataset.apApprove === '1' && _ap.dataset.apStaged === '1') {
+            x.disabled = true;
+            x.style.opacity = .45;
+          } else {
+            x.disabled = false;
+            x.style.opacity = '';
+          }
+        });
         if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e);
       });
     };
@@ -697,10 +756,12 @@ if (typeof sessionStorage !== 'undefined') {
 if (typeof document !== 'undefined') {
   setInterval(function() {
   if (document.hidden || !S.currentRunId) return;
-  try { sessionStorage.setItem('hm_run_id', S.currentRunId); } catch (e) {}
-  fetch('/approval/pending/' + encodeURIComponent(S.currentRunId))
+  var _pollRunId = S.currentRunId;
+  try { sessionStorage.setItem('hm_run_id', _pollRunId); } catch (e) {}
+  fetch('/approval/pending/' + encodeURIComponent(_pollRunId))
     .then(function(r) { return r.json(); })
     .then(function(d) {
+      if (_pollRunId !== S.currentRunId) return;
       var existing = document.getElementById('approval-request-card');
       var existingAsk = document.getElementById('ask-user-card');
       if (d && d.active) {
@@ -710,14 +771,29 @@ if (typeof document !== 'undefined') {
         // ist das Pending echte weiterhin aktiv, kommt die Card zurueck.
         if (d.kind === 'ask') {
           if (!existingAsk && Date.now() - _askClearedAt > 4000) {
-            _renderAskCard({ run_id: S.currentRunId, question: d.question || d.preview, decision_id: d.decision_id });
+            _renderAskCard({ run_id: _pollRunId, question: d.question || d.preview, decision_id: d.decision_id });
           }
-        } else if (!existing && Date.now() - _apprClearedAt > 4000) {
-          _renderApprovalCard({ run_id: S.currentRunId, tool: d.tool, preview: d.preview, decision_id: d.decision_id });
+        } else if ((!existing && Date.now() - _apprClearedAt > 4000) ||
+                   (existing && existing.dataset.runId === _pollRunId &&
+                    existing.dataset.apStaged === '1' &&
+                    (d.decision_id || d.approval_key))) {
+          _renderApprovalCard({
+            run_id: _pollRunId,
+            tool: d.tool,
+            preview: d.preview,
+            decision_id: d.decision_id,
+            approval_key: d.approval_key,
+            auto_timeout_s: d.auto_timeout_s
+          });
         }
       } else {
-        if (existing) { if (existing._apAutoInt) { clearInterval(existing._apAutoInt); existing._apAutoInt = null; } existing.remove(); }
-        if (existingAsk) existingAsk.remove();
+        if (existing && (!existing.dataset.runId || existing.dataset.runId === _pollRunId)) {
+          if (existing._apAutoInt) { clearInterval(existing._apAutoInt); existing._apAutoInt = null; }
+          existing.remove();
+        }
+        if (existingAsk && (!existingAsk.dataset.runId || existingAsk.dataset.runId === _pollRunId)) {
+          existingAsk.remove();
+        }
       }
     }).catch(function() {});
   }, 2000);
@@ -1689,46 +1765,59 @@ function _journalStartTail(runId) {
   _pollOnce();
 }
 
+function _journalApplyAttachSnapshot(j, _initEpoch) {
+  if (S.streaming || S._journalTailing || (S._chatSwitchEpoch || 0) !== _initEpoch) return;
+  if (!j || !j.active || !j.frames || !j.frames.length) return;
+  if (j.done && ((Date.now() / 1000) - (j.ts || 0)) > 300) return;
+  // JOURNAL-CHAT-SCOPE (audit 2026-11-03): only reattach a run that
+  // belongs to the chat currently open. Without this, the newest run's
+  // frames were replayed into whatever chat happened to be on screen.
+  if (j.chat_id && (!S.currentChatId || String(j.chat_id) !== String(S.currentChatId))) return;
+  if (S._attachedRunId === j.run_id) return;
+  S._attachedRunId = j.run_id;
+  if (j.done) return;
+  S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
+  // A mirrored live run counts as streaming: the composer must not start
+  // a second concurrent run on the same chat.
+  S.streaming = true;
+  _journalNote('Attached to the running job (live).');
+  for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
+  // TG-AUDIT (2026-10-07): `n` is the LOGICAL frame count while the
+  // window only holds the newest slice (20k cap) - tail polls must
+  // ask from the logical position, not the window length.
+  S._sseFrameSeq = (typeof j.n === 'number' && j.frames.length)
+    ? j.n : (S._sseFrameSeq || 0);
+  if (!S._sawDoneEvent && !j.done && !j.aborted) {
+    _journalStartTail(j.run_id);
+  } else {
+    _finalizeStreamUi();
+    if (j.aborted && !S._sawDoneEvent) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
+  }
+}
+
 function _journalInitAttach() {
   if (S.streaming || S._journalTailing) return;
   var _initEpoch = S._chatSwitchEpoch || 0;
-  fetch('/run/journal')
+  // Meta-only idle peek avoids re-serializing up to 8 MB of frames every 10 s.
+  fetch('/run/journal?after=1000000000')
     .then(function(r) { return r.json(); })
     .then(function(j) {
       if (S.streaming || S._journalTailing || (S._chatSwitchEpoch || 0) !== _initEpoch) return;
-      if (!j || !j.active || !j.frames || !j.frames.length) return;
+      if (!j || !j.active) return;
+      if (!(Number(j.n || 0) > 0 || (j.frames && j.frames.length))) return;
       if (j.done && ((Date.now() / 1000) - (j.ts || 0)) > 300) return;
-      // JOURNAL-CHAT-SCOPE (audit 2026-11-03): only reattach a run that
-      // belongs to the chat currently open. Without this, the newest run's
-      // frames were replayed into whatever chat happened to be on screen.
       if (j.chat_id && (!S.currentChatId || String(j.chat_id) !== String(S.currentChatId))) return;
-      // skip if we already rendered this run (page reload replays it via
-      // the chat transcript; only LIVE runs and fresh history attach)
       if (S._attachedRunId === j.run_id) return;
-      S._attachedRunId = j.run_id;
       // DONE-JOURNAL-SILENT (2026-10-11): a finished run's journal is fully
-      // covered by the chat-transcript replay - feed no frames AND print no
-      // note. The restore note showed after EVERY clean run within the 300s
-      // window (user report: the note showed after every run). Live/aborted attaches
-      // keep their notes.
-      if (j.done) return;
-      S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
-      // A mirrored live run counts as streaming: the composer must not start
-      // a second concurrent run on the same chat.
-      S.streaming = true;
-      _journalNote('Attached to the running job (live).');
-      for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
-      // TG-AUDIT (2026-10-07): `n` is the LOGICAL frame count while the
-      // window only holds the newest slice (20k cap) - tail polls must
-      // ask from the logical position, not the window length.
-      S._sseFrameSeq = (typeof j.n === 'number' && j.frames.length)
-        ? j.n : (S._sseFrameSeq || 0);
-      if (!S._sawDoneEvent && !j.done && !j.aborted) {
-        _journalStartTail(j.run_id);
-      } else {
-        _finalizeStreamUi();
-        if (j.aborted && !S._sawDoneEvent) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
+      // covered by the chat-transcript replay - feed no frames AND print no note.
+      if (j.done) { S._attachedRunId = j.run_id; return; }
+      if (j.frames && j.frames.length) {
+        _journalApplyAttachSnapshot(j, _initEpoch);
+        return;
       }
+      return fetch('/run/journal?run_id=' + encodeURIComponent(j.run_id) + '&after=0')
+        .then(function(r2) { return r2.json(); })
+        .then(function(fullJ) { _journalApplyAttachSnapshot(fullJ, _initEpoch); });
     })
     .catch(function() {});
 }

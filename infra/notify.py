@@ -26,13 +26,76 @@ def _notifications_enabled() -> bool:
         return True
 
 
+_TOAST_PS = (
+    "$ErrorActionPreference = 'Stop'\n"
+    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null\n"
+    "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null\n"
+    "$tpl = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
+    "$nodes = $tpl.GetElementsByTagName('text')\n"
+    "$nodes.Item(0).AppendChild($tpl.CreateTextNode($env:HM_TOAST_TITLE)) > $null\n"
+    "$nodes.Item(1).AppendChild($tpl.CreateTextNode($env:HM_TOAST_MSG)) > $null\n"
+    "$toast = [Windows.UI.Notifications.ToastNotification]::new($tpl)\n"
+    "$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:HM_TOAST_APPID)\n"
+    "$notifier.Show($toast)\n"
+)
+_TOAST_PS_B64 = __import__("base64").b64encode(_TOAST_PS.encode("utf-16-le")).decode("ascii")
+
+
+def _sanitize_toast_text(text: object, max_len: int = 240) -> str:
+    """Normalize toast text by stripping control characters and bounding length."""
+    cleaned = "".join(
+        " " if ch in ("\r", "\n", "\t") else ("" if (ord(ch) < 32 or ord(ch) == 127) else ch)
+        for ch in str(text or "")
+    )
+    collapsed = " ".join(cleaned.split())
+    if max_len > 0 and len(collapsed) > max_len:
+        return collapsed[:max_len]
+    return collapsed
+
+
 def _do_notify(title: str, message: str):
+    """Display a desktop toast via a static -EncodedCommand PowerShell script and env vars."""
+    import subprocess as _sp_mod
+    import sys as _sys_mod
+    from infra.child_env import scrubbed_env
+
+    safe_title = _sanitize_toast_text(title, max_len=160)
+    safe_msg = _sanitize_toast_text(message, max_len=400)
+    if _sys_mod.platform != "win32":
+        logger.warning("[NOTIFY-fallback] %s — %s", safe_title, safe_msg)
+        return
     try:
-        from winotify import Notification
-        toast = Notification(app_id=APP_ID, title=title, msg=message, duration="short")
-        toast.show()
-    except Exception as _e:
-        logger.warning("[NOTIFY-fallback] %s — %s (%s)", title, message, _e)
+        env = scrubbed_env(extra={
+            "HM_TOAST_APPID": _sanitize_toast_text(APP_ID, max_len=128) or "HiveMind",
+            "HM_TOAST_TITLE": safe_title,
+            "HM_TOAST_MSG": safe_msg,
+        })
+        proc = _sp_mod.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-EncodedCommand",
+                _TOAST_PS_B64,
+            ],
+            stdin=_sp_mod.DEVNULL,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            creationflags=getattr(_sp_mod, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+        if proc.returncode != 0:
+            err_tail = _sanitize_toast_text(proc.stderr or proc.stdout or f"rc={proc.returncode}", max_len=160)
+            logger.warning("[NOTIFY-fallback] %s — %s (%s)", safe_title, safe_msg, err_tail)
+    except (OSError, _sp_mod.SubprocessError) as _e:
+        logger.warning("[NOTIFY-fallback] %s — %s (%s)", safe_title, safe_msg, _e)
 
 
 def notify(title: str, message: str, dedup_sig: str = "") -> bool:

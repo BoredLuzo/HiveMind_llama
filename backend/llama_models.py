@@ -182,6 +182,7 @@ _BUILTIN_FILENAME_TAGS: dict[str, str] = {
     "nemotron-3.5-bolt-e4b-q4_k_m.gguf": "nvidia-nemotron-3.5-bolt:e4b",
     "twil-8b-q4_k_m-balanced.gguf": "twil:8b",
     "cyber-tiel-coder-35b-a3b-mtp-ud-iq4_xs.gguf": "cyber-tiel-coder:35b-a3b-mtp-ud",
+    "inkling-2-mini-ud-iq3_xxs.gguf": "inkling-2-mini",
 }
 
 

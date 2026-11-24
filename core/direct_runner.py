@@ -877,13 +877,16 @@ async def _run_direct_inner(ctx):
         # a direct anti-hallucination instruction - small models weight the
         # prompt tail most and this is exactly the failure that produced
         # "Oktober 2026 liegt mehr als ein Jahr in der Zukunft".
+        # KV-CACHE-FIX (2026-11-24): omit per-minute HH:MM from sys_p so the
+        # system prompt prefix stays byte-identical across turns (--cache-reuse
+        # does not rescue mid-prompt mutations); live HH:MM rides in chat_util's
+        # trailing user note instead.
         _now_dt = datetime.now()
         _tomorrow_dt = datetime.fromtimestamp(_now_dt.timestamp() + 86400)
         sys_p += (
             "\n\n=== TODAY (authoritative, set by the system) ===\n"
             f"Today is {_now_dt.strftime('%A, %Y-%m-%d')}. "
-            f"Tomorrow is {_tomorrow_dt.strftime('%A, %Y-%m-%d')}. "
-            f"Current local time: {_now_dt.strftime('%H:%M')}.\n"
+            f"Tomorrow is {_tomorrow_dt.strftime('%A, %Y-%m-%d')}.\n"
             "NEVER claim a date is in the future or the past without checking "
             "this section. If asked about tomorrow, use this exact date. "
             "get_datetime() returns the same info as a tool call.\n"

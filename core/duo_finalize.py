@@ -224,7 +224,9 @@ async def _duo_run_finalize(ctx, ps):
     _cleanup_pause_state(ctx.run_id)
     if ctx.chat_id:
         _clear_pause_state(ctx.chat_id)
-    _cleanup_governor(ctx.chat_id or ctx.run_id)
+    _cleanup_governor(ctx.run_id or ctx.chat_id)
+    if ctx.chat_id and ctx.chat_id != ctx.run_id:
+        _cleanup_governor(ctx.chat_id)
     from tools.runner import _current_project_state
     _current_project_state.set(None)
     # AUDIT-FIX 2026-08-03 (preload_workers_after_run, strenges Opt-in, Default False):

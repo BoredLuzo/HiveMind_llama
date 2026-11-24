@@ -11,16 +11,32 @@ Block in den Run haengt.
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 DEFAULT_TTL_S = 300.0          # Kontext ist frisch oder weg - nie "irgendwann alt"
 MAX_SELECTION_CHARS = 4000     # mehr Selektion hilft nicht, kostet ctx
 MAX_DIAGNOSTICS = 20
 MAX_OPEN_FILES = 20
+MAX_WORKSPACES = 32
+_MARKER_BRACKET_RE = re.compile(
+    r"\[(\s*/?\s*editor\s*context[^\]]*)\]",
+    re.IGNORECASE,
+)
+
+
+def _neutralize_text(value: object, *, single_line: bool = False) -> str:
+    """Strip control chars and neutralize editor-context marker brackets."""
+    s = str(value or "").replace("\x00", "")
+    if single_line:
+        s = re.sub(r"[\r\n\t]+", " ", s).strip()
+    s = _MARKER_BRACKET_RE.sub(r"(\1)", s)
+    # Catch unclosed opening tags too.
+    s = re.sub(r"(\[/?\s*editor\s*context)", lambda m: "(" + m.group(1)[1:], s, flags=re.IGNORECASE)
+    return s.replace("```", "`\u200b``")
 
 
 @dataclass
@@ -70,9 +86,14 @@ def _clean_text(value, limit: int) -> str:
 
 
 def _clean_paths(values, limit: int) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        return []
     out: list[str] = []
-    for raw in values or []:
-        p = str(raw or "").strip()
+    max_scan = max(limit * 4, limit)
+    for idx, raw in enumerate(values):
+        if idx >= max_scan:
+            break
+        p = str(raw or "").replace("\x00", "").strip()[:400]
         if p and p not in out:
             out.append(p)
         if len(out) >= limit:
@@ -101,14 +122,14 @@ def _clean_diagnostics(values) -> list[dict]:
 
 
 def _norm_workspace(workspace) -> str:
-    """Workspace-Key. Leer bleibt leer - Path("").resolve() waere das CWD."""
+    """Lexical workspace key: reject UNC/NUL, no blocking resolve(), OS-gated lower."""
     raw = str(workspace or "").strip()
-    if not raw:
+    if not raw or "\x00" in raw or raw.startswith(("\\\\", "//")):
         return ""
-    try:
-        return str(Path(raw).resolve()).lower()
-    except (OSError, ValueError):
-        return raw.lower()
+    norm = os.path.normpath(raw)
+    if norm.startswith(("\\\\", "//")):
+        return ""
+    return norm.lower() if os.name == "nt" else norm
 
 
 def _to_int(value) -> int:
@@ -134,18 +155,30 @@ def parse_context(payload: dict) -> EditorContext:
 
 
 class EditorContextStore:
-    """Ein Slot pro Workspace, mit TTL. Thread-safe, absichtlich simpel."""
+    """Ein Slot pro Workspace, mit TTL + LRU-Cap. Thread-safe, absichtlich simpel."""
 
-    def __init__(self, ttl_s: float = DEFAULT_TTL_S) -> None:
+    def __init__(self, ttl_s: float = DEFAULT_TTL_S,
+                 max_workspaces: int = MAX_WORKSPACES) -> None:
         self.ttl_s = ttl_s
+        self.max_workspaces = max(1, int(max_workspaces))
         self._lock = threading.Lock()
         self._items: dict[str, EditorContext] = {}
+
+    def _prune_expired_locked(self, now: float) -> None:
+        expired = [k for k, v in self._items.items() if (now - v.updated_at) > self.ttl_s]
+        for k in expired:
+            self._items.pop(k, None)
 
     def put(self, ctx: EditorContext) -> None:
         key = ctx.normalized_workspace()
         if not key:
             return
         with self._lock:
+            self._prune_expired_locked(time.time())
+            self._items.pop(key, None)
+            while len(self._items) >= self.max_workspaces:
+                oldest = next(iter(self._items))
+                self._items.pop(oldest, None)
             self._items[key] = ctx
 
     def get(self, workspace: str) -> EditorContext | None:
@@ -159,6 +192,9 @@ class EditorContextStore:
             if (time.time() - ctx.updated_at) > self.ttl_s:
                 self._items.pop(key, None)
                 return None
+            # Refresh LRU position
+            self._items.pop(key, None)
+            self._items[key] = ctx
             return ctx
 
     def clear(self, workspace: str) -> bool:
@@ -185,21 +221,24 @@ def format_block(ctx: EditorContext) -> str:
     lines: list[str] = []
     if ctx.file:
         extra = f", cursor line {ctx.cursor_line}" if ctx.cursor_line else ""
-        lines.append(f"Open file: {ctx.file}{extra}")
+        lines.append(f"Open file: {_neutralize_text(ctx.file, single_line=True)}{extra}")
     if ctx.selection:
         lines.append("Selected code:")
         lines.append("```")
-        lines.append(ctx.selection.rstrip())
+        lines.append(_neutralize_text(ctx.selection.rstrip()))
         lines.append("```")
     if ctx.open_files:
-        others = [p for p in ctx.open_files if p != ctx.file][:10]
+        others = [_neutralize_text(p, single_line=True) for p in ctx.open_files if p != ctx.file][:10]
         if others:
             lines.append("Also open: " + ", ".join(others))
     if ctx.diagnostics:
         lines.append("Editor diagnostics:")
         for d in ctx.diagnostics[:10]:
-            loc = f"{d['file']}:{d['line']}" if d.get("line") else str(d.get("file") or "")
-            lines.append(f"- [{d['severity']}] {loc} {d['message']}".strip())
+            d_file = _neutralize_text(d.get("file") or "", single_line=True)
+            d_sev = _neutralize_text(d.get("severity") or "", single_line=True)
+            d_msg = _neutralize_text(d.get("message") or "", single_line=True)
+            loc = f"{d_file}:{d['line']}" if d.get("line") else d_file
+            lines.append(f"- [{d_sev}] {loc} {d_msg}".strip())
     if not lines:
         return ""
     return "[EDITOR CONTEXT — from the IDE, current state]\n" + "\n".join(lines) + "\n[/EDITOR CONTEXT]"

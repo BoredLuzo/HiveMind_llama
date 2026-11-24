@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import time
@@ -18,6 +19,9 @@ _ALLOWED_TOOLS = ("read_file", "list_dir", "search_code")
 
 _last_block_ts = 0.0
 _active = False        # single-flight
+_LAST_SUB_FINISH_REASON: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_sub_last_finish_reason", default=""
+)
 
 
 def _cfg() -> dict:
@@ -241,8 +245,8 @@ def _tool_schemas() -> list[dict]:
     return build_tool_schemas(_ALLOWED_TOOLS, "read-only tool")
 
 
-async def _call_model(port: int, model: str, messages: list[dict]) -> dict:
-    """Non-stream Chat-Call mit Tools. Returns raw assistant message dict."""
+async def _call_model_with_meta(port: int, model: str, messages: list[dict]) -> tuple[dict, str]:
+    """Non-stream Chat-Call mit Tools. Returns (assistant message dict, finish_reason)."""
     from core.llm_transport import post_chat_json
 
     payload = {
@@ -260,12 +264,20 @@ async def _call_model(port: int, model: str, messages: list[dict]) -> dict:
         max_attempts=2,
         log_label="subagent_lite",
     )
-    return res.message
+    return res.message, str(getattr(res, "finish_reason", "") or "")
+
+
+async def _call_model(port: int, model: str, messages: list[dict]) -> dict:
+    """Non-stream Chat-Call mit Tools. Returns raw assistant message dict."""
+    msg, finish_reason = await _call_model_with_meta(port, model, messages)
+    _LAST_SUB_FINISH_REASON.set(finish_reason)
+    return msg
 
 
 async def _run_sub_loop(task: str, workspace_lock: str | None,
                         model: str, ctx: int) -> str:
     from backend.llama_server_manager import manager
+    from core.toolcall_sanitize import sanitize_invalid_tool_call_history
 
     max_tools = int(_s("subagent_lite_max_tools", 12))
     was_loaded_before = any(
@@ -289,9 +301,33 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
     try:
         port = await manager.ensure_loaded(model, num_ctx=ctx, pin=True)
         for _round in range(max_tools + 1):
+            sanitize_invalid_tool_call_history(messages)
+            _LAST_SUB_FINISH_REASON.set("")
             msg = await _call_model(port, model, messages)
+            finish_reason = _LAST_SUB_FINISH_REASON.get("")
             tcs = msg.get("tool_calls") or []
             content = (msg.get("content") or "").strip()
+            _fr = finish_reason.strip().lower()
+            if _fr == "length":
+                if tcs:
+                    if _round >= max_tools:
+                        summary = content or "(delegate truncated before summary)"
+                        break
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[TRUNCATED] Your previous tool call was cut off by "
+                            "max_tokens and was not executed. Issue a shorter "
+                            "read-only tool call or return your summary now."
+                        ),
+                    })
+                    continue
+                summary = (
+                    f"{content}\n[truncated: max_tokens reached]"
+                    if content
+                    else "(delegate returned no content — truncated)"
+                )
+                break
             if not tcs or _round >= max_tools:
                 summary = content or "(delegate returned no content)"
                 break
@@ -300,12 +336,36 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
                 fn = tc.get("function", {})
                 name = fn.get("name", "")
                 raw_args = fn.get("arguments", "{}")
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
-                except Exception:
-                    args = {}
                 tc_id = tc.get("id") or f"call_{_round}_{len(messages)}"  # H-audit: unique per call
-                if name not in _ALLOWED_TOOLS:
+                args_invalid = False
+                args: dict = {}
+                if isinstance(raw_args, dict):
+                    args = raw_args
+                elif isinstance(raw_args, str):
+                    stripped = raw_args.strip()
+                    if not stripped:
+                        if isinstance(fn, dict):
+                            fn["arguments"] = "{}"
+                        args = {}
+                    else:
+                        try:
+                            parsed = json.loads(stripped)
+                            if isinstance(parsed, dict):
+                                args = parsed
+                            else:
+                                args_invalid = True
+                        except (ValueError, TypeError):
+                            args_invalid = True
+                elif raw_args is None:
+                    if isinstance(fn, dict):
+                        fn["arguments"] = "{}"
+                    args = {}
+                else:
+                    args_invalid = True
+
+                if args_invalid:
+                    result = "[TOOL_ERROR:INVALID_JSON] Tool arguments must be a valid JSON object."
+                elif name not in _ALLOWED_TOOLS:
                     result = f"[blocked] '{name}' is not allowed in the subagent (read-only)."
                 else:
                     result = await _run_inline_tool(

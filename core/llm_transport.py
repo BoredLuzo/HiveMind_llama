@@ -334,6 +334,7 @@ class ChatJsonResponse:
     status_code: int = 200
     attempts: int = 1
     raw: dict = field(default_factory=dict)
+    finish_reason: str = ""
 
 
 def _error_response_message(status_code: int, body: str) -> str:
@@ -398,6 +399,11 @@ async def post_chat_json(
                     )
                 data = resp.json()
                 msg, content_text, tool_calls = parse_nonstream_chat_response(data)
+                finish_reason = ""
+                if isinstance(data, dict):
+                    _choices = data.get("choices")
+                    if isinstance(_choices, list) and _choices and isinstance(_choices[0], dict):
+                        finish_reason = str(_choices[0].get("finish_reason") or "")
                 gen_ms = int((time.monotonic() - t0) * 1000)
                 usage = parse_usage(data.get("usage") if isinstance(data, dict) else None, gen_ms=gen_ms)
                 timings = parse_timings(data.get("timings") if isinstance(data, dict) else None)
@@ -410,6 +416,7 @@ async def post_chat_json(
                     status_code=resp.status_code,
                     attempts=attempt + 1,
                     raw=data if isinstance(data, dict) else {},
+                    finish_reason=finish_reason,
                 )
             except httpx.ConnectError as exc:
                 _log.debug("[%s] ConnectError on port %s (attempt %d/%d): %s",
@@ -722,6 +729,7 @@ async def iter_tool_loop_post(
         _ns_t0 = time.monotonic()
         content_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
+        finish_reason = ""
         _st_t0 = time.monotonic()
         _st_first: float | None = None
         _last_timings: dict | None = None
@@ -757,7 +765,10 @@ async def iter_tool_loop_post(
                     else:
                         _record_tool_loop_usage(loop_obj, _cu, timings=_ctim)
                     choices = chunk.get("choices") or [{}]
-                    delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+                    first_choice = choices[0] if isinstance(choices[0], dict) else {}
+                    if first_choice.get("finish_reason"):
+                        finish_reason = str(first_choice.get("finish_reason") or "")
+                    delta = first_choice.get("delta", {})
                     if not isinstance(delta, dict):
                         continue
                     ct, tc_delta = parse_sse_delta_fn(delta, tool_calls_acc=tool_calls_acc)
@@ -802,6 +813,13 @@ async def iter_tool_loop_post(
                     gen_ms=_ns_ms,
                 )
                 msg, content_text, tcs = parse_nonstream_chat_response(data, strip_content=False)
+                ns_finish_reason = ""
+                if isinstance(data, dict):
+                    _ns_choices = data.get("choices")
+                    if isinstance(_ns_choices, list) and _ns_choices and isinstance(_ns_choices[0], dict):
+                        ns_finish_reason = str(_ns_choices[0].get("finish_reason") or "")
+                if hasattr(loop_obj, "__dict__"):
+                    loop_obj._last_finish_reason = ns_finish_reason
                 yield (msg, content_text, tcs)
                 return
 
@@ -818,6 +836,8 @@ async def iter_tool_loop_post(
                 "content": content or None,
                 "tool_calls": tcs_sorted,
             }
+            if hasattr(loop_obj, "__dict__"):
+                loop_obj._last_finish_reason = finish_reason
             yield (msg, content or "", tcs_sorted)
             return
 

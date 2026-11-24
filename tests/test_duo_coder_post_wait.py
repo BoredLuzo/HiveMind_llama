@@ -268,8 +268,8 @@ check("[death] run pause state cleaned",
       r.rec.pause_state.calls == [(("run-1",), {})])
 check("[death] chat pause state cleaned",
       r.rec.chat_pause.calls == [(("chat-1",), {})])
-check("[death] governor cleaned for the chat",
-      r.rec.governor.calls == [(("chat-1",), {})])
+check("[death] governor cleaned for both run and chat",
+      r.rec.governor.calls == [(("run-1",), {}), (("chat-1",), {})])
 check("[death] in-use slot cleared on the death path too",
       r.slot.calls == ["mark", "clear"])
 # a None chat_id must skip the chat-pause call (old `if ctx.chat_id` guard)

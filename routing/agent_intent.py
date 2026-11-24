@@ -16,7 +16,7 @@ AGENT_TRIGGER_MAP = {
 
 _TOOL_REQUEST_PATTERNS = [
     r'[A-Za-z]:\\[^\s"\'<>|*?]+\.\w+',
-    r'/(?:[^\s"\'<>|*?]+/)+[^\s"\'<>|*?]+\.\w+',
+    r'/(?:[^\s"\'<>|*?/]+/)+[^\s"\'<>|*?/]+\.\w+',
     r'(?:^|[\s"\'])(?:\./|\.\./)[\w\-\.]+\.(?:java|py|ts|js|go|rs|cpp|c|h|cs|kt|rb|php|swift|vue|json|yaml|yml|toml|xml|sql|sh|bat|ps1)',
 ]
 

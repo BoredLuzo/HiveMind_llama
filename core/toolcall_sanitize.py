@@ -36,6 +36,7 @@ def sanitize_invalid_tool_call_history(messages: list, start: int = 0) -> int:
         return 0
 
     bad: dict = {}  # tool_call_id -> (function name, raw args)
+    bad_tc_ids: set[int] = set()
     for m in messages[max(0, int(start)):]:
         if not isinstance(m, dict) or m.get("role") != "assistant":
             continue
@@ -44,19 +45,24 @@ def sanitize_invalid_tool_call_history(messages: list, start: int = 0) -> int:
                 continue
             fn = tc.get("function") or {}
             raw = fn.get("arguments") if isinstance(fn, dict) else None
-            if isinstance(raw, (dict, list)):
-                continue  # already parsed object -> fine
-            text = str(raw or "").strip()
-            if not text:
-                continue
-            try:
-                json.loads(text)
-            except Exception:
+            if raw is None or isinstance(raw, dict):
+                continue  # None or already parsed object -> fine
+            text = raw.strip() if isinstance(raw, str) else str(raw)
+            is_valid = False
+            if isinstance(raw, str) and text:
+                try:
+                    parsed = json.loads(text)
+                    is_valid = isinstance(parsed, dict)
+                except (ValueError, TypeError):
+                    is_valid = False
+            if not is_valid:
+                bad_tc_ids.add(id(tc))
                 cid = str(tc.get("id") or "").strip()
                 if cid:
-                    bad[cid] = (str(fn.get("name") or "tool"), text)
+                    fname = str(fn.get("name") or "tool") if isinstance(fn, dict) else "tool"
+                    bad[cid] = (fname, text)
 
-    if not bad:
+    if not bad and not bad_tc_ids:
         return 0
 
     removed = 0
@@ -67,7 +73,8 @@ def sanitize_invalid_tool_call_history(messages: list, start: int = 0) -> int:
             out.append(m)
             continue
         if m.get("role") == "tool":
-            if str(m.get("tool_call_id") or "") in bad:
+            _tid = str(m.get("tool_call_id") or "")
+            if _tid in bad or _tid.strip() in bad:
                 continue  # orphaned tool result - dropped, not counted as a call
             out.append(m)
             continue
@@ -76,8 +83,14 @@ def sanitize_invalid_tool_call_history(messages: list, start: int = 0) -> int:
             if tcs:
                 keep = []
                 for tc in tcs:
-                    if isinstance(tc, dict) and str(tc.get("id") or "") in bad:
-                        _name, _raw = bad[str(tc.get("id") or "")]
+                    tc_cid = str(tc.get("id") or "").strip() if isinstance(tc, dict) else ""
+                    if isinstance(tc, dict) and (id(tc) in bad_tc_ids or (tc_cid and tc_cid in bad)):
+                        if tc_cid and tc_cid in bad:
+                            _name, _raw = bad[tc_cid]
+                        else:
+                            _fn = tc.get("function") or {}
+                            _name = str(_fn.get("name") or "tool") if isinstance(_fn, dict) else "tool"
+                            _raw = str(_fn.get("arguments") or "") if isinstance(_fn, dict) else ""
                         _pm = _PATH_RE.search(_raw)
                         removed_targets.append(f"{_name} → {_pm.group(1)}" if _pm else _name)
                         removed += 1

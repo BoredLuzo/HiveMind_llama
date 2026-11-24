@@ -11,6 +11,7 @@ import uuid
 logger = logging.getLogger("hivemind.background")
 
 _MAX_OUTPUT_CHARS = 20000
+_READ_CHUNK_CHARS = 4096
 _MAX_PROCESSES = 8
 
 _REGISTRY: dict[str, dict] = {}
@@ -53,14 +54,28 @@ def _terminate(entry: dict):
 
 def _reader(handle: str, proc: subprocess.Popen):
     try:
-        for _line in proc.stdout:
-            if not _line:
-                continue
-            with _LOCK:
-                _entry = _REGISTRY.get(handle)
-                if _entry is None:
-                    return
-                _entry["buf"] = (_entry["buf"] + _line)[-_MAX_OUTPUT_CHARS:]
+        stream = proc.stdout
+        if stream is None:
+            return
+        if callable(getattr(stream, "readline", None)):
+            while True:
+                _line = stream.readline(_READ_CHUNK_CHARS)
+                if not _line:
+                    break
+                with _LOCK:
+                    _entry = _REGISTRY.get(handle)
+                    if _entry is None:
+                        return
+                    _entry["buf"] = (_entry["buf"] + _line)[-_MAX_OUTPUT_CHARS:]
+        else:
+            for _line in stream:
+                if not _line:
+                    continue
+                with _LOCK:
+                    _entry = _REGISTRY.get(handle)
+                    if _entry is None:
+                        return
+                    _entry["buf"] = (_entry["buf"] + _line)[-_MAX_OUTPUT_CHARS:]
     except Exception:
         pass
 

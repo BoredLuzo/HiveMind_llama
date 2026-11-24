@@ -1,10 +1,11 @@
 # Release 1.6.5
 
 Template-driven reasoning effort controls, decoupled sidebar Planner Effort,
-SSE keepalive & journal reattach reliability, Inkling-2-Mini (`inkling2_loop`)
-and `llama.cpp b12645` support, hardware-autofit defaults, model-discovery
-deduplication fixes, and deep-audit hardening across security, performance,
-and stability.
+modularized `static/js/` UI architecture, SSE keepalive & journal reattach
+reliability, Inkling-2-Mini (`inkling2_loop`) & `llama.cpp b12676` support
+(including optional Tier-4 installer entry), hardware-autofit defaults,
+model-discovery deduplication fixes, and pre-release deep-audit hardening
+across security, agentic loops, performance, and stability.
 
 No settings are reset and no existing model has to be re-downloaded. Upgrade
 with `update.bat` (or extract the release zip next to your old install —
@@ -17,7 +18,7 @@ and `.venv` are kept).
   Reads supported reasoning levels directly from GGUF chat templates and
   external `.jinja` templates (`effort`, `binary` On/Off, or `none`), clamping
   requests safely so strict templates never crash.
-- **Clean single composer button + independent Sidebar Planner Effort (`index.html`, `static/app.js`, `core/duo_runner.py`, `core/duo_inloop_planner.py`, `hive_functions/planner.py`):**
+- **Clean single composer button + independent Sidebar Planner Effort (`index.html`, `static/js/*`, `core/duo_runner.py`, `core/duo_inloop_planner.py`, `hive_functions/planner.py`):**
   The chat composer shows one consistent Thinking effort pill for Direct / Coder
   (keeping Think-Budget sliders independent), while Planner Effort is configured
   directly in the sidebar (`🧠 Thinking` in Code mode and synced in Auto mode's
@@ -30,29 +31,36 @@ and `.venv` are kept).
   thinking at 70% of `Planner Max Tokens` and extracting only structured steps
   on fallback so raw thinking prose never leaks into the Coder context.
 
-## Streaming Reliability & Live UI Polish
+## Modular Frontend, Streaming Reliability & Live UI Polish
 
-- **SSE 15s keepalive & journal reattach (`server.py`, `static/app.js`):**
+- **16-module `static/js/` frontend (`static/app.js`, `static/js/*`):**
+  Modularizes the UI script layer into 16 focused modules verified by a headless
+  Playwright smoke suite, stream-transport recovery, and hardened settings I/O.
+- **SSE 15s keepalive & journal reattach (`server.py`, `static/js/stream_transport.js`):**
   Prevents premature browser disconnects during long cold prefills, stops
   detached queue-overflow log spam, polls `/run/journal` immediately on drop,
   and updates the reattach banner cleanly once frames resume.
-- **Live thinking scroll & chronological tool stream (`static/app.js`, `routers/chats.py`):**
+- **Live thinking scroll & chronological tool stream (`static/js/*`, `routers/chats.py`):**
   Scrolling up inside live thinking blocks stays put while tokens stream;
   thinking, tool calls, and truncation/loop notices render in exact
   chronological order; saved chats load faster via `.chats_index.cache`.
 
-## Models, `llama.cpp b12645` & Hardware Autofit
+## Models, `llama.cpp b12676` & Hardware Autofit
 
-- **Inkling-2-Mini & `b12645` pin (`deploy/llama_build_pin.txt`, `model_configs/models/inkling-2-mini.json`):**
-  Looped-MoE core-on-GPU offload tuning (`-ot 14`, `load_mode=none`,
-  `ubatch=256`), Qwen3.6 expert-cache tuning, and `b12645` pin including
-  upstream Inkling-2 tokenizer (`#32799`) and looped-MoE host-expert (`#32807`)
-  fixes.
+- **Inkling-2-Mini in the installer & `b12676` pin (`deploy/llama_build_pin.txt`, `deploy/fetch_models.py`, `model_configs/models/inkling-2-mini.json`, `model_configs/arch_compat.json`):**
+  Looped-MoE core-on-GPU offload (`ot15`, `load_mode=none`, `ubatch=512`,
+  `moe_cache_mib=0`, `kv_bytes_per_token=9216`), `binary_min_build: 12600`
+  guard, Qwen3.6 expert-cache CPU-share tuning, `b12676` pin, and optional
+  Tier-4 catalog entry (`inkling-2-mini`, `UD-IQ3_XXS` + `mmproj`).
 - **Clean fresh-install model recognition (`backend/llama_models.py`, `deploy/fetch_models.py`):**
-  Deduplicates `models.json` catalog overrides against parsed GGUF aliases and
-  ensures case-safe `mmproj` detection on Linux and Windows.
-- **Hardware-autofit & deep-audit hardening (Waves 1–3C + 5-subsystem sweep):**
-  Hardware-matched installer defaults, Linux CUDA autodetect, runtime MoE
-  all-GPU lift, slot-lock/busy-port guards, Windows `.cmd` MCP quoting,
-  Telegram mirror-journal & UI auto-scroll/reattach fixes, security
-  containment, faster loopback readiness, and 32 Pyright fixes.
+  Deduplicates `models.json` overrides against parsed GGUF aliases, aligns
+  `mmproj_dest` casing, adds case-safe `mmproj` detection on Linux and
+  Windows, and strips `Authorization` headers across cross-origin redirects.
+- **Hardware-autofit & pre-release security/performance sweep:**
+  Hardware-matched installer defaults, Linux CUDA autodetect, destructive-gate
+  flag/alias closure, ReDoS & event-loop stall elimination, bounded tool/MCP
+  buffers, ToolLoop/subagent malformed-JSON history sanitizer, Direct
+  prompt-cache clock preservation, blind approval-card blocking, German Windows
+  `ABHÖREN` port cleanup, headless `watchdog_engine.bat` launch, UTF-8 BOM /
+  corrupt-JSON protection, scheduler & `ModelSlot` leak fixes, and clean Pyright
+  baseline.

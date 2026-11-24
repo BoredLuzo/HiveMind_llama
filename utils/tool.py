@@ -449,7 +449,7 @@ def run_bash_failed(result: str) -> bool:
         # LAST match wins: the real marker is appended at the very end of the
         # output; an earlier literal "[exit code: 0]" (echoed by the model)
         # must not mask a genuine non-zero exit.
-        matches = __import__("re").findall(r"\[exit code:\s*(\d+)", txt)
+        matches = __import__("re").findall(r"\[exit code:\s*(-?\d+)", txt)
         if matches and int(matches[-1]) != 0:
             return True
     return False

@@ -57,7 +57,7 @@ def get_run_config(run_id: str) -> dict | None:
 
 def record_ask_user(run_id: str) -> None:
     if run_id not in _ASK_USER_HISTORY:
-        _ASK_USER_HISTORY[run_id] = deque(maxlen=20)
+        _ASK_USER_HISTORY[run_id] = deque(maxlen=200)
     _ASK_USER_HISTORY[run_id].append(time.time())
 
 
@@ -69,7 +69,7 @@ def check_throttle(run_id: str, max_per_10min: int) -> tuple[bool, int]:
     if not history:
         return False, 0
     valid = [t for t in history if t > now - 600]
-    _ASK_USER_HISTORY[run_id] = deque(valid, maxlen=20)
+    _ASK_USER_HISTORY[run_id] = deque(valid, maxlen=200)
     return len(valid) > max_per_10min, len(valid)
 
 
@@ -105,6 +105,10 @@ async def start_timeout(run_id: str, timeout_s: float, auto_answer: str) -> None
                             timeout_s, run_id)
         except asyncio.CancelledError:
             pass
+        finally:
+            cur = asyncio.current_task()
+            if cur is not None and _TIMEOUT_TASKS.get(run_id) is cur:
+                _TIMEOUT_TASKS.pop(run_id, None)
 
     _TIMEOUT_TASKS[run_id] = asyncio.create_task(_task())
 

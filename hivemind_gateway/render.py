@@ -31,12 +31,32 @@ _ENV_SECRET_LINE = re.compile(
     re.IGNORECASE)
 
 
+# Plain-string secrets registered at gateway boot (e.g. a resolved Telegram token)
+# so bare occurrences without `bot<id>:` / `TOKEN=` prefixes are still scrubbed.
+_LITERAL_SECRETS: list[str] = []
+
+
+def register_secret(secret: str) -> None:
+    """Register a literal secret string for outbound `filter_secrets()` scrubbing."""
+    clean = str(secret or "")
+    if clean and clean not in _LITERAL_SECRETS:
+        _LITERAL_SECRETS.append(clean)
+
+
+def clear_registered_secrets() -> None:
+    """Clear registered literal secrets (primarily for test isolation)."""
+    _LITERAL_SECRETS.clear()
+
+
 def filter_secrets(text: str, extra_patterns: tuple = ()) -> str:
     out = text
     for pat in _DEFAULT_SECRET_PATTERNS:
         out = pat.sub("***", out)
     for pat in extra_patterns:
         out = pat.sub("***", out)
+    for sec in _LITERAL_SECRETS:
+        if sec:
+            out = out.replace(sec, "***")
     out = "\n".join(
         _ENV_SECRET_LINE.sub(r"\1=***", line) for line in out.split("\n"))
     return out

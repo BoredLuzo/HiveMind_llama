@@ -1335,15 +1335,15 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
             "[ASK-DIAG] wait_for_resume ERROR run_id=%s: %s",
             run_id, _ask_exc)
         answer = ""
+    finally:
+        # W2-3: the question is resolved (normal return OR cancel/error) — kill
+        # a still-pending governor timeout so a stale auto-answer cannot land
+        # in a later pause of the same run.
+        _gov_cancel_timeout(run_id)
+        _pending_approvals.pop(str(run_id), None)
     _ask_diag2.getLogger("hivemind.tools").warning(
         "[ASK-DIAG] resumed run_id=%s after %.1fs answer_len=%d",
         run_id, _ask_diag_t.monotonic() - _ask_t0, len(answer or ""))
-    # W2-3: the question is resolved — kill a still-pending governor timeout
-    # so a stale auto-answer cannot land in a later pause of the same run
-    # (the router decision paths cancel too; this covers the pause-timeout
-    # and error exits that bypass the router).
-    _gov_cancel_timeout(run_id)
-    _pending_approvals.pop(str(run_id), None)
     _note_tool_use(
         run_id, "ask_user",
         "paused_timeout"
@@ -1483,19 +1483,32 @@ _INLINE_TOOL_HANDLER_MAP = {
 
 
 _DESTRUCTIVE_BASH_PATTERNS = [
-    # PowerShell
+    # PowerShell / Windows deletion aliases & flags
     r"Remove-Item\s.*-[Rr]ecurse.*-[Ff]orce",
     r"Remove-Item\s.*-[Ff]orce.*-[Rr]ecurse",
-    r"\brm\s+-rf?\b",
-    r"\brm\s+.*-r\s.*-f\b",
+    r"\b(?:Remove-Item|ri|del|erase|rd|rmdir)\s+(?:[^|&;\n]*\s)?-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?=\s|$|[;|&])",
+    r"\brm\s+(?:[^|&;\n]*\s)?(?:-[a-z]*[rR][a-z]*|--recursive)\b",
+    r"\bfind\b[^|&;\n]*\s-delete(?=\s|$|[;|&])",
     r"\bdel\s+/[Ff]\s+/[Ss]\s+/[Qq]\b",
     r"\bformat\s+[A-Za-z]:",
     r"\bdiskpart\b",
     # Git destructive
-    r"git\s+reset\s+--hard",
-    r"git\s+push\s+--force",
-    r"git\s+push\s+--force-with-lease",
-    r"git\s+clean\s+-fdx",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*reset\s+(?:[^|&;\n]*\s)?--har(?:d)?\b",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*push\s+(?:[^|&;\n]*\s)?(?:--force(?:-with-lease|-if-includes)?|-f)(?=\s|$|[;|&])",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*push\b[^|&;\n]*\s\+\S+",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*clean\s+(?:[^|&;\n]*\s)?(?:-[a-z]*f[a-z]*|--force)\b",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*checkout\s+(?:[^|&;\n]*\s)?--\s+\S",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*restore\b(?![^|&;\n]*--staged\b)",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*restore\b[^|&;\n]*--worktree\b",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*stash\s+(?:drop|clear)\b",
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*branch\b[^|&;\n]*(?:--delete[^|&;\n]*--force|--force[^|&;\n]*--delete)\b",
+    # Disk / mirror / system / cron destructive
+    r"\bdd\b[^|&;\n]*\bof=",
+    r"\bwipefs\b",
+    r"(?:^|[;&|]\s*|\bsudo\s+)(?:poweroff|reboot|halt)(?=\s|$|[;|&])",
+    r"\bsystemctl\s+(?:poweroff|reboot|halt)\b",
+    r"\bcrontab\b[^|&;\n]*\s-[a-z]*r[a-z]*(?=\s|$|[;|&])",
+    r"\brsync\b[^|&;\n]*\s--delete(?:-[a-z]+)?(?=\s|$|[;|&])",
     # SQL destructive
     r"\bDROP\s+TABLE\b",
     r"\bDROP\s+DATABASE\b",
@@ -1517,7 +1530,7 @@ _DESTRUCTIVE_BASH_PATTERNS = [
     # -Recurse (no -Force), download cradles and scheduled-task
     # persistence all passed ungated.
     r"\b(rd|rmdir)\s+[^|&;]*\/[sS]",
-    r"\bdel\s+[^|&;]*\/[sS]",
+    r"\b(del|erase)\s+[^|&;]*\/[sS]",
     r"\bRemove-Item\s+.*-[Rr]ecurse",
     # R3: bare "iex" false-positived on the Elixir REPL - require
     # invocation context (paren or quote); pipe cradles stay covered
@@ -1541,10 +1554,20 @@ else:
     _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+[-+]\w")
 
 
+_DESTRUCTIVE_BASH_PATTERNS_CS = [
+    # Case-sensitive flags where lowercase is routine (-d = safe merged branch delete).
+    r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*branch\b[^|&;\n]*\s-(?:D|f\w*d|d\w*f)(?=\s|$|[;|&])",
+]
+
+
 def _is_destructive_bash(cmd: str) -> str | None:
     """Return matching pattern description if command is destructive, else None."""
     import re as _dre
-    _cmd_lower = str(cmd).lower()
+    _cmd_raw = str(cmd)
+    for _pat in _DESTRUCTIVE_BASH_PATTERNS_CS:
+        if _dre.search(_pat, _cmd_raw):
+            return _pat
+    _cmd_lower = _cmd_raw.lower()
     for _pat in _DESTRUCTIVE_BASH_PATTERNS:
         if _dre.search(_pat, _cmd_lower, _dre.IGNORECASE):
             return _pat

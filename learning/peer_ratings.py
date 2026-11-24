@@ -295,7 +295,8 @@ async def _maybe_adapt_config(model, agent_key, new_score, rating_data):
     if len(peer_ratings) < 2:
         return
 
-    recent       = peer_ratings[-5:]
+    # read_learning_log returns newest-first; take the 5 newest and reverse to chronological order.
+    recent       = list(reversed(peer_ratings[:5]))
     scores       = [e.get("score", 0.5) for e in recent]
     avg          = sum(scores) / len(scores)
     score_trend  = scores[-1] - scores[0] if len(scores) > 1 else 0

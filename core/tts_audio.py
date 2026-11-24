@@ -41,7 +41,7 @@ _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((?:https?://|www\.)[^)]+\)")
 _BARE_URL_RE = re.compile(r"https?://\S+|www\.\S+")
 _HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _HRULE_RE = re.compile(r"(?m)^\s*[-*_]{3,}\s*$")
-_TABLE_SEP_RE = re.compile(r"(?m)^\s*\|?[\s:]*-{2,}[\s:]*(?:\|[\s:]*-{2,}[\s:]*)+\|?\s*$")
+_TABLE_SEP_RE = re.compile(r"(?m)^[ \t]*\|?[ \t:]*-{2,}[ \t:]*(?:\|[ \t:]*-{2,}[ \t:]*)+\|?[ \t]*$")
 _BULLET_RE = re.compile(r"(?m)^\s*(?:[-*•]+|\d+[.)])\s+")
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _EMPH_RE = re.compile(r"(\*\*|__|\*|~~)")
@@ -74,8 +74,7 @@ def clean_for_speech(text: str) -> str:
     paras = raw_lines
     if len(paras) > 1:
         paras = [ln if ln[-1] in ".!?;:," else (ln + ".") for ln in paras]
-    cleaned = " ".join(paras).strip()
-    return cleaned or raw
+    return " ".join(paras).strip()
 
 
 def _cap_at_sentence(text: str, limit: int) -> str:
@@ -212,12 +211,20 @@ def wav_to_samples(data: bytes | str) -> tuple[np.ndarray, int]:
 
 
 def samples_to_wav(samples: np.ndarray, sr: int) -> bytes:
+    if int(sr) <= 0:
+        raise ValueError(f"sample rate must be positive (got {sr})")
+    finite = np.nan_to_num(
+        np.asarray(samples, dtype="float64"),
+        nan=0.0,
+        posinf=32767.0,
+        neginf=-32768.0,
+    )
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(np.clip(samples, -32768, 32767).astype("<i2").tobytes())
+        w.setframerate(int(sr))
+        w.writeframes(np.clip(finite, -32768, 32767).astype("<i2").tobytes())
     return buf.getvalue()
 
 

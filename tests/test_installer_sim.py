@@ -36,6 +36,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tests._harness import Harness  # noqa: E402
+from tests._silent_choice import ensure_silent_choice_dir  # noqa: E402
 
 h = Harness(style="summary", pad=True)
 check = h.check
@@ -43,6 +44,7 @@ check = h.check
 
 _EMPTY_HOME = Path(tempfile.gettempdir()) / "hmsim_empty_home"
 _EMPTY_HOME.mkdir(exist_ok=True)
+_SILENT_CHOICE_DIR = ensure_silent_choice_dir()
 
 
 def build_env(fakebin=None, extra=None):
@@ -50,8 +52,12 @@ def build_env(fakebin=None, extra=None):
     parts = [str(windir / "System32"),
              str(windir / "System32" / "WindowsPowerShell" / "v1.0"),
              str(Path(sys.executable).parent)]
+    if _SILENT_CHOICE_DIR:
+        # Place the silent choice.exe shim strictly ahead of System32 so
+        # C:\Windows\System32\choice.exe never invokes kernel32!Beep during tests.
+        parts.insert(0, _SILENT_CHOICE_DIR)
     if fakebin:
-        parts.insert(2, str(fakebin))
+        parts.insert(parts.index(str(windir / "System32")) + 2, str(fakebin))
     env = {
         **os.environ,
         "PATH": os.pathsep.join(parts),
@@ -265,7 +271,10 @@ def case_install_optionals_garbage_voice_pick():
     sim.mkdir(parents=True)
     try:
         shutil.copy2(ROOT / "install.bat", sim / "install.bat")
-        r = run_cmd(sim, "install.bat", stdin="O\nN\nN\n9\nN\nX\n")
+        # Pipe exact 1-char answers for choice prompts (O, N, N, N) and a real
+        # newline-terminated "9" for `set /p VOICE_PICK=` so garbage-input
+        # normalization runs without sending stray CR/LF bytes to choice.
+        r = run_cmd(sim, "install.bat", stdin="ONN9\nNX\n")
         check(f"{label}: optionals path entered",
               "Optional parts only" in r.stdout)
         check(f"{label}: docker absent handled",
@@ -369,6 +378,18 @@ def case_install_lsp_only_and_all():
 
 
 def main() -> int:
+    if os.name == "nt":
+        resolved_choice = shutil.which("choice", path=build_env()["PATH"])
+        silent_ok = bool(
+            _SILENT_CHOICE_DIR
+            and resolved_choice
+            and os.path.normcase(str(Path(resolved_choice).parent))
+            == os.path.normcase(str(Path(_SILENT_CHOICE_DIR)))
+        )
+        check("silent choice.exe shim active ahead of System32", silent_ok,
+              f"(resolved={resolved_choice!r})")
+        if not silent_ok:
+            return h.finish("installer_sim")
     case_setup_models_paren_path()
     case_setup_models_mkdir_failure()
     case_lsp_bad_token()

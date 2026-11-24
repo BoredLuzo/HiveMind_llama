@@ -1,4 +1,6 @@
 """Websearch API router."""
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -43,7 +45,7 @@ async def websearch_config(req: Request):
             if _k in data:
                 _cur[_k] = data[_k]
 
-    settings.update(mutate_settings(_apply))
+    settings.update(await asyncio.to_thread(lambda: mutate_settings(_apply)))
     _ws_configure(
         host=settings.get("searxng_host", "http://localhost:8888"),
         enabled=settings.get("pipeline_websearch_enabled", False)

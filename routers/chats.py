@@ -791,7 +791,7 @@ async def create_chat(req: Request):
     chat["_msg_count"] = _user_msg_count(_msgs)
     chat["_tokens"] = _chat_tokens(_msgs)
     chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-    _saved = _save_chat(cid, chat)
+    _saved = await asyncio.to_thread(_save_chat, cid, chat)
     return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
             "chat": {k: v for k, v in chat.items() if k != "_file"}}
 
@@ -950,20 +950,23 @@ async def get_chat(chat_id: str):
     chat = await asyncio.to_thread(_load_chat_full, chat_id)
     if chat is None:
         return JSONResponse({"error": "Not found"}, status_code=404)
-    _restore_messages(chat_id, chat.get("messages", []))
+    def _hydrate() -> dict | None:
+        _restore_messages(chat_id, chat.get("messages", []))
+        try:
+            return _load_chat_context(chat_id)
+        except (OSError, ValueError, TypeError):
+            return None
+
+    _ctx = await asyncio.to_thread(_hydrate)
     result = {k: v for k, v in chat.items() if k.startswith("_") is False}
     # INTERRUPTED (2026-08-21): last_run (stop_reason="disconnect") mitliefern,
-    try:
-        _ctx = _load_chat_context(chat_id)
-        if isinstance(_ctx, dict):
-            # json workspace wins; the sidecar key only fills older chats
-            # unless the main json explicitly set an empty workspace string.
-            if "workspace" not in result and _ctx.get("workspace"):
-                result["workspace"] = _ctx["workspace"]
-            if isinstance(_ctx.get("last_run"), dict):
-                result["last_run"] = _ctx["last_run"]
-    except Exception:
-        pass
+    if isinstance(_ctx, dict):
+        # json workspace wins; the sidecar key only fills older chats
+        # unless the main json explicitly set an empty workspace string.
+        if "workspace" not in result and _ctx.get("workspace"):
+            result["workspace"] = _ctx["workspace"]
+        if isinstance(_ctx.get("last_run"), dict):
+            result["last_run"] = _ctx["last_run"]
     return result
 
 

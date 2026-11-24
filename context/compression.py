@@ -1,6 +1,7 @@
 """Kontext-Kompression (aus server.py extrahiert)."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import httpx
 import re
@@ -30,10 +31,15 @@ def _weighted_ttl(content: str, base_ttl: int) -> int:
 _settings: dict = {}
 _registry_get: Callable | None = None
 _pipeline_chat_stream: Callable | None = None
+_SESSION_SUMMARY_CACHE: dict[tuple[str, str], dict] = {}
+_SESSION_SUMMARY_CACHE_MAX = 32
+SESSION_COMPRESS_RECOMPUTE_DELTA = 6
+
 
 def init_compression(settings_obj=None, registry_get_fn=None,
                      pipeline_chat_stream_fn=None):
     global _settings, _registry_get, _pipeline_chat_stream
+    _SESSION_SUMMARY_CACHE.clear()
     if settings_obj is not None:
         _settings = settings_obj
     if registry_get_fn:
@@ -920,6 +926,29 @@ SESSION_COMPRESS_THRESHOLD = 20  # messages (= 10 turns) → compress
 SESSION_COMPRESS_KEEP      = 6
 
 
+def _session_msg_text(msg: dict) -> str:
+    content = msg.get("content", "") if isinstance(msg, dict) else ""
+    if isinstance(content, list):
+        content = " ".join(
+            p.get("text", "") if isinstance(p, dict) else str(p)
+            for p in content
+        )
+    return str(content or "")
+
+
+def _session_prefix_digest(msgs: list) -> str:
+    """Deterministic digest over message roles and truncated normalized text."""
+    h = hashlib.sha256()
+    for m in msgs:
+        role = str(m.get("role", "") if isinstance(m, dict) else "")
+        text = _session_msg_text(m)[:600]
+        h.update(role.encode("utf-8", errors="replace"))
+        h.update(b"\x00")
+        h.update(text.encode("utf-8", errors="replace"))
+        h.update(b"\x01")
+    return h.hexdigest()
+
+
 async def _compress_chat_session(sess_msgs: list) -> list:
 
 
@@ -934,59 +963,91 @@ async def _compress_chat_session(sess_msgs: list) -> list:
     _history_lines = []
     for m in _old_msgs:
         role    = m.get("role", "")
-        content = m.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(
-                p.get("text", "") if isinstance(p, dict) else str(p)
-                for p in content
-            )
+        content = _session_msg_text(m)
         if role in ("user", "assistant") and content:
             label = "USER" if role == "user" else "ASSISTANT"
-            _history_lines.append(f"[{label}]: {str(content)[:600]}")
+            _history_lines.append(f"[{label}]: {content[:600]}")
 
     if not _history_lines:
         return sess_msgs
 
-    _compress_prompt = (
-        "You are compressing a conversation history for a chat system. "
-        "Create a compact but information-dense summary that preserves what matters for future responses.\n\n"
-        "CONVERSATION HISTORY TO COMPRESS:\n"
-        + "\n".join(_history_lines)
-        + "\n\n"
-        "Write a compact summary (max 300 words) covering:\n"
-        "1. Main topics discussed (most recent first)\n"
-        "2. User preferences, style, or constraints they expressed\n"
-        "3. Decisions made or conclusions reached\n"
-        "4. Ongoing tasks or open questions the user has\n"
-        "5. Any important context about the user or their project\n\n"
-        "Be dense and factual. Use bullet points. "
-        "This replaces older messages — the most recent messages are kept separately."
-    )
+    _reg_get = _registry_get
+    _pipe_stream = _pipeline_chat_stream
+    _sum_model = ""
+    if _reg_get is not None:
+        try:
+            _sum_model = str(_reg_get("direct") or _reg_get("analyst") or "")
+        except (TypeError, ValueError, RuntimeError):
+            _sum_model = ""
 
+    _covered_count = len(_old_msgs)
     _summary = ""
-    try:
-        # Local aliases: the injectables are Callable | None until
-        # init_compression() wires them; a None here lands in the except
-        # below exactly like a failed call did before.
-        _reg_get = _registry_get
-        _pipe_stream = _pipeline_chat_stream
-        if _reg_get is None or _pipe_stream is None:
-            raise RuntimeError("compression pipeline not initialized")
-        _sum_model = _reg_get("direct") or _reg_get("analyst") or ""
-        if _sum_model:
-            _parts: list[str] = []
-            async for tok in _pipe_stream(
-                _sum_model,
-                [{"role": "user", "content": _compress_prompt}],
-                0.1, 400
+    _cache_key: tuple[str, str] | None = None
+    if len(_old_msgs) >= 2 and _sum_model:
+        _cache_key = (_sum_model, _session_prefix_digest(_old_msgs[:2]))
+        _cached = _SESSION_SUMMARY_CACHE.get(_cache_key)
+        if isinstance(_cached, dict):
+            _cached_len = int(_cached.get("covered") or 0)
+            if (
+                2 <= _cached_len <= len(_old_msgs)
+                and (len(_old_msgs) - _cached_len) < SESSION_COMPRESS_RECOMPUTE_DELTA
+                and _session_prefix_digest(_old_msgs[:_cached_len]) == _cached.get("digest")
             ):
-                _parts.append(tok)
-            _summary = "".join(_parts).strip()
-    except Exception as _sess_compress_err:
-        logger.warning(
-            "Session compression failed (%s: %s) - using plaintext fallback",
-            type(_sess_compress_err).__name__, _sess_compress_err
+                _summary = str(_cached.get("summary") or "")
+                _covered_count = _cached_len
+                _keep_msgs = _old_msgs[_cached_len:] + _keep_msgs
+
+    _used_llm_summary = False
+    if not _summary:
+        _compress_prompt = (
+            "You are compressing a conversation history for a chat system. "
+            "Create a compact but information-dense summary that preserves what matters for future responses.\n\n"
+            "CONVERSATION HISTORY TO COMPRESS:\n"
+            + "\n".join(_history_lines)
+            + "\n\n"
+            "Write a compact summary (max 300 words) covering:\n"
+            "1. Main topics discussed (most recent first)\n"
+            "2. User preferences, style, or constraints they expressed\n"
+            "3. Decisions made or conclusions reached\n"
+            "4. Ongoing tasks or open questions the user has\n"
+            "5. Any important context about the user or their project\n\n"
+            "Be dense and factual. Use bullet points. "
+            "This replaces older messages — the most recent messages are kept separately."
         )
+
+        try:
+            # Local aliases: the injectables are Callable | None until
+            # init_compression() wires them; a None here lands in the except
+            # below exactly like a failed call did before.
+            if _reg_get is None or _pipe_stream is None:
+                raise RuntimeError("compression pipeline not initialized")
+            if _sum_model:
+                _parts: list[str] = []
+                async for tok in _pipe_stream(
+                    _sum_model,
+                    [{"role": "user", "content": _compress_prompt}],
+                    0.1, 400
+                ):
+                    _parts.append(tok)
+                _summary = "".join(_parts).strip()
+                if _summary:
+                    _used_llm_summary = True
+        except Exception as _sess_compress_err:
+            logger.warning(
+                "Session compression failed (%s: %s) - using plaintext fallback",
+                type(_sess_compress_err).__name__, _sess_compress_err
+            )
+
+        if _used_llm_summary and _cache_key is not None:
+            if len(_SESSION_SUMMARY_CACHE) >= _SESSION_SUMMARY_CACHE_MAX:
+                _oldest_key = next(iter(_SESSION_SUMMARY_CACHE), None)
+                if _oldest_key is not None:
+                    _SESSION_SUMMARY_CACHE.pop(_oldest_key, None)
+            _SESSION_SUMMARY_CACHE[_cache_key] = {
+                "covered": len(_old_msgs),
+                "digest": _session_prefix_digest(_old_msgs),
+                "summary": _summary,
+            }
 
     if not _summary:
         _summary = "Previous conversation covered: " + "; ".join(
@@ -1000,7 +1061,7 @@ async def _compress_chat_session(sess_msgs: list) -> list:
     _compressed_block = {
         "role":    "user",
         "content": (
-            f"[CONVERSATION SUMMARY - {len(_old_msgs)} older messages compressed]\n"
+            f"[CONVERSATION SUMMARY - {_covered_count} older messages compressed]\n"
             f"{_summary}\n"
             f"[END SUMMARY - current conversation continues below]"
         )

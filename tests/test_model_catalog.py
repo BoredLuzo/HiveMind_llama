@@ -325,4 +325,78 @@ if q36_mtp:
               Path(_mj.get("qwen3.6:35b-a3b-mtp", "")).name == _f_mtp.name,
               f"({_mj})")
 
+# ── Inkling-2-Mini UD-IQ3_XXS (optional Tier-4 Looped MoE + Vision) ──────
+ink = specs.get("inkling-2-mini")
+check("inkling-2-mini is in the catalog as optional upgrade",
+      ink is not None and "inkling-2-mini" not in fm.ESSENTIAL_KEYS)
+if ink:
+    check("inkling-2-mini repo pinned to unsloth/Inkling-2-Mini-GGUF",
+          ink["repo"] == "unsloth/Inkling-2-Mini-GGUF", f"({ink['repo']})")
+    check("inkling-2-mini file_regex matches UD-IQ3_XXS and rejects other variants",
+          any(re.match(p, "Inkling-2-Mini-UD-IQ3_XXS.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "Inkling-2-Mini-UD-Q4_K_M.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "dspark-Inkling-2-Mini-Q8_0.gguf") for p in ink["file_regex"]))
+    check("inkling-2-mini mmproj matches F16 with unique dest and ships no DSpark sidecar yet",
+          any(re.match(p, "mmproj-F16.gguf") for p in ink["mmproj_regex"])
+          and ink.get("mmproj_dest") == "mmproj-Inkling-2-Mini-F16.gguf"
+          and not ink.get("sidecar"))
+
+    import json as _json_ink
+    import tempfile as _tempfile_ink
+    _ink_prof_p = ROOT / "model_configs" / "models" / "inkling-2-mini.json"
+    check("inkling-2-mini profile exists with looped-MoE & projector settings",
+          _ink_prof_p.exists())
+    if _ink_prof_p.exists():
+        _ip = _json_ink.loads(_ink_prof_p.read_text(encoding="utf-8"))
+        check("inkling-2-mini profile sets ncmoe=15, ubatch=512, load_mode=none, q4_0 KV & mmproj",
+              _ip.get("model") == "inkling-2-mini"
+              and int(_ip.get("moe_cpu_experts") or 0) == 15
+              and int(_ip.get("ubatch") or 0) == 512
+              and _ip.get("load_mode") == "none"
+              and _ip.get("kv_cache_type") == "q4_0"
+              and _ip.get("mmproj_filename") == "mmproj-Inkling-2-Mini-F16.gguf")
+
+    with _tempfile_ink.TemporaryDirectory() as _tmp_ink:
+        _mdir_i = Path(_tmp_ink)
+        _f_ink = _mdir_i / "Inkling-2-Mini-UD-IQ3_XXS.gguf"
+        _f_mm = _mdir_i / "mmproj-Inkling-2-Mini-F16.gguf"
+        _f_ink.write_bytes(b"inkling")
+        _f_mm.write_bytes(b"mmproj")
+        (_mdir_i / "model_configs").mkdir(exist_ok=True)
+        _out_i = _mdir_i / "models.json"
+        _orig_fm_root_i = fm.ROOT
+        fm.ROOT = _mdir_i
+        try:
+            fm.write_models_json(_mdir_i, out=_out_i)
+        finally:
+            fm.ROOT = _orig_fm_root_i
+        _mj_i = _json_ink.loads(_out_i.read_text(encoding="utf-8"))
+        check("write_models_json registers inkling-2-mini + inkling-2-mini_mmproj",
+              Path(_mj_i.get("inkling-2-mini", "")).name == _f_ink.name
+              and Path(_mj_i.get("inkling-2-mini_mmproj", "")).name == _f_mm.name,
+              f"({_mj_i})")
+
+        import backend.llama_models as _lm_i
+        _f_ink.write_bytes(b"\x00" * (1024 * 1024 + 4096))
+        _orig_lm_dirs = (_lm_i.MODELS_DIR, _lm_i._MODELS_JSON, _lm_i._index_cache,
+                         _lm_i._index_ts, _lm_i._index_stamp, _lm_i._names_cache,
+                         _lm_i._names_cache_ts, _lm_i._filename_tag_map)
+        _lm_i.MODELS_DIR = _mdir_i
+        _lm_i._MODELS_JSON = _out_i
+        _lm_i._index_cache = None
+        _lm_i._names_cache = None
+        _lm_i._filename_tag_map = None
+        try:
+            _res_canon = _lm_i.resolve_model_path("inkling-2-mini")
+            _res_legacy = _lm_i.resolve_model_path("inkling-2-mini-ud")
+            _avail = _lm_i.list_available_models(force_refresh=True)
+            check("llama_models resolves both inkling-2-mini and legacy inkling-2-mini-ud without duplicates",
+                  _res_canon == _f_ink and _res_legacy == _f_ink
+                  and "inkling-2-mini" in _avail and "inkling-2-mini-ud" not in _avail,
+                  f"(canon={_res_canon}, legacy={_res_legacy}, avail={_avail})")
+        finally:
+            (_lm_i.MODELS_DIR, _lm_i._MODELS_JSON, _lm_i._index_cache,
+             _lm_i._index_ts, _lm_i._index_stamp, _lm_i._names_cache,
+             _lm_i._names_cache_ts, _lm_i._filename_tag_map) = _orig_lm_dirs
+
 sys.exit(h.finish("model_catalog"))

@@ -209,6 +209,7 @@ _*.py
 !core/duo/_*.py
 !tools/handlers/_shared.py
 !tests/_harness.py
+!tests/_silent_choice.py
 *.zip
 dist/
 *.bundle

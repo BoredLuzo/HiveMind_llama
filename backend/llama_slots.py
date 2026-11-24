@@ -83,13 +83,15 @@ class ModelSlot:
     def mark_in_flight(self) -> None:
         """A round starts using this slot (see in_flight in __init__)."""
         import time as _t
-        # P1 (deep audit 2026-11-03): after a leaked mark ages out, the NEXT
-        # mark must refresh the stamp - otherwise the counter rises to 2 while
-        # the stamp stays old and the slot looks free mid-round.
-        if (int(getattr(self, "in_flight", 0)) <= 0
-                or not self.in_flight_active()):
+        # P1 (deep audit 2026-11-03; hardened 2026-11-24): after a leaked mark
+        # ages out, reset the stale counter to 1 and refresh the stamp instead of
+        # carrying leaked counts forward.
+        cur = int(getattr(self, "in_flight", 0))
+        if cur <= 0 or not self.in_flight_active():
             self.in_flight_since = _t.monotonic()
-        self.in_flight = int(getattr(self, "in_flight", 0)) + 1
+            self.in_flight = 1
+        else:
+            self.in_flight = cur + 1
 
     def clear_in_flight(self) -> None:
         self.in_flight = max(0, int(getattr(self, "in_flight", 0)) - 1)

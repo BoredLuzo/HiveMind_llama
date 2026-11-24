@@ -212,7 +212,7 @@ def _pick_roles_from_rows(rows: list[dict], vram_total: float, vram_free: float,
     pick_curated = lambda role: next((t for t in curated_orders.get(role, ()) if t in usable_tags), "")  # noqa: E731
     heavy_moe = ""
     if tier.get("id") in ("8gb_32gb", "12gb_16gb", "24gb_plus"):
-        heavy_moe = next((t for t in ("qwen3.6:35b-a3b-mtp", "air:26b-a4b") if t in usable_tags), "")
+        heavy_moe = next((t for t in ("qwen3.6:35b-a3b-mtp", "inkling-2-mini", "air:26b-a4b") if t in usable_tags), "")
     power_dense = next(
         (t for t in ("nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "twil:8b", "qwen3.5:9b-mtp") if t in usable_tags),
         "",

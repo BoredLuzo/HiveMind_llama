@@ -26,6 +26,13 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tests._silent_choice import (  # noqa: E402
+    ensure_silent_choice_dir,
+    prepend_silent_choice_to_path,
+)
 
 # FLAKE HISTORY (B9, 2026-11-07): every run appends pass/fail/duration per
 # suite to a local, git-ignored file. `--flake-report` reads it; a suite that
@@ -474,8 +481,13 @@ SUITES = [
     ("live_pip_think_codepanel_fixes", "tests/test_live_pip_think_codepanel_fixes.py", 45),
     ("notify_chats_speed_and_think_order", "tests/test_notify_chats_speed_and_think_order.py", 45),
     ("reasoning_effort_and_pip_pipe", "tests/test_reasoning_effort_and_pip_pipe.py", 45),
+    ("glm54_slice1_fixes", "tests/test_glm54_slice1_fixes.py", 30),
     ("ui_sources_harness", "tests/test_ui_sources_harness.py", 30),
     ("ui_playwright_smoke", "tests/test_ui_playwright_smoke.py", 90),
+    ("silent_test_suite", "tests/test_silent_test_suite.py", 45),
+    ("glm54_slice2a_fixes", "tests/test_glm54_slice2a_fixes.py", 60),
+    ("audit_p0_p1_wave_infra", "tests/test_audit_p0_p1_wave_infra.py", 60),
+    ("final_release_batch", "tests/test_final_release_batch.py", 60),
 
 ]
 
@@ -872,6 +884,8 @@ def main() -> int:
         print(f"CHANGED MODE: {len(changed)} file(s) -> {len(active)} suite(s)"
               f"  [ref: {changed_ref}]")
 
+    _silent_choice_dir = ensure_silent_choice_dir()
+
     # PARALLEL RUNNER (2026-11-05 maintainability audit): 313 sequential
     # subprocess suites took ~18 min wall clock. Suites are independent
     # scripts; a small worker pool cuts that ~4x. Output stays in SUITES
@@ -931,6 +945,10 @@ def main() -> int:
             "PYTHONIOENCODING": "utf-8:replace",
             "HIVEMIND_NO_NOTIFY": "1",
         }
+        if _silent_choice_dir:
+            _suite_env["PATH"] = prepend_silent_choice_to_path(
+                _suite_env.get("PATH", ""), _silent_choice_dir
+            )
         try:
             r = subprocess.run(
                 [sys.executable, str(target)],

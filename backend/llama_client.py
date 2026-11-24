@@ -139,13 +139,69 @@ class LlamaClient:
                 return True
         return False
 
+    @staticmethod
+    def _slot_for_port(port: int):
+        fn = getattr(manager, "get_slot_by_port", None)
+        if callable(fn):
+            return fn(port)
+        return None
+
+    @classmethod
+    def _acquire_slot(cls, port: int):
+        slot = cls._slot_for_port(port)
+        if slot is not None:
+            touch_fn = getattr(slot, "touch", None)
+            if callable(touch_fn):
+                touch_fn()
+            mark_fn = getattr(slot, "mark_in_flight", None)
+            if callable(mark_fn):
+                mark_fn()
+        return slot
+
+    @staticmethod
+    def _release_slot(slot) -> None:
+        if slot is not None:
+            touch_fn = getattr(slot, "touch", None)
+            if callable(touch_fn):
+                touch_fn()
+            clear_fn = getattr(slot, "clear_in_flight", None)
+            if callable(clear_fn):
+                clear_fn()
+
     async def _recover_model_port(self, model: str, ctx: int, old_port: int | None = None,
                                   vision: bool = False) -> int:
         """Best-effort recovery for stale/broken model slots, then return a fresh port."""
-        try:
-            await manager.evict(model)
-        except Exception:
-            pass
+        slots = getattr(manager, "_slots", None)
+        same_fn = getattr(manager, "_same_model", None)
+
+        def _same_m(a: str, b: str) -> bool:
+            if callable(same_fn):
+                return bool(same_fn(a, b))
+            return str(a or "") == str(b or "")
+
+        if isinstance(slots, (list, tuple)):
+            for s in slots:
+                s_port = getattr(s, "port", None)
+                if (
+                    s_port is not None
+                    and s_port != old_port
+                    and getattr(s, "is_running", False)
+                    and _same_m(getattr(s, "model", ""), model)
+                ):
+                    self._log.info(
+                        "Adopting already-recovered slot for model=%s old_port=%s new_port=%s",
+                        model, old_port, s_port,
+                    )
+                    return int(s_port)
+
+        should_evict = True
+        if old_port is not None and isinstance(slots, (list, tuple)) and self._slot_for_port(old_port) is None:
+            should_evict = False
+        if should_evict:
+            try:
+                await manager.evict(model)
+            except (RuntimeError, OSError, httpx.HTTPError, ValueError):
+                pass
         new_port = await manager.ensure_loaded(model, num_ctx=ctx, vision=vision)
         self._log.warning(
             "Recovered llama-server slot for model=%s old_port=%s new_port=%s vision=%s",
@@ -179,119 +235,129 @@ class LlamaClient:
             (payload.get("chat_template_kwargs") or {}).get("enable_thinking"),
         )
         max_attempts = 45
-        for attempt in range(max_attempts):
-            try:
-                async with _port_lock(port):
-                    r = await self._client.post(
-                        f"http://127.0.0.1:{port}/v1/chat/completions",
-                        json=payload,
-                        timeout=httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0),
-                    )
-                if r.status_code >= 400:
-                    self._log.error(
-                        "req=%s llama-server %s fuer '%s' (chat) | body: %s",
-                        req_id,
-                        r.status_code,
-                        model,
-                        r.text[:400],
-                    )
-                if r.status_code == 404 and attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt)
-                    self._log.warning(
-                        "req=%s chat 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
-                    await asyncio.sleep(backoff)
-                    continue
-                if _should_retry_http_status(
-                        r.status_code, r.text[:2000], attempt, max_attempts):
-                    backoff = _retry_backoff(attempt, r.status_code)
-                    self._log.warning(
-                        "req=%s chat transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        r.status_code,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    continue
-                r.raise_for_status()
-                data = r.json()
-                self._log.debug(
-                    "req=%s chat success model=%s port=%s elapsed=%.2fs attempts=%d",
-                    req_id,
-                    model,
-                    port,
-                    time.perf_counter() - t0,
-                    attempt + 1,
-                )
-                # PERF-TRACE (2026-10-30): one grep-able line per side call -
-                # without it the compression/summary calls were invisible in
-                # the cache-loss analysis.
+        _active_slot = self._acquire_slot(port)
+        try:
+            for attempt in range(max_attempts):
                 try:
-                    from utils.perf_log import perf_line as _perf_line
-                    self._log.info(_perf_line(
-                        kind="side", model=model, port=str(port),
-                        usage=data.get("usage") or {},
-                        timings=data.get("timings") or {}))
-                except (ImportError, AttributeError, TypeError) as _perf_err:
-                    self._log.debug("perf line skipped: %s", _perf_err)
-                # EMPTY-CONTENT-POLICY (2026-10-30, revised): some models
-                # ignore chat_template_kwargs.enable_thinking and spend the
-                # whole max_tokens budget inside the think block, so `content`
-                # comes back empty (measured: LFM2.5 2.6B - 800/800 tokens,
-                # 0 chars content, 125+ chars reasoning).
-                # POLICY: the reasoning text is NOT substituted. Titles,
-                # memory writes and insights persist what they get, and a
-                # think-block fragment must never end up as stored knowledge.
-                # Log it and return "" - the caller skips the result.
-                _choices = data.get("choices") or []
-                if not _choices or not isinstance(_choices[0], dict):
-                    self._log.warning("[SIDE-SKIP] model=%s returned empty choices", model)
-                    return ""
-                _msg = _choices[0].get("message") or {}
-                _content = _msg.get("content") or ""
-                if not _content.strip():
-                    _reason = (_msg.get("reasoning_content")
-                               or _msg.get("reasoning") or "").strip()
-                    self._log.warning(
-                        "[SIDE-SKIP] model=%s returned empty content "
-                        "(reasoning_chars=%d, thinking not suppressed) - result skipped",
-                        model, len(_reason))
-                    return ""
-                return _content
-            except _TRANSIENT_HTTP_EXCEPTIONS as e:
-                if attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt)
-                    self._log.warning(
-                        "req=%s chat transient error=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        type(e).__name__,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    if isinstance(e, httpx.ConnectError):
+                    async with _port_lock(port):
+                        r = await self._client.post(
+                            f"http://127.0.0.1:{port}/v1/chat/completions",
+                            json=payload,
+                            timeout=httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0),
+                        )
+                    if r.status_code >= 400:
+                        self._log.error(
+                            "req=%s llama-server %s fuer '%s' (chat) | body: %s",
+                            req_id,
+                            r.status_code,
+                            model,
+                            r.text[:400],
+                        )
+                    if r.status_code == 404 and attempt < max_attempts - 1:
+                        backoff = _retry_backoff(attempt)
+                        self._log.warning(
+                            "req=%s chat 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                            req_id,
+                            model,
+                            attempt + 1,
+                            max_attempts,
+                            port,
+                            backoff,
+                        )
+                        self._release_slot(_active_slot)
+                        _active_slot = None
                         port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
-                    await asyncio.sleep(backoff)
-                    continue
-                raise LlamaError(f"[{req_id}] llama-server for '{model}' unreachable (port {port})")
-            except httpx.HTTPStatusError as e:
-                # the 404/transient retries already ran pre-raise_for_status();
-                # every path reaching here is final
-                raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
-        raise LlamaError(f"[{req_id}] llama-server chat failure for '{model}' after retry")
+                        _active_slot = self._acquire_slot(port)
+                        await asyncio.sleep(backoff)
+                        continue
+                    if _should_retry_http_status(
+                            r.status_code, r.text[:2000], attempt, max_attempts):
+                        backoff = _retry_backoff(attempt, r.status_code)
+                        self._log.warning(
+                            "req=%s chat transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                            req_id,
+                            r.status_code,
+                            model,
+                            attempt + 1,
+                            max_attempts,
+                            port,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+                    r.raise_for_status()
+                    data = r.json()
+                    self._log.debug(
+                        "req=%s chat success model=%s port=%s elapsed=%.2fs attempts=%d",
+                        req_id,
+                        model,
+                        port,
+                        time.perf_counter() - t0,
+                        attempt + 1,
+                    )
+                    # PERF-TRACE (2026-10-30): one grep-able line per side call -
+                    # without it the compression/summary calls were invisible in
+                    # the cache-loss analysis.
+                    try:
+                        from utils.perf_log import perf_line as _perf_line
+                        self._log.info(_perf_line(
+                            kind="side", model=model, port=str(port),
+                            usage=data.get("usage") or {},
+                            timings=data.get("timings") or {}))
+                    except (ImportError, AttributeError, TypeError) as _perf_err:
+                        self._log.debug("perf line skipped: %s", _perf_err)
+                    # EMPTY-CONTENT-POLICY (2026-10-30, revised): some models
+                    # ignore chat_template_kwargs.enable_thinking and spend the
+                    # whole max_tokens budget inside the think block, so `content`
+                    # comes back empty (measured: LFM2.5 2.6B - 800/800 tokens,
+                    # 0 chars content, 125+ chars reasoning).
+                    # POLICY: the reasoning text is NOT substituted. Titles,
+                    # memory writes and insights persist what they get, and a
+                    # think-block fragment must never end up as stored knowledge.
+                    # Log it and return "" - the caller skips the result.
+                    _choices = data.get("choices") or []
+                    if not _choices or not isinstance(_choices[0], dict):
+                        self._log.warning("[SIDE-SKIP] model=%s returned empty choices", model)
+                        return ""
+                    _msg = _choices[0].get("message") or {}
+                    _content = _msg.get("content") or ""
+                    if not _content.strip():
+                        _reason = (_msg.get("reasoning_content")
+                                   or _msg.get("reasoning") or "").strip()
+                        self._log.warning(
+                            "[SIDE-SKIP] model=%s returned empty content "
+                            "(reasoning_chars=%d, thinking not suppressed) - result skipped",
+                            model, len(_reason))
+                        return ""
+                    return _content
+                except _TRANSIENT_HTTP_EXCEPTIONS as e:
+                    if attempt < max_attempts - 1:
+                        backoff = _retry_backoff(attempt)
+                        self._log.warning(
+                            "req=%s chat transient error=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                            req_id,
+                            type(e).__name__,
+                            model,
+                            attempt + 1,
+                            max_attempts,
+                            port,
+                            backoff,
+                        )
+                        if isinstance(e, httpx.ConnectError):
+                            self._release_slot(_active_slot)
+                            _active_slot = None
+                            port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
+                            _active_slot = self._acquire_slot(port)
+                        await asyncio.sleep(backoff)
+                        continue
+                    raise LlamaError(f"[{req_id}] llama-server for '{model}' unreachable (port {port})")
+                except httpx.HTTPStatusError as e:
+                    # the 404/transient retries already ran pre-raise_for_status();
+                    # every path reaching here is final
+                    raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
+            raise LlamaError(f"[{req_id}] llama-server chat failure for '{model}' after retry")
+        finally:
+            self._release_slot(_active_slot)
 
     async def chat_stream(self, model: str, messages: list, temperature: float | None = 0.3,
                           max_tokens: int = 600, ctx: int = CONTEXT_SIZE_DEFAULT,
@@ -350,133 +416,143 @@ class LlamaClient:
         stream_timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=5.0)
         max_attempts = 45
         _yielded_any = False
-        for attempt in range(max_attempts):
-            err_info: _SlotStreamError | None = None
-            try:
-                async with contextlib.aclosing(
-                    _stream_slot_once(
-                        port,
-                        self._client,
-                        f"http://127.0.0.1:{port}/v1/chat/completions",
-                        payload,
-                        stream_timeout,
-                        port_lock_fn=_port_lock,
-                    )
-                ) as slot_stream:
-                    async for item in slot_stream:
-                        if isinstance(item, _SlotStreamError):
-                            err_info = item
-                            break
-                        chunk = item
-                        if usage_out is not None:
-                            _u = chunk.get("usage")
-                            if isinstance(_u, dict) and _u:
-                                usage_out.update(_u)
-                            _t = chunk.get("timings")
-                            if isinstance(_t, dict) and _t:
-                                usage_out["timings"] = _t
-                        delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
-                        _content = delta.get("content", "")
-                        # AGENT-THINKING: collect reasoning fields separately
-                        _thinking = ""
-                        for _k in ("thinking", "reasoning_content", "reasoning"):
-                            _thinking = delta.get(_k, "") or ""
-                            if _thinking:
+        _active_slot = self._acquire_slot(port)
+        try:
+            for attempt in range(max_attempts):
+                err_info: _SlotStreamError | None = None
+                try:
+                    async with contextlib.aclosing(
+                        _stream_slot_once(
+                            port,
+                            self._client,
+                            f"http://127.0.0.1:{port}/v1/chat/completions",
+                            payload,
+                            stream_timeout,
+                            port_lock_fn=_port_lock,
+                        )
+                    ) as slot_stream:
+                        async for item in slot_stream:
+                            if isinstance(item, _SlotStreamError):
+                                err_info = item
                                 break
-                        if split_thinking:
-                            if think is False:
-                                _thinking = ""
-                            if (_content and _content != "\0") or (_thinking and _thinking != "\0"):
-                                _yielded_any = True
-                                yield _content, _thinking
-                        else:
-                            if think is False:
-                                token = _content
+                            chunk = item
+                            if usage_out is not None:
+                                _u = chunk.get("usage")
+                                if isinstance(_u, dict) and _u:
+                                    usage_out.update(_u)
+                                _t = chunk.get("timings")
+                                if isinstance(_t, dict) and _t:
+                                    usage_out["timings"] = _t
+                            delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
+                            _content = delta.get("content", "")
+                            # AGENT-THINKING: collect reasoning fields separately
+                            _thinking = ""
+                            for _k in ("thinking", "reasoning_content", "reasoning"):
+                                _thinking = delta.get(_k, "") or ""
+                                if _thinking:
+                                    break
+                            if split_thinking:
+                                if think is False:
+                                    _thinking = ""
+                                if (_content and _content != "\0") or (_thinking and _thinking != "\0"):
+                                    _yielded_any = True
+                                    yield _content, _thinking
                             else:
-                                token = _content or _thinking
-                            if token and token != "\0":
-                                _yielded_any = True
-                                yield token
-                if err_info is not None:
-                    r = err_info.response
-                    body = err_info.body_bytes
-                    self._log.error(
-                        "req=%s llama-server %s fuer '%s' | payload-keys: %s | msg-roles: %s | body: %s",
+                                if think is False:
+                                    token = _content
+                                else:
+                                    token = _content or _thinking
+                                if token and token != "\0":
+                                    _yielded_any = True
+                                    yield token
+                    if err_info is not None:
+                        r = err_info.response
+                        body = err_info.body_bytes
+                        self._log.error(
+                            "req=%s llama-server %s fuer '%s' | payload-keys: %s | msg-roles: %s | body: %s",
+                            req_id,
+                            r.status_code,
+                            model,
+                            list(payload.keys()),
+                            [m.get("role") for m in payload.get("messages", [])],
+                            body.decode(errors="replace")[:400],
+                        )
+                        if r.status_code == 404 and attempt < max_attempts - 1:
+                            backoff = _retry_backoff(attempt)
+                            self._log.warning(
+                                "req=%s stream 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                                req_id,
+                                model,
+                                attempt + 1,
+                                max_attempts,
+                                port,
+                                backoff,
+                            )
+                            self._release_slot(_active_slot)
+                            _active_slot = None
+                            port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
+                            _active_slot = self._acquire_slot(port)
+                            await asyncio.sleep(backoff)
+                            continue
+                        if _should_retry_http_status(
+                                r.status_code,
+                                body.decode(errors="replace")[:2000],
+                                attempt, max_attempts):
+                            backoff = _retry_backoff(attempt, r.status_code)
+                            self._log.warning(
+                                "req=%s stream transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                                req_id,
+                                r.status_code,
+                                model,
+                                attempt + 1,
+                                max_attempts,
+                                port,
+                                backoff,
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+                        r.raise_for_status()
+                    self._log.debug(
+                        "req=%s stream success model=%s port=%s elapsed=%.2fs attempts=%d",
                         req_id,
-                        r.status_code,
                         model,
-                        list(payload.keys()),
-                        [m.get("role") for m in payload.get("messages", [])],
-                        body.decode(errors="replace")[:400],
+                        port,
+                        time.perf_counter() - t0,
+                        attempt + 1,
                     )
-                    if r.status_code == 404 and attempt < max_attempts - 1:
+                    return
+                except _TRANSIENT_HTTP_EXCEPTIONS as e:
+                    if _yielded_any:
+                        raise LlamaError(
+                            f"[{req_id}] stream interrupted after partial output ({type(e).__name__})"
+                        ) from e
+                    if attempt < max_attempts - 1:
                         backoff = _retry_backoff(attempt)
                         self._log.warning(
-                            "req=%s stream 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
+                            "req=%s stream transient error=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
                             req_id,
+                            type(e).__name__,
                             model,
                             attempt + 1,
                             max_attempts,
                             port,
                             backoff,
                         )
-                        port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
+                        if isinstance(e, httpx.ConnectError):
+                            self._release_slot(_active_slot)
+                            _active_slot = None
+                            port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
+                            _active_slot = self._acquire_slot(port)
                         await asyncio.sleep(backoff)
                         continue
-                    if _should_retry_http_status(
-                            r.status_code,
-                            body.decode(errors="replace")[:2000],
-                            attempt, max_attempts):
-                        backoff = _retry_backoff(attempt, r.status_code)
-                        self._log.warning(
-                            "req=%s stream transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                            req_id,
-                            r.status_code,
-                            model,
-                            attempt + 1,
-                            max_attempts,
-                            port,
-                            backoff,
-                        )
-                        await asyncio.sleep(backoff)
-                        continue
-                    r.raise_for_status()
-                self._log.debug(
-                    "req=%s stream success model=%s port=%s elapsed=%.2fs attempts=%d",
-                    req_id,
-                    model,
-                    port,
-                    time.perf_counter() - t0,
-                    attempt + 1,
-                )
-                return
-            except _TRANSIENT_HTTP_EXCEPTIONS as e:
-                if _yielded_any:
-                    raise LlamaError(
-                        f"[{req_id}] stream interrupted after partial output ({type(e).__name__})"
-                    ) from e
-                if attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt)
-                    self._log.warning(
-                        "req=%s stream transient error=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        type(e).__name__,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    if isinstance(e, httpx.ConnectError):
-                        port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
-                    await asyncio.sleep(backoff)
-                    continue
-                raise LlamaError(f"[{req_id}] llama-server for '{model}' unreachable (port {port})")
-            except httpx.HTTPStatusError as e:
-                # the 404/transient retries already ran pre-raise_for_status();
-                # every path reaching here is final
-                raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
-        raise LlamaError(f"[{req_id}] llama-server stream failure for '{model}' after retry")
+                    raise LlamaError(f"[{req_id}] llama-server for '{model}' unreachable (port {port})")
+                except httpx.HTTPStatusError as e:
+                    # the 404/transient retries already ran pre-raise_for_status();
+                    # every path reaching here is final
+                    raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
+            raise LlamaError(f"[{req_id}] llama-server stream failure for '{model}' after retry")
+        finally:
+            self._release_slot(_active_slot)
 
     async def close(self):
         """Called on app shutdown."""

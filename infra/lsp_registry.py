@@ -131,7 +131,12 @@ def normalize_override(raw) -> dict[str, list[str]]:
         if not lang:
             continue
         if isinstance(value, str):
-            argv = split_command(value)
+            try:
+                argv = split_command(value)
+            except ValueError as exc:
+                logger.warning("[LSP] lsp_servers[%s] invalid quoting (%s) - ignored",
+                               lang, exc)
+                continue
         elif isinstance(value, list):
             argv = [str(v) for v in value]
         else:

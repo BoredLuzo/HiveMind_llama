@@ -7,15 +7,19 @@ from utils.file import (
     _inline_resolve_path,
     _inline_check_workspace,
     _is_junction,
+    _is_protected_path,
     is_secret_path,
     filter_secret_search_rows,
 )
 from tools.errors import tool_error_response as _tool_error_response
 import asyncio
+import fnmatch
 import os
 import re
 import shutil
+import stat
 import sys
+import time
 
 _SKIP_SEARCH_DIRS = frozenset({
     ".git", "__pycache__", "node_modules", ".venv", "venv",
@@ -131,6 +135,79 @@ async def _inline_tool_list_dir(args: dict, workspace: Path, workspace_lock: str
             tool="list_dir" )
 
 
+_FIND_LIMIT = 150
+_MAX_SEARCH_BYTES = 256 * 1024
+
+
+def _is_unsafe_regex(pattern: str) -> bool:
+    """Detect common catastrophic-backtracking (ReDoS) regex shapes."""
+    if not pattern or len(pattern) > 500:
+        return len(pattern) > 500
+    if re.search(r"(?:\.\*|\.\+)\s*(?:\.\*|\.\+)", pattern):
+        return True
+    if re.search(r"\\[1-9](?:[*+?]|\{\d)", pattern):
+        return True
+    stack: list[bool] = []
+    in_class = False
+    i = 0
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if in_class:
+            if ch == "]":
+                in_class = False
+            i += 1
+            continue
+        if ch == "[":
+            in_class = True
+            if i + 1 < n and pattern[i + 1] == "^":
+                i += 2
+            else:
+                i += 1
+            if i < n and pattern[i] == "]":
+                i += 1
+            continue
+        if ch == "(":
+            stack.append(False)
+            i += 1
+            continue
+        if ch == ")" and stack:
+            inner_q = stack.pop()
+            nxt = pattern[i + 1] if i + 1 < n else ""
+            has_outer_rep = nxt in "*+" or (
+                nxt == "{" and i + 2 < n and pattern[i + 2].isdigit()
+            )
+            if inner_q and has_outer_rep:
+                return True
+            if (inner_q or has_outer_rep) and stack:
+                stack[-1] = True
+            i += 1
+            continue
+        if stack and (
+            ch in "*+"
+            or (ch == "{" and i + 1 < n and pattern[i + 1].isdigit())
+        ):
+            stack[-1] = True
+        i += 1
+    return False
+
+
+def _lstat_regular_nonlink(fp: Path) -> bool:
+    """Return True iff *fp* is a non-symlink, non-reparse regular file in 1 syscall."""
+    try:
+        st = os.lstat(fp)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        return False
+    if sys.platform == "win32" and (getattr(st, "st_file_attributes", 0) & 0x400):
+        return False
+    return stat.S_ISREG(st.st_mode)
+
+
 async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     pattern = args.get("pattern", "**/*")
     base = _inline_resolve_path(workspace, args.get("path", "."))
@@ -147,26 +224,24 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
                 return False
             if any(part in _SKIP_SEARCH_DIRS for part in rel.parts):
                 return False
+            if is_secret_path(rel.as_posix()):
+                return False
             cur = base
-            for part in rel.parts:
+            for part in rel.parts[:-1]:
                 cur = cur / part
                 if cur.is_symlink() or _is_junction(cur):
                     return False
+            if not _lstat_regular_nonlink(fp):
+                return False
             try:
                 fp_res = fp.resolve()
             except (OSError, RuntimeError):
                 return False
-            if not fp_res.is_file():
-                return False
             if not (fp_res.is_relative_to(base_resolved) and fp_res.is_relative_to(lock_resolved)):
                 return False
-            if _inline_check_workspace(fp, workspace_lock, "find_files") is not None:
+            if _is_protected_path(fp_res):
                 return False
-            if _inline_check_workspace(fp_res, workspace_lock, "find_files") is not None:
-                return False
-            if is_secret_path(fp, base) or is_secret_path(fp_res, base_resolved):
-                return False
-            return True
+            return not is_secret_path(fp_res, base_resolved)
 
         def _dir_allowed(dp: Path) -> bool:
             if dp.is_symlink() or _is_junction(dp):
@@ -177,43 +252,56 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
                 return False
             return dp_res.is_relative_to(base_resolved) and dp_res.is_relative_to(lock_resolved)
 
-        def _collect() -> list[Path]:
-            if "**" not in pattern:
-                return [
-                    m for m in sorted(base.glob(pattern))
-                    if _entry_allowed(m)
-                ]
-            import fnmatch
-            sub_pat = pattern[3:] if pattern.startswith("**/") else pattern
+        def _collect() -> tuple[list[Path], bool]:
             found: list[Path] = []
+            if "**" not in pattern:
+                for m in sorted(base.glob(pattern)):
+                    if _entry_allowed(m):
+                        found.append(m)
+                        if len(found) > _FIND_LIMIT:
+                            return found[:_FIND_LIMIT], True
+                return found, False
+
+            sub_pat = pattern[3:] if pattern.startswith("**/") else pattern
             for dp, dns, fns in os.walk(base, followlinks=False):
+                dp_path = Path(dp)
                 dns[:] = [
                     d for d in sorted(dns)
-                    if d not in _SKIP_SEARCH_DIRS and _dir_allowed(Path(dp) / d)
+                    if d not in _SKIP_SEARCH_DIRS and _dir_allowed(dp_path / d)
                 ]
                 for fn in sorted(fns):
-                    fp = Path(dp) / fn
+                    fp = dp_path / fn
                     rel_s = fp.relative_to(base).as_posix()
-                    if (fnmatch.fnmatch(rel_s, pattern)
-                            or fnmatch.fnmatch(fn, sub_pat)
-                            or fnmatch.fnmatch(rel_s, sub_pat)):
-                        if _entry_allowed(fp):
-                            found.append(fp)
-            return sorted(found)
+                    if not (
+                        fnmatch.fnmatch(rel_s, pattern)
+                        or fnmatch.fnmatch(fn, sub_pat)
+                        or fnmatch.fnmatch(rel_s, sub_pat)
+                    ):
+                        continue
+                    if is_secret_path(rel_s):
+                        continue
+                    if not _lstat_regular_nonlink(fp):
+                        continue
+                    if _is_protected_path(fp):
+                        continue
+                    found.append(fp)
+                    if len(found) > _FIND_LIMIT:
+                        return found[:_FIND_LIMIT], True
+            return found, False
 
-        files = await asyncio.to_thread(_collect)
+        files, has_more = await asyncio.to_thread(_collect)
         if not files:
             return f"(no matches for '{pattern}' in {base})"
         lines = []
-        for m in files[:150]:
+        for m in files:
             try:
                 rel = m.relative_to(base)
             except ValueError:
                 rel = m
             lines.append(str(rel))
         result = "\n".join(lines)
-        if len(files) > 150:
-            result += f"\n… ({len(files) - 150} more)"
+        if has_more:
+            result += f"\n… (more than {_FIND_LIMIT} matches — narrow pattern or path)"
         return result
     except Exception as e:
         return _tool_error_response(
@@ -275,6 +363,30 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
     _backend_completed = False
     _LINE_CAP = 50
 
+    async def _drain_stream(stream, limit: int, stop_on_cap: bool = True) -> tuple[bytes, bool]:
+        if stream is None:
+            return b"", False
+        chunks: list[bytes] = []
+        total = 0
+        capped = False
+        while True:
+            chunk = await stream.read(16384)
+            if not chunk:
+                break
+            if not capped:
+                room = limit - total
+                if len(chunk) >= room:
+                    if room > 0:
+                        chunks.append(chunk[:room])
+                        total += room
+                    capped = True
+                    if stop_on_cap:
+                        break
+                else:
+                    chunks.append(chunk)
+                    total += len(chunk)
+        return b"".join(chunks), capped
+
     async def _run_one(argv: list[str]):
         nonlocal _any_executed, _backend_completed
         r = None
@@ -283,9 +395,30 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
                 *argv,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
-            out, _ = await asyncio.wait_for(r.communicate(), 10)
+            _capped_out = False
+            if getattr(r, "stdout", None) is not None:
+                _t_out = asyncio.create_task(_drain_stream(r.stdout, _MAX_SEARCH_BYTES, True))
+                _t_err = asyncio.create_task(_drain_stream(r.stderr, 8192, False))
+                try:
+                    out, _capped_out = await asyncio.wait_for(_t_out, 10)
+                    if _capped_out:
+                        from tools.sandbox import kill_tree_and_reap as _ci_kill_reap
+                        await _ci_kill_reap(r)
+                    else:
+                        await asyncio.wait_for(r.wait(), 5)
+                    await asyncio.wait_for(_t_err, 2)
+                finally:
+                    for _t in (_t_out, _t_err):
+                        if not _t.done():
+                            _t.cancel()
+                    await asyncio.gather(_t_out, _t_err, return_exceptions=True)
+                    _tr = getattr(r, "_transport", None)
+                    if _tr is not None:
+                        _tr.close()
+            else:
+                out, _ = await asyncio.wait_for(r.communicate(), 10)
             _any_executed = True
-            if r.returncode in (0, 1):
+            if _capped_out or r.returncode in (0, 1):
                 _backend_completed = True
             raw_text = out.decode(errors="replace").strip()
             if not raw_text:
@@ -297,6 +430,8 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
             capped = "\n".join(lines[:_LINE_CAP])
             if len(lines) > _LINE_CAP:
                 capped += f"\n... ({len(lines) - _LINE_CAP} more)"
+            elif _capped_out:
+                capped += "\n... (output truncated)"
             return capped
         except Exception:
             if r is not None and getattr(r, "returncode", 0) is None:
@@ -307,19 +442,25 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
     for _argv in cmds:
         _r = await _run_one(_argv)
         if _r:
-            return f"[search_code: {pattern}]\n{_r[:8000]}"
+            if len(_r) > 8000:
+                _r = _r[:7960] + "\n... (output truncated)"
+            return f"[search_code: {pattern}]\n{_r}"
         if _backend_completed:
             return "(no matches — search completed, nothing found)"
 
-    # PYTHON-FALLBACK (3. Backend): Original-Pattern, garantiert korrekt —
+    # PYTHON-FALLBACK (3rd backend): original pattern, ReDoS- and time-bounded
     _fb_error = False
     try:
         _fb = await asyncio.to_thread(_python_content_search, _sc_p, pattern)
+    except ValueError as _ve:
+        return _tool_error_response("INVALID_REGEX", str(_ve), tool="search_code")
     except Exception:
         _fb = None
         _fb_error = True
     if _fb:
-        return f"[search_code: {pattern}]\n{_fb[:8000]}"
+        if len(_fb) > 8000:
+            _fb = _fb[:7960] + "\n... (output truncated)"
+        return f"[search_code: {pattern}]\n{_fb}"
     if _fb_error and not _any_executed:
         return _tool_error_response(
             "SEARCH_FAILED",
@@ -335,9 +476,14 @@ def _python_content_search(
     max_results: int = 80,
     max_file_bytes: int = 512_000,
     max_files: int = 2000,
+    max_seconds: float = 5.0,
+    max_line_chars: int = 4096,
 ) -> str | None:
-
-
+    if _is_unsafe_regex(pattern):
+        raise ValueError(
+            "Unsafe regex pattern (potential catastrophic backtracking / ReDoS); "
+            "simplify nested quantifiers or use a literal search."
+        )
     try:
         rx = re.compile(pattern)
     except re.error:
@@ -380,8 +526,14 @@ def _python_content_search(
                 files.append(p)
             if len(files) >= max_files:
                 break
+    deadline = time.monotonic() + max_seconds
     hits: list[str] = []
     for fp in files:
+        if time.monotonic() > deadline:
+            if hits:
+                hits.append("... (search timed out)")
+                return "\n".join(hits)
+            return None
         try:
             if fp.stat().st_size > max_file_bytes:
                 continue
@@ -395,7 +547,12 @@ def _python_content_search(
         except UnicodeDecodeError:
             text = data.decode("latin-1", errors="replace")
         for ln, line in enumerate(text.splitlines(), 1):
-            if rx.search(line):
+            if (ln & 255) == 0 and time.monotonic() > deadline:
+                if hits:
+                    hits.append("... (search timed out)")
+                    return "\n".join(hits)
+                return None
+            if rx.search(line[:max_line_chars]):
                 hits.append(f"{fp}:{ln}: {line.strip()[:200]}")
                 if len(hits) >= max_results:
                     hits.append("... (truncated)")

@@ -974,9 +974,19 @@ class AgenticToolLoop(ToolLoop):
                                         if _pre_tool and _pre_tool != _cfn:
                                             _tr_stage._clear_staged_approval(_tr_scope)
                                         elif not _pre_dec.get("args_hash") and not _pre_dec.get("approval_key"):
-                                            _pre_dec["tool"] = _pre_tool or _cfn
-                                            _pre_dec["approval_key"] = _canon_key
-                                            _pre_dec["args_hash"] = _args_hash
+                                            _pre_kind = _tr_stage._parse_approval_answer(_pre_dec.get("answer", ""))
+                                            if _pre_kind in ("once", "repo"):
+                                                # Never retroactively bind an early approve to unseen final arguments.
+                                                _tr_stage._approval_pre_decisions.pop(_tr_scope, None)
+                                            else:
+                                                _pre_dec["tool"] = _pre_tool or _cfn
+                                                _pre_dec["approval_key"] = _canon_key
+                                                _pre_dec["args_hash"] = _args_hash
+                                        elif (
+                                            (_pre_dec.get("args_hash") and _pre_dec["args_hash"] != _args_hash)
+                                            or (_pre_dec.get("approval_key") and _pre_dec["approval_key"] != _canon_key)
+                                        ):
+                                            _tr_stage._approval_pre_decisions.pop(_tr_scope, None)
                                     _pend = _tr_stage._pending_approvals.get(_tr_scope)
                                     if isinstance(_pend, dict):
                                         _was_generating = str(_pend.get("preview", "")).startswith("(generating")
