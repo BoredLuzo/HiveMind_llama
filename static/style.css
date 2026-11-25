@@ -338,7 +338,8 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 .sidebar-effort-wrap{margin:0}
 .sidebar-effort-trigger{min-width:104px;height:26px;padding:4px 9px;font-size:10.5px}
 .sidebar-effort-wrap .effort-menu{top:calc(100% + 6px);bottom:auto;right:0;z-index:220;
-  min-width:238px;max-width:280px;max-height:min(320px, calc(100vh - 180px))}
+  min-width:238px;max-width:280px;max-height:min(300px, calc(100vh - 180px))}
+.sidebar-effort-wrap .effort-menu.open-up{top:auto;bottom:calc(100% + 6px)}
 .effort-trigger:hover,.effort-trigger[aria-expanded="true"]{border-color:var(--amber);background:rgba(240,168,64,.1)}
 .effort-trigger[data-effort="none"]{color:#9aa6ba}
 .effort-trigger[data-effort="on"]{border-color:rgba(56,201,184,.45);color:#38c9b8;background:rgba(56,201,184,.1)}
@@ -1682,6 +1683,87 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 .mode-routing .ctx-row { padding: 3px 0; }
 .rt-status b { color: #dbe4ef; font-weight: 600; }
 .rt-status br + br { display: none; }
+
+/* ── UNIFIED REASONING CARD (2026-11-25) ──────────────────────────────── */
+.reasoning-card {
+  margin: 2px 0 10px;
+  border-color: rgba(154,116,220,.28);
+  background: linear-gradient(180deg, rgba(136,88,192,.07) 0%, #0e1319 42%);
+}
+.reasoning-card-title { color: #b79ae4; }
+.rsn-reset-btn {
+  margin-left: 6px;
+  background: rgba(240,168,64,.10);
+  border: 1px solid rgba(240,168,64,.35);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--amber);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.rsn-reset-btn:hover { background: rgba(240,168,64,.22); border-color: var(--amber); }
+.rsn-reset-btn[hidden] { display: none; }
+.rsn-role-row { padding: 5px 0; }
+.rsn-row-sep { border-top: 1px solid rgba(255,255,255,.05); margin-top: 2px; padding-top: 7px; }
+.rsn-role-row.is-inactive .opt-row-left,
+.rsn-role-row.is-inactive .effort-trigger { opacity: .55; transition: opacity .15s; }
+.rsn-inactive-pill {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border: 1px solid #2b3848;
+  background: rgba(128,140,160,.12);
+  color: #8b98ab;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.rsn-inactive-pill[hidden] { display: none; }
+.rsn-adv {
+  border-top: 1px solid rgba(154,116,220,.16);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+.rsn-adv[hidden] { display: none; }
+.rsn-adv-summary {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; user-select: none; list-style: none;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; color: #9ab0c8;
+  padding: 2px 0;
+}
+.rsn-adv-summary::-webkit-details-marker { display: none; }
+.rsn-adv-summary:hover { color: #dbe4ef; }
+.rsn-adv-caret {
+  font-size: 9px; color: #9a74dc;
+  transition: transform .15s ease;
+  display: inline-block;
+}
+.rsn-adv[open] .rsn-adv-caret { transform: rotate(90deg); }
+.rsn-adv-summary-val {
+  margin-left: auto;
+  font-size: 9px; color: #8c78b8;
+  background: rgba(136,88,192,.10);
+  border: 1px solid rgba(136,88,192,.22);
+  border-radius: 4px; padding: 1px 6px;
+  white-space: nowrap;
+}
+.rsn-adv-body {
+  margin-top: 7px;
+  padding: 8px 9px;
+  background: rgba(10,14,19,.52);
+  border: 1px solid #1b2533;
+  border-radius: 6px;
+}
+.rsn-footer-hint {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px; color: #5b6a80;
+  margin-top: 6px; line-height: 1.4;
+}
 
 /* ── UNIFIED TOOLS & OPTIONALS CARD (2026-11-12) ────────────────────────── */
 .tools-opt-card { margin: 2px 0 10px; }

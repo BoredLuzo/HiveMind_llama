@@ -967,6 +967,8 @@ async def _llm_stream(
                 await line_q.put(None)  # EOF sentinel
 
         _p_gen_t0 = time.monotonic()
+        _p_first_tok_t: float | None = None
+        _p_tim_last: dict = {}
         _p_usage_final = None
         async with client.stream(
             "POST",
@@ -1022,10 +1024,14 @@ async def _llm_stream(
                         chunk_data = json.loads(raw_data)
                     except Exception:
                         continue
+                    if isinstance(chunk_data.get("timings"), dict) and chunk_data["timings"]:
+                        _p_tim_last = chunk_data["timings"]
                     _p_usage = chunk_data.get("usage")
                     if _p_usage and _p_usage.get("completion_tokens"):
+                        _p_tim = chunk_data.get("timings") or _p_usage.get("timings") or _p_tim_last or {}
                         try:
-                            _p_cached = int((_p_usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                            _p_det_ca = ((_p_usage.get("prompt_tokens_details") or {}).get("cached_tokens"))
+                            _p_cached = int(_p_det_ca or _p_usage.get("cached_tokens") or (_p_tim.get("cache_n") if isinstance(_p_tim, dict) else 0) or 0)
                         except Exception:
                             _p_cached = 0
                         # TOKEN-DISPLAY-FIX (2026-08-31): llama.cpp reports the pure
@@ -1037,8 +1043,11 @@ async def _llm_stream(
                         except Exception:
                             _p_reasoning = 0
                         _p_ct = int(_p_usage["completion_tokens"])
-                        _p_gen_ms = int((time.monotonic() - _p_gen_t0) * 1000)
-                        _p_tim = chunk_data.get("timings") or _p_usage.get("timings") or {}
+                        try:
+                            _p_tim_ms = float(_p_tim.get("predicted_ms") or 0.0) if isinstance(_p_tim, dict) else 0.0
+                        except (TypeError, ValueError):
+                            _p_tim_ms = 0.0
+                        _p_gen_ms = int(round(_p_tim_ms)) if _p_tim_ms > 0 else int((time.monotonic() - (_p_first_tok_t or _p_gen_t0)) * 1000)
                         try:
                             _p_dtps = float(_p_tim.get("predicted_per_second") or 0.0) if isinstance(_p_tim, dict) else 0.0
                         except (TypeError, ValueError):
@@ -1053,6 +1062,13 @@ async def _llm_stream(
                             "gen_ms": _p_gen_ms,
                             "decode_tps": round(_p_dtps, 2),
                         }
+                        if isinstance(_p_tim, dict):
+                            try:
+                                _p_ptps = float(_p_tim.get("prompt_per_second") or 0.0)
+                                if _p_ptps > 0:
+                                    _p_usage_final["prompt_tps"] = round(_p_ptps, 2)
+                            except (TypeError, ValueError) as _ptps_err:
+                                logger.debug("[Planner] prompt_per_second parse error: %s", _ptps_err)
                     delta = (chunk_data.get("choices") or [{}])[0].get("delta", {})
 
                     # Field normalization (llama.cpp vs Ollama vs vLLM)
@@ -1066,6 +1082,8 @@ async def _llm_stream(
 
                     if not think_tok and not cont_tok:
                         continue
+                    if _p_first_tok_t is None:
+                        _p_first_tok_t = time.monotonic()
 
                     # PERF-LIVE-FIX: accumulate chunk chars + throttled ctx_meter
                     _gen_chars += len(think_tok) + len(cont_tok)
@@ -1151,6 +1169,21 @@ async def _llm_stream(
                     pass
 
             if _p_usage_final and emit_fn:
+                if _p_tim_last:
+                    try:
+                        _p_dtps_l = float(_p_tim_last.get("predicted_per_second") or 0.0)
+                        if _p_dtps_l > 0:
+                            _p_usage_final["decode_tps"] = round(_p_dtps_l, 2)
+                        _p_gms_l = float(_p_tim_last.get("predicted_ms") or 0.0)
+                        if _p_gms_l > 0:
+                            _p_usage_final["gen_ms"] = int(round(_p_gms_l))
+                        if not _p_usage_final.get("cached_tokens") and _p_tim_last.get("cache_n"):
+                            _p_usage_final["cached_tokens"] = int(_p_tim_last["cache_n"])
+                        _p_ptps_l = float(_p_tim_last.get("prompt_per_second") or 0.0)
+                        if _p_ptps_l > 0:
+                            _p_usage_final["prompt_tps"] = round(_p_ptps_l, 2)
+                    except (TypeError, ValueError) as _tim_err:
+                        logger.debug("[Planner] final timings merge failed: %s", _tim_err)
                 try:
                     await emit_fn({"type": "usage_meta", "phase": "planner", **_p_usage_final})
                 except Exception:

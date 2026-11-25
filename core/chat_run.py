@@ -513,7 +513,8 @@ async def _run_stream_locked(
                                     ("vision", "pipeline_vision"))
                 for _pname, _skey in (("pre_explore", "pre_explore"),
                                       ("planner", "soft_planner"),
-                                      ("coder", "coder_loop")) + _PIPELINE_PHASES:
+                                      ("coder", "coder_loop"),
+                                      ("direct", "direct_chat")) + _PIPELINE_PHASES:
                     _ent = _snap.get(_skey) or {}
                     # Pipeline-Stages kennen nur die reine Generierungszeit
                     # (add_real fuellt gen_s, kein start/end) -> als Dauer nutzen
@@ -523,7 +524,7 @@ async def _run_stream_locked(
                     if _ds:
                         _phases_ms[_pname] = int(round(float(_ds) * 1000))
                 for _pname, _skey in (("pre_explore", "pre_explore"), ("planner", "soft_planner"),
-                                      ("coder", "coder_loop")) + _PIPELINE_PHASES:
+                                      ("coder", "coder_loop"), ("direct", "direct_chat")) + _PIPELINE_PHASES:
                     if not _phases.get(_pname):
                         _ot = (_snap.get(_skey) or {}).get("output_tokens", 0)
                         if _ot:
@@ -737,6 +738,11 @@ async def _run_stream_locked(
         _run_taint.clear()
     except ImportError:
         pass
+    try:
+        from tools.runner import reset_read_file_stats as _reset_rf_stats
+        _reset_rf_stats()
+    except (ImportError, AttributeError) as _rf_err:
+        logger.debug("[READ-STATS] reset failed: %s", _rf_err)
     logger.warning("[RUN-TRACE] abort/stepskip registered run_id=%s", run_id)
     _agent_elapsed: dict = {}   # agent_key - elapsed seconds, fÃƒÂ¼r Log + Prefetch-Kalibrierung
     _pf = PrefetchCoordinator(
@@ -1174,6 +1180,7 @@ async def _run_stream_locked(
             pipeline_soul=_pipeline_soul,
             exec_ctrl=_exec_ctrl,
             agent_elapsed=_agent_elapsed,
+            tool_round_durations=_tool_round_durations,
             prefetch_state=_prefetch_state,
             prefetch_run_active=_prefetch_run_active,
             this_file=THIS_FILE,

@@ -488,6 +488,8 @@ SUITES = [
     ("glm54_slice2a_fixes", "tests/test_glm54_slice2a_fixes.py", 60),
     ("audit_p0_p1_wave_infra", "tests/test_audit_p0_p1_wave_infra.py", 60),
     ("final_release_batch", "tests/test_final_release_batch.py", 60),
+    ("metrics_and_reasoning_ui", "tests/test_metrics_and_reasoning_ui.py", 60),
+    ("gateway_thinking_and_chat_continuity", "tests/test_gateway_thinking_and_chat_continuity.py", 60),
 
 ]
 

@@ -329,17 +329,50 @@ function closeReasoningEffortMenu() {
   if (trig) trig.setAttribute('aria-expanded', 'false');
 }
 
+function closeSidebarMainEffortMenu() {
+  if (typeof document === 'undefined') return;
+  var menu = document.getElementById('sidebar-main-effort-menu');
+  var trig = document.getElementById('sidebar-main-effort-trigger');
+  if (menu) {
+    menu.hidden = true;
+    if (menu.classList) menu.classList.remove('open-up');
+  }
+  if (trig) trig.setAttribute('aria-expanded', 'false');
+}
+
 function closePlannerReasoningEffortMenu() {
   if (typeof document === 'undefined') return;
   var menu = document.getElementById('planner-effort-menu');
   var trig = document.getElementById('planner-effort-trigger');
-  if (menu) menu.hidden = true;
+  if (menu) {
+    menu.hidden = true;
+    if (menu.classList) menu.classList.remove('open-up');
+  }
   if (trig) trig.setAttribute('aria-expanded', 'false');
+}
+
+function _positionSidebarEffortMenu(wrap, menu) {
+  if (!menu || !menu.classList) return;
+  menu.classList.remove('open-up');
+  if (!wrap || typeof wrap.getBoundingClientRect !== 'function' || typeof menu.getBoundingClientRect !== 'function') return;
+  var wr = wrap.getBoundingClientRect();
+  var mr = menu.getBoundingClientRect();
+  var panel = (typeof wrap.closest === 'function') ? wrap.closest('.panel') : null;
+  var bounds = (panel && typeof panel.getBoundingClientRect === 'function')
+    ? panel.getBoundingClientRect()
+    : { top: 0, bottom: (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 900 };
+  var needH = Math.max(mr.height || 0, 220);
+  var spaceBelow = bounds.bottom - wr.bottom - 8;
+  var spaceAbove = wr.top - bounds.top - 8;
+  if (spaceBelow < needH && spaceAbove > spaceBelow) {
+    menu.classList.add('open-up');
+  }
 }
 
 function toggleReasoningEffortMenu(ev) {
   if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
   if (typeof document === 'undefined') return;
+  closeSidebarMainEffortMenu();
   closePlannerReasoningEffortMenu();
   var menu = document.getElementById('effort-menu');
   var trig = document.getElementById('effort-trigger');
@@ -352,18 +385,43 @@ function toggleReasoningEffortMenu(ev) {
   }
 }
 
+function toggleSidebarMainEffortMenu(ev) {
+  if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+  if (typeof document === 'undefined') return;
+  closeReasoningEffortMenu();
+  closePlannerReasoningEffortMenu();
+  var menu = document.getElementById('sidebar-main-effort-menu');
+  var trig = document.getElementById('sidebar-main-effort-trigger');
+  var wrap = document.getElementById('sidebar-main-effort-wrap');
+  if (!menu || !trig) return;
+  var willOpen = Boolean(menu.hidden);
+  menu.hidden = !willOpen;
+  trig.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+  if (willOpen) {
+    _renderReasoningEffortUI(S.reasoningEffort);
+    _positionSidebarEffortMenu(wrap, menu);
+  } else if (menu.classList) {
+    menu.classList.remove('open-up');
+  }
+}
+
 function togglePlannerReasoningEffortMenu(ev) {
   if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
   if (typeof document === 'undefined') return;
   closeReasoningEffortMenu();
+  closeSidebarMainEffortMenu();
   var menu = document.getElementById('planner-effort-menu');
   var trig = document.getElementById('planner-effort-trigger');
+  var wrap = document.getElementById('planner-effort-wrap');
   if (!menu || !trig) return;
   var willOpen = Boolean(menu.hidden);
   menu.hidden = !willOpen;
   trig.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
   if (willOpen) {
     _renderPlannerReasoningEffortUI(S.plannerReasoningEffort);
+    _positionSidebarEffortMenu(wrap, menu);
+  } else if (menu.classList) {
+    menu.classList.remove('open-up');
   }
 }
 
@@ -555,6 +613,132 @@ function _renderPlannerReasoningEffortUI(v) {
   _syncRoutingPlannerEffortSelect(st);
 }
 
+function _renderSidebarMainEffortUI(st) {
+  if (typeof document === 'undefined' || !st) return;
+  var mode = S.mode || 'auto';
+  var roleLbl = document.getElementById('sidebar-main-role-lbl');
+  if (roleLbl) {
+    roleLbl.textContent = (mode === 'code_duo')
+      ? 'Coder'
+      : (mode === 'pipeline' ? 'Synthesizer' : (mode === 'simple' ? 'Direct' : 'Direct / Coder'));
+  }
+  var hintEl = document.getElementById('sidebar-main-effort-hint');
+  if (hintEl) {
+    if (!st.supportsThinking) {
+      hintEl.textContent = st.shortModel + ' has no native reasoning';
+    } else if (st.isOverriding) {
+      hintEl.textContent = 'Synced with composer \u00b7 overrides card/sidebar';
+    } else {
+      hintEl.textContent = 'Synced with composer \u00b7 ' + st.ctxText;
+    }
+  }
+  var trig = document.getElementById('sidebar-main-effort-trigger');
+  if (trig) {
+    trig.setAttribute('data-effort', st.trigEff);
+    trig.setAttribute('data-override', st.isOverriding ? '1' : '0');
+    if (!st.supportsThinking) trig.setAttribute('data-no-reasoning', '1');
+    else if (typeof trig.removeAttribute === 'function') trig.removeAttribute('data-no-reasoning');
+    trig.title = st.ctxText;
+  }
+  var lblEl = document.getElementById('sidebar-main-effort-trig-lbl');
+  if (lblEl) lblEl.textContent = st.trigLabel;
+  var ctxEl = document.getElementById('sidebar-main-effort-menu-ctx');
+  if (ctxEl) ctxEl.textContent = st.ctxText;
+  var ovrEl = document.getElementById('sidebar-main-effort-menu-ovr');
+  var ovrTxt = document.getElementById('sidebar-main-effort-menu-ovr-txt');
+  var ovrResetBtn = document.getElementById('sidebar-main-effort-ovr-reset-btn');
+  if (ovrEl) {
+    if (st.ovrKind !== 'none') {
+      ovrEl.hidden = false;
+      ovrEl.className = 'effort-menu-ovr ' + st.ovrKind;
+      if (ovrTxt) ovrTxt.textContent = st.ovrText;
+      if (ovrResetBtn) ovrResetBtn.hidden = !st.showReset;
+    } else {
+      ovrEl.hidden = true;
+      if (ovrResetBtn) ovrResetBtn.hidden = true;
+    }
+  }
+  var emptyEl = document.getElementById('sidebar-main-effort-menu-empty');
+  if (emptyEl) {
+    emptyEl.hidden = st.supportsThinking;
+    if (!st.supportsThinking) emptyEl.textContent = st.shortModel + ' does not support native reasoning';
+  }
+  var menu = document.getElementById('sidebar-main-effort-menu');
+  if (menu && menu.querySelectorAll) {
+    var opts = menu.querySelectorAll('.effort-opt');
+    for (var i = 0; i < opts.length; i++) {
+      var b = opts[i];
+      var optEff = b.getAttribute('data-effort');
+      var shown = (optEff === 'on')
+        ? (st.rMode === 'binary')
+        : (optEff === 'minimal' ? (st.rMode !== 'binary') : true);
+      var avail = (optEff === 'auto') || (st.supportsThinking && (optEff === 'none' || st.availLevels.indexOf(optEff) >= 0));
+      var activeOpt = shown && avail && (optEff === st.eff || (st.eff !== 'auto' && optEff === st.mappedEff));
+      b.hidden = !shown;
+      b.disabled = !shown || !avail;
+      if (b.classList) {
+        b.classList.toggle('active', activeOpt);
+        b.classList.toggle('disabled', shown && !avail);
+      }
+      b.title = (shown && !avail) ? ('Not supported by ' + st.shortModel) : '';
+      b.setAttribute('aria-hidden', shown ? 'false' : 'true');
+      b.setAttribute('aria-disabled', (!avail) ? 'true' : 'false');
+      b.setAttribute('aria-selected', activeOpt ? 'true' : 'false');
+    }
+  }
+}
+
+function _renderReasoningCardChrome(mainSt, planSt) {
+  if (typeof document === 'undefined') return;
+  var mode = S.mode || 'auto';
+  var isAgentic = (mode === 'code_duo' && S.duoAgenticMode !== false);
+  var showPlanner = (isAgentic || (mode === 'auto' && (S.routingPlanner || 'decider') !== 'never'));
+  var showAdv = (isAgentic || mode === 'auto');
+  var plannerOff = (isAgentic && S.duoPlannerEnabled === false);
+
+  var pRow = document.getElementById('planner-effort-row');
+  if (pRow) {
+    if (pRow.style) pRow.style.display = showPlanner ? '' : 'none';
+    if (pRow.classList) pRow.classList.toggle('is-inactive', plannerOff);
+  }
+  var pPill = document.getElementById('planner-effort-inactive-pill');
+  if (pPill) pPill.hidden = !plannerOff;
+
+  var sub = document.getElementById('reasoning-card-scope-sub');
+  if (sub) {
+    if (mode === 'simple') sub.textContent = 'Direct';
+    else if (mode === 'pipeline') sub.textContent = 'Synthesizer';
+    else if (mode === 'code_duo') sub.textContent = isAgentic ? (plannerOff ? 'Coder (Planner off)' : 'Coder + Planner') : 'Coder';
+    else sub.textContent = showPlanner ? 'Direct + Planner' : 'Direct';
+  }
+
+  var resetBtn = document.getElementById('reasoning-card-reset-btn');
+  if (resetBtn) {
+    var hasOvr = (mainSt && mainSt.eff !== 'auto') || (showPlanner && planSt && planSt.eff !== 'auto');
+    resetBtn.hidden = !hasOvr;
+  }
+
+  var adv = document.getElementById('reasoning-adv-details');
+  if (adv) adv.hidden = !showAdv;
+  var advVal = document.getElementById('reasoning-adv-summary-val');
+  if (advVal) {
+    var pTxt = S.duoChunking ? 'Plan: Forced' : (S.duoAgenticThinking ? 'Plan: On' : 'Plan: Off');
+    var tTxt = S.duoToolThinkingAlways ? 'Tools: On' : 'Tools: Off';
+    var mt = parseInt(S.duoPlannerMaxTokens, 10) || 0;
+    var mtTxt = mt > 0 ? (mt >= 1000 ? ((mt % 1000 === 0 ? (mt / 1000) : (mt / 1000).toFixed(1)) + 'k') : String(mt)) : 'ctx';
+    advVal.textContent = pTxt + ' \u00b7 ' + tTxt + ' \u00b7 ' + mtTxt;
+  }
+}
+
+function resetAllReasoningEffort() {
+  if (_normalizeReasoningEffort(S.reasoningEffort) !== 'auto') {
+    setReasoningEffort('auto');
+  }
+  if (_normalizeReasoningEffort(S.plannerReasoningEffort) !== 'auto') {
+    setPlannerReasoningEffort('auto');
+  }
+}
+
 function _renderReasoningEffortUI(v) {
   var st = _getActiveEffortState(v);
   var eff = st.eff;
@@ -620,7 +804,10 @@ function _renderReasoningEffortUI(v) {
       }
     }
   }
+  var pSt = _getPlannerEffortState(S.plannerReasoningEffort);
   _renderPlannerReasoningEffortUI(S.plannerReasoningEffort);
+  _renderSidebarMainEffortUI(st);
+  _renderReasoningCardChrome(st, pSt);
   _syncReasoningOverrideBadges();
 }
 
@@ -629,6 +816,7 @@ function setReasoningEffort(level) {
   var eff = _normalizeReasoningEffort(level);
   S.reasoningEffort = eff;
   closeReasoningEffortMenu();
+  closeSidebarMainEffortMenu();
   _renderReasoningEffortUI(eff);
   if (typeof _postSettingsFF === 'function') {
     _postSettingsFF({ reasoning_effort: eff }, function() {
@@ -646,11 +834,13 @@ function setPlannerReasoningEffort(level) {
   S.plannerReasoningEffort = eff;
   closePlannerReasoningEffortMenu();
   _renderPlannerReasoningEffortUI(eff);
+  _renderReasoningCardChrome(_getActiveEffortState(S.reasoningEffort), _getPlannerEffortState(eff));
   _syncReasoningOverrideBadges();
   if (typeof _postSettingsFF === 'function') {
     _postSettingsFF({ planner_reasoning_effort: eff }, function() {
       S.plannerReasoningEffort = prev;
       _renderPlannerReasoningEffortUI(prev);
+      _renderReasoningCardChrome(_getActiveEffortState(S.reasoningEffort), _getPlannerEffortState(prev));
       _syncReasoningOverrideBadges();
     });
   } else if (typeof postSettings === 'function') {
@@ -664,6 +854,10 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
     if (wrap && (!ev || !ev.target || (typeof wrap.contains === 'function' && !wrap.contains(ev.target)))) {
       closeReasoningEffortMenu();
     }
+    var smWrap = document.getElementById('sidebar-main-effort-wrap');
+    if (smWrap && (!ev || !ev.target || (typeof smWrap.contains === 'function' && !smWrap.contains(ev.target)))) {
+      closeSidebarMainEffortMenu();
+    }
     var pwrap = document.getElementById('planner-effort-wrap');
     if (pwrap && (!ev || !ev.target || (typeof pwrap.contains === 'function' && !pwrap.contains(ev.target)))) {
       closePlannerReasoningEffortMenu();
@@ -672,6 +866,7 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
   document.addEventListener('keydown', function(ev) {
     if (ev && ev.key === 'Escape') {
       closeReasoningEffortMenu();
+      closeSidebarMainEffortMenu();
       closePlannerReasoningEffortMenu();
     }
   });

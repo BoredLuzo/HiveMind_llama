@@ -11,6 +11,7 @@ _PHASE_LABELS: dict[str, str] = {
     "pre_explore":  "Pre-Explore",
     "soft_planner": "Planner",
     "coder_loop":   "Coder",
+    "direct_chat":  "Direct",
 }
 
 

@@ -47,13 +47,16 @@ var EVENT_HANDLERS = {
     // TOKEN-DISPLAY-FIX (2026-08-31): set the thinking block to the REAL llama.cpp
     // reasoning-token count (phase=planner). Guard >0: the NT retry
     // (reasoning=0) must not overwrite the real value of the thinking run.
-    if (d.phase === 'planner' && d.reasoning_tokens > 0) {
-      var _tcReal = document.getElementById('planner-think-token-count');
-      if (_tcReal) {
-        var _realTok = parseInt(d.reasoning_tokens, 10) || 0;
-        // real llama.cpp value (without ≈) — replaces the chars/3 estimate.
-        _tcReal.textContent = (_realTok > 999 ? (_realTok / 1000).toFixed(1) + 'k' : _realTok) + ' tok';
-        _tcReal.style.color = '#4a3060';
+    if (d.phase === 'planner') {
+      if (typeof _updatePlannerTokRate === 'function') _updatePlannerTokRate();
+      if (d.reasoning_tokens > 0) {
+        var _tcReal = document.getElementById('planner-think-token-count');
+        if (_tcReal) {
+          var _realTok = parseInt(d.reasoning_tokens, 10) || 0;
+          // real llama.cpp value (without ≈) — replaces the chars/3 estimate.
+          _tcReal.textContent = (_realTok > 999 ? (_realTok / 1000).toFixed(1) + 'k' : _realTok) + ' tok';
+          _tcReal.style.color = '#4a3060';
+        }
       }
     }
   },

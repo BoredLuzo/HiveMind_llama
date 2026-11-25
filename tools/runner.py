@@ -77,6 +77,37 @@ _files_seen_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVa
 _files_written_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar(
     "_files_written_in_run", default=None
 )
+_read_file_stats_in_run: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
+    "_read_file_stats_in_run", default=None
+)
+
+
+def reset_read_file_stats() -> dict:
+    """Initialize a fresh shared read_file statistics dict for the current run."""
+    stats: dict = {"calls": 0, "paths": set(), "bytes": 0}
+    _read_file_stats_in_run.set(stats)
+    return stats
+
+
+def get_read_file_stats() -> dict:
+    """Return accumulated read_file statistics for the current run."""
+    stats = _read_file_stats_in_run.get(None)
+    if not isinstance(stats, dict):
+        return {"calls": 0, "paths": set(), "bytes": 0}
+    return stats
+
+
+def _record_read_file_stat(path_key: str, n_bytes: int = 0) -> None:
+    """Accumulate read_file call count, unique paths, and bytes in the active run."""
+    stats = _read_file_stats_in_run.get(None)
+    if not isinstance(stats, dict):
+        stats = reset_read_file_stats()
+    stats["calls"] = int(stats.get("calls", 0)) + 1
+    paths = stats.setdefault("paths", set())
+    if isinstance(paths, set) and path_key:
+        paths.add(path_key)
+    if n_bytes > 0:
+        stats["bytes"] = int(stats.get("bytes", 0)) + int(n_bytes)
 # RUN-WIDE fallback (2026-11-04): tool calls can run in child tasks that each
 # copy the ContextVar before the first lazily-created set exists. This
 # module-level registry is keyed by run id, so the static-only test guard
@@ -1984,12 +2015,14 @@ async def _run_inline_tool(
                 _rp_str
             )
         if _rp_str in _read_set and not args.get("start_line") and not args.get("end_line"):
-            return _normalize_meta_paths(
+            _skip_msg = _normalize_meta_paths(
                 f"[SKIP: '{args.get('path')}' already read in this session. "
                 f"The full content is in your context above. "
                 f"Do NOT call read_file on this path again. "
                 f"Use edit_file or write_file directly.]"
             )
+            _record_read_file_stat(_rp_str, len(_skip_msg))
+            return _skip_msg
 
     # DEAD-NAME GUARD (audit 2026-10-17): a handler that exists but is offered by
     # NO mode (today: patch_file) was still reachable in the duo path - the model
@@ -2224,6 +2257,7 @@ async def _run_inline_tool(
                 if not _is_range_read:
                     _read_set.add(_rp_ok)
                 _any_read_set.add(_rp_ok)
+                _record_read_file_stat(_rp_ok, len(str(_result or "")))
                 # T2 (audit r2): the signature block used to run on ANY
                 # outcome at its own indent level - a FAILED re-read
                 # refreshed the signature for content the model never saw,

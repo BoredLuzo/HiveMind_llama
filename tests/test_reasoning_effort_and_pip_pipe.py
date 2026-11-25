@@ -1477,7 +1477,9 @@ check(
     and 'id="effort-wrap"' in _input_box_slice
     and 'id="planner-effort-row"' in _html_src
     and 'id="planner-effort-trigger"' in _html_src
-    and 'id="routing-planner-effort-sel"' in _html_src
+    and 'id="reasoning-card"' in _html_src
+    and 'id="sidebar-main-effort-trigger"' in _html_src
+    and 'id="routing-planner-effort-sel"' not in _html_src
     and "min-width:96px;height:28px" in _css_src
     and ".sidebar-effort-trigger{min-width:104px" in _css_src,
     repr((_sep_meta_ok, _eff_on.get("reasoning_effort"), _eff_auto.get("reasoning_effort"), _pl_sep_hi.get("reasoning_effort"), _pl_sep_none.get("reasoning_effort"), _inloop_sep_max.get("reasoning_effort"), _inloop_auto_decoupled.get("reasoning_effort"), [p.get("reasoning_effort") for p in _nt_retry_payloads])),

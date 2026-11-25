@@ -260,6 +260,31 @@ function updateChatToolsSectionVisibility() {
   }
 }
 
+// REASONING-CARD (2026-11-25): single card in #chat-reasoning-section for
+// Direct/Auto/Pipeline, moved into #duo-reasoning-slot in Code-Duo. Hidden in AutoMap.
+function updateReasoningCardVisibility() {
+  var sec = document.getElementById('chat-reasoning-section');
+  var card = document.getElementById('reasoning-card');
+  var duoSlot = document.getElementById('duo-reasoning-slot');
+  if (!sec || !card) return;
+  var mode = S.mode || 'auto';
+  if (mode === 'simple' || mode === 'auto' || mode === 'pipeline') {
+    _ctxRestore(card);
+    sec.style.display = 'block';
+    card.style.display = 'block';
+  } else if (mode === 'code_duo') {
+    sec.style.display = 'none';
+    if (duoSlot) _ctxMoveTo(card, duoSlot);
+    card.style.display = 'block';
+  } else {
+    _ctxRestore(card);
+    sec.style.display = 'none';
+  }
+  if (typeof _renderReasoningEffortUI === 'function') {
+    _renderReasoningEffortUI(S.reasoningEffort);
+  }
+}
+
 function setDuoCoderToolTier(v) {
   var tier = (v === 'lean' || v === 'core' || v === 'full') ? v : 'core';
   S.duoCoderToolTier = tier;
@@ -1218,6 +1243,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     updateDirectToolsTierHint();
     updateChatToolsBadge();
     updateChatToolsSectionVisibility();
+    updateReasoningCardVisibility();
     updatePassFilesButtons();
 
   // AutoMap Advanced
@@ -1914,6 +1940,7 @@ function setModeUI(mode) {
   updateWebsearchHint();
   updateChatToolsBadge();
   updateChatToolsSectionVisibility();
+  updateReasoningCardVisibility();
   updateModeDesc();
   updateComplexityVisibility();
   if (typeof updateModelsChip === 'function') updateModelsChip();
@@ -2029,6 +2056,7 @@ function setDuoSubMode(mode, opts) {
   updateCtxScopeHint();
   updateComplexityVisibility();
   updateChatToolsSectionVisibility();
+  updateReasoningCardVisibility();
 }
 
 function updateAgenticHint() {

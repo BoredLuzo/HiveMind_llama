@@ -59,7 +59,9 @@ async def _phase_vram(ctx, state: dict):
     _ctx_pressure_peak = 0.0
     _ctx_compressions = 0
     _ctx_evictions = 0
-    _tool_round_durations: list[float] = []
+    _tool_round_durations: list[float] = (
+        ctx.tool_round_durations if isinstance(getattr(ctx, "tool_round_durations", None), list) else []
+    )
 
     if ctx.duo_config.agentic_mode:
         if exec_mdl != coder_mdl:

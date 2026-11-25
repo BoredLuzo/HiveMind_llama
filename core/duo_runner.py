@@ -2257,7 +2257,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         "_ctx_limit_seen": 0,
         "_ctx_pressure_peak": 0.0,
         "_ctx_compressions": 0,
-        "_tool_round_durations": [],
+        "_tool_round_durations": (
+            ctx.tool_round_durations if isinstance(getattr(ctx, "tool_round_durations", None), list) else []
+        ),
         "_coder_tc": False,
         # _pre_explore reads this before the VRAM phase sets it.
         "_exec_tc": False,

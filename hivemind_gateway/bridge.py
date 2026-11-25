@@ -198,20 +198,29 @@ class RunBridge:
         self.state.data["follow_ui"] = bool(on)
         self.state.save()
 
-    async def _ui_chat_target(self) -> str:
-        """id of the newest non-[TG] chat that is still fresh, else ''."""
-        if not self.follow_ui_enabled():
-            return ""
+    def _pinned_chat(self) -> dict | None:
+        pin = self.state.data.get("pinned_chat")
+        return pin if isinstance(pin, dict) and pin.get("hive_chat_id") else None
+
+    async def _ui_chat_target_info(self) -> tuple[str, str]:
+        """(chat_id, title) of the newest non-[TG] chat that is still fresh, else ('', '')."""
+        if not self.follow_ui_enabled() or self._pinned_chat():
+            return "", ""
         try:
             chats = await self.hive.get_chats()
         except (HiveUnreachable, OSError, ValueError):
-            return ""
+            return "", ""
         now_ts = time.time()
         tg = self._tg_chat() or {}
-        tg_ts = _to_epoch(tg.get("new_chat_ts"))
-        if tg_ts is None:
-            tg_ts = _to_epoch(tg.get("created_at"))
-        best: tuple[float, str] = (0.0, "")
+        _tg_stamps = [
+            ts for ts in (
+                _to_epoch(tg.get("last_active_ts")),
+                _to_epoch(tg.get("new_chat_ts")),
+                _to_epoch(tg.get("created_at")),
+            ) if ts is not None
+        ]
+        tg_ts = max(_tg_stamps) if _tg_stamps else None
+        best: tuple[float, str, str] = (0.0, "", "")
         for ch in chats or []:
             if not isinstance(ch, dict):
                 continue
@@ -228,27 +237,60 @@ class RunBridge:
             if age < 0 or age > self.FOLLOW_UI_MAX_AGE_S:
                 continue
             if when_ts > best[0]:
-                best = (when_ts, cid)
+                best = (when_ts, cid, title)
         if best[1] and tg_ts is not None and tg_ts >= best[0]:
-            return ""
-        return best[1]
+            return "", ""
+        return best[1], best[2]
+
+    async def _ui_chat_target(self) -> str:
+        """id of the newest non-[TG] chat that is still fresh, else ''."""
+        cid, _ = await self._ui_chat_target_info()
+        return cid
 
     async def _ensure_chat(self) -> dict:
+        pinned = self._pinned_chat()
+        if pinned:
+            cid = str(pinned["hive_chat_id"])
+            _still_exists = True
+            _get_chat = getattr(self.hive, "get_chat", None)
+            if _get_chat is not None:
+                try:
+                    resp = await _get_chat(cid)
+                    if getattr(resp, "status_code", 200) == 404:
+                        _still_exists = False
+                except (HiveUnreachable, HTTPError, OSError, ValueError, AttributeError):
+                    pass
+            if _still_exists:
+                return {
+                    "hive_chat_id": cid,
+                    "title": str(pinned.get("title") or ""),
+                    "created_at": "",
+                    "pinned": True,
+                }
+            self.state.data.pop("pinned_chat", None)
+            self.state.save()
         # FOLLOW-UI: continue the chat the browser used last
-        _ui = await self._ui_chat_target()
+        _ui, _ui_title = await self._ui_chat_target_info()
         if _ui:
-            mapping = {"hive_chat_id": _ui, "created_at": "", "followed": True}
-            self.state.data["followed_chat"] = _ui
+            mapping = {"hive_chat_id": _ui, "title": _ui_title, "created_at": "", "followed": True}
+            if self.state.data.get("followed_chat") != _ui:
+                self.state.data["followed_chat"] = _ui
+                self.state.save()
             return mapping
+        if self.state.data.pop("followed_chat", None) is not None:
+            self.state.save()
         mapping = self._tg_chat()
         if mapping and mapping.get("hive_chat_id"):
             return mapping
         import datetime as _dt
+        now_ts = time.time()
         title = "[TG] Telegram " + _dt.datetime.now().astimezone() \
             .strftime("%Y-%m-%d %H:%M")
         created = await self.hive.create_chat(title)
         mapping = {"hive_chat_id": str(created["id"]),
-                   "created_at": created.get("chat", {}).get("created_at", "")}
+                   "title": title,
+                   "created_at": created.get("chat", {}).get("created_at", ""),
+                   "last_active_ts": now_ts}
         self.state.data["tg_chat"] = mapping
         self.state.save()
         return mapping
@@ -419,6 +461,25 @@ class RunBridge:
         ok = await self._progress_msgs()
         self._progress_cache = (now, ok)
         return ok
+
+    async def _flush_thinking(self, text: str, *, label: str = "") -> None:
+        """Send buffered model/planner reasoning to Telegram if progress msgs are on."""
+        raw = (text or "").strip()
+        if not raw:
+            return
+        try:
+            if not await self._progress_ok():
+                return
+        except (HiveUnreachable, HTTPError, OSError):
+            pass
+        clean = " ".join(render.filter_secrets(raw).split())
+        if not clean:
+            return
+        cap = 1200 if self.verbose else 450
+        if len(clean) > cap:
+            clean = "…" + clean[-(cap - 1):]
+        prefix = f"💭 {label}: " if label else "💭 "
+        await self.ms.send_message(prefix + clean)
 
     async def _send_chunk(self, plain: str) -> None:
         """Send one answer chunk as Telegram HTML (code fences render as
@@ -773,6 +834,12 @@ class RunBridge:
 
         mapping = await self._ensure_chat()
         chat_id = mapping["hive_chat_id"]
+        if not mapping.get("followed") and not mapping.get("pinned"):
+            tg_map = self._tg_chat()
+            if isinstance(tg_map, dict) and str(tg_map.get("hive_chat_id") or "") == chat_id:
+                tg_map["last_active_ts"] = time.time()
+                self.state.data["tg_chat"] = tg_map
+                self.state.save()
         # SEND-FILE (2026-11-04): one workspace lookup per run; the engine
         # already confined the file, this is the gateway-side re-check.
         _run_ws, _run_is_ph = await self.resolve_chat_workspace(chat_id)
@@ -873,10 +940,22 @@ class RunBridge:
         status_id = None  # R3: unbound here used to NameError in _finish
                            # (start-note transport failure) and wedge the
                            # latch - NameError is not in the finally tuple.
+        _chat_src = ("pinned" if mapping.get("pinned")
+                     else ("follow-UI" if mapping.get("followed") else "TG"))
+        _chat_title = str(mapping.get("title") or "").strip()
+        _chat_line = (f"{_chat_title[:42]} ({chat_id}) [{_chat_src}]"
+                      if _chat_title and _chat_title != chat_id
+                      else f"{chat_id} [{_chat_src}]")
+        _conf_ov = (_conf.get("run_overrides") if isinstance(_conf, dict) else None) or {}
+        _eff_main = str(_conf_ov.get("reasoning_effort") or (_s.get("reasoning_effort") if isinstance(_s, dict) else "") or "auto")
+        _eff_plan = str(_conf_ov.get("planner_reasoning_effort") or (_s.get("planner_reasoning_effort") if isinstance(_s, dict) else "") or "auto")
+        _effort_line = f"effort: {_eff_main}" + (f" · planner: {_eff_plan}" if _eff_plan != "auto" else "") + "\n"
         try:
             await self.ms.send_message(
                 "ℹ️ Run\n\n"
+                f"chat: {_chat_line}\n"
                 f"mode: {_eff_label}\n"
+                f"{_effort_line}"
                 f"{_model_line}\n"
                 f"approvals: {_appr_mode}\n"
                 f"workspace: {_ws_short}")
@@ -994,6 +1073,12 @@ class RunBridge:
                             except (HiveUnreachable, OSError, ValueError):
                                 pass
                 elif etype == "token":
+                    if planner_think.strip():
+                        await self._flush_thinking(planner_think, label="Planning")
+                        planner_think = ""
+                    if tick_think.strip():
+                        await self._flush_thinking(tick_think, label="Reasoning")
+                        tick_think = ""
                     parts.append(str(ev.get("content") or ""))
                 elif etype == "stream_gap":
                     # P0 (edge audit 2026-11-03): the server dropped frames
@@ -1027,15 +1112,20 @@ class RunBridge:
                         await self._relay_own_approval(ev)
                 elif etype == "agent":
                     # R4: phase switches as own lines (Planner / Code / …)
+                    if planner_think.strip():
+                        await self._flush_thinking(planner_think, label="Planning")
+                        planner_think = ""
+                    if tick_think.strip():
+                        await self._flush_thinking(tick_think, label="Reasoning")
+                        tick_think = ""
                     _ph = str(ev.get("content") or "").strip()
                     if _ph and _ph != last_phase:
                         await self.ms.send_message(f"→ {_ph}")
                         last_phase = _ph
-                    if planner_think.strip():
-                        _pt = " ".join(planner_think.split())[-160:]
-                        await self.ms.send_message(f"💭 Planning: …{_pt}")
-                        planner_think = ""
                 elif etype == "planner_result":
+                    if planner_think.strip():
+                        await self._flush_thinking(planner_think, label="Planning")
+                        planner_think = ""
                     _plan = str(ev.get("content") or "")
                     if not _plan and isinstance(ev.get("chunks"), list):
                         _plan = "".join(str(c) for c in ev["chunks"])
@@ -1102,8 +1192,7 @@ class RunBridge:
                         await self.ms.send_message(f"🔍 pre-explore: {_pdl[:160]}")
                 elif etype == "tool_call":
                     if tick_think.strip():
-                        _tt = " ".join(tick_think.split())[-160:]
-                        await self.ms.send_message(f"💭 …{_tt}")
+                        await self._flush_thinking(tick_think, label="Reasoning")
                         tick_think = ""
                     # Tool-Call-Relay (2026-10-05) + REPEAT-DEDUPE (R6,
                     # live flood): identical lines relay once, counter
@@ -1179,6 +1268,18 @@ class RunBridge:
                         "and is mirrored here.")
             raise  # engine truly unreachable: keep the honest failure path
         finally:
+            if planner_think.strip():
+                try:
+                    await self._flush_thinking(planner_think, label="Planning")
+                except (TelegramApiError, OSError):
+                    pass
+                planner_think = ""
+            if tick_think.strip():
+                try:
+                    await self._flush_thinking(tick_think, label="Reasoning")
+                except (TelegramApiError, OSError):
+                    pass
+                tick_think = ""
             _approval_poll_stop.set()
             if _approval_poll_task is not None:
                 try:
@@ -1510,11 +1611,13 @@ class RunBridge:
         created = await self.hive.create_chat(title)
         mapping = {
             "hive_chat_id": str(created["id"]),
+            "title": title,
             "created_at": created.get("chat", {}).get("created_at", ""),
             "new_chat_ts": now_ts,
         }
         self.state.data["tg_chat"] = mapping
         self.state.data.pop("followed_chat", None)
+        self.state.data.pop("pinned_chat", None)
         self.state.save()
         extra = (f"\n🧹 Cleared {cleared} file(s) from default_workspace."
                  if cleared > 0 else "")
@@ -1607,7 +1710,25 @@ class RunBridge:
                         + f" · model {(_rs or {}).get('routing_decider_model') or 'default'}")
         else:
             _routing = "routing: decider off (keyword rules)"
-        _ws_cid = str(mapping.get("hive_chat_id") or "")
+        _pin = self._pinned_chat()
+        _ui_cid, _ui_title = ("", "")
+        if _pin is None and hasattr(self.hive, "get_chats"):
+            _ui_cid, _ui_title = await self._ui_chat_target_info()
+        if _pin:
+            _active_cid = str(_pin["hive_chat_id"])
+            _active_title = str(_pin.get("title") or "").strip()
+            _chat_line = (f"{_active_title[:42]} ({_active_cid}) [pinned]"
+                          if _active_title and _active_title != _active_cid
+                          else f"{_active_cid} [pinned]")
+        elif _ui_cid:
+            _active_cid = _ui_cid
+            _chat_line = (f"{_ui_title[:42]} ({_ui_cid}) [follow-UI]"
+                          if _ui_title and _ui_title != _ui_cid
+                          else f"{_ui_cid} [follow-UI]")
+        else:
+            _active_cid = str(mapping.get("hive_chat_id") or "")
+            _chat_line = (_active_cid + " [TG]") if _active_cid else "- none yet"
+        _ws_cid = _active_cid
         _ws_map = mapping.get("workspace") or ""
         if _ws_cid:
             _ws_res, _ws_is_ph = await self.resolve_chat_workspace(_ws_cid)
@@ -1618,12 +1739,16 @@ class RunBridge:
             _ws_ph = await self._placeholder_info()
             _ws_txt = ("default_workspace (placeholder)"
                        if _ws_ph.get("path") else "engine default")
+        _eff_m = str(ov.get("reasoning_effort") or (_rs or {}).get("reasoning_effort") or "auto")
+        _eff_p = str(ov.get("planner_reasoning_effort") or (_rs or {}).get("planner_reasoning_effort") or "auto")
+        _eff_txt = _eff_m + (f" · planner: {_eff_p}" if _eff_p != "auto" else "")
         return (
             "📡 Gateway status\n"
             "\n"
-            f"chat: {mapping.get('hive_chat_id', '- none yet')}\n"
+            f"chat: {_chat_line}\n"
             f"workspace: {_ws_txt}\n"
             f"mode: {mode}  (phone runs only)\n"
+            f"effort: {_eff_txt}\n"
             f"model: {ov.get('model') or 'engine default'}\n"
             f"ctx: planner {ov.get('planner_ctx') or '-'} · coder "
             f"{ov.get('coder_ctx') or '-'}\n"
@@ -1751,6 +1876,10 @@ class RunBridge:
             out["direct_tools_enabled"] = tier != "off"
         elif tools is not None:
             out["direct_tools_enabled"] = bool(tools)
+        for _rk in ("reasoning_effort", "planner_reasoning_effort"):
+            _rv = str(ov.get(_rk) or "").strip().lower()
+            if _rv and _rv != "auto":
+                out[_rk] = _rv
         # audit G1: FORCE the engine's approval gate for every phone run -
         # this restores the documented "gated tools are auto-denied from
         # the phone" invariant even when the engine-global toggle
@@ -1928,6 +2057,134 @@ class RunBridge:
         return (f"✅ Preset '{names[pick - 1]}' loaded (global - phone + "
                 "UI).")
 
+    async def chat_text(self, arg: str) -> str:
+        """/chat [number|id|auto] - inspect or pin active HiveMind chat."""
+        a = (arg or "").strip()
+        al = a.lower()
+        if al in ("auto", "off", "unpin", "clear", "reset"):
+            had = self.state.data.pop("pinned_chat", None) is not None
+            if had:
+                self.state.save()
+            follow_s = "follow-UI" if self.follow_ui_enabled() else "[TG] default"
+            return (f"🔓 Chat unpinned — back to automatic ({follow_s})."
+                    if had else f"Chat is already automatic ({follow_s}).")
+        if a:
+            cached = list(self.state.data.get("last_chat_list") or [])
+            if a.isdigit() and not cached:
+                chats = await self.hive.get_chats()
+                cached = [
+                    {"id": str(c.get("id") or ""), "title": str(c.get("title") or "Untitled")}
+                    for c in (chats or [])[:10] if isinstance(c, dict) and c.get("id")
+                ]
+            picked = None
+            if a.isdigit():
+                idx = int(a)
+                if 1 <= idx <= len(cached):
+                    picked = cached[idx - 1]
+                elif cached:
+                    return f"❌ {idx} out of range 1–{len(cached)}. List: /chat"
+            if picked is None:
+                chats = await self.hive.get_chats()
+                for c in chats or []:
+                    if not isinstance(c, dict):
+                        continue
+                    cid = str(c.get("id") or "")
+                    if cid == a or cid.startswith(a):
+                        picked = {"id": cid, "title": str(c.get("title") or "Untitled")}
+                        break
+            if picked is None or not picked.get("id"):
+                return f"❌ Chat '{a}' not found. Run /chat to list recent chats."
+            cid = str(picked["id"])
+            title = str(picked.get("title") or "Untitled")
+            self.state.data["pinned_chat"] = {"hive_chat_id": cid, "title": title}
+            self.state.data.pop("followed_chat", None)
+            self._invalidate_chat_runconf()
+            self.state.save()
+            return (f"📌 Pinned chat: {title[:48]} ({cid})\n"
+                    "All Telegram messages stay in this chat until /new or /chat auto.")
+
+        chats = await self.hive.get_chats()
+        pin = self._pinned_chat()
+        tg = self._tg_chat() or {}
+        ui_cid, _ = await self._ui_chat_target_info()
+        active_cid = (str(pin["hive_chat_id"]) if pin
+                      else (ui_cid or str(tg.get("hive_chat_id") or "")))
+        items = [c for c in (chats or []) if isinstance(c, dict) and c.get("id")][:10]
+        self.state.data["last_chat_list"] = [
+            {"id": str(c.get("id")), "title": str(c.get("title") or "Untitled")}
+            for c in items
+        ]
+        self.state.save()
+        if pin:
+            hdr = f"📌 Pinned: {str(pin.get('title') or pin['hive_chat_id'])[:42]} ({pin['hive_chat_id']})"
+        elif ui_cid:
+            hdr = f"🔗 Auto (follow-UI): {ui_cid}"
+        elif active_cid:
+            hdr = f"💬 Auto (TG chat): {active_cid}"
+        else:
+            hdr = "💬 No active chat yet"
+        lines = [hdr, ""]
+        if not items:
+            lines.append("No saved HiveMind chats found.")
+        else:
+            lines.append("Recent chats:")
+            for i, c in enumerate(items, 1):
+                cid = str(c.get("id"))
+                title = str(c.get("title") or "Untitled").replace("\n", " ")[:38]
+                cnt = int(c.get("msg_count") or 0)
+                mark = " ◀ active" if cid == active_cid else ""
+                lines.append(f"{i}. {title} ({cid}, {cnt}m){mark}")
+        lines.append("")
+        lines.append("Pin: /chat <number> · Unpin: /chat auto · Fresh: /new")
+        return "\n".join(lines)
+
+    async def effort_text(self, arg: str) -> str:
+        """/effort [planner] [level|auto] - thinking effort override for phone runs."""
+        aliases = {
+            "auto": "auto", "default": "auto", "reset": "auto",
+            "off": "none", "none": "none", "disabled": "none", "false": "none", "0": "none",
+            "on": "on", "enabled": "on", "true": "on", "1": "on",
+            "min": "minimal", "minimal": "minimal",
+            "low": "low", "med": "medium", "medium": "medium",
+            "high": "high", "max": "max", "xhigh": "max", "maximum": "max",
+        }
+        tokens = [t.strip().lower() for t in (arg or "").split() if t.strip()]
+        ov = self.state.data.setdefault("run_overrides", {})
+        if not tokens or (tokens == ["planner"]):
+            try:
+                _s = await self.hive.settings()
+            except (HiveUnreachable, OSError, ValueError):
+                _s = {}
+            _pm = str(ov.get("reasoning_effort") or "")
+            _pp = str(ov.get("planner_reasoning_effort") or "")
+            _em = str((_s or {}).get("reasoning_effort") or "auto")
+            _ep = str((_s or {}).get("planner_reasoning_effort") or "auto")
+            return (
+                "🧠 Thinking effort (Telegram):\n"
+                f"  Direct / Coder: {_pm + ' (phone)' if _pm else _em + ' (engine)'}\n"
+                f"  Planner: {_pp + ' (phone)' if _pp else _ep + ' (engine)'}\n\n"
+                "Set: /effort <auto|off|minimal|low|medium|high|max>\n"
+                "Planner: /effort planner <auto|off|low|medium|high|max>"
+            )
+        target_key = "reasoning_effort"
+        target_lbl = "Direct / Coder"
+        if tokens[0] in ("planner", "plan"):
+            target_key = "planner_reasoning_effort"
+            target_lbl = "Planner"
+            tokens = tokens[1:]
+        if len(tokens) != 1 or tokens[0] not in aliases:
+            return "❌ Use /effort [planner] <auto|off|on|minimal|low|medium|high|max>."
+        level = aliases[tokens[0]]
+        if level == "auto":
+            ov.pop(target_key, None)
+            msg = f"🧠 Effort ({target_lbl}): auto (follows engine/UI defaults)."
+        else:
+            ov[target_key] = level
+            msg = f"🧠 Effort ({target_lbl}): {level} (applies to upcoming phone runs)."
+        self._invalidate_chat_runconf()
+        self.state.save()
+        return msg
+
     def reset_overrides(self) -> str:
         self.state.data["run_overrides"] = {}
         self.state.data["pending_setup"] = None
@@ -1948,6 +2205,8 @@ class RunBridge:
                                   "other_run_noted": "", "last_phase": "",
                                   "tool_relay_seen": {},
                                   "answer_parts": [],
+                                  "tick_think": "",
+                                  "planner_think": "",
                                   "last_tick": 0.0}
         return self._mirror_state
 
@@ -1959,7 +2218,8 @@ class RunBridge:
                   "approval_decision_id": "", "approval_card_did": "",
                   "approval_tool": "",
                   "other_run_noted": "", "last_phase": "",
-                                  "tool_relay_seen": {}, "answer_parts": [],
+                  "tool_relay_seen": {}, "answer_parts": [],
+                  "tick_think": "", "planner_think": "",
                   "ctx_marks": set(), "ctx_compression_noted": False,
                   "answer_sent_upto": 0})
         # A new mirror run may legitimately send the same filename again.
@@ -2094,6 +2354,7 @@ class RunBridge:
                       "approval_card_did": "",
                       "approval_tool": "", "other_run_noted": "",
                       "last_phase": "", "answer_parts": [],
+                      "tick_think": "", "planner_think": "",
                       "ctx_marks": set(), "ctx_compression_noted": False,
                       "answer_sent_upto": 0})
             # R6 CATCH-UP (user feedback: messages must arrive): process the
@@ -2248,8 +2509,7 @@ class RunBridge:
         done_reason = self._parse_done(new_frames)
         last_status = ""
         tool_lines: list[str] = []
-        # R4 relay: phase/plan/thinking visibility on the phone
-        tick_think = ""
+        # R4 relay: phase/plan/thinking visibility on the phone (persisted in m across ticks)
         last_phase = m.get("last_phase", "")
         for raw in new_frames:
             if not isinstance(raw, str):
@@ -2261,6 +2521,12 @@ class RunBridge:
             if ev.get("type") == "status":
                 last_status = str(ev.get("content") or "")[:120]
             elif ev.get("type") == "token":
+                if (m.get("planner_think") or "").strip():
+                    await self._flush_thinking(m["planner_think"], label="Planning")
+                    m["planner_think"] = ""
+                if (m.get("tick_think") or "").strip():
+                    await self._flush_thinking(m["tick_think"], label="Reasoning")
+                    m["tick_think"] = ""
                 # FAZIT RELAY (2026-10-06, owner report): the takeover never
                 # delivered the run's RESULT - the phone watched status lines
                 # and then got a bare "🏁 completed". Accumulate the answer
@@ -2269,6 +2535,12 @@ class RunBridge:
                 # event types and never land here).
                 m["answer_parts"].append(str(ev.get("content") or ""))
             elif ev.get("type") == "agent":
+                if (m.get("planner_think") or "").strip():
+                    await self._flush_thinking(m["planner_think"], label="Planning")
+                    m["planner_think"] = ""
+                if (m.get("tick_think") or "").strip():
+                    await self._flush_thinking(m["tick_think"], label="Reasoning")
+                    m["tick_think"] = ""
                 if m["answer_parts"]:
                     m["answer_parts"] = []
                 # R4: phase switches (Planner / Code / Answer) as own lines
@@ -2286,6 +2558,9 @@ class RunBridge:
                         _note += f" (+{ev.get('images')} img)"
                     await self.ms.send_message(_note)
             elif ev.get("type") == "planner_result":
+                if (m.get("planner_think") or "").strip():
+                    await self._flush_thinking(m["planner_think"], label="Planning")
+                    m["planner_think"] = ""
                 # Combine structured chunks preview with content/thinking fallbacks
                 _pch = ev.get("chunks") or []
                 _plan = ""
@@ -2377,15 +2652,15 @@ class RunBridge:
                             render.filter_secrets(_delta).split())
                         await self.ms.send_message(
                             "💬 " + _txt[:700] + ("…" if len(_txt) > 700 else ""))
+            elif ev.get("type") == "planner_thinking_token":
+                m["planner_think"] = (m.get("planner_think") or "") + str(ev.get("content") or "")
             elif ev.get("type") == "thinking_token":
-                # R4: coder reasoning between tool calls - keep a tail, sent
-                # with the next tool line (one 💭 per tick max)
-                tick_think += str(ev.get("content") or "")
+                # R4: coder/direct reasoning - buffered across ticks in mirror state
+                m["tick_think"] = (m.get("tick_think") or "") + str(ev.get("content") or "")
             elif ev.get("type") == "tool_call":
-                if tick_think.strip():
-                    _tt = " ".join(tick_think.split())[-160:]
-                    await self.ms.send_message(f"💭 …{_tt}")
-                    tick_think = ""
+                if (m.get("tick_think") or "").strip():
+                    await self._flush_thinking(m["tick_think"], label="Reasoning")
+                    m["tick_think"] = ""
                 # Tool-Call-Relay (2026-10-05) + REPEAT-DEDUPE (R6, live
                 # flood 10:21): identical lines (same tool, same args -
                 # model retry loops) relay once, then a compact counter
@@ -2418,6 +2693,12 @@ class RunBridge:
             m["last_tick"] = _now()
         m["last_phase"] = last_phase  # F5: cross-tick dedupe state
         if done_reason:
+            if (m.get("planner_think") or "").strip():
+                await self._flush_thinking(m["planner_think"], label="Planning")
+                m["planner_think"] = ""
+            if (m.get("tick_think") or "").strip():
+                await self._flush_thinking(m["tick_think"], label="Reasoning")
+                m["tick_think"] = ""
             # FAZIT RELAY (2026-10-06, R6-hardened): deliver what the run
             # PRODUCED, not just the fact that it ended. Empty accumulator
             # falls back to the full journal frames (late adoption, phase
@@ -3001,6 +3282,12 @@ class RunBridge:
                     "allowed - please name a concrete folder.")
         mapping = await self._ensure_chat()
         chat_id = mapping["hive_chat_id"]
+        if not mapping.get("followed") and not mapping.get("pinned"):
+            tg_map = self._tg_chat()
+            if isinstance(tg_map, dict) and str(tg_map.get("hive_chat_id") or "") == chat_id:
+                tg_map["last_active_ts"] = time.time()
+                self.state.data["tg_chat"] = tg_map
+                self.state.save()
         r = await self.hive.get_chat(chat_id)
         r.raise_for_status()
         chat = r.json()

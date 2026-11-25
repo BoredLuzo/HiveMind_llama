@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261123-03">
+  <link rel="stylesheet" href="/static/style.css?v=20261125-01">
 </head>
 <body>
 <header>
@@ -201,20 +201,246 @@
             <option value="never">Never plan</option>
           </select>
         </div>
-        <div class="ctx-row" id="routing-planner-effort-row">
-          <span class="ctx-label" title="Independent reasoning effort for the Planner when Auto routes to Code">Planner effort</span>
-          <select id="routing-planner-effort-sel" class="rt-select"
-            onchange="setPlannerReasoningEffort(this.value)">
-            <option value="auto">Auto</option>
-            <option value="none">Off</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="max">Max</option>
-          </select>
-        </div>
         <div class="ctx-hint">Whether an agentic run gets a plan first. The planning model itself is set in Agents.</div>
         <div id="routing-status" class="ctx-hint rt-status"></div>
+      </div>
+    </div>
+
+    <!-- Unified Reasoning Card (2026-11-25):
+         Single home for Main Role (Direct/Coder/Synthesizer) & Planner effort
+         plus collapsible Fine-tuning & Auto defaults. Sits here in
+         Direct/Auto/Pipeline and moves into #duo-reasoning-slot in Code-Duo. -->
+    <div id="chat-reasoning-section">
+      <div id="reasoning-card" class="ctx-card reasoning-card">
+        <div class="ctx-card-head">
+          <span class="ctx-card-title reasoning-card-title">&#129504; Reasoning</span>
+          <span class="ctx-card-sub" id="reasoning-card-scope-sub">Direct + Planner</span>
+          <button type="button" id="reasoning-card-reset-btn" class="rsn-reset-btn" onclick="resetAllReasoningEffort()" title="Reset all reasoning effort overrides to Auto" hidden>Reset</button>
+        </div>
+
+        <div class="ctx-row rsn-role-row" id="sidebar-main-effort-row">
+          <div class="opt-row-left">
+            <span class="opt-name" id="sidebar-main-role-lbl">Direct / Coder</span>
+            <span class="opt-hint" id="sidebar-main-effort-hint">Synced with chat composer &middot; follows model template</span>
+          </div>
+          <div id="sidebar-main-effort-wrap" class="effort-wrap sidebar-effort-wrap">
+            <button type="button" id="sidebar-main-effort-trigger" class="effort-trigger sidebar-effort-trigger" data-effort="auto" aria-haspopup="listbox" aria-expanded="false" onclick="toggleSidebarMainEffortMenu(event)" title="Thinking effort for active role (synced with chat composer)">
+              <span class="effort-trig-lbl" id="sidebar-main-effort-trig-lbl">Auto</span>
+              <span class="effort-trig-caret" aria-hidden="true">&#9662;</span>
+            </button>
+            <div id="sidebar-main-effort-menu" class="effort-menu" role="listbox" aria-label="Main role reasoning effort" hidden>
+              <div class="effort-menu-hdr">
+                <div class="effort-menu-title-row">
+                  <span class="effort-menu-title" id="sidebar-main-effort-menu-title">Thinking effort</span>
+                  <span class="effort-menu-info" title="Synced directly with the chat composer thinking-effort selector.">&#9432;</span>
+                </div>
+                <div id="sidebar-main-effort-menu-ctx" class="effort-menu-ctx">Inherits agent &amp; model default</div>
+                <div id="sidebar-main-effort-menu-ovr" class="effort-menu-ovr" hidden>
+                  <span id="sidebar-main-effort-menu-ovr-txt"></span>
+                  <button type="button" class="effort-ovr-reset" id="sidebar-main-effort-ovr-reset-btn" onclick="setReasoningEffort('auto')" hidden>Reset</button>
+                </div>
+              </div>
+              <button type="button" class="effort-opt active" data-effort="auto" role="option" aria-selected="true" onclick="setReasoningEffort('auto')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Auto</span>
+                  <span class="effort-opt-desc">Follows sidebar / card &amp; model default</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="none" role="option" aria-selected="false" onclick="setReasoningEffort('none')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Off</span>
+                  <span class="effort-opt-desc">Disable thinking</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="on" role="option" aria-selected="false" onclick="setReasoningEffort('on')" hidden>
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>On</span>
+                  <span class="effort-opt-desc">Enable thinking (model default)</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="minimal" role="option" aria-selected="false" onclick="setReasoningEffort('minimal')" hidden>
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Minimal</span>
+                  <span class="effort-opt-desc">Very brief thinking</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="low" role="option" aria-selected="false" onclick="setReasoningEffort('low')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Low</span>
+                  <span class="effort-opt-desc">Quick, focused reasoning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="medium" role="option" aria-selected="false" onclick="setReasoningEffort('medium')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Medium</span>
+                  <span class="effort-opt-desc">Balanced reasoning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="high" role="option" aria-selected="false" onclick="setReasoningEffort('high')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>High</span>
+                  <span class="effort-opt-desc">Deep reasoning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="max" role="option" aria-selected="false" onclick="setReasoningEffort('max')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Max</span>
+                  <span class="effort-opt-desc">Maximum reasoning effort</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <div id="sidebar-main-effort-menu-empty" class="effort-menu-empty" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ctx-row rsn-role-row rsn-row-sep" id="planner-effort-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Planner <span id="planner-effort-inactive-pill" class="rsn-inactive-pill" hidden>off</span></span>
+            <span class="opt-hint" id="planner-effort-hint">Independent of chat composer &middot; follows model template</span>
+          </div>
+          <div id="planner-effort-wrap" class="effort-wrap sidebar-effort-wrap">
+            <button type="button" id="planner-effort-trigger" class="effort-trigger sidebar-effort-trigger" data-effort="auto" aria-haspopup="listbox" aria-expanded="false" onclick="togglePlannerReasoningEffortMenu(event)" title="Planner reasoning effort (independent of chat composer)">
+              <span class="effort-trig-lbl" id="planner-effort-trig-lbl">Auto</span>
+              <span class="effort-trig-caret" aria-hidden="true">&#9662;</span>
+            </button>
+            <div id="planner-effort-menu" class="effort-menu" role="listbox" aria-label="Planner reasoning effort" hidden>
+              <div class="effort-menu-hdr">
+                <div class="effort-menu-title-row">
+                  <span class="effort-menu-title">Planner reasoning effort</span>
+                  <span class="effort-menu-info" title="Controls only the Planner independently from the chat composer (Direct/Coder).">&#9432;</span>
+                </div>
+                <div id="planner-effort-menu-ctx" class="effort-menu-ctx">Inherits Planner Thinking &amp; model default</div>
+                <div id="planner-effort-menu-ovr" class="effort-menu-ovr" hidden>
+                  <span id="planner-effort-menu-ovr-txt"></span>
+                  <button type="button" class="effort-ovr-reset" id="planner-effort-ovr-reset-btn" onclick="setPlannerReasoningEffort('auto')" hidden>Reset</button>
+                </div>
+              </div>
+              <button type="button" class="effort-opt active" data-effort="auto" role="option" aria-selected="true" onclick="setPlannerReasoningEffort('auto')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Auto</span>
+                  <span class="effort-opt-desc">Follows Planner Thinking &amp; model default</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="none" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('none')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Off</span>
+                  <span class="effort-opt-desc">Disable planner thinking</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="on" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('on')" hidden>
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>On</span>
+                  <span class="effort-opt-desc">Enable planner thinking (model default)</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="minimal" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('minimal')" hidden>
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Minimal</span>
+                  <span class="effort-opt-desc">Very brief planning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="low" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('low')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Low</span>
+                  <span class="effort-opt-desc">Quick, focused planning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="medium" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('medium')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Medium</span>
+                  <span class="effort-opt-desc">Balanced planning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="high" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('high')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>High</span>
+                  <span class="effort-opt-desc">Deep planning</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <button type="button" class="effort-opt" data-effort="max" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('max')">
+                <span class="effort-opt-main">
+                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Max</span>
+                  <span class="effort-opt-desc">Maximum planning effort</span>
+                </span>
+                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
+              </button>
+              <div id="planner-effort-menu-empty" class="effort-menu-empty" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <details id="reasoning-adv-details" class="rsn-adv">
+          <summary class="rsn-adv-summary">
+            <span class="rsn-adv-caret" aria-hidden="true">&#9656;</span>
+            <span>Fine-tuning &amp; Auto defaults</span>
+            <span id="reasoning-adv-summary-val" class="rsn-adv-summary-val"></span>
+          </summary>
+          <div class="rsn-adv-body">
+            <div class="opt-row" data-reasoning-ovr-row="duo_planner">
+              <div class="opt-row-left">
+                <span class="opt-name">Planner Thinking <span class="reasoning-override-slot" data-agent-override="duo_planner"></span></span>
+                <span class="opt-hint">Default when Planner Effort is Auto</span>
+              </div>
+              <label class="cfl-sw" style="margin:0">
+                <input type="checkbox" id="duo-agentic-thinking-toggle"
+                  onchange="S.duoAgenticThinking=this.checked;postSettings({duo_agentic_thinking:S.duoAgenticThinking});updateAgenticCombinedWarn();if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
+                <span class="sl"></span>
+              </label>
+            </div>
+
+            <div style="margin-top:6px" id="duo-coder-tool-thinking-wrap">
+              <div class="opt-row" data-reasoning-ovr-row="duo">
+                <div class="opt-row-left">
+                  <span class="opt-name">Thinking with tool use <span class="reasoning-override-slot"></span></span>
+                  <span class="opt-hint">Coder default when Effort is Auto</span>
+                </div>
+                <label class="cfl-sw" style="margin:0">
+                  <input type="checkbox" id="duo-tool-thinking-toggle"
+                    onchange="S.duoToolThinkingAlways=this.checked;S.duoToolThinkingMode=this.checked?'always':'off';postSettings({duo_coder_tool_thinking:S.duoToolThinkingAlways,duo_coder_tool_thinking_auto_mode:S.duoToolThinkingMode});if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
+                  <span class="sl"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="opt-row" style="margin-top:6px" id="duo-thinking-per-chunk-wrap">
+              <div class="opt-row-left">
+                <span class="opt-name" id="tpc-label" style="opacity:.4">Per Chunk</span>
+                <span class="opt-hint" id="tpc-hint" style="opacity:.4">Think before each subtask &mdash; requires chunking</span>
+              </div>
+              <label class="cfl-sw" style="margin:0">
+                <input type="checkbox" id="duo-thinking-per-chunk-toggle" disabled onchange="S.duoThinkingPerChunk=this.checked;postSettings({duo_thinking_per_chunk:S.duoThinkingPerChunk});if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
+                <span class="sl"></span>
+              </label>
+            </div>
+
+            <div class="opt-row" style="margin-top:6px">
+              <div class="opt-row-left">
+                <span class="opt-name">Planner Max Tokens</span>
+                <span class="opt-hint">Output budget incl. thinking &middot; 0 = context as limit</span>
+              </div>
+              <input type="number" id="duo-planner-maxtokens-inp" min="0" step="500" value="8000"
+                style="width:82px;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
+                onchange="S.duoPlannerMaxTokens=parseInt(this.value)||0;postSettings({duo_planner_max_tokens:S.duoPlannerMaxTokens});if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
+            </div>
+          </div>
+        </details>
+
+        <div id="reasoning-card-footer-hint" class="rsn-footer-hint">Synced with chat composer &middot; Think-Budget sliders live on Agent cards below.</div>
       </div>
     </div>
 
@@ -725,146 +951,14 @@
 
       </div>
 
-      <!-- ── Thinking ──────────────────────────────── -->
-      <div class="opt-group" style="margin-top:8px">
-        <div class="opt-group-label">🧠 Thinking</div>
-
-        <div class="opt-row" data-reasoning-ovr-row="duo_planner">
-          <div class="opt-row-left">
-            <span class="opt-name">Planner Thinking <span class="reasoning-override-slot" data-agent-override="duo_planner"></span></span>
-            <span class="opt-hint">Planner thinks through the task before output</span>
-          </div>
-          <label class="cfl-sw" style="margin:0">
-            <input type="checkbox" id="duo-agentic-thinking-toggle"
-              onchange="S.duoAgenticThinking=this.checked;postSettings({duo_agentic_thinking:S.duoAgenticThinking});updateAgenticCombinedWarn();if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
-            <span class="sl"></span>
-          </label>
-        </div>
-
-        <div class="opt-row" style="margin-top:4px" id="planner-effort-row">
-          <div class="opt-row-left">
-            <span class="opt-name">Planner Effort</span>
-            <span class="opt-hint" id="planner-effort-hint">Independent of chat composer · follows model template</span>
-          </div>
-          <div id="planner-effort-wrap" class="effort-wrap sidebar-effort-wrap">
-            <button type="button" id="planner-effort-trigger" class="effort-trigger sidebar-effort-trigger" data-effort="auto" aria-haspopup="listbox" aria-expanded="false" onclick="togglePlannerReasoningEffortMenu(event)" title="Planner reasoning effort (independent of chat composer)">
-              <span class="effort-trig-lbl" id="planner-effort-trig-lbl">Auto</span>
-              <span class="effort-trig-caret" aria-hidden="true">&#9662;</span>
-            </button>
-            <div id="planner-effort-menu" class="effort-menu" role="listbox" aria-label="Planner reasoning effort" hidden>
-              <div class="effort-menu-hdr">
-                <div class="effort-menu-title-row">
-                  <span class="effort-menu-title">Planner reasoning effort</span>
-                  <span class="effort-menu-info" title="Controls only the Planner independently from the chat composer (Direct/Coder).">&#9432;</span>
-                </div>
-                <div id="planner-effort-menu-ctx" class="effort-menu-ctx">Inherits Planner Thinking &amp; model default</div>
-                <div id="planner-effort-menu-ovr" class="effort-menu-ovr" hidden>
-                  <span id="planner-effort-menu-ovr-txt"></span>
-                  <button type="button" class="effort-ovr-reset" id="planner-effort-ovr-reset-btn" onclick="setPlannerReasoningEffort('auto')" hidden>Reset</button>
-                </div>
-              </div>
-              <button type="button" class="effort-opt active" data-effort="auto" role="option" aria-selected="true" onclick="setPlannerReasoningEffort('auto')">
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Auto</span>
-                  <span class="effort-opt-desc">Follows Planner Thinking &amp; model default</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="none" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('none')">
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Off</span>
-                  <span class="effort-opt-desc">Disable planner thinking</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="on" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('on')" hidden>
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>On</span>
-                  <span class="effort-opt-desc">Enable planner thinking (model default)</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="minimal" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('minimal')" hidden>
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Minimal</span>
-                  <span class="effort-opt-desc">Very brief planning</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="low" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('low')">
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Low</span>
-                  <span class="effort-opt-desc">Quick, focused planning</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="medium" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('medium')">
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Medium</span>
-                  <span class="effort-opt-desc">Balanced planning</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="high" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('high')">
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>High</span>
-                  <span class="effort-opt-desc">Deep planning</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <button type="button" class="effort-opt" data-effort="max" role="option" aria-selected="false" onclick="setPlannerReasoningEffort('max')">
-                <span class="effort-opt-main">
-                  <span class="effort-opt-name"><span class="effort-dot" aria-hidden="true"></span>Max</span>
-                  <span class="effort-opt-desc">Maximum planning effort</span>
-                </span>
-                <span class="effort-opt-chk" aria-hidden="true">&#10003;</span>
-              </button>
-              <div id="planner-effort-menu-empty" class="effort-menu-empty" hidden></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="opt-row" style="margin-top:4px">
-          <div class="opt-row-left">
-            <span class="opt-name">Planner Max Tokens</span>
-            <span class="opt-hint">Output budget incl. thinking · 0 = context as limit</span>
-          </div>
-          <input type="number" id="duo-planner-maxtokens-inp" min="0" step="500" value="8000"
-            style="width:90px;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
-            onchange="S.duoPlannerMaxTokens=parseInt(this.value)||0;postSettings({duo_planner_max_tokens:S.duoPlannerMaxTokens})">
-        </div>
-
-        <div class="opt-row" style="margin-top:4px" id="duo-thinking-per-chunk-wrap">
-          <div class="opt-row-left">
-            <span class="opt-name" id="tpc-label" style="opacity:.4">Per Chunk</span>
-            <span class="opt-hint" id="tpc-hint" style="opacity:.4">Think before each subtask — requires chunking</span>
-          </div>
-          <label class="cfl-sw" style="margin:0">
-            <input type="checkbox" id="duo-thinking-per-chunk-toggle" disabled onchange="S.duoThinkingPerChunk=this.checked;postSettings({duo_thinking_per_chunk:S.duoThinkingPerChunk})">
-            <span class="sl"></span>
-          </label>
-        </div>
-
-        <div style="margin-top:4px" id="duo-coder-tool-thinking-wrap">
-          <div class="opt-row" data-reasoning-ovr-row="duo">
-            <div class="opt-row-left">
-              <span class="opt-name">Thinking with tool use <span class="reasoning-override-slot"></span></span>
-              <span class="opt-hint">Default for Auto · overridden by composer effort</span>
-            </div>
-            <label class="cfl-sw" style="margin:0">
-              <input type="checkbox" id="duo-tool-thinking-toggle"
-                onchange="S.duoToolThinkingAlways=this.checked;S.duoToolThinkingMode=this.checked?'always':'off';postSettings({duo_coder_tool_thinking:S.duoToolThinkingAlways,duo_coder_tool_thinking_auto_mode:S.duoToolThinkingMode});if(typeof _renderReasoningEffortUI==='function')_renderReasoningEffortUI(S.reasoningEffort)">
-              <span class="sl"></span>
-            </label>
-          </div>
-        </div>
-      </div>
-
       <div id="duo-all3-warn" class="ui-hint warn" style="display:none;margin-top:6px">
         <b>Slowest mode active:</b> Pre-Explore + Chunking + Per-Chunk-Thinking run in parallel — expect high latency.
       </div>
       <div id="duo-agentic-hint" class="ui-hint" style="display:none;margin-top:6px"></div>
     </div>
+
+    <!-- Consolidated Reasoning card slot (moved here when Code-Duo is active) -->
+    <div id="duo-reasoning-slot" style="margin-top:8px"></div>
 
     <!-- Tools & Optionals slot (moved here when Code-Duo is active) -->
     <div id="duo-tools-slot" style="margin-top:8px"></div>
@@ -2953,19 +3047,19 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <script src="/static/js/core_state.js?v=20261123-06"></script>
         <script src="/static/js/markdown.js?v=20261123-06"></script>
         <script src="/static/js/scroll.js?v=20261123-06"></script>
-        <script src="/static/js/reasoning.js?v=20261123-06"></script>
+        <script src="/static/js/reasoning.js?v=20261125-01"></script>
         <script src="/static/js/voice.js?v=20261123-06"></script>
-        <script src="/static/js/settings_io.js?v=20261123-06"></script>
+        <script src="/static/js/settings_io.js?v=20261125-01"></script>
         <script src="/static/js/agent_cards_presets.js?v=20261123-06"></script>
-        <script src="/static/js/planner_ui.js?v=20261123-06"></script>
+        <script src="/static/js/planner_ui.js?v=20261125-01"></script>
         <script src="/static/js/code_panel.js?v=20261123-06"></script>
         <script src="/static/js/chats_history.js?v=20261123-06"></script>
         <script src="/static/js/panels_learning.js?v=20261123-06"></script>
-        <script src="/static/js/panels_vram_models.js?v=20261123-06"></script>
-        <script src="/static/js/panels_feature_search.js?v=20261123-06"></script>
+        <script src="/static/js/panels_vram_models.js?v=20261125-01"></script>
+        <script src="/static/js/panels_feature_search.js?v=20261125-01"></script>
         <script src="/static/js/advanced_and_profiles.js?v=20261123-06"></script>
         <script src="/static/js/stream_transport.js?v=20261124-01"></script>
-        <script src="/static/js/stream_handlers.js?v=20261123-06"></script>
+        <script src="/static/js/stream_handlers.js?v=20261125-01"></script>
         <script src="/static/app.js?v=20261123-06"></script>
 </body>
 </html>

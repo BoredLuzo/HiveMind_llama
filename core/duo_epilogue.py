@@ -108,15 +108,22 @@ async def _duo_session_epilogue(ctx, ps):
 
     # D4-DIAG (2026-08-21): measure re-read inflation — repeated read_file
     try:
-        _parts_joined = "".join(ps._parts) if isinstance(ps._parts, list) else ""
-        _rf_calls = len(re.findall(r"read_file\s*\(", _parts_joined))
-        _rf_paths = set(re.findall(r"read_file\([^)]*path\s*[:=]\s*['\"]([^'\"]+)['\"]", _parts_joined))
-        _rf_bytes = 0
-        for _rfm in re.finditer(
-            r"\n?\[[^\]]*(?:total lines|lines \d+-\d+)[^\]]*\]\n(.*?)(?=\n\[[^\]]*(?:total lines|lines \d+-\d+)[^\]]*\]|$)",
-            _parts_joined, re.S,
-        ):
-            _rf_bytes += len(_rfm.group(1))
+        from tools.runner import get_read_file_stats as _get_rf_stats
+        _rf_live = _get_rf_stats()
+        if int(_rf_live.get("calls", 0) or 0) > 0:
+            _rf_calls = int(_rf_live["calls"])
+            _rf_paths = set(_rf_live.get("paths") or ())
+            _rf_bytes = int(_rf_live.get("bytes", 0) or 0)
+        else:
+            _parts_joined = "".join(ps._parts) if isinstance(ps._parts, list) else ""
+            _rf_calls = len(re.findall(r"read_file\s*\(", _parts_joined))
+            _rf_paths = set(re.findall(r"read_file\([^)]*path\s*[:=]\s*['\"]([^'\"]+)['\"]", _parts_joined))
+            _rf_bytes = 0
+            for _rfm in re.finditer(
+                r"\n?\[[^\]]*(?:total lines|lines \d+-\d+)[^\]]*\]\n(.*?)(?=\n\[[^\]]*(?:total lines|lines \d+-\d+)[^\]]*\]|$)",
+                _parts_joined, re.S,
+            ):
+                _rf_bytes += len(_rfm.group(1))
         logger.warning(
             "[READ-STATS] read_file_calls=%d unique_paths=%d re_read_ratio=%.1f approx_bytes=%d est_ctx=%d",
             _rf_calls, len(_rf_paths),

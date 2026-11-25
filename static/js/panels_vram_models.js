@@ -115,7 +115,7 @@ function onChunkingChange(persist) {
             S._thinkingBeforeChunking = undefined;
             if (_persist) postSettings({_thinking_before_chunking: null}); // clear persisted backup
         }
-        if (thinkHint) thinkHint.textContent = 'Planner thinks through the task before output';
+        if (thinkHint) thinkHint.textContent = 'Default when Planner Effort is Auto';
         if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
         // Test-Feedback pro Chunk ausblenden (nur bei Chunking relevant)
         S.duoTestFeedbackChunk = false;
@@ -134,6 +134,9 @@ function updatePlannerHint() {
         S.duoChunking = false;
         postSettings({duo_chunking: false});
         onChunkingChange(false);
+    }
+    if (typeof _renderReasoningEffortUI === 'function') {
+        _renderReasoningEffortUI(S.reasoningEffort);
     }
 }
 function updateAgenticCombinedWarn() {
@@ -216,8 +219,10 @@ function setRouting(key, value) {
   if (key === 'routing_judge') S.routingJudge = value;
   if (key === 'routing_planner') S.routingPlanner = value;
   renderRoutingStatus();
-  if (key === 'routing_planner' && typeof _renderReasoningEffortUI === 'function') {
-    _renderReasoningEffortUI(S.reasoningEffort);
+  if (key === 'routing_planner') {
+    if (typeof _renderReasoningEffortUI === 'function') {
+      _renderReasoningEffortUI(S.reasoningEffort);
+    }
   }
   if (typeof updateModeDesc === 'function') updateModeDesc();  // UX: the auto text names the router
 }

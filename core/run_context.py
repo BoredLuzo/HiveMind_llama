@@ -83,6 +83,7 @@ class RunContext:
 
     # ── Per-run mutable state ──
     agent_elapsed: dict = field(default_factory=dict)
+    tool_round_durations: list = field(default_factory=list)
     prefetch_state: dict = field(default_factory=dict)
     prefetch_run_active: bool = True
     phase_timer: Any = None

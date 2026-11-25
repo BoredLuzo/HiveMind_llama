@@ -515,6 +515,26 @@ async def _direct_websearch_tool_round(ctx, model: str, msgs: list, num_ctx: int
                 log_label="Direct-WS",
             )
             _msg = _res.message
+            _ws_u = _res.usage if isinstance(_res.usage, dict) else {}
+            _ws_raw_tim = (_res.raw.get("timings") if isinstance(_res.raw, dict) else None) or {}
+            _ws_ct = int(_ws_u.get("completion_tokens") or 0)
+            _ws_pt = int(_ws_u.get("prompt_tokens") or 0)
+            if _ws_ct > 0 or _ws_pt > 0:
+                _ws_ca = int(_ws_u.get("cached_tokens") or (_ws_raw_tim.get("cache_n") if isinstance(_ws_raw_tim, dict) else 0) or 0)
+                _ws_gms = float((_ws_raw_tim.get("predicted_ms") if isinstance(_ws_raw_tim, dict) else 0.0) or _ws_u.get("gen_ms") or 0.0)
+                _ws_dtps = float((_ws_raw_tim.get("predicted_per_second") if isinstance(_ws_raw_tim, dict) else 0.0) or 0.0)
+                if _ws_dtps <= 0 and _ws_gms > 0 and _ws_ct > 0:
+                    _ws_dtps = _ws_ct / (_ws_gms / 1000.0)
+                events.append(await ctx.emit({
+                    "type": "usage_meta",
+                    "phase": "direct",
+                    "timer_key": "direct_chat",
+                    "completion_tokens": _ws_ct,
+                    "prompt_tokens": _ws_pt,
+                    "cached_tokens": _ws_ca,
+                    "gen_ms": round(_ws_gms, 1),
+                    "decode_tps": round(_ws_dtps, 2),
+                }))
         except (_ws_httpx.HTTPError, ValueError, RuntimeError) as _e:
             _direct_log.debug("[Direct-WS] round %d failed: %s", _round, _e)
             break
@@ -833,7 +853,7 @@ async def _run_direct_inner(ctx):
             ctx.settings.get("duo_websearch_enabled", False)
             and ctx.websearch_available
         )
-        _direct_ws_tool = _direct_ws_enabled and not _direct_tools_active and not _direct_tier_off
+        _direct_ws_tool = _direct_ws_enabled and _direct_tools_enabled and not _direct_tools_active and not _direct_tier_off
         _direct_ws_inject = bool(
             _direct_ws_enabled
             and ctx.settings.get("pipeline_websearch_enabled", False)
@@ -917,6 +937,8 @@ async def _run_direct_inner(ctx):
         # curAgent is null) → the answer was lost, the bubble stayed empty, and
         # the run ended "without error".
         t = time.time()
+        if getattr(ctx, "phase_timer", None) is not None:
+            ctx.phase_timer.start("direct_chat")
         yield await ctx.emit({"type": "agent", "content": "Answer", "model": _direct_model})
         yield await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
         _ws_used = False
@@ -1156,7 +1178,6 @@ async def _run_direct_inner(ctx):
                                 yield await ctx.emit({"type": "token", "content": _tok})
                     if _pause_aborted or _aborted():
                         break
-                    _d_round_gen_ms = max(0.0, (time.monotonic() - (_d_first_tok_t or _d_round_t0)) * 1000.0)
                     # RUN-STATS: accumulate the round's real usage — the emit
                     # below stays ONE usage_meta event even with continuation
                     # rounds (the ledger adds per event).
@@ -1164,6 +1185,11 @@ async def _run_direct_inner(ctx):
                     if _d_ct > 0:
                         _d_det = _usage.get("prompt_tokens_details") or {}
                         _d_tim = _usage.get("timings") or {}
+                        try:
+                            _d_tim_ms = float((_d_tim.get("predicted_ms") if isinstance(_d_tim, dict) else 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            _d_tim_ms = 0.0
+                        _d_round_gen_ms = _d_tim_ms if _d_tim_ms > 0 else max(0.0, (time.monotonic() - (_d_first_tok_t or _d_round_t0)) * 1000.0)
                         _d_ca = int((_d_det.get("cached_tokens") if isinstance(_d_det, dict) else 0)
                                     or _usage.get("cached_tokens") or 0
                                     or (_d_tim.get("cache_n") if isinstance(_d_tim, dict) else 0) or 0)
@@ -1251,6 +1277,8 @@ async def _run_direct_inner(ctx):
             "aborted" if (_aborted() or _pause_aborted)
             else ("error" if (_direct_had_err and _d_ct_sum == 0 and _d_pt_sum == 0) else "completed")
         )
+        if getattr(ctx, "phase_timer", None) is not None and not ctx.phase_timer.is_ended("direct_chat"):
+            ctx.phase_timer.end("direct_chat", status=_direct_stop_reason)
         # SEND-FILE (direct mode): a file the model wrote in this run can be
         # queued with send_file, or auto-picked when exactly one deliverable
         # exists. The gateway uploads it before the done frame.

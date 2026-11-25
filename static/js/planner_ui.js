@@ -242,7 +242,9 @@ function _updatePlannerTokRate() {
   var _pb = document.getElementById('planner-bubble');
   if (!_pb) return;
   var _realRate = 0;
-  if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
+  if (S.perfDecodeEma > 0) {
+    _realRate = Number(S.perfDecodeEma);
+  } else if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
     _realRate = _perfRealRate();
   }
   var _t = S.perfRealTokens > 0 ? S.perfRealTokens : (S.perfEstTokens || 0);

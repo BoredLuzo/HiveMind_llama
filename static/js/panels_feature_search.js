@@ -282,6 +282,15 @@
             },
             'thinking effort reasoning_effort reasoning auto off on minimal low medium high max composer dropdown');
     }
+    var _rsnCardSearch = document.getElementById('reasoning-card');
+    if (_rsnCardSearch) {
+      _push('agents', 'Agents — Reasoning (Effort, Planner & Tool Thinking)', _rsnCardSearch, 'Reasoning',
+            function() {
+              var det = document.getElementById('reasoning-adv-details');
+              if (det && !det.hidden) det.open = true;
+            },
+            'reasoning thinking effort planner_reasoning_effort planner thinking tool use per chunk max tokens auto off minimal low medium high max');
+    }
     // VOICE (1.4): the search must find the new features by their everyday
     // names - the card scan only yields English labels, people type "vorlesen",
     // "tts", "diktieren", "microphone", "voice note".

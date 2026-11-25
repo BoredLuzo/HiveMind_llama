@@ -525,6 +525,8 @@ class Gateway:
                              reply_markup=gw_commands.help_keyboard())
         elif name == "new":
             await self.cmd_new(p, arg)
+        elif name == "chat":
+            await self._owner_bridge_call(p, self.bridge.chat_text(arg))
         elif name == "shutdown":
             # R5+R6 (owner): secret /shutdown - two-step confirm with an
             # optional seconds BUFFER so the owner has time to wrap up.
@@ -723,6 +725,8 @@ class Gateway:
             await self.reply(p.chat_id,
                              await self.bridge.planner_text(arg),
                              reply_to_message_id=p.message_id)
+        elif name == "effort":
+            await self._owner_bridge_call(p, self.bridge.effort_text(arg))
         elif name == "status":
             await self.reply(p.chat_id, await self.bridge.status_text(),
                              reply_to_message_id=p.message_id)
