@@ -99,6 +99,18 @@ check(
     and "get_read_file_stats" in epilogue_src,
 )
 
+from core.duo._vram import _format_ctx_label  # noqa: E402
+
+check(
+    "_format_ctx_label matches UI footer decimal k formatting",
+    _format_ctx_label(65000) == "65k"
+    and _format_ctx_label(60000) == "60k"
+    and _format_ctx_label(65536) == "65.5k"
+    and _format_ctx_label(32768) == "32.8k"
+    and _format_ctx_label(512) == "512",
+    repr([_format_ctx_label(x) for x in (65000, 60000, 65536, 32768, 512)]),
+)
+
 # ── 4. Planner _llm_stream pure-decode gen_ms, cache_n & final timings merge ─
 import hive_functions.planner as planner_mod  # noqa: E402
 
@@ -401,6 +413,160 @@ check(
     and _nc_j["c5"]["planEff"] == "auto"
     and _nc_j["c5"]["resetHidden"] is True,
     _nc.stdout.strip() or _nc.stderr.strip(),
+)
+
+# ── 6. Live Metrics separation & in-flight output tracking (Node VM) ───────
+_node_metrics = r"""
+const vm = require('vm');
+const fs = require('fs');
+const path = require('path');
+
+const transportSrc = fs.readFileSync(path.join(process.cwd(), 'static/js/stream_transport.js'), 'utf8');
+const handlersSrc = fs.readFileSync(path.join(process.cwd(), 'static/js/stream_handlers.js'), 'utf8');
+
+function extractRange(src, startMarker, endMarker) {
+  const i = src.indexOf(startMarker);
+  const j = endMarker ? src.indexOf(endMarker, i) : src.length;
+  if (i < 0 || j < 0) throw new Error('Marker not found: ' + startMarker);
+  return src.slice(i, j);
+}
+
+const perfSlice = extractRange(transportSrc, 'function _perfResetRuntimeState()', '// ── Phase Timing Pills');
+const doneBlock = '  S.perfCompressing = false;\n  _perfRender(true);\n}';
+const usageSlice = extractRange(handlersSrc, "  'usage_meta': function(d) {", "  'steer': function(d) {");
+const toolGenSlice = extractRange(handlersSrc, "  'tool_gen': function(d) {", "  'tool_gen_reset': function(d) {");
+const handleSlice = extractRange(handlersSrc, 'function handleEvent(d) {', '');
+
+const domIds = ['pbb-ctx', 'pbb-ctxreuse', 'pbb-tok', 'pbb-rate', 'pbb-decode', 'pbb-in', 'pbb-cached', 'pbb-new', 'pbb-reqs', 'pbb-tools', 'pbb-summary'];
+const els = {
+  'perf-bar-bottom': { dataset: { built: '1' }, classList: { add() {} }, style: {}, textContent: '' },
+  'agent-1': { textContent: '' },
+};
+for (const id of domIds) els[id] = { textContent: '', className: '' };
+
+let fakeNow = 100000;
+class FakeDate {
+  static now() { return fakeNow; }
+}
+const ctx = {
+  Date: FakeDate,
+  Math, Number, parseInt, parseFloat, isNaN, isFinite, String, Object,
+  S: {
+    perfRunStartedAt: 0, perfFirstTokenAt: 0, perfActiveMs: 0, perfLastTokAt: 0, perfDecodeEma: 0,
+    perfToolCalls: 0, perfToolMs: 0, perfToolLabel: '', perfToolStart: 0, perfLastToolTxt: '--',
+    perfChars: 0, perfEstTokens: 0, perfRealTokens: 0, perfInFlightChars: 0, perfInFlightTokens: 0,
+    perfCtxTokens: 0, perfCtxLimit: 0, perfCtxPct: 0, perfCtxReal: 0, perfCtxCached: 0,
+    perfTokRate: 0, perfTokRateEma: 0, perfCompressing: false,
+    runPromptTokens: 0, runCachedTokens: 0, runRequestCount: 0,
+    curAgent: { tid: 'agent-1' },
+  },
+  document: { getElementById(id) { return els[id] || null; } },
+  _perfPaintLastAt: 0,
+  _pbbEnsure() {},
+  _hmStorageGet() { return ''; },
+  _hmStorageSet() {},
+  _fmtTokens(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n); },
+  _toolGenStream() {},
+  _updatePlannerTokRate() {},
+  scrollBtmIfNearBottom() {},
+};
+
+const script = `
+var window = {};
+${perfSlice}
+${doneBlock}
+function _perfEnsureUiRow() { return document.getElementById('perf-bar-bottom'); }
+var EVENT_HANDLERS = {
+${usageSlice}
+${toolGenSlice}
+  'ctx_meter': function(d) { _perfOnCtxMeter(d.est_tokens, d.ctx_limit, !!d.compressing, d.real_tokens, d.cached_tokens); },
+  'thinking_token': function(d) { _perfOnToken(d.content); },
+  'status': function() {}
+};
+${handleSlice}
+`;
+vm.createContext(ctx);
+vm.runInContext(script, ctx);
+
+ctx._perfResetRuntimeState();
+// 1. Status + ctx_meter must NOT start perfFirstTokenAt / perfActiveMs or pollute perfEstTokens
+ctx.handleEvent({ type: 'status', content: 'Loading coder...' });
+ctx.handleEvent({ type: 'ctx_meter', est_tokens: 6200, ctx_limit: 65000, compressing: false, real_tokens: 6200, cached_tokens: 6138 });
+const s1 = {
+  firstTokAt: ctx.S.perfFirstTokenAt,
+  activeMs: ctx.S.perfActiveMs,
+  ctxTokens: ctx.S.perfCtxTokens,
+  estTokens: ctx.S.perfEstTokens,
+  ctxText: els['pbb-ctx'].textContent,
+};
+
+// 2. Previous round usage_meta (106 tok, 19.3 decode) followed by 10s later streaming 10560 chars of thinking + tool_gen
+fakeNow = 105000;
+ctx.handleEvent({ type: 'usage_meta', completion_tokens: 106, prompt_tokens: 6200, cached_tokens: 6138, decode_tps: 19.3 });
+fakeNow = 120000; // long prefill gap before next turn's first output token
+const chunk = 'x'.repeat(352);
+for (let k = 0; k < 15; k++) {
+  fakeNow += 500;
+  ctx.handleEvent({ type: 'thinking_token', content: chunk });
+  fakeNow += 500;
+  ctx.handleEvent({ type: 'tool_gen', content: chunk });
+}
+const s2 = {
+  inFlightTok: ctx.S.perfInFlightTokens,
+  liveOut: ctx._perfLiveOutTokens(false),
+  outText: els['pbb-tok'].textContent,
+  ctxText: els['pbb-ctx'].textContent,
+  rateText: els['pbb-rate'].textContent,
+  wallRate: ctx._perfWallRate(),
+};
+
+// 3. Turn usage_meta finalizes round (no double count) + _perfOnDone stays consistent
+fakeNow += 500;
+ctx.handleEvent({ type: 'usage_meta', completion_tokens: 3000, prompt_tokens: 12500, cached_tokens: 6200, decode_tps: 19.3 });
+const afterUsage = {
+  realTok: ctx.S.perfRealTokens,
+  inFlightTok: ctx.S.perfInFlightTokens,
+  outText: els['pbb-tok'].textContent,
+};
+ctx._perfOnDone({
+  metrics_ctx_peak_tokens: 15500,
+  metrics_ctx_limit: 65000,
+  metrics_ctx_pressure_peak: 0.24,
+  elapsed: 30,
+  phase_timings: { total: { real_tokens: 3106, gen_s: 160.0 } },
+});
+const afterDone = {
+  ctxTokens: ctx.S.perfCtxTokens,
+  estTokens: ctx.S.perfEstTokens,
+  outText: els['pbb-tok'].textContent,
+  ctxText: els['pbb-ctx'].textContent,
+};
+
+console.log(JSON.stringify({ s1, s2, afterUsage, afterDone }));
+"""
+_nm = subprocess.run(["node", "-e", _node_metrics], cwd=ROOT, capture_output=True, text=True)
+_nm_ok = _nm.returncode == 0
+_nm_j = json.loads(_nm.stdout.strip()) if _nm_ok else {}
+check(
+    "Node VM verifies perf metrics separate ctx vs output, count thinking+tool_gen live, and avoid double-booking",
+    _nm_ok
+    and _nm_j["s1"]["firstTokAt"] == 0
+    and _nm_j["s1"]["activeMs"] == 0
+    and _nm_j["s1"]["ctxTokens"] == 6200
+    and _nm_j["s1"]["estTokens"] == 0
+    and _nm_j["s1"]["ctxText"] == "ctx: 6.2K/65.0K (10%) \u00b7 real"
+    and _nm_j["s2"]["inFlightTok"] == round((30 * 352) / 3.5)
+    and _nm_j["s2"]["liveOut"] == 106 + _nm_j["s2"]["inFlightTok"]
+    and _nm_j["s2"]["outText"] == "out: 3.1K"
+    and _nm_j["s2"]["ctxText"] == "ctx: 9.2K/65.0K (14%) \u00b7 real"
+    and _nm_j["s2"]["wallRate"] > 50.0
+    and _nm_j["afterUsage"]["realTok"] == 3106
+    and _nm_j["afterUsage"]["inFlightTok"] == 0
+    and _nm_j["afterUsage"]["outText"] == "out: 3.1K"
+    and _nm_j["afterDone"]["ctxTokens"] == 15500
+    and _nm_j["afterDone"]["outText"] == "out: 3.1K"
+    and _nm_j["afterDone"]["ctxText"] == "ctx: 15.5K/65.0K (24%) \u00b7 real",
+    _nm.stdout.strip() or _nm.stderr.strip(),
 )
 
 sys.exit(h.finish("metrics_and_reasoning_ui"))

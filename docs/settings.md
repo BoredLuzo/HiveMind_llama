@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**311 settings keys.**
+**312 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -66,6 +66,7 @@ its comment) in either file, then re-run the generator.
 | `duo_compress_overflow_reserve` | int | `1024` | yes |  |
 | `duo_compress_tail_tool_max_chars` | int | `8000` | yes | Chars kept from tool output when a compression tail-caps it (read by duo_runner with an 8000 fallback). |
 | `duo_compress_threshold` | int | `0` | yes |  |
+| `duo_concise_write_thinking` | bool | `False` | yes | Opt-in concise-thinking hint for file writes: tells reasoning models not to draft full file contents inside <think> before calling write_file, edit_file, or apply_patch. Off by default; live toggle in Advanced Settings -> Agentic. |
 | `duo_context_budget_chars` | int | `8000` | yes | CONTEXT BUDGET (D2, ): upper char cap for the tiny-workspace pre-seed block (core/duo_helpers.build_preseed_context). The effective cap is min(this, ctx_tokens/4, floor 2000); 8000 keeps the old behavior. |
 | `duo_critic_ctx` | null | `None` | yes |  |
 | `duo_critic_model` | str | `` | yes |  |

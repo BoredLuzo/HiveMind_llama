@@ -490,6 +490,7 @@ SUITES = [
     ("final_release_batch", "tests/test_final_release_batch.py", 60),
     ("metrics_and_reasoning_ui", "tests/test_metrics_and_reasoning_ui.py", 60),
     ("gateway_thinking_and_chat_continuity", "tests/test_gateway_thinking_and_chat_continuity.py", 60),
+    ("view_image_tool", "tests/test_view_image_tool.py", 30),
 
 ]
 

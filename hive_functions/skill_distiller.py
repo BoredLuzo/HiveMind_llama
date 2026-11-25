@@ -20,7 +20,7 @@ class SkillDistiller:
     MIN_SCORE_KEEP  = 0.10
     MAX_INSIGHTS    = 400
 
-    def run(self, insights: list[dict], focus_paths: list[str] = []) -> list[dict]:
+    def run(self, insights: list[dict], focus_paths: list[str] | None = None) -> list[dict]:
         if not insights:
             return insights
         updated = self._decay(insights, focus_paths)

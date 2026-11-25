@@ -2013,7 +2013,9 @@ function setDuoSubMode(mode, opts) {
   var desc = document.getElementById('duo-mode-desc');
   if (desc) {
     var _ctxVal = S.duoCtxAgentic || _ctxNum('duo-ctx-agentic', 16384);
-    var _ctxK = Math.round(_ctxVal / 1024) + 'k';
+    var _ctxK = _ctxVal >= 1000
+      ? ((_ctxVal % 1000 === 0 ? (_ctxVal / 1000) : (_ctxVal / 1000).toFixed(1)) + 'k')
+      : String(_ctxVal);
     desc.textContent = isCritic
       ? 'Coder writes → Critic reviews JSON → Coder fixes. Tool calls optional.'
       : 'Coder runs autonom: one model, solo in VRAM (ctx=' + _ctxK + '), no critic. Explore → Implement → Test → Fix.';

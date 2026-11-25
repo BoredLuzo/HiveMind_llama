@@ -46,6 +46,7 @@ from tools.handlers import (
     _inline_tool_get_datetime,
     _inline_tool_remember,
     _inline_tool_send_file,
+    _inline_tool_view_image,
     _inline_tool_task_complete,
     _inline_tool_lsp_status,
     _inline_tool_lsp_diagnostics,
@@ -380,7 +381,11 @@ def _repo_approval_granted(workspace, name: str, args: dict) -> bool:
 
 
 def _remember_repo_approval(workspace, name: str, args: dict) -> None:
-    _mem = _approval_memory.setdefault(_approval_scope(), {})
+    _scope = _approval_scope()
+    if _scope not in _approval_memory:
+        while len(_approval_memory) >= 64:
+            _approval_memory.pop(next(iter(_approval_memory)), None)
+    _mem = _approval_memory.setdefault(_scope, {})
     if len(_mem) > 512:
         _mem.clear()
     _mem[_workspace_approval_key(workspace) + "::" + _canonical_approval_key(name, args)] = int(time.time())
@@ -557,7 +562,7 @@ def _is_headless_run() -> bool:
 # The safe set for restricted runs (keep in sync with
 # definitions._READ_ONLY_INLINE_TOOL_NAMES + web + dialog):
 _PHONE_SAFE_TOOLS = frozenset({
-    "read_file", "get_signatures", "find_references", "list_dir",
+    "read_file", "view_image", "get_signatures", "find_references", "list_dir",
     "find_files", "search_code", "get_background_output", "get_datetime",
     "remember",
     "ask_user", "task_complete", "web_search", "web_fetch",
@@ -1443,6 +1448,7 @@ _INLINE_TOOL_HANDLER_MAP = {
     "get_datetime": _inline_tool_get_datetime,
     "remember": _inline_tool_remember,
     "send_file": _inline_tool_send_file,
+    "view_image": _inline_tool_view_image,
     "ask_user": _handle_ask_user,
     "task_complete": _inline_tool_task_complete,
     "browser": _browser_tool,
@@ -2268,7 +2274,11 @@ async def _run_inline_tool(
                         _rs_fp = workspace / _rs_fp
                     _rs_fp = _rs_fp.resolve()
                     _rs_st = _rs_fp.stat()
-                    _read_signatures[_normalize_tool_path(str(_rs_fp), workspace)] = (
+                    _rs_key = _normalize_tool_path(str(_rs_fp), workspace)
+                    if _rs_key not in _read_signatures:
+                        while len(_read_signatures) >= 2048:
+                            _read_signatures.pop(next(iter(_read_signatures)), None)
+                    _read_signatures[_rs_key] = (
                         _rs_st.st_mtime_ns, _rs_st.st_size)
                 except OSError:
                     pass
@@ -2302,6 +2312,9 @@ async def _run_inline_tool(
                 _written_set.add(_w_key)
                 _rid_w = str(_current_run_id.get(None) or "")
                 if _rid_w:
+                    if _rid_w not in _files_written_by_run:
+                        while len(_files_written_by_run) >= 128:
+                            _files_written_by_run.pop(next(iter(_files_written_by_run)), None)
                     _files_written_by_run.setdefault(
                         _rid_w, set()).add(_w_key)
 

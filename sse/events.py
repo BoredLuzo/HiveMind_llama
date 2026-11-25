@@ -199,6 +199,9 @@ def make_tool_call_event(name: str, args: dict) -> dict:
         if args.get("timeout"):
             extra["timeout"] = f"{args.get('timeout')}s"
 
+    elif name == "view_image":
+        label = str(args.get("path", "") or "").strip()
+
     else:
         # Generic: expose all args in extra
         first_val = next(iter(args.values()), "") if args else ""

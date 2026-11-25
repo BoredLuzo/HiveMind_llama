@@ -169,6 +169,7 @@ class ToolExecResult:
     # holds them until the final verification has passed, then emits the
     # send_file events as the last action of the run.
     send_files: list[str] = field(default_factory=list)
+    viewed_images: list[dict] = field(default_factory=list)
     extra_user_msg: str = ""            # injected into dtool_msgs when set
     deadline_extended_to: float = 0.0   # DEADLINE-GRACE: new run deadline after write progress
     wedge_file: str = ""                # WEDGE-HANDOFF: path whose edit keeps failing
@@ -562,6 +563,75 @@ async def execute_tool_round(
     include_git: bool | None = None) -> ToolExecResult:
     """Execute all tool calls for one round. Mutates dtool_msgs, round_state,
     and the passed-in mutable structures in-place. Returns structured result."""
+    from tools.handlers.view_image import (
+        _pending_view_images,
+        drain_viewed_images,
+        reset_pending_view_images,
+    )
+    _vi_tok = reset_pending_view_images()
+    try:
+        # A7 (audit 2026-11-03): the read-only prefetch (can include run_tests for
+        # up to 90 s) used to fire before the deadline/abort checks, so an already
+        # stopped or aborted round still ran tests whose results were discarded.
+        _pre_results: dict[int, str] = {}
+        # P2 (deep audit 2026-11-03): an unset deadline is 0.0 - do not treat that
+        # as "already over"; only a real deadline can block the prefetch.
+        _deadline_ok = (not trs.duo_deadline_at
+                        or time.monotonic() < trs.duo_deadline_at)
+        if _deadline_ok and not hooks.is_aborted(chat_id):
+            _pre_results = await _prefetch_readonly_tools(
+                tool_calls, exec_model, workspace_lock, tool_mode, duo_ws,
+                include_git=include_git)
+        else:
+            _logger.info("[PREFETCH] skipped: round already over deadline or aborted")
+        res = await _execute_tool_round_impl(
+            tool_calls=tool_calls,
+            dtool_msgs=dtool_msgs,
+            round_state=round_state,
+            hooks=hooks,
+            trs=trs,
+            tool_mode=tool_mode,
+            duo_ws=duo_ws,
+            workspace_lock=workspace_lock,
+            exec_model=exec_model,
+            auto_test_before_complete=auto_test_before_complete,
+            exec_has_thinking=exec_has_thinking,
+            tool_think_auto_mode=tool_think_auto_mode,
+            run_id_global=run_id_global,
+            chat_id=chat_id,
+            subtask_index=subtask_index,
+            _MAX_FOCUS_PATHS=_MAX_FOCUS_PATHS,
+            include_git=include_git,
+            pre_results=_pre_results,
+        )
+        res.viewed_images = drain_viewed_images()
+        return res
+    finally:
+        _pending_view_images.reset(_vi_tok)
+
+
+async def _execute_tool_round_impl(
+    *,
+    tool_calls: list[dict],
+    dtool_msgs: list[dict],
+    round_state: DuoRoundState,
+    hooks: ToolExecHooks,
+    trs: ToolRoundState,          # round-level mutable state (17 slots bundled)
+    # ── immutable config ──
+    tool_mode: str,
+    duo_ws: bool,
+    workspace_lock: str,
+    exec_model: str,
+    auto_test_before_complete: bool = False,
+    exec_has_thinking: bool,
+    tool_think_auto_mode: str,
+    run_id_global: str,
+    chat_id: str,
+    subtask_index: int,
+    _MAX_FOCUS_PATHS: int = 5,
+    include_git: bool | None = None,
+    pre_results: dict[int, str] | None = None) -> ToolExecResult:
+    """Internal implementation of execute_tool_round wrapped by view_image queue."""
 
     if trs.task_complete_blocked_count is None:
         trs.task_complete_blocked_count = [0]
@@ -610,20 +680,7 @@ async def execute_tool_round(
             _assistant_idx = _ai
             break
 
-    # A7 (audit 2026-11-03): the read-only prefetch (can include run_tests for
-    # up to 90 s) used to fire before the deadline/abort checks, so an already
-    # stopped or aborted round still ran tests whose results were discarded.
-    _pre_results: dict[int, str] = {}
-    # P2 (deep audit 2026-11-03): an unset deadline is 0.0 - do not treat that
-    # as "already over"; only a real deadline can block the prefetch.
-    _deadline_ok = (not trs.duo_deadline_at
-                    or time.monotonic() < trs.duo_deadline_at)
-    if _deadline_ok and not hooks.is_aborted(chat_id):
-        _pre_results = await _prefetch_readonly_tools(
-            tool_calls, exec_model, workspace_lock, tool_mode, duo_ws,
-            include_git=include_git)
-    else:
-        _logger.info("[PREFETCH] skipped: round already over deadline or aborted")
+    _pre_results: dict[int, str] = pre_results if pre_results is not None else {}
 
     for _i, _dtc_call in enumerate(tool_calls):
         # P3 (audit 2026-11-03): same truthiness guard as the prefetch above —
@@ -691,7 +748,7 @@ async def execute_tool_round(
             })
             continue
 
-        if not _dargs and _dname in (WRITE_TOOLS | {"read_file"}):
+        if not _dargs and _dname in (WRITE_TOOLS | {"read_file", "view_image"}):
             dtool_msgs.append({
                 "role": "tool",
                 "content": _tool_error_response(
@@ -720,6 +777,11 @@ async def execute_tool_round(
                 "SEND_FILE_UNAVAILABLE",
                 "send_file is only available in runs started from the "
                 "Telegram chat.",
+                tool=_dname, mode=tool_mode)
+        elif _dname == "view_image" and not trs.allow_view_image:
+            _dresult = _tool_error_response(
+                "VIEW_IMAGE_UNAVAILABLE",
+                "view_image is only available when vision/mmproj is active for the coder.",
                 tool=_dname, mode=tool_mode)
         else:
             _static_only_tests = False

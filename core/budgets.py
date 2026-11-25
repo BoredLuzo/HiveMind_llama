@@ -272,8 +272,8 @@ def update_prefill_ema(model: str, tps: float, prompt_n: int = 0) -> float | Non
         else:
             new = round(float(tps), 2)  # first stored measurement replaces the default
         state[key] = new
-        _PREFILL_STATE.parent.mkdir(parents=True, exist_ok=True)
-        _PREFILL_STATE.write_text(json.dumps(state), encoding="utf-8")
+        from utils.file import write_json_atomic
+        write_json_atomic(_PREFILL_STATE, state)
         return new
     except Exception:
         return None

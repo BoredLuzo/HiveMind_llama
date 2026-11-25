@@ -910,6 +910,9 @@ function _perfResetRuntimeState() {
   S.perfChars = 0;
   S.perfEstTokens = 0;
   S.perfRealTokens = 0;
+  S.perfInFlightChars = 0;
+  S.perfInFlightTokens = 0;
+  S.perfCtxTokens = 0;
   // TOKEN-TRACKER UI (2026-08-25): Run-scope Akkumulatoren zuruecksetzen.
   S.runPromptTokens = 0;
   S.runCachedTokens = 0;
@@ -971,21 +974,32 @@ function _perfEnsureUiRow() {
   return document.getElementById('perf-bar-bottom');
 }
 
+function _perfLiveOutTokens(finalized) {
+  var _real = Math.max(0, parseInt(S.perfRealTokens || 0, 10) || 0);
+  var _est = Math.max(0, parseInt(S.perfEstTokens || 0, 10) || 0);
+  if (finalized) return _real > 0 ? _real : _est;
+  var _inf = Math.max(0, parseInt(S.perfInFlightTokens || 0, 10) || 0);
+  return _real > 0 ? (_real + _inf) : _est;
+}
+
 function _perfRender(finalized) {
   if (!_perfEnsureUiRow()) return;
-  var _pct = parseInt(S.perfCtxPct || 0, 10);
-  _pct = isNaN(_pct) ? 0 : Math.max(0, Math.min(100, _pct));
+  var _ctx = Math.max(0, parseInt(S.perfCtxLimit || 0, 10) || 0);
+  var _ctxBase = Math.max(0, parseInt(S.perfCtxTokens || 0, 10) || 0);
+  var _inFlight = finalized ? 0 : Math.max(0, parseInt(S.perfInFlightTokens || 0, 10) || 0);
+  var _ctxUsed = _ctxBase > 0 ? (_ctxBase + _inFlight) : 0;
+  var _pct = (_ctx > 0 && _ctxUsed > 0)
+    ? Math.max(0, Math.min(100, Math.round((_ctxUsed / _ctx) * 100)))
+    : Math.max(0, Math.min(100, parseInt(S.perfCtxPct || 0, 10) || 0));
   var _tokRate = Number(S.perfTokRate || 0);
   var _realRate = 0;
-  if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
+  if (!finalized && _perfLiveOutTokens(false) > 0 && S.perfFirstTokenAt) {
     _realRate = _perfWallRate();
   }
   // SUMMARY (2026-10-07, user feedback: previous display was better): the collapsed
   // line shows the plain wall-clock rate again; the CLEANED rate (active
   // decode time only) lives as its own pill in the expanded details.
   var _rateVal = (finalized && _tokRate > 0) ? _tokRate : (_realRate > 0 ? _realRate : _tokRate);
-  var _est = Math.max(0, parseInt(S.perfEstTokens || 0, 10) || 0);
-  var _ctx = Math.max(0, parseInt(S.perfCtxLimit || 0, 10) || 0);
 
   // BIG PERF BAR AT THE BOTTOM (AUDIT-R2+ 2026-08-25): full live dimensions.
   var _pbb = document.getElementById('perf-bar-bottom');
@@ -994,12 +1008,12 @@ function _perfRender(finalized) {
     _pbb.style.display = '';
     _pbb.style.opacity = '';
     var _qId = function (id) { return document.getElementById(id); };
-    var _outT = S.perfRealTokens > 0 ? S.perfRealTokens : S.perfEstTokens;
+    var _outT = _perfLiveOutTokens(finalized);
     var _e;
     if ((_e = _qId('pbb-ctx'))) {
       var _ctxTxt = 'ctx: ' + (_ctx > 0 ? (_pct > 0 ? _pct + '%' : '--') : '--');
-      if (_ctx > 0 && _pct > 0) {
-        var _absC = _est > 0 ? _fmtTokens(_est) + '/' + _fmtTokens(_ctx) : _pct + '%';
+      if (_ctx > 0 && (_ctxUsed > 0 || _pct > 0)) {
+        var _absC = _ctxUsed > 0 ? _fmtTokens(_ctxUsed) + '/' + _fmtTokens(_ctx) : _pct + '%';
         _ctxTxt = 'ctx: ' + _absC + ' (' + _pct + '%)' + (S.perfCtxReal > 0 ? ' \u00b7 real' : ' \u00b7 est');
       }
       _e.textContent = _ctxTxt;
@@ -1055,8 +1069,8 @@ function _perfRender(finalized) {
       // SUMMARY-REDESIGN (2026-08-26): collapsed = ctx ABS/LIMIT (P%) · N t/s · M% cached.
       // reqs deliberately ONLY expanded. Color coding on ctx-% (green <70, amber <90, red ≥90).
       var _parts = [];
-      if (_ctx > 0 && _pct > 0) {
-        var _absTxt = _est > 0 ? (_fmtTokens(_est) + '/' + _fmtTokens(_ctx)) : String(_pct);
+      if (_ctx > 0 && (_ctxUsed > 0 || _pct > 0)) {
+        var _absTxt = _ctxUsed > 0 ? (_fmtTokens(_ctxUsed) + '/' + _fmtTokens(_ctx)) : String(_pct);
         _parts.push('ctx ' + _absTxt + ' (' + _pct + '%)' + (S.perfCtxReal > 0 ? ' real' : ''));
       } else if (_ctx > 0) {
         _parts.push('ctx --/' + _fmtTokens(_ctx));
@@ -1075,13 +1089,16 @@ function _perfOnToken(content) {
   if (!S.perfRunStartedAt) _perfResetRuntimeState();
   var _now = Date.now();
   if (!S.perfFirstTokenAt) { S.perfFirstTokenAt = _now; S.perfLastTokAt = _now; }
-  // active-time accumulation now lives in handleEvent (every event type)
+  // active-time accumulation now lives in handleEvent (model output event types)
   var _chars = String(content).length;
   if (_chars <= 0) return;
-  S.perfChars += _chars;
-  S.perfEstTokens += Math.max(1, Math.floor(_chars / 3));
+  S.perfChars = (S.perfChars || 0) + _chars;
+  S.perfInFlightChars = (S.perfInFlightChars || 0) + _chars;
+  S.perfInFlightTokens = Math.max(1, Math.round(S.perfInFlightChars / 3.5));
+  S.perfEstTokens = Math.max(1, Math.round(S.perfChars / 3.5));
   var _elapsed = Math.max(0.25, (_now - S.perfFirstTokenAt) / 1000);
-  var _inst = S.perfEstTokens / _elapsed;
+  var _liveOut = _perfLiveOutTokens(false);
+  var _inst = _liveOut / _elapsed;
   if (!isFinite(S.perfTokRateEma) || S.perfTokRateEma <= 0) S.perfTokRateEma = _inst;
   else S.perfTokRateEma = (S.perfTokRateEma * 0.8) + (_inst * 0.2);
   S.perfTokRate = S.perfTokRateEma;
@@ -1094,8 +1111,9 @@ function _perfOnToken(content) {
     if (S.curAgent) {
       var at = document.getElementById(S.curAgent.tid);
       if (at) {
-        var _t = S.perfEstTokens || 0;
-        var _r = S.perfTokRate > 0 ? S.perfTokRate.toFixed(1) + ' t/s' : '';
+        var _t = _liveOut || 0;
+        var _rVal = _perfWallRate() || S.perfTokRate || 0;
+        var _r = _rVal > 0 ? _rVal.toFixed(1) + ' t/s' : '';
         at.textContent = _t + ' tok' + (_r ? ' \u00b7 ' + _r : '');
       }
     }
@@ -1108,29 +1126,31 @@ var _perfPaintLastAt = 0;
 function _perfWallRate() {
   // the "normal" figure: tokens over wall clock since the first token -
   // includes tool runs and processing gaps (honest over the whole run)
-  if (!S.perfRealTokens || !S.perfFirstTokenAt) return 0;
-  return S.perfRealTokens / Math.max(0.25, (Date.now() - S.perfFirstTokenAt) / 1000);
+  var _live = _perfLiveOutTokens(false);
+  if (!_live || !S.perfFirstTokenAt) return 0;
+  return _live / Math.max(0.25, (Date.now() - S.perfFirstTokenAt) / 1000);
 }
 
 function _perfRealRate() {
   // FIX 2026-10-07: tokens / ACTIVE decode time (wall-clock gaps >= 2 s
   // between token events excluded). Falls back to 0 while no active
   // time has accumulated yet.
-  if (!S.perfRealTokens || !(S.perfActiveMs > 0)) return 0;
-  return S.perfRealTokens / Math.max(0.25, S.perfActiveMs / 1000);
+  var _live = _perfLiveOutTokens(false);
+  if (!_live || !(S.perfActiveMs > 0)) return 0;
+  return _live / Math.max(0.25, S.perfActiveMs / 1000);
 }
 
 function _perfOnCtxMeter(estTokens, ctxLimit, compressing, realTokens, cachedTokens) {
   var _est = parseInt(estTokens || 0, 10);
   var _ctx = parseInt(ctxLimit || 0, 10);
-  if (!isNaN(_est) && _est >= 0) S.perfEstTokens = _est;
+  if (!isNaN(_est) && _est >= 0) S.perfCtxTokens = _est;
   // METER-REAL (2026-09-09): real_tokens > 0 = measured usage (usage_meta),
   // 0 = heuristic estimate (e.g. right after compression).
   S.perfCtxReal = parseInt(realTokens || 0, 10) || 0;
   S.perfCtxCached = parseInt(cachedTokens || 0, 10) || 0;
   if (!isNaN(_ctx) && _ctx > 0) {
     S.perfCtxLimit = _ctx;
-    S.perfCtxPct = Math.round((S.perfEstTokens / _ctx) * 100);
+    S.perfCtxPct = Math.round(((S.perfCtxTokens || 0) / _ctx) * 100);
   }
   S.perfCompressing = !!compressing;
   _perfRender(false);
@@ -1141,17 +1161,21 @@ function _perfOnDone(d) {
   var _peak = parseInt(d.metrics_ctx_peak_tokens || 0, 10);
   var _ctx = parseInt(d.metrics_ctx_limit || 0, 10);
   var _pressure = parseFloat(d.metrics_ctx_pressure_peak || 0);
-  if (!isNaN(_peak) && _peak > 0) S.perfEstTokens = _peak;
+  S.perfInFlightChars = 0;
+  S.perfInFlightTokens = 0;
+  if (!isNaN(_peak) && _peak > 0) S.perfCtxTokens = _peak;
   if (!isNaN(_ctx) && _ctx > 0) S.perfCtxLimit = _ctx;
   if (isFinite(_pressure) && _pressure > 0) S.perfCtxPct = Math.round(_pressure * 100);
+  else if (S.perfCtxLimit > 0 && S.perfCtxTokens > 0) S.perfCtxPct = Math.round((S.perfCtxTokens / S.perfCtxLimit) * 100);
   var _elapsed = parseFloat(d.elapsed || 0);
   // GEN-TIME-FIX: globale tok/s aus echten Tokens / Generierungszeit (nicht ctx/Heuristik / Wandzeit)
   var _ptTot = (d.phase_timings && d.phase_timings.total) || {};
   var _genRate = (_ptTot.real_tokens > 0 && _ptTot.gen_s > 0) ? (_ptTot.real_tokens / _ptTot.gen_s) : 0;
+  var _finalOut = _perfLiveOutTokens(true);
   if (_genRate > 0) {
     S.perfTokRate = _genRate;
-  } else if (isFinite(_elapsed) && _elapsed > 0 && S.perfEstTokens > 0) {
-    S.perfTokRate = S.perfEstTokens / _elapsed;
+  } else if (isFinite(_elapsed) && _elapsed > 0 && _finalOut > 0) {
+    S.perfTokRate = _finalOut / _elapsed;
   }
   S.perfCompressing = false;
   _perfRender(true);
@@ -1652,7 +1676,7 @@ var _TOOL_ICONS = {
   get_signatures:'\uD83D\uDDFA', list_dir:'\uD83D\uDCC1',
   git_commit:'\uD83D\uDD27', git_status:'\uD83D\uDD27', task_complete:'\u2705',
   start_background:'\u25B6', get_background_output:'\uD83D\uDCE4', stop_background:'\u23F9',
-  ask_user:'\u2753', browser:'\uD83C\uDF10', undo_last:'\u21A9'
+  ask_user:'\u2753', browser:'\uD83C\uDF10', view_image:'\uD83D\uDDBC', undo_last:'\u21A9'
 };
 
 // Tool-cluster anchor (2026-09-02): chips / WRITE badges / result details stay

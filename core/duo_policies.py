@@ -76,6 +76,7 @@ class _DroppedToolRetryResult:
     think_only_retries: int = 0
     dropped_tool_retries: int = 0
     force_compress_next: bool = False
+    coder_no_think: bool = False
     loop_detected: bool = False
     events: list = dataclasses.field(default_factory=list)
 
@@ -84,7 +85,7 @@ def _plan_dropped_tool_retry(
     *, result, drop_names, drop_len, dr, max_tool_rounds,
     max_tokens_round, messages, think_only_retries, dropped_tool_retries,
     force_compress_next, loop_detected, should_compress, build_retry,
-    ld_setter,
+    ld_setter, has_thinking: bool = False,
 ) -> _DroppedToolRetryResult:
     """Decide the next step after tool calls were dropped/truncated.
 
@@ -128,7 +129,57 @@ def _plan_dropped_tool_retry(
             int(max_tokens_round))
         res.action = "continue"
         return res
+    _fr_drop = str(result.get("dr_finish_reason") or "")
     if dr < max_tool_rounds - 1:
+        if not drop_names and _fr_drop in ("thinking_drift", "drift"):
+            if has_thinking:
+                res.coder_no_think = True
+            if _fr_drop == "thinking_drift":
+                res.events.append({
+                    "type": "status",
+                    "content": (
+                        f"⚠ Reasoning {res.dropped_tool_retries}/3 collapsed into "
+                        "repetition drift — retrying directly without extended thinking."
+                    ),
+                })
+                messages.append({"role": "user", "content": (
+                    "[REASONING DRIFT] Your previous turn collapsed into a repetition loop "
+                    "during thinking and was cut early. Do NOT think at length — call "
+                    "write_file / edit_file directly now."
+                )})
+            else:
+                res.events.append({
+                    "type": "status",
+                    "content": (
+                        f"⚠ Output {res.dropped_tool_retries}/3 collapsed into "
+                        "repetition drift — retrying cleanly."
+                    ),
+                })
+                messages.append({"role": "user", "content": (
+                    "[OUTPUT DRIFT] Your previous turn collapsed into a repetition loop "
+                    "and was cut early. Do NOT repeat text — call write_file / edit_file "
+                    "directly now."
+                )})
+            res.action = "continue"
+            return res
+        if not drop_names and _fr_drop == "length" and has_thinking:
+            res.coder_no_think = True
+            res.events.append({
+                "type": "status",
+                "content": (
+                    f"⚠ Reasoning {res.dropped_tool_retries}/3 exceeded output limit "
+                    f"({int(max_tokens_round)} tok) before emitting a tool call — "
+                    "retrying directly without extended thinking."
+                ),
+            })
+            messages.append({"role": "user", "content": (
+                "[REASONING LIMIT] Your previous turn spent the entire output budget "
+                "thinking without emitting a tool call. Do NOT draft full code inside "
+                "reasoning — call write_file / edit_file directly now (split large "
+                "files into smaller steps if needed)."
+            )})
+            res.action = "continue"
+            return res
         res.events.append({
             "type": "status",
             "content": (
@@ -139,6 +190,13 @@ def _plan_dropped_tool_retry(
         })
         messages.append({"role": "user", "content": build_retry(drop_names)})
         res.action = "continue"
+        return res
+    if not drop_names and _fr_drop in ("thinking_drift", "drift"):
+        res.events.append({
+            "type": "status",
+            "content": "⚠ Output collapsed into repetition drift on the final round — aborting round.",
+        })
+        res.action = "break"
         return res
     return res
 

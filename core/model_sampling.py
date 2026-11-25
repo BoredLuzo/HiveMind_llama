@@ -134,6 +134,84 @@ def resolve_reasoning_effort(
     return ""
 
 
+# Documented OpenRouter reasoning.effort token-budget ratios:
+# minimal=10%, low=20%, medium=50%, high=80%, max/xhigh=95%.
+OPENROUTER_EFFORT_RATIOS: dict[str, float] = {
+    "minimal": 0.10,
+    "low":     0.20,
+    "medium":  0.50,
+    "high":    0.80,
+    "max":     0.95,
+}
+
+
+def resolve_effort_thinking_budget(
+    effort: str,
+    *,
+    free_ctx_tokens: int,
+    answer_reserve_tokens: int = 0,
+    min_budget: int = 1024,
+) -> int:
+    """Compute thinking token budget from OpenRouter effort_ratio over free context."""
+    eff = normalize_reasoning_effort(effort)
+    ratio = OPENROUTER_EFFORT_RATIOS.get(eff)
+    if ratio is None:
+        return 0
+    pool = max(0, int(free_ctx_tokens or 0) - max(0, int(answer_reserve_tokens or 0)))
+    if pool < 64:
+        return 0
+    raw = int(round(pool * ratio))
+    return min(pool, max(min(pool, int(min_budget)), raw))
+
+
+def resolve_effort_max_tokens(
+    base_max_tokens: int,
+    effort: str,
+    *,
+    thinking: bool = True,
+    ctx_tokens: int = 0,
+    input_tokens: int = 0,
+    explicit_thinking_budget: int = 0,
+    reserve_tokens: int = 1024,
+) -> int:
+    """Compute total max_tokens (answer + thinking) using OpenRouter effort ratios
+    and llama.cpp free-context semantics.
+
+    Leaves `auto`, `none`, and `on` untouched (`base_max_tokens`). For explicit
+    graduated efforts (`minimal`/`low`/`medium`/`high`/`max`), reserves `answer_budget`
+    for visible output/tool-calls and adds `effort_ratio * remaining_free_ctx` on top,
+    bounded by `ctx_tokens - input_tokens - reserve_tokens`.
+    """
+    base = max(1, int(base_max_tokens or 0))
+    if not thinking:
+        return base
+    eff = normalize_reasoning_effort(effort)
+    ratio = OPENROUTER_EFFORT_RATIOS.get(eff)
+    if ratio is None:
+        return base
+    ctx = int(ctx_tokens or 0)
+    if ctx <= 0:
+        extra = int(round(base * (ratio / max(0.05, 1.0 - ratio))))
+        if explicit_thinking_budget > 0:
+            extra = max(extra, int(explicit_thinking_budget))
+        return min(65536, max(base, base + max(1024, extra)))
+    free_ctx = max(0, ctx - max(0, int(input_tokens or 0)) - max(256, int(reserve_tokens or 0)))
+    if free_ctx <= base:
+        return base
+    ans_floor = 2048 if eff in ("medium", "high", "max") else base
+    answer_budget = min(free_ctx, max(base, min(ans_floor, free_ctx // 4)))
+    if explicit_thinking_budget > 0:
+        think_add = min(max(0, free_ctx - answer_budget), int(explicit_thinking_budget))
+    else:
+        think_add = resolve_effort_thinking_budget(
+            eff,
+            free_ctx_tokens=free_ctx,
+            answer_reserve_tokens=answer_budget,
+            min_budget=1024,
+        )
+    return max(base, min(free_ctx, answer_budget + think_add))
+
+
 def _sync_repeat_penalty(target: dict, source: dict) -> None:
     """Keep repeat_penalty / repetition_penalty aligned across layers."""
     has_rep = "repeat_penalty" in source

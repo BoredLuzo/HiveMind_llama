@@ -150,7 +150,8 @@ def _direct_tool_summary(tool_mode: str, ws_ok: bool = False,
 
 def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
                        git_ok: bool = False,
-                       send_file_ok: bool = False) -> str:
+                       send_file_ok: bool = False,
+                       concise_write_thinking: bool = False) -> str:
     """TIER-AWARE (2026-09-02): only advertise tools the selected direct tier
     actually provides. The old note always listed read_file + web, which was
     wrong for the Websearch-only tier (models then called read_file and hit
@@ -158,7 +159,7 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
     _list = _direct_tool_summary(
         tool_mode, ws_ok=ws_ok, git_ok=git_ok, send_file_ok=send_file_ok,
     )
-    return (
+    note = (
         "\n\nTOOLS ARE AVAILABLE: " + _list + ".\n"
         "Use tools ONLY when they actually help — for pure knowledge, conversation, "
         "math or general questions answer directly from your knowledge. "
@@ -166,6 +167,10 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
         "WITHOUT calling another tool. "
         "Never call a tool that is not listed above."
     )
+    if concise_write_thinking and tool_mode == "direct_full":
+        from core.duo_helpers import CONCISE_WRITE_THINKING_HINT
+        note += "\n\n" + CONCISE_WRITE_THINKING_HINT
+    return note
 
 
 def _append_direct_capability_trail(
@@ -324,9 +329,49 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         finally:
             from backend.manager_load import clear_reasoning_override as _clr_dt_ro
             _clr_dt_ro(_mgr, model)
+        from core.duo_helpers import (
+            model_supports_mmproj as _dt_has_mmproj,
+            resolve_view_image_enabled as _dt_resolve_vi,
+        )
+        _dt_slot_vision = None
+        try:
+            for _dt_s in getattr(_mgr, "_slots", []) or []:
+                if getattr(_dt_s, "port", None) == _port:
+                    _dt_slot_vision = getattr(_dt_s, "vision_active", None)
+                    break
+        except (AttributeError, TypeError, ValueError):
+            _dt_slot_vision = None
+        _dt_allow_view_image = (tool_mode != "direct") and _dt_resolve_vi(
+            slot_vision_active=_dt_slot_vision,
+            coder_images_off=False,
+            wants_vision=bool(vision or _settings_dict.get("vision_mmproj_always", False)),
+            model_has_mmproj=_dt_has_mmproj(model),
+        )
+        if _dt_allow_view_image:
+            _tools = _tools_fn(
+                include_websearch=_ws_avail,
+                mode=tool_mode,
+                budget_chars=_schema_budget or None,
+                include_send_file=_send_file_on,
+                include_view_image=True,
+                include_git=_git_avail,
+                settings=_settings_dict,
+            )
         _budget = int(_resolved_budget or 0)
         _base_tok = int(getattr(_agent, "max_tokens", 600) or 600)
         _max_tokens = _base_tok + (_budget if _think and _budget > 0 else 0)
+        from core.model_sampling import resolve_effort_max_tokens as _dt_resolve_eff_tok
+        from utils.token import estimate_ctx_tokens as _dt_est_ctx_tok
+        _dt_in_est = int(_dt_est_ctx_tok(msgs) * 1.1) if msgs else 0
+        _max_tokens = _dt_resolve_eff_tok(
+            _max_tokens,
+            _dt_user_eff,
+            thinking=_think,
+            ctx_tokens=int(_num_ctx or 0),
+            input_tokens=_dt_in_est,
+            explicit_thinking_budget=(_budget if _think else 0),
+            reserve_tokens=512,
+        )
         _max_tokens = min(int(_max_tokens), max(256, int(_num_ctx) - 512))
         try:
             _rounds_raw = int(ctx.settings.get("direct_tools_max_rounds", 12))
@@ -396,6 +441,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                 include_websearch=_ws_avail,
                 include_git=_git_avail,
                 allow_send_file=_send_file_on,
+                allow_view_image=_dt_allow_view_image,
                 settings=_settings_dict,
                 # Direct chat: a plain answer without tools is a valid final answer.
                 require_tool_call=False,
@@ -871,6 +917,7 @@ async def _run_direct_inner(ctx):
                 ws_ok=_direct_ws_enabled,
                 git_ok=_direct_git_ok,
                 send_file_ok=_direct_sf,
+                concise_write_thinking=bool((getattr(ctx, "settings", None) or {}).get("duo_concise_write_thinking", False)),
             )
             if _direct_sf:
                 _write_hint = (
@@ -1020,6 +1067,21 @@ async def _run_direct_inner(ctx):
         # OUTPUT-CAP (2026-08-27): max_tokens never above the effective context —
         # otherwise the answer is silently truncated (finish_reason=length).
         _direct_ctx_cap = ctx.get_num_ctx(_direct_model, "direct") or 8192
+        from core.model_sampling import (
+            normalize_reasoning_effort as _dir_norm_re_tok,
+            resolve_effort_max_tokens as _dir_resolve_eff_tok,
+        )
+        from utils.token import estimate_ctx_tokens as _dir_est_ctx_tok
+        _dir_in_est = int(_dir_est_ctx_tok(messages) * 1.1) if messages else 0
+        _direct_tokens = _dir_resolve_eff_tok(
+            _direct_tokens,
+            _dir_norm_re_tok((ctx.settings or {}).get("reasoning_effort")),
+            thinking=bool(_direct_think),
+            ctx_tokens=int(_direct_ctx_cap),
+            input_tokens=_dir_in_est,
+            explicit_thinking_budget=(_direct_budget if _direct_think else 0),
+            reserve_tokens=512,
+        )
         _direct_tokens = min(int(_direct_tokens), max(256, int(_direct_ctx_cap)))
         parts = []
         _pause_aborted = bool(_dt_result and _dt_result.pause_aborted)   # A1: an abort during the pause gate ends the run

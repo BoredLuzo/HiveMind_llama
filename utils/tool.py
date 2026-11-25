@@ -254,6 +254,55 @@ def arguments_repetition_drift(buf: str, *, min_chars: int = 1024,
     return run >= min_repeat
 
 
+_DRIFT_SEP_CHARS = frozenset("-=*#_~.")
+
+
+def text_repetition_drift(buf: str, *, min_chars: int = 320) -> bool:
+    """Detect a degenerate token/phrase/line repetition collapse at the tail
+    of streaming thinking or text output.
+
+    Catches short cyclic collapses (e.g. ' 0' x 160 from quantized logit
+    degeneration) and verbatim repeated line loops without false-positiving
+    on markdown dividers, normal code, or moderate literal arrays.
+    """
+    if not buf or len(buf) < min_chars:
+        return False
+    tail = buf[-4096:]
+    # 1. Cyclic short-unit collapse (period 1..24 chars, e.g. ' 0', '0', 'Wait, ')
+    for p in range(1, 25):
+        if len(tail) < p:
+            break
+        unit = tail[-p:]
+        stripped = unit.strip()
+        is_sep = (not stripped) or (set(stripped) <= _DRIFT_SEP_CHARS)
+        req_chars = max(480, p * 25) if is_sep else max(min_chars, p * 20)
+        if len(tail) >= req_chars:
+            reps = (req_chars + p - 1) // p
+            expected = (unit * reps)[-req_chars:]
+            if tail.endswith(expected):
+                return True
+    # 2. Verbatim identical consecutive non-empty line loop (>= 15x)
+    lines = tail.split("\n")
+    if len(lines) >= 17:
+        ref = lines[-2].strip()
+        if len(ref) >= 12 and len(set(ref)) >= 4:
+            run = 0
+            j = len(lines) - 2
+            while j >= 0:
+                cur = lines[j].strip()
+                if not cur:
+                    j -= 1
+                    continue
+                if cur == ref:
+                    run += 1
+                    j -= 1
+                else:
+                    break
+            if run >= 15:
+                return True
+    return False
+
+
 # ── TOOL-CALL VALIDATION (extracted from duo_runner 2026-09-30) ──────────────
 # PURE function: tool_calls + budget in, validated tool_calls / drop notices /
 # salvage notes / dropped names / meta out. No ctx, no emit, no loop state —

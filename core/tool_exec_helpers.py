@@ -1374,6 +1374,7 @@ class ToolRoundState:
     # gateway. The schema is also gated, but the dispatch guard keeps a
     # hallucinated tool name from reaching the handler in desktop/API runs.
     allow_send_file: bool = False
+    allow_view_image: bool = False
     ws_budget_streak: list = field(default_factory=lambda: [0])
     # WEBSEARCH-SOFT-STOP (2026-10-17): once the budget is gone the tool is
     # switched OFF for this run instead of killing it (live: 24 rounds,

@@ -1,7 +1,6 @@
 
 
 
-import json
 import sys
 from pathlib import Path
 
@@ -63,10 +62,8 @@ def main():
     output["_note"] = "Manual overrides take precedence. Paths can be adjusted."
     output.update(mapping)
 
-    _MODELS_JSON.write_text(
-        json.dumps(output, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    from utils.file import write_json_atomic
+    write_json_atomic(_MODELS_JSON, output)
 
     print()
     print(f"models.json written: {_MODELS_JSON}")

@@ -166,6 +166,9 @@ from core.duo_finalize import _DuoRunFinalizeState, _duo_run_finalize
 from core.duo_helpers import (
     build_image_desc_block, resolve_image_plan,
     effective_image_plan, vision_note_for_coder,
+    resolve_view_image_enabled as _resolve_view_image_enabled,
+    build_view_image_user_message as _build_view_image_user_message,
+    model_supports_mmproj as _model_supports_mmproj,
     build_steer_user_message as _build_steer_user_message,
     RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -1546,6 +1549,7 @@ async def _duo_exec_round_task(
     _ws_str, _explore_ctx, _pre_explore_msgs, _written_files, _contracts_raw,
     _coder_event_q, _cached_coder_port, exec_mdl, _exec_has_thinking,
     _tool_think_auto_mode, _run_id_global, _di,
+    _allow_view_image: bool = False,
 ):
     # CODE-MOTION (duo-runner-split): tool-round launch (run-bash snapshot
     # guard + cache horizon + execute_tool_round task) and the heartbeat
@@ -1626,6 +1630,7 @@ async def _duo_exec_round_task(
                 ws_disabled=_ws_disabled,
                 last_test_outcome=_last_test_outcome,
                 allow_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
+                allow_view_image=bool(_allow_view_image),
             ),
             tool_mode=_tool_mode,
             duo_ws=_duo_ws,
@@ -3529,6 +3534,24 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _slot_degraded = _slotctx_ps.slot_degraded
                     _slot_ctx_floor_stop = _slotctx_ps.slot_ctx_floor_stop
                     _dtool_ctx_requested = _slotctx_ps.dtool_ctx_requested
+                    _coder_slot_vision = None
+                    try:
+                        for _sv_s in getattr(_lsm3, "_slots", []) or []:
+                            if getattr(_sv_s, "port", None) == _dport:
+                                _coder_slot_vision = getattr(_sv_s, "vision_active", None)
+                                break
+                    except (AttributeError, TypeError, ValueError):
+                        _coder_slot_vision = None
+                    _allow_view_image = _resolve_view_image_enabled(
+                        slot_vision_active=_coder_slot_vision,
+                        coder_images_off=bool(ctx.settings.get("duo_coder_images_off", False)),
+                        wants_vision=bool(
+                            _img_plan.get("coder") == "raw"
+                            or _always_vision
+                            or ctx.settings.get("vision_mmproj_always", False)
+                        ),
+                        model_has_mmproj=_model_supports_mmproj(exec_mdl),
+                    )
                     _dtc_owned = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) is None
                     _dtc = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) or httpx.AsyncClient(
                         limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
@@ -3587,6 +3610,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _duo_runtime_profile=_duo_runtime_profile,
                         _accumulated_replan_bonus=_accumulated_replan_bonus,
                         _cached_coder_port=_cached_coder_port,
+                        include_view_image=_allow_view_image,
                     )
                     _xtools_ws = _budg_ps.xtools_ws
                     _compress_threshold = _budg_ps.compress_threshold
@@ -3665,6 +3689,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             include_websearch=_duo_ws,
                             mode=_tool_mode,
                             budget_chars=_ro_budget,
+                            include_view_image=_allow_view_image,
                             settings=ctx.settings,
                         )
                     else:
@@ -3672,6 +3697,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _xtools_ws,
                             mode=_tool_mode,
                             include_websearch=_duo_ws,
+                            include_view_image=_allow_view_image,
                             settings=ctx.settings,
                         )
                     if _read_only_task:
@@ -3795,6 +3821,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                         "🖼 image steer received — loading vision support (~15 s)…"})
                                     await _mgr_vu2.upgrade_port_to_vision(int(_dport))
                                     _dtool_opts["vision"] = True
+                                    if not bool(ctx.settings.get("duo_coder_images_off", False)):
+                                        _allow_view_image = True
                                 except (RuntimeError, OSError, httpx.HTTPError) as _vu_err2:
                                     logger.warning("[STEER-IMAGE] vision upgrade failed: %s", _vu_err2)
                                     _r_steer_allowed = False
@@ -3870,6 +3898,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             force_compress_next=_force_compress_next,
                             ctx_critical_warned=_ctx_critical_warned,
                             ctx_pressure_warned=_ctx_pressure_warned,
+                            total_tool_rounds=_total_tool_rounds,
                         )
                         _ctx_pressure_peak = _cm.ctx_pressure_peak
                         _swa_triggered_compress = _cm.swa_triggered_compress
@@ -3993,7 +4022,13 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _total_tool_rounds = _cc_ps._total_tool_rounds
                             if _cc_ps.stop:
                                 break
-                        if _duo_state.think_runtime:
+                        from core.model_sampling import (
+                            OPENROUTER_EFFORT_RATIOS as _OR_EFF_RATIOS,
+                            normalize_reasoning_effort as _norm_re_cap,
+                            resolve_effort_max_tokens as _resolve_eff_max_tok,
+                        )
+                        _coder_user_eff = _norm_re_cap((ctx.settings or {}).get("reasoning_effort"))
+                        if _duo_state.think_runtime and not _coder_no_think:
                             _tool_thinking_budget = _calculate_thinking_tokens(
                                 exec_mdl,
                                 ctx.settings,
@@ -4008,8 +4043,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # tool call costs ~15-25 s. Opt-in only: the
                             # default keeps the model's own budget so answer
                             # quality never degrades silently.
-                            from core.model_sampling import normalize_reasoning_effort as _norm_re_cap
-                            _coder_user_eff = _norm_re_cap((ctx.settings or {}).get("reasoning_effort"))
                             try:
                                 _think_cap = int(ctx.settings.get(
                                     "duo_tool_thinking_budget_cap", 0) or 0)
@@ -4056,18 +4089,39 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # as there is room; near the compression threshold
                         # the output budget shrinks instead of overflowing.
                         _est_now = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
+                        _round_base_output = int(_dtool_opts.get("num_predict", 1024) or 1024)
+                        _round_reserve = max(
+                            768,
+                            int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
+                        )
+                        try:
+                            _coder_slider_tb = int(
+                                (((ctx.settings or {}).get("agents") or {}).get("duo_coder") or {}).get("thinking_budget") or 0
+                            )
+                        except (TypeError, ValueError):
+                            _coder_slider_tb = 0
+                        _round_eff_output = _resolve_eff_max_tok(
+                            _round_base_output,
+                            _coder_user_eff,
+                            thinking=_thinking,
+                            ctx_tokens=int(_dtool_ctx or 0),
+                            input_tokens=int(_est_now),
+                            explicit_thinking_budget=(
+                                _tool_thinking_budget
+                                if (_thinking and (_coder_slider_tb > 0 or _coder_user_eff not in _OR_EFF_RATIOS))
+                                else 0
+                            ),
+                            reserve_tokens=_round_reserve,
+                        )
                         _max_tokens_round = _clamp_request_max_tokens(
                             est_tokens=int(_est_now),
                             ctx_tokens=int(_dtool_ctx),
-                            max_output=int(_dtool_opts.get("num_predict", 1024) or 1024),
+                            max_output=_round_eff_output,
                             factor=(1.05 if _coder_real_prompt_tokens[0] > 0 else 1.35),
                             # CLAMP-RESERVE-FIX (2026-09-09): honor the same
                             # reserve knobs the threshold math uses instead of
                             # the hardwired 768 default.
-                            reserve_tokens=max(
-                                768,
-                                int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
-                            ),
+                            reserve_tokens=_round_reserve,
                         )
                         if _dtool_ctx > 0 and _max_tokens_round > int(_dtool_ctx):
                             _max_tokens_round = int(_dtool_ctx)
@@ -4081,7 +4135,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # retried with the same budget. Scale the floor with
                         # the round's own request instead.
                         _min_viable_budget = _min_viable_tool_budget(
-                            int(_dtool_opts.get("num_predict", 1024) or 1024),
+                            _round_base_output,
                             ctx_tokens=int(_dtool_ctx or 0))
                         _tbg = _tool_budget_gate(
                             max_tokens_round=_max_tokens_round,
@@ -4121,10 +4175,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         except Exception as _san_err:
                             logger.debug("[TOOLCALL-REPAIR] skipped: %s", _san_err)
                         if _tool_thinking_budget > 0 and _max_tokens_round > 0:
-                            _budget_70_cap = max(1, int(_max_tokens_round * 0.70))
+                            if _coder_user_eff in _OR_EFF_RATIOS:
+                                _ans_floor = min(_round_base_output, max(1024, int(_max_tokens_round * 0.15)))
+                                _budget_70_cap = max(1, int(_max_tokens_round) - _ans_floor)
+                            else:
+                                _budget_70_cap = max(1, int(_max_tokens_round * 0.70))
                             if _tool_thinking_budget > _budget_70_cap:
                                 logger.info(
-                                    "[TOOL-THINK-CLAMP] %d -> %d tokens (70%% of max_tokens=%d)",
+                                    "[TOOL-THINK-CLAMP] %d -> %d tokens (cap of max_tokens=%d)",
                                     _tool_thinking_budget, _budget_70_cap, _max_tokens_round,
                                 )
                                 _tool_thinking_budget = _budget_70_cap
@@ -4161,7 +4219,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _tool_payload["min_p"] = _profile["min_p"]
                         if _profile.get("cache_prompt"):
                             _tool_payload["cache_prompt"] = True
-                        if _coder_no_think and not _duo_state.think_runtime:
+                        if _coder_no_think and not _thinking:
                             # template-level thinking off (Spark/Qwen3-style
                             # templates; unknown keys are ignored by others).
                             # PHASE-3 CACHE (2026-10-14, audit): reactive-think
@@ -4301,7 +4359,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _drop_notices = _vres["drop_notices"]
                         _drop_names = _vres["dropped_names"]
                         _salvage_notes = _vres["salvage_notes"]
-                        if _result.get("dr_finish_reason") in ("length", "drift"):
+                        if _result.get("dr_finish_reason") in ("length", "drift", "thinking_drift"):
                             _log_write_truncation(
                                 coder_mdl=coder_mdl, round_no=_dr,
                                 finish_reason=_result.get("dr_finish_reason"),
@@ -4322,6 +4380,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _dr_tcs = _validated_tcs
                         if _validated_tcs:
                             _dr_dropped_tool_retries = 0
+                            _coder_no_think = False
                         if not _dr_tcs:
                             # TOOL-CALL-MISS (2026-10-30, live Groot run): 7/7
                             # coder rounds emitted tool calls as plain text and
@@ -4339,7 +4398,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 )
                             # explored. Now: prompt targeted repair, own
                             # counter against endless loops.
-                            if _drop_notices:
+                            if _drop_notices or _result.get("dr_finish_reason") in ("thinking_drift", "drift"):
                                 _dtr = _plan_dropped_tool_retry(
                                     result=_result,
                                     drop_names=_drop_names, drop_len=_drop_len,
@@ -4353,10 +4412,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                     should_compress=_should_compress_after_truncated_drop,
                                     build_retry=_build_dropped_tool_retry,
                                     ld_setter=_ld_setter,
+                                    has_thinking=bool(_dr_thinking_parts),
                                 )
                                 _dr_think_only_retries = _dtr.think_only_retries
                                 _dr_dropped_tool_retries = _dtr.dropped_tool_retries
                                 _force_compress_next = _dtr.force_compress_next
+                                _coder_no_think = _coder_no_think or _dtr.coder_no_think
                                 _loop_detected = _dtr.loop_detected
                                 for _ev in _dtr.events:
                                     yield await ctx.emit(_ev)
@@ -4466,6 +4527,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _exec_has_thinking=_exec_has_thinking,
                                 _tool_think_auto_mode=_tool_think_auto_mode,
                                 _run_id_global=_run_id_global, _di=_di,
+                                _allow_view_image=_allow_view_image,
                             ):
                                 yield _ev
                         finally:
@@ -4517,7 +4579,20 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # later resume block/checkpoint carries the queue.
                             if _sfp and _sfp not in _cs.send_files:
                                 _cs.send_files.append(_sfp)
-                        if _exec_result.extra_user_msg:
+                        if _exec_result.viewed_images:
+                            _vi_msg = _build_view_image_user_message(
+                                _exec_result.viewed_images,
+                                extra_text=_exec_result.extra_user_msg,
+                            )
+                            if _vi_msg is not None:
+                                _dtool_msgs.append(_vi_msg)
+                            elif _exec_result.extra_user_msg:
+                                _dtool_msgs.append({
+                                    "role": "user",
+                                    "content": _exec_result.extra_user_msg})
+                            _exec_result.viewed_images.clear()
+                            _exec_result.extra_user_msg = ""
+                        elif _exec_result.extra_user_msg:
                             # SEND-FILE: hard next-step nudge after a delivery.
                             _dtool_msgs.append({
                                 "role": "user",

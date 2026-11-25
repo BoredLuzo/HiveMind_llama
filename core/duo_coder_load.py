@@ -213,7 +213,7 @@ async def _duo_resolve_tool_budgets(
     ctx, state, ps: _DuoToolBudgetsState, *,
     exec_mdl, _dtool_ctx, _duo_out_budget, _duo_ws, _stored_threshold,
     duo_rounds, _duo_runtime_profile, _accumulated_replan_bonus,
-    _cached_coder_port,
+    _cached_coder_port, include_view_image: bool = False,
 ):
     # CODE-MOTION (duo-runner-split): the BUDGETS resolve (REAL-CPT probe,
     # core.budgets.resolve + set_active, tool-schema rebuild from the
@@ -274,6 +274,7 @@ async def _duo_resolve_tool_budgets(
             # Telegram runs may deliver files the model creates; desktop and
             # API runs never see a channel they cannot use.
             include_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
+            include_view_image=include_view_image,
             settings=ctx.settings)
         state["_xtools_ws"] = _xtools_ws
         logger.info(

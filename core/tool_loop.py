@@ -17,7 +17,13 @@ from tools.errors import tool_call_failed, tool_error_response as _tool_error_re
 from tools.definitions import get_tools_for_phase, _tool_names_for_mode
 from tools.runner import _run_inline_tool, _current_run_id, _tool_loop_emit
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
-from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, build_steer_user_message as _build_steer_user_message
+from core.duo_helpers import (
+    RE_THINK_CLEANUP as _RE_THINK_CLEANUP,
+    parse_sse_delta as _parse_sse_delta,
+    count_image_parts as _count_image_parts,
+    build_steer_user_message as _build_steer_user_message,
+    build_view_image_user_message as _build_view_image_user_message,
+)
 from core.toolcall_sanitize import sanitize_invalid_tool_call_history
 
 _log = logging.getLogger("hivemind.tool_loop")
@@ -221,6 +227,7 @@ class ToolLoopConfig:
     include_git: bool | None = None
     include_subagent: bool | None = None
     allow_send_file: bool = False
+    allow_view_image: bool = False
     settings: dict | None = None
 
     compress_enabled: bool = False
@@ -526,6 +533,12 @@ class ToolLoop:
             if _san_removed:
                 _payload["messages"] = normalize_system_messages(_msgs_to_parts(_tool_messages))
 
+            if int(self.cfg.num_ctx or 0) > 0 and int(_payload.get("max_tokens") or 0) > 0:
+                from utils.token import estimate_ctx_tokens as _tl_est_ctx
+                _tl_in_est = int(_tl_est_ctx(_tool_messages) * 1.15)
+                if _tl_in_est + int(_payload["max_tokens"]) + 256 > int(self.cfg.num_ctx):
+                    _payload["max_tokens"] = max(256, int(self.cfg.num_ctx) - _tl_in_est - 256)
+
             # IMAGES-IN-REQUEST (2026-10-04): the tool loop is the
             # coder's real per-round caller and used to bypass the pipeline
             # trace entirely. Log every round - also at 0, so "the image
@@ -643,113 +656,128 @@ class ToolLoop:
             _known_tool_names = {t.get("function", {}).get("name", "") for t in self.cfg.tools}
             _unknown_tool_abort = False
             _pending_parse_error = False
-            for _tc_idx, _tc in enumerate(_tool_calls):
-                _fn = _tc.get("function", {})
-                _name = _fn.get("name", "")
+            from tools.handlers.view_image import (
+                _pending_view_images as _tl_pvi,
+                drain_viewed_images as _tl_drain_vi,
+                reset_pending_view_images as _tl_reset_vi,
+            )
+            _vi_tok = _tl_reset_vi()
+            _round_viewed_images: list[dict] = []
+            try:
+                for _tc_idx, _tc in enumerate(_tool_calls):
+                    _fn = _tc.get("function", {})
+                    _name = _fn.get("name", "")
 
-                # K2: unknown tool name → pair remaining tool_calls with tool error,
-                # then inject user feedback + retry
-                if _name and _name not in _known_tool_names:
-                    for _tc_u in _tool_calls[_tc_idx:]:
-                        _u_name = (_tc_u.get("function") or {}).get("name", "")
+                    # K2: unknown tool name → pair remaining tool_calls with tool error,
+                    # then inject user feedback + retry
+                    if _name and _name not in _known_tool_names:
+                        for _tc_u in _tool_calls[_tc_idx:]:
+                            _u_name = (_tc_u.get("function") or {}).get("name", "")
+                            _tool_messages.append({
+                                "role": "tool",
+                                "content": f"[TOOL_ERROR:UNKNOWN_TOOL] Unknown tool '{_u_name}'.",
+                                "tool_call_id": _tc_u.get("id", _u_name),
+                                "name": _u_name,
+                            })
+                        if _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
+                            _inject_retry_feedback(
+                                _tool_messages,
+                                error_type="unknown_tool",
+                                bad_content="",
+                                tool_names=sorted(_known_tool_names),
+                                model=getattr(self.cfg, "model", ""),
+                            )
+                            _feedback_injected_count += 1
+                        state.tool_errors += 1
+                        _unknown_tool_abort = True
+                        break
+
+                    _raw_args = _fn.get("arguments", {})
+                    _args = _parse_tool_args(_raw_args)
+                    if (isinstance(_raw_args, str) and _args == {}
+                            and _raw_args.strip() not in ("", "{}", "null", "none")):
+                        _pending_parse_error = True
+                        state.tool_errors += 1
                         _tool_messages.append({
                             "role": "tool",
-                            "content": f"[TOOL_ERROR:UNKNOWN_TOOL] Unknown tool '{_u_name}'.",
-                            "tool_call_id": _tc_u.get("id", _u_name),
-                            "name": _u_name,
+                            "content": ("[TOOL_ERROR:INVALID_JSON] Tool arguments are "
+                                        "not valid JSON. Return one valid JSON object "
+                                        "for this tool call."),
+                            "tool_call_id": _tc.get("id", _name),
+                            "name": _name,
                         })
-                    if _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
-                        _inject_retry_feedback(
-                            _tool_messages,
-                            error_type="unknown_tool",
-                            bad_content="",
-                            tool_names=sorted(_known_tool_names),
-                            model=getattr(self.cfg, "model", ""),
-                        )
-                        _feedback_injected_count += 1
-                    state.tool_errors += 1
-                    _unknown_tool_abort = True
-                    break
+                        continue
+                    if isinstance(_raw_args, str) and _raw_args.strip() in ("", "null", "none") and isinstance(_fn, dict):
+                        _fn["arguments"] = "{}"
 
-                # 2.4 (audit 2026-10-17): parse_tool_args returns {} when the
-                # model emits broken JSON, so the tool ran with NO arguments -
-                # a list_dir scanned the workspace root instead of the intended
-                # folder, a write tool answered "missing path". The duo path has
-                # had this guard for a while (_args_parse_failed ->
-                # INVALID_JSON); the agentic loop had not. Same rule here: a
-                # non-empty string that parses to nothing is a parse error, not
-                # "no arguments".
-                _raw_args = _fn.get("arguments", {})
-                _args = _parse_tool_args(_raw_args)
-                if (isinstance(_raw_args, str) and _args == {}
-                        and _raw_args.strip() not in ("", "{}", "null", "none")):
-                    _pending_parse_error = True
-                    state.tool_errors += 1
+                    state.tool_calls_made += 1
+
+                    yield await self._emit(_make_tool_call_event(_name, _args))
+
+                    # Set ask_user event emitter for tool_agent/openai_agent modes
+                    _ask_events: list[dict] = []
+                    async def _capture_ask_event(ev):
+                        _ask_events.append(ev)
+                    _tool_loop_emit.set(_capture_ask_event)
+
+                    if _name == "send_file" and not self.cfg.allow_send_file:
+                        _result = _tool_error_response(
+                            "SEND_FILE_UNAVAILABLE",
+                            "send_file is only available in runs started from the Telegram chat.",
+                            tool=_name,
+                            mode=self.cfg.tool_mode,
+                        )
+                    elif _name == "view_image" and not self.cfg.allow_view_image:
+                        _result = _tool_error_response(
+                            "VIEW_IMAGE_UNAVAILABLE",
+                            "view_image is only available when vision/mmproj is active for the model.",
+                            tool=_name,
+                            mode=self.cfg.tool_mode,
+                        )
+                    else:
+                        _result = await self._run_tool(_name, _args)
+
+                    _tool_loop_emit.set(None)
+
+                    # Flush any ask_user events (agent_asking/agent_resumed)
+                    for _aev in _ask_events:
+                        yield _aev
+
+                    # ── on_tool_result callback ──
+                    if self._on_tool_result:
+                        _modified = await self._on_tool_result(_name, _args, _result, state)
+                        if _modified is not None:
+                            _result = _modified
+
+                    yield await self._emit(_make_tool_result_event(_name, _result))
+                    if "\n\n[Diff — what changed]\n" in _result:
+                        _result = _re_tc.sub(
+                            r"\n\n\[Diff — what changed\]\n```diff\n[\s\S]*?\n```",
+                            "", _result, count=1,
+                        )
+
+                    # ── Error tracking ──
+                    if tool_call_failed(_result, _name):
+                        state.tool_errors += 1
+                    if _name in _tool_names_for_guard and not tool_call_failed(_result, _name):
+                        state.verify_mutation_serial += 1
+                    if _name == "run_bash" and not _run_bash_failed(_result):
+                        state.verify_last_ok_serial = max(state.verify_last_ok_serial, state.verify_mutation_serial)
+
                     _tool_messages.append({
                         "role": "tool",
-                        "content": ("[TOOL_ERROR:INVALID_JSON] Tool arguments are "
-                                    "not valid JSON. Return one valid JSON object "
-                                    "for this tool call."),
+                        "content": _result,
                         "tool_call_id": _tc.get("id", _name),
                         "name": _name,
                     })
-                    continue
-                if isinstance(_raw_args, str) and _raw_args.strip() in ("", "null", "none") and isinstance(_fn, dict):
-                    _fn["arguments"] = "{}"
+                _round_viewed_images = _tl_drain_vi()
+            finally:
+                _tl_pvi.reset(_vi_tok)
 
-                state.tool_calls_made += 1
-
-                yield await self._emit(_make_tool_call_event(_name, _args))
-
-                # Set ask_user event emitter for tool_agent/openai_agent modes
-                _ask_events: list[dict] = []
-                async def _capture_ask_event(ev):
-                    _ask_events.append(ev)
-                _tool_loop_emit.set(_capture_ask_event)
-
-                if _name == "send_file" and not self.cfg.allow_send_file:
-                    _result = _tool_error_response(
-                        "SEND_FILE_UNAVAILABLE",
-                        "send_file is only available in runs started from the Telegram chat.",
-                        tool=_name,
-                        mode=self.cfg.tool_mode,
-                    )
-                else:
-                    _result = await self._run_tool(_name, _args)
-
-                _tool_loop_emit.set(None)
-
-                # Flush any ask_user events (agent_asking/agent_resumed)
-                for _aev in _ask_events:
-                    yield _aev
-
-                # ── on_tool_result callback ──
-                if self._on_tool_result:
-                    _modified = await self._on_tool_result(_name, _args, _result, state)
-                    if _modified is not None:
-                        _result = _modified
-
-                yield await self._emit(_make_tool_result_event(_name, _result))
-                if "\n\n[Diff — what changed]\n" in _result:
-                    _result = _re_tc.sub(
-                        r"\n\n\[Diff — what changed\]\n```diff\n[\s\S]*?\n```",
-                        "", _result, count=1,
-                    )
-
-                # ── Error tracking ──
-                if tool_call_failed(_result, _name):
-                    state.tool_errors += 1
-                if _name in _tool_names_for_guard and not tool_call_failed(_result, _name):
-                    state.verify_mutation_serial += 1
-                if _name == "run_bash" and not _run_bash_failed(_result):
-                    state.verify_last_ok_serial = max(state.verify_last_ok_serial, state.verify_mutation_serial)
-
-                _tool_messages.append({
-                    "role": "tool",
-                    "content": _result,
-                    "tool_call_id": _tc.get("id", _name),
-                    "name": _name,
-                })
+            if _round_viewed_images and not _unknown_tool_abort:
+                _vi_msg = _build_view_image_user_message(_round_viewed_images)
+                if _vi_msg is not None:
+                    _tool_messages.append(_vi_msg)
 
             # ── K2: abort round after unknown tool ──
             if _unknown_tool_abort:
@@ -781,6 +809,8 @@ class ToolLoop:
                             yield await self._emit({"type": "status", "content":
                                 "🖼 image steer received — loading vision support (~15 s)…"})
                             await _mgr_vu.upgrade_port_to_vision(self._port)
+                            if self.cfg.tool_mode != "direct":
+                                self.cfg.allow_view_image = True
                         except (RuntimeError, OSError, httpx.HTTPError) as _vu_err:
                             yield await self._emit({"type": "status", "content":
                                 f"⚠ vision upgrade failed: {str(_vu_err)[:100]}"})

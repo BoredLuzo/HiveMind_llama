@@ -277,7 +277,7 @@ function _syncReasoningOverrideBadges() {
       slot.innerHTML = '';
       continue;
     }
-    var baseLbl = (isPlan ? 'Planner: ' : 'Composer: ') + (_REASONING_EFFORT_LABELS[eff] || eff);
+    var baseLbl = (isPlan ? 'Planner: ' : 'Effort: ') + (_REASONING_EFFORT_LABELS[eff] || eff);
     var tModel = _targetModelForEffortKey(key);
     var tMeta = _getModelReasoningMetaUI(tModel);
     var sup = tMeta.mode !== 'none';
@@ -302,8 +302,8 @@ function _syncReasoningOverrideBadges() {
     btn.setAttribute('onclick', resetCall);
     btn.className = (!sup && eff !== 'auto') ? 'reasoning-override-badge muted' : 'reasoning-override-badge';
     btn.title = (!sup && eff !== 'auto')
-      ? ('Skipped on this non-reasoning model \u2014 click to reset ' + (isPlan ? 'planner effort' : 'composer') + ' to Auto')
-      : ('Overridden by ' + (isPlan ? 'Planner Effort' : 'composer Thinking effort') + ' \u2014 click to reset to Auto');
+      ? ('Skipped on this non-reasoning model \u2014 click to reset ' + (isPlan ? 'planner effort' : 'reasoning effort') + ' to Auto')
+      : ('Overridden by ' + (isPlan ? 'Planner Effort' : 'Reasoning Effort') + ' \u2014 click to reset to Auto');
     btn.textContent = lbl;
   }
   var rows = document.querySelectorAll('[data-reasoning-ovr-row]');

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -218,6 +219,93 @@ check(
     and _th_j is False and _b_j == 0 and "reasoning_effort" not in _s_j
     and _tok_none == 0 and 0 < _tok_low <= 4000 and _tok_max > 2500,
     repr((_b_d, _b_d2, _th_j, _s_j.get("reasoning_effort"), _tok_none, _tok_low, _tok_max)),
+)
+
+_tok_high_65k = _calculate_thinking_tokens(
+    "inkling-2-mini-ud",
+    {"reasoning_effort": "high", "agents": {"duo_coder": {"max_tokens": 7300, "thinking_budget": 0}}},
+    input_tokens=6500, available_ctx=65000, agent_name="duo_coder",
+)
+_tok_max_65k = _calculate_thinking_tokens(
+    "inkling-2-mini-ud",
+    {"reasoning_effort": "max", "agents": {"duo_coder": {"max_tokens": 7300, "thinking_budget": 0}}},
+    input_tokens=6500, available_ctx=65000, agent_name="duo_coder",
+)
+_tok_high_slider = _calculate_thinking_tokens(
+    "inkling-2-mini-ud",
+    {"reasoning_effort": "high", "agents": {"duo_coder": {"max_tokens": 7300, "thinking_budget": 3000}}},
+    input_tokens=6500, available_ctx=65000, agent_name="duo_coder",
+)
+_eff_auto_65k = MS.resolve_effort_max_tokens(7300, "auto", thinking=True, ctx_tokens=65000, input_tokens=6500)
+_eff_min_65k = MS.resolve_effort_max_tokens(7300, "minimal", thinking=True, ctx_tokens=65000, input_tokens=6500)
+_eff_low_65k = MS.resolve_effort_max_tokens(7300, "low", thinking=True, ctx_tokens=65000, input_tokens=6500)
+_eff_med_65k = MS.resolve_effort_max_tokens(7300, "medium", thinking=True, ctx_tokens=65000, input_tokens=6500)
+_eff_high_65k = MS.resolve_effort_max_tokens(7300, "high", thinking=True, ctx_tokens=65000, input_tokens=6500)
+_eff_max_65k = MS.resolve_effort_max_tokens(7300, "max", thinking=True, ctx_tokens=65000, input_tokens=6500)
+_eff_high_16k = MS.resolve_effort_max_tokens(7300, "high", thinking=True, ctx_tokens=16384, input_tokens=4000)
+_eff_dir_med = MS.resolve_effort_max_tokens(600, "medium", thinking=True, ctx_tokens=16384, input_tokens=1000, reserve_tokens=512)
+_eff_dir_high = MS.resolve_effort_max_tokens(600, "high", thinking=True, ctx_tokens=65000, input_tokens=1000, reserve_tokens=512)
+_eff_nothink = MS.resolve_effort_max_tokens(7300, "max", thinking=False, ctx_tokens=65000, input_tokens=6500)
+_eff_high_slider = MS.resolve_effort_max_tokens(
+    7300, "high", thinking=True, ctx_tokens=65000, input_tokens=6500, explicit_thinking_budget=_tok_high_slider,
+)
+check(
+    "OpenRouter effort ratios (0.10/0.20/0.50/0.80/0.95) + additive answer reserve scale cleanly within free ctx",
+    MS.OPENROUTER_EFFORT_RATIOS == {"minimal": 0.10, "low": 0.20, "medium": 0.50, "high": 0.80, "max": 0.95}
+    and _tok_high_65k == 40141
+    and _tok_max_65k == 47667
+    and _tok_high_slider == 3000
+    and _eff_high_slider == 7300 + 3000
+    and _eff_auto_65k == 7300
+    and 12000 <= _eff_min_65k < _eff_low_65k < _eff_med_65k < _eff_high_65k < _eff_max_65k <= (65000 - 6500 - 1024)
+    and _eff_high_65k == 7300 + 40141
+    and _eff_max_65k == 7300 + 47667
+    and _eff_high_16k <= (16384 - 4000 - 1024)
+    and _eff_dir_med > 6000
+    and _eff_dir_high > 50000
+    and _eff_nothink == 7300,
+    repr((_tok_high_65k, _tok_max_65k, _tok_high_slider, _eff_high_slider, _eff_auto_65k, _eff_min_65k, _eff_low_65k, _eff_med_65k, _eff_high_65k, _eff_max_65k, _eff_high_16k, _eff_dir_med, _eff_dir_high, _eff_nothink)),
+)
+
+from settings_defaults import DEFAULT_SETTINGS as _DS_CWT, SETTINGS_UI_META as _META_CWT  # noqa: E402
+from core.duo_helpers import (  # noqa: E402
+    CONCISE_WRITE_THINKING_HINT as _CWT_HINT,
+    _build_duo_coder_sys as _build_coder_sys_cwt,
+)
+from core.direct_runner import _direct_tools_note as _dt_note_cwt  # noqa: E402
+
+
+def _cwt_ctx(flag: bool):
+    return SimpleNamespace(
+        settings={"duo_concise_write_thinking": flag, "duo_websearch_enabled": False},
+        active_preset=None,
+        use_learned=False,
+        websearch_available=False,
+        workspace="",
+        get_effective_prompt_with_override=lambda *a, **kw: "",
+        duo_config=SimpleNamespace(
+            test_feedback_chunk=False,
+            test_feedback_final=False,
+            until_finished=False,
+        ),
+    )
+
+
+_cwt_duo_off = _build_coder_sys_cwt(_cwt_ctx(False), False, False, False)
+_cwt_duo_on = _build_coder_sys_cwt(_cwt_ctx(True), False, False, False)
+_cwt_dir_full_off = _dt_note_cwt("direct_full", concise_write_thinking=False)
+_cwt_dir_full_on = _dt_note_cwt("direct_full", concise_write_thinking=True)
+_cwt_dir_ro_on = _dt_note_cwt("direct_readonly", concise_write_thinking=True)
+check(
+    "duo_concise_write_thinking setting + Advanced/Agentic UI schema + Duo/Direct prompt wiring hold",
+    _DS_CWT.get("duo_concise_write_thinking") is False
+    and _META_CWT.get("duo_concise_write_thinking") == {"group": "agentic", "apply_mode": "live"}
+    and _CWT_HINT not in _cwt_duo_off
+    and _CWT_HINT in _cwt_duo_on
+    and _CWT_HINT not in _cwt_dir_full_off
+    and _CWT_HINT in _cwt_dir_full_on
+    and _CWT_HINT not in _cwt_dir_ro_on,
+    repr((_DS_CWT.get("duo_concise_write_thinking"), _META_CWT.get("duo_concise_write_thinking"), _CWT_HINT in _cwt_duo_on, _CWT_HINT in _cwt_dir_full_on)),
 )
 
 
@@ -596,7 +684,7 @@ if _ne_ok:
         and _nej["afterMed"]["resetHidden"] is False
         and _nej["afterMed"]["duoDimmed"] is True
         and _nej["afterMed"]["duoOffDimmed"] is False
-        and _nej["afterMed"]["badgeText"] == ["Composer: Medium \u00d7", "Composer: Medium \u00d7"]
+        and _nej["afterMed"]["badgeText"] == ["Effort: Medium \u00d7", "Effort: Medium \u00d7"]
         and _nej["afterMed"]["saved"][0]["patch"] == {"reasoning_effort": "medium"}
         and _nej["afterInklingOff"]["duoDimmed"] is True
         and _nej["afterInklingOff"]["duoOffDimmed"] is True
@@ -627,7 +715,7 @@ if _ne_ok:
         and len(_nej["afterMaxNonThink"]["hidden"]) == 8
         and _nej["afterMaxNonThink"]["visible"] == []
         and _nej["afterMaxNonThink"]["directDimmed"] is False
-        and _nej["afterMaxNonThink"]["badgeText"] == ["Composer: Max \u00d7", "Composer: Max (n/a) \u00d7"]
+        and _nej["afterMaxNonThink"]["badgeText"] == ["Effort: Max \u00d7", "Effort: Max (n/a) \u00d7"]
         and _nej["afterAutoNonThink"]["state"] == "auto"
         and _nej["afterAutoNonThink"]["label"] == "No reasoning"
         and _nej["afterAutoNonThink"]["noReasonAttr"] == "1"
@@ -1300,7 +1388,7 @@ _nda_ok = _nda.returncode == 0
 if _nda_ok:
     _ndaj = json.loads(_nda.stdout.strip())
     _nda_ok = (
-        _ndaj["duoBadges"][0]["txt"] == "Composer: High \u00d7"
+        _ndaj["duoBadges"][0]["txt"] == "Effort: High \u00d7"
         and _ndaj["duoBadges"][1] is None
         and _ndaj["planNaBadge"]["txt"] == "Planner: High (n/a) \u00d7"
         and "muted" in _ndaj["planNaBadge"]["cls"]
@@ -1314,7 +1402,7 @@ if _nda_ok:
         and _ndaj["lfmOff"]["label"] == "Off (n/a)"
         and _ndaj["lfmOff"]["ovrClass"] == "effort-menu-ovr muted"
         and _ndaj["lfmOff"]["resetHidden"] is False
-        and _ndaj["lfmOff"]["badge"]["txt"] == "Composer: Off (n/a) \u00d7"
+        and _ndaj["lfmOff"]["badge"]["txt"] == "Effort: Off (n/a) \u00d7"
         and "muted" in _ndaj["lfmOff"]["badge"]["cls"]
     )
 check("Deep-audit P1-13/14 & P2: frontend k2 Off, On-on-effort, LFM Off reset, duo_planner & revert callback hold", _nda_ok, _nda.stdout.strip() or _nda.stderr.strip())
@@ -1627,13 +1715,13 @@ if _nsep_ok:
         and _nsep_j["s1"]["rtVal"] == "auto"
         and _nsep_j["s1"]["rtHasHigh"] is True
         and _nsep_j["s1"]["rtRowDisp"] == ""
-        and _nsep_j["s2"]["coderBadge"]["txt"] == "Composer: Low \u00d7"
+        and _nsep_j["s2"]["coderBadge"]["txt"] == "Effort: Low \u00d7"
         and _nsep_j["s2"]["planBadgeEmpty"] is True
         and _nsep_j["s3"]["patch"] == {"planner_reasoning_effort": "high"}
         and _nsep_j["s3"]["planLbl"] == "High"
         and _nsep_j["s3"]["coderLbl"] == "Low"
         and _nsep_j["s3"]["rtVal"] == "high"
-        and _nsep_j["s3"]["coderBadge"]["txt"] == "Composer: Low \u00d7"
+        and _nsep_j["s3"]["coderBadge"]["txt"] == "Effort: Low \u00d7"
         and _nsep_j["s3"]["coderBadge"]["oc"] == "setReasoningEffort('auto')"
         and _nsep_j["s3"]["planBadge"]["txt"] == "Planner: High \u00d7"
         and _nsep_j["s3"]["planBadge"]["oc"] == "setPlannerReasoningEffort('auto')"

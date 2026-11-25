@@ -27,6 +27,8 @@ var EVENT_HANDLERS = {
 
   'usage_meta': function(d) {
     if (d.completion_tokens) S.perfRealTokens = (S.perfRealTokens || 0) + parseInt(d.completion_tokens, 10);
+    S.perfInFlightChars = 0;
+    S.perfInFlightTokens = 0;
     // DECODE-RATE (2026-10-07): the engine forwards llama.cpp timings
     // (predicted_per_second) per coder call - EMA smooths per-call noise.
     if (d.decode_tps) {
@@ -528,6 +530,7 @@ var EVENT_HANDLERS = {
   'tool_gen': function(d) {
     // TOOL-GEN-STREAM (2026-09-17): live streaming of write-family tool call
     // arguments — the user sees the code being generated instead of waiting.
+    if (d && d.content) _perfOnToken(d.content);
     _toolGenStream(d);
   },
 
@@ -2327,7 +2330,11 @@ function handleEvent(d) {
   // tool_gen bursts and thinking tokens are all model output, while
   // usage_meta counts ALL completion tokens. Counting only text token
   // events made tokens/active-time explode.
-  if (d && d.type && d.type !== 'heartbeat') {
+  if (d && (
+    d.type === 'token' || d.type === 'thinking_token' || d.type === 'tool_gen'
+    || d.type === 'planner_token' || d.type === 'planner_thinking_token'
+    || d.type === 'planner_plan_token'
+  )) {
     var _an = Date.now();
     if (!S.perfFirstTokenAt) { S.perfFirstTokenAt = _an; S.perfLastTokAt = _an; }
     var _ag = _an - (S.perfLastTokAt || _an);

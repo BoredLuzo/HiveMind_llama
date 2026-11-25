@@ -68,6 +68,32 @@ try:
     _r = _run(est_tokens=900, ctx_compressions=3)
     check("SWA warning does not force compression at the cap",
           _r.force_compress_next is False)
+
+    M._lsm._slots = [SimpleNamespace(port=123, swa_window=1024)]
+    _r0_hyb = _run(dtool_ctx=65000, est_tokens=3797, total_tool_rounds=0)
+    _m0_hyb = next(e for e in _r0_hyb.events if e["type"] == "ctx_meter")
+    _r1_hyb = _run(
+        dtool_ctx=65000, est_tokens=4200, total_tool_rounds=1,
+        swa_triggered_compress=_r0_hyb.swa_triggered_compress,
+    )
+    check("Round-0 hybrid SWA guard suppresses futile warning/compress and suppresses Round-1 follow-up",
+          _m0_hyb["swa_warning"] is False
+          and not any(e.get("code") == "swa_reprefill_zone" for e in _r0_hyb.events)
+          and _r0_hyb.force_compress_next is False
+          and _r0_hyb.swa_triggered_compress is True
+          and _r1_hyb.force_compress_next is False)
+
+    M._lsm._slots = [SimpleNamespace(port=123, swa_window=8192)]
+    _r0_swa = _run(dtool_ctx=65000, est_tokens=3500, total_tool_rounds=0)
+    _r2_swa = _run(
+        dtool_ctx=65000, est_tokens=7200, total_tool_rounds=2,
+        swa_triggered_compress=_r0_swa.swa_triggered_compress,
+    )
+    check("Genuine SWA model does not pre-trigger in Round 0 and triggers normally in Round 2",
+          _r0_swa.swa_triggered_compress is False
+          and _r0_swa.force_compress_next is False
+          and next(e for e in _r2_swa.events if e["type"] == "ctx_meter")["swa_warning"] is True
+          and _r2_swa.force_compress_next is True)
 finally:
     M._lsm._slots = _orig_slots
 

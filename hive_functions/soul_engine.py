@@ -282,7 +282,7 @@ def resolve_reflection_model(
     return raw
 
 
-def run_soul_cycle(memory, settings: dict, focus_paths: list[str] = [], base_path: Path | None = None):
+def run_soul_cycle(memory, settings: dict, focus_paths: list[str] | None = None, base_path: Path | None = None):
     """Run Skill Distillation and optional Skill Writing after Soul Evolution.
 
     This is an add-on to the existing Soul Evolution logic.
@@ -294,6 +294,7 @@ def run_soul_cycle(memory, settings: dict, focus_paths: list[str] = [], base_pat
         focus_paths: List of currently active file paths (from agentic loop / git diff).
         base_path: Path to server.py (for resolving skills dir).
     """
+    _focus_paths = list(focus_paths or [])
     # Distillation: Decay, Merge, Evict
     _current_insights: list[dict] = []
     _distilled = False
@@ -304,12 +305,12 @@ def run_soul_cycle(memory, settings: dict, focus_paths: list[str] = [], base_pat
             from .skill_distiller import SkillDistiller
             distiller = SkillDistiller()
             with lock:
-                memory._insights = distiller.run(memory._insights, focus_paths=focus_paths)
+                memory._insights = distiller.run(memory._insights, focus_paths=_focus_paths)
                 memory._persist_insights()  # Distiller always flushes — this is the main persist point
                 _distilled = True
                 _current_insights = list(memory._insights)  # snapshot under lock
             _logger.info("[SkillDistiller] Ran distillation: %d insights remaining, focus_paths=%s",
-                        len(_current_insights), focus_paths[:3])
+                        len(_current_insights), _focus_paths[:3])
         except Exception as e:
             _logger.warning("[SkillDistiller] Failed: %s", e)
 

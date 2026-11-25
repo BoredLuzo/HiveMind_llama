@@ -471,6 +471,21 @@ _SEND_FILE_TOOL = {"type": "function", "function": {
     }, "required": ["path"]}
 }}
 
+# VIEW-IMAGE: Conditional schema, added ONLY when vision/mmproj is active for
+# the running model (`include_view_image`). Never advertised to text-only runs.
+_VIEW_IMAGE_TOOL = {"type": "function", "function": {
+    "name": "view_image",
+    "description": (
+        "Inspect a local image file (PNG, JPG, JPEG, WEBP, GIF, BMP) inside the "
+        "workspace visually. Use this after taking a browser screenshot or to "
+        "examine UI assets, charts, or diagrams. The image is attached "
+        "immediately after this round's tool results."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "path": {"type": "string", "description": "Image file path relative to the workspace"},
+    }, "required": ["path"]}
+}}
+
 _PIPELINE_TOOL = {"type": "function", "function": {
     "name": "hivemind_pipeline",
     "description": (
@@ -490,6 +505,7 @@ _INLINE_TOOL_NAMES = {t["function"]["name"] for t in _INLINE_CODING_TOOLS}
 
 _READ_ONLY_INLINE_TOOL_NAMES = {
     "read_file",
+    "view_image",
     "get_signatures",
     "find_references",
     "list_dir",
@@ -521,11 +537,11 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # _INLINE_CODING_TOOLS) — the coder uses edit_file (+start_line/end_line).
     "duo_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
                                            "replace_lines", "edit_ast",
-                                           "send_file"},
+                                           "send_file", "view_image"},
     # CORE CODER (2026-11-08): token-saving default for the coder/planner.
     # Read + edit + run + tests only; Web/Git/Subagent become opt-in optionals.
     "duo_core": {
-        "read_file", "get_signatures", "find_references", "list_dir",
+        "read_file", "view_image", "get_signatures", "find_references", "list_dir",
         "find_files", "search_code", "edit_file", "write_file",
         "write_file_append", "apply_patch", "undo_last", "run_bash",
         "run_python", "run_tests", "task_complete", "ask_user",
@@ -545,7 +561,7 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # family, deliberately NO run_bash/git/ask_user/browser — minimal-invasive
     # fix only; all handler-level guards (noop, shrink, block-sniff,
     # READ_REQUIRED) apply unchanged.
-    "fix_agent": {"read_file", "get_signatures", "list_dir", "find_files",
+    "fix_agent": {"read_file", "view_image", "get_signatures", "list_dir", "find_files",
                   "search_code", "edit_file", "write_file",
                   "write_file_append", "undo_last", "get_datetime"},
     # LSP (2026-10-31): read tiers with get_signatures/find_references get
@@ -560,9 +576,9 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
                    | _LSP_READ_TIER_EXTRAS,
     "critic_verify": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"run_bash"}
                      | _LSP_READ_TIER_EXTRAS,
-    "tool_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
-    "mcp_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
-    "openai_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "hivemind_pipeline"},
+    "tool_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "view_image"},
+    "mcp_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "view_image"},
+    "openai_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "hivemind_pipeline", "view_image"},
     # DIRECT-CHAT-TOOLS (2026-08-31): tiered tool sets for the simple/direct chat.
     # TIER-FIX (2026-09-02): the "read" tier is now WEBSEARCH ONLY — the model
     # can search/fetch the web but gets no file-read tools. File reading moved
@@ -644,11 +660,20 @@ def subagent_tools_enabled(settings: dict | None = None) -> bool:
     return str(raw or "").strip().lower() not in ("", "0", "false", "off", "no")
 
 
+_VIEW_IMAGE_OPT_IN_MODES = frozenset({
+    "duo_full", "duo_core", "duo_lean", "fix_agent",
+    "duo_readonly", "duo_mcp", "pre_explore", "critic_verify",
+    "tool_agent", "mcp_agent", "openai_agent",
+    "direct_python", "direct_research", "direct_mcp", "direct_full",
+})
+
+
 def _tool_names_for_mode(
     mode: str,
     include_websearch: bool = False,
     include_git: bool | None = None,
     include_subagent: bool | None = None,
+    include_view_image: bool | None = None,
 ) -> set[str]:
     allowed = set(_TOOL_MODE_ALLOWLISTS.get(mode, _READ_ONLY_INLINE_TOOL_NAMES))
     if include_websearch and _WEBSEARCH_AVAILABLE:
@@ -668,6 +693,10 @@ def _tool_names_for_mode(
             allowed.add(_SUBAGENT_TOOL_NAME)
     elif include_subagent is False:
         allowed.discard(_SUBAGENT_TOOL_NAME)
+    if include_view_image is False:
+        allowed.discard("view_image")
+    elif mode in _VIEW_IMAGE_OPT_IN_MODES:
+        allowed.add("view_image")
     return allowed
 
 
@@ -745,6 +774,7 @@ def _filter_tools_for_mode(
     include_git: bool | None = None,
     settings: dict | None = None,
     include_subagent: bool | None = None,
+    include_view_image: bool | None = None,
 ) -> list:
     _eff_git = include_git
     if _eff_git is None and settings is not None:
@@ -754,7 +784,7 @@ def _filter_tools_for_mode(
         _eff_sub = subagent_tools_enabled(settings)
     allowed = _tool_names_for_mode(
         mode, include_websearch=include_websearch, include_git=_eff_git,
-        include_subagent=_eff_sub)
+        include_subagent=_eff_sub, include_view_image=include_view_image)
     allow_mcp = (not mode or mcp_allowed_in_mode(mode))
     out = [
         t for t in tools
@@ -788,6 +818,7 @@ _TOOL_PRIORITY = [
     # tier 1b — full/direct extras
     "get_datetime",
     "send_file",
+    "view_image",
     # LSP: the two tools a small-ctx run needs most. Without priority they
     # were dropped first by the schema fitter (audit 2026-10-31, P2-5).
     "lsp_status", "lsp_diagnostics",
@@ -933,12 +964,15 @@ def _mcp_tool_defs() -> list:
 def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
                       budget_chars: int | None = None,
                       include_send_file: bool = False,
+                      include_view_image: bool = False,
                       include_git: bool | None = None,
                       settings: dict | None = None,
                       include_subagent: bool | None = None) -> list:
     tools = list(_INLINE_CODING_TOOLS)
     if include_send_file:
         tools.append(_SEND_FILE_TOOL)
+    if include_view_image:
+        tools.append(_VIEW_IMAGE_TOOL)
     if mode == "openai_agent":
         tools.append(_PIPELINE_TOOL)
     if include_websearch and _WEBSEARCH_AVAILABLE and _websearch is not None:
@@ -947,7 +981,8 @@ def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
         tools = _filter_tools_for_mode(
             tools, mode, include_websearch=include_websearch,
             include_git=include_git, settings=settings,
-            include_subagent=include_subagent)
+            include_subagent=include_subagent,
+            include_view_image=include_view_image)
     # MCP CLIENT (beta): exactly one place. The names are dynamic, so a static
     # mode allowlist cannot hold them and they are added AFTER the filter.
     # (_mcp_tool_defs is cache-only; servers start on /mcp/reload or at boot.)

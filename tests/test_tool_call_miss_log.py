@@ -177,6 +177,74 @@ check("truncated edit forces compression instead of retrying",
       and not _r3.events and len(_msgs3) == 1
       and "OUTPUT LIMIT" in _msgs3[0].get("content", ""))
 
+_msgs_ov: list = []
+_rov = _plan(drop_names=[], messages=_msgs_ov, max_tokens_round=7300, has_thinking=True)
+check("unnamed length-cut with thinking forces direct no-think retry with clear hint",
+      _rov.action == "continue"
+      and _rov.coder_no_think is True
+      and _rov.dropped_tool_retries == 1
+      and len(_rov.events) == 1
+      and "Reasoning 1/3 exceeded output limit" in _rov.events[0].get("content", "")
+      and len(_msgs_ov) == 1
+      and "[REASONING LIMIT]" in _msgs_ov[0].get("content", ""))
+
+_msgs_dr: list = []
+_rdr = _plan(
+    result={"dr_finish_reason": "thinking_drift"},
+    drop_names=[],
+    messages=_msgs_dr,
+    max_tokens_round=32388,
+    has_thinking=True,
+)
+check("thinking_drift forces direct no-think retry with drift hint",
+      _rdr.action == "continue"
+      and _rdr.coder_no_think is True
+      and _rdr.dropped_tool_retries == 1
+      and len(_rdr.events) == 1
+      and "repetition drift" in _rdr.events[0].get("content", "")
+      and len(_msgs_dr) == 1
+      and "[REASONING DRIFT]" in _msgs_dr[0].get("content", ""))
+
+_msgs_od: list = []
+_rod = _plan(
+    result={"dr_finish_reason": "drift"},
+    drop_names=[],
+    messages=_msgs_od,
+    max_tokens_round=32388,
+    has_thinking=False,
+)
+check("output drift without thinking forces clean retry without fallthrough",
+      _rod.action == "continue"
+      and _rod.coder_no_think is False
+      and _rod.dropped_tool_retries == 1
+      and len(_rod.events) == 1
+      and "Output 1/3 collapsed into repetition drift" in _rod.events[0].get("content", "")
+      and len(_msgs_od) == 1
+      and "[OUTPUT DRIFT]" in _msgs_od[0].get("content", ""))
+
+_rod_last = _plan(
+    result={"dr_finish_reason": "drift"},
+    drop_names=[],
+    dr=9,
+    max_tool_rounds=10,
+    messages=[],
+    has_thinking=False,
+)
+check("output drift on final round aborts instead of falling through to text summary",
+      _rod_last.action == "break"
+      and len(_rod_last.events) == 1
+      and "repetition drift" in _rod_last.events[0].get("content", ""))
+
+from utils.tool import text_repetition_drift as _trd  # noqa: E402
+check("text_repetition_drift catches zero/phrase/line collapse without false-positiving code or dividers",
+      _trd("prefix " + (" 0" * 160)) is True
+      and _trd("0" * 320) is True
+      and _trd("Wait, let me check. " * 20) is True
+      and _trd("Let me verify this line carefully.\n" * 16 + "partial") is True
+      and _trd("-" * 120) is False
+      and _trd("const arr = [" + ("0, " * 50) + "0];\n") is False
+      and _trd("normal reasoning with varied sentences and code\n" * 10) is False)
+
 # ── text-only / empty-answer policy ──────────────────────────────────────
 def _txt(**over):
     _kw = dict(
@@ -252,5 +320,51 @@ try:
 finally:
     _sig_log.removeHandler(_sig_cap)
     _sig_log.setLevel(_sig_old)
+
+import inspect  # noqa: E402
+import json as _json_hyg  # noqa: E402
+import tempfile as _tf_hyg  # noqa: E402
+from pathlib import Path as _Path_hyg  # noqa: E402
+import tools.runner as _tr_hyg  # noqa: E402
+from hive_functions.skill_distiller import SkillDistiller as _SD_hyg  # noqa: E402
+from hive_functions.soul_engine import run_soul_cycle as _rsc_hyg  # noqa: E402
+import vision.preprocess as _vp_hyg  # noqa: E402
+import core.budgets as _cb_hyg  # noqa: E402
+
+_orig_am = dict(_tr_hyg._approval_memory)
+try:
+    _tr_hyg._approval_memory.clear()
+    for _si in range(70):
+        _tok_s = _tr_hyg._current_run_id.set(f"scope-{_si}")
+        try:
+            _tr_hyg._remember_repo_approval("/tmp", "write_file", {"path": "a.py"})
+        finally:
+            _tr_hyg._current_run_id.reset(_tok_s)
+    check("tools.runner _approval_memory is bounded at <=64 scopes",
+          len(_tr_hyg._approval_memory) == 64)
+finally:
+    _tr_hyg._approval_memory.clear()
+    _tr_hyg._approval_memory.update(_orig_am)
+
+check("mutable list defaults replaced with None on SkillDistiller.run and run_soul_cycle",
+      inspect.signature(_SD_hyg.run).parameters["focus_paths"].default is None
+      and inspect.signature(_rsc_hyg).parameters["focus_paths"].default is None)
+
+with _tf_hyg.TemporaryDirectory(ignore_cleanup_errors=True) as _td_hyg:
+    _tdp = _Path_hyg(_td_hyg)
+    _orig_vmf = _vp_hyg.VISION_MODEL_FILE
+    _orig_pfs = _cb_hyg._PREFILL_STATE
+    try:
+        _vp_hyg.VISION_MODEL_FILE = _tdp / "vision_model.json"
+        _cb_hyg._PREFILL_STATE = _tdp / "sub" / "prefill_ema.json"
+        _vp_hyg._save_vision_model_cfg({"model": "gemma", "enabled": True})
+        _ema_val = _cb_hyg.update_prefill_ema("m:test", 42.5, prompt_n=1024)
+        check("vision_model.json and prefill_ema.json write valid JSON atomically",
+              _json_hyg.loads(_vp_hyg.VISION_MODEL_FILE.read_text(encoding="utf-8"))["enabled"] is True
+              and _ema_val == 42.5
+              and _json_hyg.loads(_cb_hyg._PREFILL_STATE.read_text(encoding="utf-8"))["m:test"] == 42.5)
+    finally:
+        _vp_hyg.VISION_MODEL_FILE = _orig_vmf
+        _cb_hyg._PREFILL_STATE = _orig_pfs
 
 sys.exit(h.finish("tool_call_miss_log"))

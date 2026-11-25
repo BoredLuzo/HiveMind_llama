@@ -46,7 +46,8 @@ def _load_vision_model_cfg() -> dict:
 
 
 def _save_vision_model_cfg(cfg: dict):
-    VISION_MODEL_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    from utils.file import write_json_atomic
+    write_json_atomic(VISION_MODEL_FILE, cfg)
 
 
 _vision_cfg: dict = _state._vision_cfg

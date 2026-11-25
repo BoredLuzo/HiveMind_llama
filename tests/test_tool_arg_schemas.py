@@ -88,7 +88,10 @@ _KNOWN_EXTERNAL = {"web_search", "web_fetch", "hivemind_pipeline",
                    "replace_lines", "edit_ast",
                    # SEND-FILE 2026-11-04: conditional schema, added only for
                    # Telegram-gateway runs via include_send_file.
-                   "send_file"}
+                   "send_file",
+                   # VIEW-IMAGE: conditional schema, added only when
+                   # vision/mmproj is active via include_view_image.
+                   "view_image"}
 _bad_allow = []
 for mode, allow in _TOOL_MODE_ALLOWLISTS.items():
     for name in allow:

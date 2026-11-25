@@ -1357,8 +1357,6 @@ def _resolve_planner_sampling(
 
 
 def _resolve_planner_max_tokens(settings: dict | None, planner_ctx: int) -> int:
-
-
     _s = settings or {}
     try:
         _cfg = int(_s.get("duo_planner_max_tokens", 0) or 0)
@@ -1366,7 +1364,17 @@ def _resolve_planner_max_tokens(settings: dict | None, planner_ctx: int) -> int:
         _cfg = 0
     _ctx = max(1, int(planner_ctx or 0))
     if _cfg > 0:
-        return min(_cfg, _ctx)
+        from core.model_sampling import (
+            normalize_reasoning_effort as _norm_pm_re,
+            resolve_effort_max_tokens as _res_pm_tok,
+        )
+        _scaled = _res_pm_tok(
+            _cfg,
+            _norm_pm_re(_s.get("reasoning_effort")),
+            thinking=True,
+            ctx_tokens=_ctx,
+        )
+        return min(_scaled, _ctx)
     return _ctx
 
 
@@ -1487,6 +1495,11 @@ async def run_planner(
         _messages = attach_images_to_last_user(_messages, images)
 
     _wall_timeout = float(settings.get("duo_planner_thinking_timeout_s", 600.0))
+    if use_thinking:
+        if _p_user_eff == "max":
+            _wall_timeout = max(_wall_timeout, 2400.0)
+        elif _p_user_eff == "high":
+            _wall_timeout = max(_wall_timeout, 1200.0)
 
     if use_thinking:
         # ── Thinking Planner (Streaming) ──────────────────────────────────────
@@ -1502,6 +1515,17 @@ async def run_planner(
             _p_temp, _p_smp = _resolve_planner_sampling(
                 planner_model, True, settings, fallback_temp=0.2,
             )
+            from core.model_sampling import resolve_effort_max_tokens as _res_plan_eff_tok
+            from utils.token import estimate_ctx_tokens as _plan_est_ctx
+            _plan_in_est = int(_plan_est_ctx(_messages) * 1.1)
+            _plan_round_max_tok = _res_plan_eff_tok(
+                max_output_tokens + _eff_think_budget,
+                _p_user_eff,
+                thinking=True,
+                ctx_tokens=planner_ctx,
+                input_tokens=_plan_in_est,
+                explicit_thinking_budget=_eff_think_budget,
+            )
             _plan_thinking, _plan_content, _hit_timeout = await _llm_stream_retry(
                 planner_model,
                 planner_port,
@@ -1509,7 +1533,7 @@ async def run_planner(
                 temp=_p_temp,
                 # OUTPUT-LIMIT-POLICY (0.99.2): max_tokens = min(output+budget,
                 # min(setting, planner_ctx). Wall-Timeout schuetzt zeitlich.
-                max_tokens=min(max_output_tokens + _eff_think_budget, _planner_max_tokens),
+                max_tokens=min(_plan_round_max_tok, _planner_max_tokens),
                 read_timeout=_wall_timeout,
                 emit_fn=emit_fn,
                 aborted_fn=aborted_fn,
@@ -1727,7 +1751,6 @@ async def run_inloop_planner(
 
     Returns: (plan_text, plan_thinking, used_fallback)
     """
-    _inloop_max_tokens = _resolve_planner_max_tokens(settings, planner_ctx)
     settings = settings or {}
     from core.model_sampling import (
         POSITIVE_REASONING_EFFORTS as _INLOOP_POS_RE,
@@ -1736,6 +1759,7 @@ async def run_inloop_planner(
         resolve_planner_effort_settings as _res_inloop_cfg,
     )
     settings = _res_inloop_cfg(settings)
+    _inloop_max_tokens = _resolve_planner_max_tokens(settings, planner_ctx)
     _inloop_user_eff = _norm_inloop_re(settings.get("reasoning_effort"))
     _inloop_supports = _inloop_mst(planner_model)
     if not _inloop_supports or _inloop_user_eff == "none":
@@ -1778,6 +1802,20 @@ async def run_inloop_planner(
     _inloop_temp, _inloop_smp = _resolve_planner_sampling(
         planner_model, use_thinking, settings, fallback_temp=0.3,
     )
+    from core.model_sampling import resolve_effort_max_tokens as _res_inloop_eff_tok
+    from utils.token import estimate_ctx_tokens as _inloop_est_ctx
+    _inloop_in_est = int(_inloop_est_ctx([
+        {"role": "system", "content": _inloop_plan_sys},
+        {"role": "user", "content": _plan_user_msg},
+    ]) * 1.1)
+    _inloop_round_max_tok = _res_inloop_eff_tok(
+        max_output_tokens + _inloop_eff_budget,
+        str(settings.get("reasoning_effort") or "auto"),
+        thinking=bool(use_thinking),
+        ctx_tokens=planner_ctx,
+        input_tokens=_inloop_in_est,
+        explicit_thinking_budget=_inloop_eff_budget,
+    )
     _plan_payload = {
         "model":    planner_model,
         "messages": [
@@ -1786,7 +1824,7 @@ async def run_inloop_planner(
         ],
         "stream":          False,
         "temperature":     _inloop_temp,
-        "max_tokens":      min(max_output_tokens + _inloop_eff_budget, _inloop_max_tokens),
+        "max_tokens":      min(_inloop_round_max_tok, _inloop_max_tokens),
     }
     _apply_sampler_to_payload(_plan_payload, _inloop_smp)
     _apply_thinking_fields(
@@ -1805,6 +1843,11 @@ async def run_inloop_planner(
         pass
 
     _inloop_read_timeout = 600.0
+    if use_thinking:
+        if _inloop_user_eff == "max":
+            _inloop_read_timeout = max(_inloop_read_timeout, 2400.0)
+        elif _inloop_user_eff == "high":
+            _inloop_read_timeout = max(_inloop_read_timeout, 1200.0)
     _plan_resp = None
     _plan_err_last = None
 

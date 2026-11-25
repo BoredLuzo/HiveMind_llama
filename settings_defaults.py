@@ -371,6 +371,11 @@ DEFAULT_SETTINGS = {
     # is 0 (no silent quality change); set it explicitly after judging your
     # model's tool-round behavior.
     "duo_tool_thinking_budget_cap": 0,
+    # Opt-in concise-thinking hint for file writes: tells reasoning models not
+    # to draft full file contents inside <think> before calling write_file,
+    # edit_file, or apply_patch. Off by default; live toggle in Advanced
+    # Settings -> Agentic.
+    "duo_concise_write_thinking": False,
     # truncated at the output-token limit (finish_reason=length -> DROPPED -> loop),
     # coupled to the token budget: max_chars ~ budget_tokens * factor - overhead.
     # Step; cap 3.3 (documented measured value).
@@ -922,6 +927,7 @@ SETTINGS_UI_META = {
     "duo_auto_test_timeout": {"group": "testing", "apply_mode": "live", "min": 10, "max": 180, "step": 5},
     "duo_selective_tests": {"group": "testing", "apply_mode": "live"},
     "duo_tool_thinking_budget_cap": {"group": "agentic", "apply_mode": "live", "min": 0, "max": 32768, "step": 128},
+    "duo_concise_write_thinking": {"group": "agentic", "apply_mode": "live"},
     "duo_coder_tool_tier": {"group": "agentic", "apply_mode": "live", "choices": ["core", "full"]},
     "reasoning_effort": {"group": "agentic", "apply_mode": "live", "choices": ["auto", "none", "on", "minimal", "low", "medium", "high", "max"]},
     "planner_reasoning_effort": {"group": "agentic", "apply_mode": "live", "choices": ["auto", "none", "on", "minimal", "low", "medium", "high", "max"]},

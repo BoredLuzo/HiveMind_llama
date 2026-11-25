@@ -247,7 +247,9 @@ function _updatePlannerTokRate() {
   } else if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
     _realRate = _perfRealRate();
   }
-  var _t = S.perfRealTokens > 0 ? S.perfRealTokens : (S.perfEstTokens || 0);
+  var _t = (typeof _perfLiveOutTokens === 'function')
+    ? _perfLiveOutTokens(false)
+    : (S.perfRealTokens > 0 ? S.perfRealTokens : (S.perfEstTokens || 0));
   var _r = _realRate > 0 ? _realRate.toFixed(1) + ' t/s' : (S.perfTokRate > 0 ? S.perfTokRate.toFixed(1) + ' t/s~' : '');
   var _pm = document.getElementById('planner-tokrate');
   if (_pm) _pm.textContent = (_r || _t ? _t + ' tok' + (_r ? ' \u00b7 ' + _r : '') : 'running\u2026');

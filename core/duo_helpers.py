@@ -455,9 +455,11 @@ def _calculate_thinking_tokens(
 ) -> int:
     _s = settings_dict or {}
     from core.model_sampling import (
+        OPENROUTER_EFFORT_RATIOS as _OR_RATIOS,
         POSITIVE_REASONING_EFFORTS as _POS_RE,
         model_supports_thinking as _mst_dh,
         normalize_reasoning_effort as _norm_re,
+        resolve_effort_thinking_budget as _res_or_tb,
     )
     _user_eff = _norm_re(_s.get("reasoning_effort"))
     if _user_eff == "none":
@@ -467,11 +469,17 @@ def _calculate_thinking_tokens(
         return 0
     base_budget = None
     _has_explicit_budget = False
+    _agent_max_tok = 0
     if agent_name:
         _agents_map = _s.get("agents") or {}
         agent_cfg = _agents_map.get(agent_name) or (
             _agents_map.get("duo_planner", {}) if agent_name == "planner" else {}
         )
+        if isinstance(agent_cfg, dict):
+            try:
+                _agent_max_tok = max(0, int(agent_cfg.get("max_tokens") or 0))
+            except (ValueError, TypeError):
+                _agent_max_tok = 0
         if isinstance(agent_cfg, dict) and "thinking_budget" in agent_cfg:
             tb = agent_cfg.get("thinking_budget")
             if tb is not None:
@@ -484,11 +492,19 @@ def _calculate_thinking_tokens(
                     pass
 
     if base_budget is None:
+        if _user_eff in _OR_RATIOS:
+            available = max(0, available_ctx - input_tokens)
+            if available < 64:
+                return 0
+            free_ctx = max(64, available - 1024) if available > 1152 else available
+            ans_res = min(_agent_max_tok, free_ctx // 2) if _agent_max_tok > 0 else 0
+            return _res_or_tb(
+                _user_eff,
+                free_ctx_tokens=free_ctx,
+                answer_reserve_tokens=ans_res,
+                min_budget=1024,
+            )
         if _user_eff in _POS_RE:
-            if _user_eff == "max":
-                available = max(0, available_ctx - input_tokens)
-                _max_thinking_share = int(available * 0.40)
-                return _max_thinking_share if _max_thinking_share >= 64 else 0
             prof_tb = profile.get("thinking_budget", 2500)
             base_budget = prof_tb if prof_tb > 0 else 2500
         else:
@@ -806,6 +822,15 @@ def inloop_plan_should_run(agentic_thinking: bool, thinking_per_chunk: bool,
     return bool(agentic_thinking or thinking_per_chunk)
 
 
+CONCISE_WRITE_THINKING_HINT = (
+    "THINKING DISCIPLINE FOR FILE WRITES: Keep internal reasoning concise "
+    "(outline architecture, interfaces, and key edge cases only). Do NOT "
+    "draft full file contents or long code listings inside <think> before "
+    "calling write_file, edit_file, or apply_patch — write the code directly "
+    "in the tool call."
+)
+
+
 def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ctx: bool) -> str:
     from hive_functions.prompts import PROMPTS
     parts = [
@@ -854,6 +879,8 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
         parts.append(PROMPTS.get("duo_coder_auto_test", ""))
     if ctx.duo_config.until_finished:
         parts.append(PROMPTS.get("duo_coder_until_finished", ""))
+    if bool((getattr(ctx, "settings", None) or {}).get("duo_concise_write_thinking", False)):
+        parts.append(CONCISE_WRITE_THINKING_HINT)
     sys_prompt = "\n\n".join(p for p in parts if p)
     # RUNTIME-ENV LINE (2026-09-30): DUO_CODER_BASE promises an OS/runtime
     # note "appended to this system prompt" and a workspace root "stated in
@@ -1049,10 +1076,20 @@ def _resolve_duo_run_timeout_seconds(profile: str) -> float:
         _critical = 900.0
 
     if profile == "critical":
-        return max(120.0, _critical)
-    if profile == "fast":
-        return max(90.0, min(_balanced, 300.0))
-    return max(120.0, _balanced)
+        _out_to = max(120.0, _critical)
+    elif profile == "fast":
+        _out_to = max(90.0, min(_balanced, 300.0))
+    else:
+        _out_to = max(120.0, _balanced)
+    from core.model_sampling import normalize_reasoning_effort as _norm_to_re
+    _eff_to = _norm_to_re((_st.settings or {}).get("reasoning_effort"))
+    if _eff_to == "max":
+        _out_to = max(_out_to, 3600.0)
+    elif _eff_to == "high":
+        _out_to = max(_out_to, 1800.0)
+    elif _eff_to == "medium":
+        _out_to = max(_out_to, 900.0)
+    return _out_to
 
 
 def _bucket_stop_reason(stop_reason: str) -> str:
@@ -1183,6 +1220,58 @@ def direct_vision_should_drop(slot_vision_active, slot_model: str = "",
     if slot_model and requested_model and slot_model != requested_model:
         return False
     return slot_vision_active is False
+
+
+def resolve_view_image_enabled(
+    *,
+    slot_vision_active: bool | None,
+    coder_images_off: bool = False,
+    wants_vision: bool = False,
+    model_has_mmproj: bool = False,
+) -> bool:
+    """Return True when `view_image` should be exposed & allowed for this run."""
+    if coder_images_off:
+        return False
+    if slot_vision_active is False:
+        return False
+    if slot_vision_active is True:
+        return True
+    return bool(wants_vision and model_has_mmproj)
+
+
+def build_view_image_user_message(
+    viewed_images: list[dict],
+    extra_text: str = "",
+    *,
+    max_images: int = 4,
+) -> dict | None:
+    """Build a multimodal user message carrying downscaled view_image results."""
+    items = [
+        item for item in (viewed_images or [])
+        if isinstance(item, dict) and str(item.get("data_url") or "").strip()
+    ]
+    if not items:
+        return None
+    kept = items[:max(1, int(max_images))]
+    parts: list[dict] = [
+        {"type": "image_url", "image_url": {"url": str(item["data_url"]).strip()}}
+        for item in kept
+    ]
+    lines = ["[VIEW_IMAGE] Attached workspace image(s):"]
+    for item in kept:
+        p = str(item.get("path") or "image")
+        w = int(item.get("width") or 0)
+        h = int(item.get("height") or 0)
+        dims = f" ({w}x{h})" if (w > 0 and h > 0) else ""
+        lines.append(f"- {p}{dims}")
+    if len(items) > len(kept):
+        lines.append(f"(Showing first {len(kept)} of {len(items)} viewed images; cap={len(kept)}.)")
+    extra = str(extra_text or "").strip()
+    if extra:
+        lines.append("")
+        lines.append(extra)
+    parts.append({"type": "text", "text": "\n".join(lines)})
+    return {"role": "user", "content": parts}
 
 
 def build_steer_user_message(text: str, images=None) -> dict:

@@ -9,6 +9,14 @@ from core.duo_helpers import DEFAULT_VRAM_BUDGET_GB
 from hive_functions.num_ctx_config import resolve_ctx
 
 
+def _format_ctx_label(tokens: int) -> str:
+    """Format a token count in decimal k (e.g. 65000 -> '65k', 65536 -> '65.5k') matching UI footer."""
+    n = max(0, int(tokens or 0))
+    if n >= 1000:
+        return f"{n // 1000}k" if (n % 1000 == 0) else f"{n / 1000:.1f}k"
+    return str(n)
+
+
 async def _phase_vram(ctx, state: dict):
     """Phase A: VRAM setup, model pinning, tool-thinking modes, duo_start emit."""
     _MAX_FOCUS_PATHS = 10
@@ -343,11 +351,11 @@ async def _phase_vram(ctx, state: dict):
     if ctx.duo_config.agentic_mode:
         _vram_mdl = ctx.vram_lookup_gb.get(coder_mdl, 4.1)
         _runtime_ctx_target = resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-        _ctx_k = _runtime_ctx_target // 1024
+        _ctx_lbl = _format_ctx_label(_runtime_ctx_target)
         if ctx.duo_config.pre_explore:
             _agentic_label = ""
         else:
-            _agentic_label = f"Agentic — {coder_mdl} solo ({_vram_mdl:.1f} GB @ ctx={_ctx_k}k)"
+            _agentic_label = f"Agentic — {coder_mdl} solo ({_vram_mdl:.1f} GB @ ctx={_ctx_lbl})"
         _runtime_model_source = "dropdown"
     else:
         _agentic_label = f"{coder_mdl} solo"

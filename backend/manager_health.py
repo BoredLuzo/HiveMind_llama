@@ -125,9 +125,11 @@ class LlamaHealthMixin:
                 if not _pid:
                     continue
                 try:
-                    subprocess.run(
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["taskkill", "/F", "/T", "/PID", str(_pid)],
-                        capture_output=True, timeout=5,
+                        capture_output=True,
+                        timeout=5,
                         creationflags=_WIN_CNF,
                     )
                 except Exception as _e:      # already gone / no permission

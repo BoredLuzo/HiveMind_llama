@@ -43,7 +43,7 @@ def _ctx_meter_round(
     *, dtool_ctx, dport, est_tokens, real_prompt_tokens, real_cached_tokens,
     guard_tokens, ctx_compressions, max_compressions,
     ctx_pressure_peak, swa_triggered_compress, force_compress_next,
-    ctx_critical_warned, ctx_pressure_warned,
+    ctx_critical_warned, ctx_pressure_warned, total_tool_rounds: int = 1,
 ) -> _CtxMeterResult:
     """Build the ctx_meter/SWA events and the 60%/85% runtime notices."""
     res = _CtxMeterResult(
@@ -64,7 +64,18 @@ def _ctx_meter_round(
                     break
         except (AttributeError, TypeError, RuntimeError, OSError):
             pass
-        _swa_warn = bool(_swa_win and est_tokens > _swa_win * 0.85)
+        _swa_over = bool(_swa_win and est_tokens > _swa_win * 0.85)
+        if _swa_over and total_tool_rounds <= 0:
+            # Round-0 guard: the base prompt alone already exceeds the reported
+            # sliding window (typical for hybrid SWA + global-attention models
+            # reporting a small local window like 1024 on a 65k context).
+            # Compressing before any tool output exists is a guaranteed no-op;
+            # mark SWA compression handled for this chunk so Round 1 does not
+            # immediately fire a futile compression either.
+            _swa_warn = False
+            res.swa_triggered_compress = True
+        else:
+            _swa_warn = _swa_over
         res.events.append({
             "type": "ctx_meter",
             "est_tokens": int(real_prompt_tokens or est_tokens),

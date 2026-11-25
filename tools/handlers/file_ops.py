@@ -166,6 +166,14 @@ def _mkstemp_bounded(parent: Path, suffix: str = ".tmp"):
 
 def _read_binary_error(p) -> str:
     """READ-FIX helper: konsistente Binary-Fehlerantwort (sys.platform-aware)."""
+    _img_hint = ""
+    if Path(str(p)).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+        try:
+            from tools.handlers._shared import coder_vision_truth
+            if coder_vision_truth() is True:
+                _img_hint = " Use view_image(path=...) to inspect this image visually."
+        except ImportError:
+            pass
     _inspect_hint = (
         "Use run_bash with 'Get-Content -Encoding Byte {p} | Select-Object -First 64' "
         "to inspect binary content."
@@ -177,7 +185,8 @@ def _read_binary_error(p) -> str:
         "BINARY_FILE",
         f"'{p}' appears to be a binary file (image, compiled binary, archive, etc.) "
         "and cannot be read as text. "
-        + _inspect_hint,
+        + _inspect_hint
+        + _img_hint,
         tool="read_file")
 
 

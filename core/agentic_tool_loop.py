@@ -478,8 +478,15 @@ class AgenticToolLoop(ToolLoop):
                     # be cut EARLY — live, one write_file call repeated a line
                     # 293x and burned the full 8000-token budget (~11 min at
                     # 11.5 t/s) before finish_reason=length ever fired
-                    from utils.tool import arguments_repetition_drift as _arg_drift
+                    from utils.tool import (
+                        arguments_repetition_drift as _arg_drift,
+                        text_repetition_drift as _text_drift,
+                    )
                     _drift_args_buf = ""
+                    _drift_think_buf = ""
+                    _drift_cont_buf = ""
+                    _drift_think_chk = 320
+                    _drift_cont_chk = 320
                     _drift_cut = False
                     _emitted_tool_gen = False
                     async for _sse_chunk in _t_iter_sse(_resp):
@@ -655,11 +662,19 @@ class AgenticToolLoop(ToolLoop):
                         )
                         if _sse_cont:
                             result["dr_content_parts"].append(_sse_cont)
+                            _drift_cont_buf += _sse_cont
+                            if len(_drift_cont_buf) > 8192:
+                                _drift_cont_buf = _drift_cont_buf[-4096:]
+                                _drift_cont_chk = len(_drift_cont_buf) + 64
                             await self._emit({"type": "token", "content": _sse_cont})
                             _dr_stream_partial = True
                         if _sse_think:
                             result["dr_thinking_parts"].append(_sse_think)
                             self._dr_thinking_parts.append(_sse_think)
+                            _drift_think_buf += _sse_think
+                            if len(_drift_think_buf) > 8192:
+                                _drift_think_buf = _drift_think_buf[-4096:]
+                                _drift_think_chk = len(_drift_think_buf) + 64
                             await self._emit({"type": "thinking_token", "content": _sse_think})
                             _dr_stream_partial = True
                         # Staging + deny-interrupt work on the tool-name
@@ -719,6 +734,30 @@ class AgenticToolLoop(ToolLoop):
                             await self._emit({"type": "status",
                                 "content": "⚠ repetition drift in tool-call arguments — cutting generation early"})
                             break
+                        if not _drift_cut and len(_drift_think_buf) >= _drift_think_chk:
+                            _drift_think_chk = len(_drift_think_buf) + 64
+                            if _text_drift(_drift_think_buf):
+                                _drift_cut = True
+                                _dr_finish_reason = "thinking_drift"
+                                if _appr_scope:
+                                    _tr_stage._clear_staged_approval(_appr_scope)
+                                await self._emit({
+                                    "type": "status",
+                                    "content": "⚠ repetition drift in thinking — cutting generation early",
+                                })
+                                break
+                        if not _drift_cut and len(_drift_cont_buf) >= _drift_cont_chk:
+                            _drift_cont_chk = len(_drift_cont_buf) + 64
+                            if _text_drift(_drift_cont_buf):
+                                _drift_cut = True
+                                _dr_finish_reason = "drift"
+                                if _appr_scope:
+                                    _tr_stage._clear_staged_approval(_appr_scope)
+                                await self._emit({
+                                    "type": "status",
+                                    "content": "⚠ repetition drift in output — cutting generation early",
+                                })
+                                break
 
                     # STREAM-DIAG (2026-10-10): six runs lost usage — log the
                     # exact end state of every stream: chunk count, usage

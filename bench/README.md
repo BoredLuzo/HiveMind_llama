@@ -108,7 +108,9 @@ External suites are also wired under `bench/tasks_polyglot/` (10 bundled Exercis
 
 ## Measured results
 
-### Aider Polyglot — 34 Python tasks × 3 runs (`qwen3.6:35b-a3b-mtp`, `120k` ctx, A100 40 GB, HiveMind `v1.6.4`)
+The tables below document the latest completed runs (`v1.6.4` on 2026-11-21 and `v1.6.3` on 2026-11-18); **`v1.6.5` benchmark re-runs are pending**.
+
+### Aider Polyglot — 34 Python tasks × 3 runs (`qwen3.6:35b-a3b-mtp`, `120k` ctx, A100 40 GB, HiveMind `v1.6.4`, measured 2026-11-21)
 
 510 total cells (`102` per harness, 300 s agent timeout, hidden tests installed only at check time; merged archive: `bench/results/polyglot_35b_mtp_120k_3runs.json`):
 
@@ -122,7 +124,7 @@ External suites are also wired under `bench/tasks_polyglot/` (10 bundled Exercis
 
 \* Aider reports rounded token totals with no cache breakdown. `pass@1` 95% CIs overlap at `N = 102` (paired McNemar `hivemind_duo` vs `hermes` `p = 0.66`, vs `aider` `p = 0.39`, vs `pi` `p = 0.17`). Across all three runs `hivemind_duo` finished #1 (or tied #1) in every run, achieved the highest `pass@3` (`27/34`), lowest median wall time (`26.9 s`), highest KV-cache reuse (`93.2%`), and fewest timeouts (`2/102`). Note on thinking mode: `llama-server` ran with Qwen3.6's default `--reasoning on`; `hivemind_duo` / `hivemind_duo_lean` disable tool-round thinking by default (`enable_thinking=false`), whereas `aider`, `hermes`, and `pi` inherit the server default.
 
-### Local starter suite — 21 tasks (`qwen3.5:4b-mtp`)
+### Local starter suite — 21 tasks (`qwen3.5:4b-mtp`, HiveMind `v1.6.3`, measured 2026-11-18)
 
 | Condition | Pass Rate | Median Wall Time | Notes |
 |---|---|---|---|

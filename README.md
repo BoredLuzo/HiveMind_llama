@@ -90,8 +90,8 @@ a message. Drop any extra `.gguf` weights into `models/` (or
   `qwen3.5:4b-mtp`, `gemma-4:e4b-it-qat`, `minicpm5:2b-sharp`, `lfm3:1.7b-qad`)
   is about 12.5 GB including vision projectors and drafters. Adding one 26B–35B MoE model adds
   roughly 13–18 GB, so about 25–31 GB in total. The full optional installer
-  catalog (`11` performance-class models, including projectors and speculative-decoding drafters) is
-  about 63 GB. Sizes and hardware tiers are listed in the
+  catalog (`12` performance-class models, including projectors and speculative-decoding drafters) is
+  about 72 GB. Sizes and hardware tiers are listed in the
   [download catalog](docs/guide.md#download-catalog); `python deploy/fetch_models.py --list-only`
   (or `python deploy/recommend_models.py --plan`) is the authoritative answer.
 - **Optional tooling:** Git, Docker Desktop (for local SearXNG web search),
@@ -110,8 +110,8 @@ a message. Drop any extra `.gguf` weights into `models/` (or
 Three coder tool tiers trade schema overhead against breadth (`Tools & Optionals` sidebar):
 
 - **Lean (`duo_lean`, 8 tools):** Minimal orthogonal core (`read_file`, `edit_file`, `write_file`, `search_code`, `find_files`, `run_bash`, `run_tests`, `task_complete`).
-- **Core (`duo_core`, default — 18 desktop tools + `+Subagent` = 19; `+send_file` on Telegram):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
-- **Full (`duo_full`, 36 inline + extras / 39 allowlisted names):** Adds `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, MCP client tools, and `remember`.
+- **Core (`duo_core`, default — 18 desktop tools + `+Subagent` = 19; `+send_file` on Telegram; `+view_image` when vision is active):** Adds `apply_patch`, `write_file_append`, `undo_last`, `list_dir`, `get_signatures`, `find_references`, `lsp_diagnostics`, `run_python`, `ask_user`, and `get_datetime`, with optional `+Websearch` and `+Git`.
+- **Full (`duo_full`, 37 inline + extras / 40 allowlisted names):** Adds `install_package`, background processes, full `lsp_*` navigation/refactoring, `browser`, `view_image` (vision-active runs), MCP client tools, and `remember`.
 
 Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 [docs/architecture.md](docs/architecture.md).
@@ -122,11 +122,11 @@ Mode details and architecture: [docs/guide.md](docs/guide.md#run-modes) and
 
 ## Benchmarks
 
-Same-model, same-`llama-server` comparisons (every harness hits the identical local endpoint with identical per-cell timeouts and hidden tests):
+Same-model, same-`llama-server` comparisons (every harness hits the identical local endpoint with identical per-cell timeouts and hidden tests). The tables below report the latest completed runs from **`v1.6.4` (2026-11-21)** and **`v1.6.3` (2026-11-18)**; **`v1.6.5` benchmark re-runs are pending**.
 
 ### Aider Polyglot (34 Python Exercism tasks × 3 runs = 102 cells/harness)
 
-`qwen3.6:35b-a3b-mtp` (`120k` context, NVIDIA A100 40 GB, HiveMind `v1.6.4`; see [bench/README.md](bench/README.md#measured-results)):
+`qwen3.6:35b-a3b-mtp` (`120k` context, NVIDIA A100 40 GB, HiveMind `v1.6.4`, measured 2026-11-21; see [bench/README.md](bench/README.md#measured-results)):
 
 | Condition | `pass@1` (95% CI) | `pass@3` | Median Time | Net Tokens | KV Cache | Timeouts |
 |---|---|---|---|---|---|---|
@@ -138,7 +138,7 @@ Same-model, same-`llama-server` comparisons (every harness hits the identical lo
 
 \* Aider's CLI reports rounded token totals with no prompt-cache split. Pass-rate 95% Wilson CIs overlap at `N = 102`; `hivemind_duo` ranked #1 (or tied #1) in all three runs while running **2.7× faster in median wall time**, spending **50% fewer net tokens**, and hitting **8.5× fewer timeouts** than the closest competitor (`hermes`). Note on thinking mode: `llama-server` ran with Qwen3.6's default `--reasoning on`; `hivemind_duo` / `hivemind_duo_lean` disable tool-round thinking by default (`enable_thinking=false`), whereas `aider`, `hermes`, and `pi` inherit the server default.
 
-### Local 4B starter suite (21 tasks, `qwen3.5:4b-mtp`)
+### Local 4B starter suite (21 tasks, `qwen3.5:4b-mtp`, HiveMind `v1.6.3`, measured 2026-11-18)
 
 | Condition | Pass Rate | Median Wall Time | Notes |
 |---|---|---|---|

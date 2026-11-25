@@ -1,17 +1,22 @@
-## [1.6.5] - 2026-11-24
+## [1.6.5] - 2026-11-25
 
-Template-driven reasoning effort controls, decoupled sidebar Planner Effort,
-modularized `static/js/` frontend, Inkling-2-Mini (`inkling2_loop`) & `llama.cpp b12676`
-support (incl. optional Tier-4 installer entry), hardware-autofit installer,
-model-discovery dedup fixes, and full pre-release audit hardening across
-security, performance, agentic loops, and stability.
+Template-driven reasoning effort controls & OpenRouter effort ratios, decoupled
+sidebar Planner Effort, pure-stdlib `view_image` tool, modularized `static/js/`
+frontend with live streaming metrics, Inkling-2-Mini (`inkling2_loop`) &
+`llama.cpp b12676` support (incl. optional Tier-4 installer entry),
+hardware-autofit installer, model-discovery dedup fixes, and full pre-release
+audit hardening across security, performance, agentic loops, and stability.
 
 ### Added
-- **Template-driven Reasoning Effort & decoupled Sidebar Planner Effort (`backend/gguf_meta.py`, `core/model_sampling.py`, `core/duo_runner.py`, `core/duo_inloop_planner.py`, `hive_functions/planner.py`, `index.html`, `static/js/*`, `static/style.css`):**
+- **Template-driven Reasoning Effort, OpenRouter effort ratios & decoupled Sidebar Planner Effort (`backend/gguf_meta.py`, `core/model_sampling.py`, `core/duo_helpers.py`, `core/duo_runner.py`, `core/direct_runner.py`, `core/tool_loop.py`, `hive_functions/planner.py`, `index.html`, `static/js/*`, `static/style.css`):**
   - Inspects GGUF and external `.jinja` chat templates to determine exact reasoning capabilities (`effort`, `binary` On/Off, or `none`) and clamps payloads safely to prevent strict-template crashes.
-  - Chat composer carries a single clean Thinking effort button for Direct / Coder (showing only supported levels, transparent source/override status, and Think-Budget sliders kept independent).
+  - Chat composer carries a single clean Thinking effort button for Direct / Coder (showing only supported levels, transparent `Effort:` override badges, and Think-Budget sliders kept independent).
+  - Explicit graduated efforts (`minimal`/`low`/`medium`/`high`/`max`) scale token budgets using documented OpenRouter ratios (`10% / 20% / 50% / 80% / 95%` over remaining free context) plus guaranteed answer/tool reserve and dynamic wall-clock timeout lifts (`Medium` `900s`, `High` `1800s`, `Max` `3600s`), while leaving `Auto` untouched and honoring manual Think-Budget slider overrides.
+  - Adds opt-in `duo_concise_write_thinking` live toggle (Settings -> Advanced -> Agentic) to keep `<think>` concise instead of drafting full files before `write_file`/`edit_file`/`apply_patch`.
   - Planner Effort lives cleanly in the sidebar (`🧠 Thinking` in Code mode and synced in `Routing: who decides` in Auto mode), graying out unsupported levels for the Planner model and staying fully decoupled from the chat composer across pre-coder, in-loop, and same-model `--reasoning on/off` slot handoffs; removes the legacy Coder `Escalation` UI control (`ttm_off` / `ttm_on_fail`).
   - User-controlled Planner thinking budgets (`thinking_budget = 0` by default instead of forced 750/2500 token caps) paired with a dynamic 70% `Planner Max Tokens` streaming cap and structured-step-only fallback extraction so raw thinking prose never leaks into Coder context.
+- **Pure-stdlib `view_image` tool (`tools/handlers/view_image.py`, `tools/definitions.py`, `core/tool_executor.py`, `core/tool_loop.py`, `core/duo_runner.py`, `core/direct_runner.py`, `sse/events.py`):**
+  - Lets vision-active (`mmproj`) Direct and Duo runs inspect local workspace images (PNG/JPEG/GIF/WebP/BMP up to `10 MB`, magic-byte validated via pure Python stdlib with zero new dependencies) and browser screenshots visually, with full workspace/symlink/secret-path containment.
 - **Modularized `static/js/` UI architecture (`static/app.js`, `static/js/*`, `tests/test_ui_playwright_smoke.py`):**
   - Split monolithic UI logic into 16 focused `static/js/` ES modules covered by a headless Playwright UI smoke suite.
 - **Inkling-2-Mini (`inkling2_loop`), Qwen3.6 MoE tuning & `llama.cpp b12676` (`deploy/llama_build_pin.txt`, `deploy/fetch_models.py`, `model_configs/models/inkling-2-mini.json`, `model_configs/arch_compat.json`, `backend/llama_start_phases.py`):**
@@ -21,7 +26,11 @@ security, performance, agentic loops, and stability.
   - Recommends hardware-matched defaults during install and lifts MoE expert offload to full GPU at runtime when VRAM fits.
 
 ### Fixed
-- **SSE keepalive, journal reattach & frontend transport (`server.py`, `static/js/stream_transport.js`, `static/js/settings_io.js`):**
+- **Mid-stream thinking/output repetition-drift cutoff & `/no_think` recovery (`utils/tool.py`, `core/agentic_tool_loop.py`, `core/duo_policies.py`, `core/duo_runner.py`):**
+  - Detects cyclic token/phrase/line repetition collapses (`text_repetition_drift`) mid-stream during thinking or plain text output and cuts generation cleanly instead of waiting out the full output budget; automatically retries `thinking_drift` and reasoning `length` overruns directly with `/no_think` and prevents corrupted drift output from being accepted as a final summary.
+- **Live streaming metrics, UI polishes & Gateway continuity (`static/js/stream_transport.js`, `static/js/stream_handlers.js`, `static/js/planner_ui.js`, `core/duo_ctx_meter.py`, `core/duo/_vram.py`, `hivemind_gateway/`, `routers/chats.py`):**
+  - Separates live context occupancy (`perfCtxTokens`) from cumulative output tracking (`perfEstTokens` + `perfInFlightTokens`, including `tool_gen` bursts) and restricts decode timers to model-output token events so footer `out:`, `ctx:`, and `t/s` update smoothly in real time.
+  - Consolidates Reasoning UI controls and override badges (`Effort:`), formats runtime CTX labels consistently in decimal `k` (`65k`), guards SWA hybrid attention compression on Round 0 (`total_tool_rounds <= 0`), and preserves Gateway thinking streams and chat continuity.
   - Sends 15s SSE `: keepalive` heartbeats while idle during long cold prefills so browsers do not drop `/stream`; stops enqueueing orphaned frames after client detach; polls `/run/journal` immediately and updates the amber warning banner to `✓ Reattached via run journal`; hardens stream reconnect & settings save error surfacing.
 - **Model downloader & discovery (`backend/llama_models.py`, `deploy/fetch_models.py`):**
   - Deduplicates `models.json` overrides against parsed GGUF aliases (eliminating duplicate model picker entries on fresh installs), aligns `mmproj_dest` casing with shipped profiles, adds case-insensitive `mmproj` lookup for Linux, and strips `Authorization` headers on cross-origin HF redirects.

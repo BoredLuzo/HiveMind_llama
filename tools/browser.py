@@ -483,11 +483,14 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
         page.screenshot(path=str(_out), full_page=full)
         try:
             from tools.handlers._shared import coder_vision_truth as _cvt
-            if _cvt() is False:
+            _vt = _cvt()
+            if _vt is False:
                 return (f"[browser] screenshot saved to {_out} "
                         "(this coder runs WITHOUT vision/mmproj - you cannot view "
                         "this image. Inspect the page via browser snapshot/evaluate "
                         "text output instead.)")
+            if _vt is True:
+                return f"[browser] screenshot saved to {_out} (call view_image(path='{path}') to inspect it visually)"
         except Exception:
             pass
         return f"[browser] screenshot saved to {_out}"
