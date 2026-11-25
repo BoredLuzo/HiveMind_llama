@@ -30,8 +30,7 @@ and `.venv` are kept).
   The chat composer shows one consistent Thinking effort pill for Direct / Coder
   (`Effort:` override badges, Think-Budget sliders kept independent), while
   Planner Effort is configured directly in the sidebar (`🧠 Thinking` in Code
-  mode and synced in Auto mode's Routing card) with unavailable levels grayed
-  out for the Planner model. Same-model Planner ↔ Coder handoffs preserve
+  mode) with unavailable levels grayed out for the Planner model. Same-model Planner ↔ Coder handoffs preserve
   `--reasoning on/off` slot state, and the legacy Coder `Escalation` UI toggle
   has been removed.
 - **User-driven Planner budgets & leak-proof fallback (`core/duo_helpers.py`, `hive_functions/planner.py`):**
@@ -87,5 +86,5 @@ and `.venv` are kept).
   buffers, ToolLoop/subagent malformed-JSON history sanitizer, Direct
   prompt-cache clock preservation, blind approval-card blocking, German Windows
   `ABHÖREN` port cleanup, headless `watchdog_engine.bat` launch, UTF-8 BOM /
-  corrupt-JSON protection, scheduler & `ModelSlot` leak fixes, and clean Pyright
-  baseline.
+  corrupt-JSON protection, atomic JSON state persistence, bounded runtime
+  registries, scheduler & `ModelSlot` leak fixes, and clean Pyright baseline.
