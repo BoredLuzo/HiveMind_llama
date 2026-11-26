@@ -530,6 +530,8 @@ async def _duo_coder_preloop(ctx, ps: _DuoCoderPreloopState):
                                 timeout=_coder_load_timeout,
                             )
                             _coder_load_ok = True
+                            if _coder_ctx_try < _coder_ctx_post:
+                                _coder_ctx_override = _coder_ctx_try
                             _coder_ctx_post = _coder_ctx_try
                             _cached_coder_port = _coder_port
                             _cached_coder_port_ctx = _coder_ctx_try

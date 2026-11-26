@@ -197,6 +197,11 @@ duo_exec_src = inspect.getsource(DR._duo_exec_round_task)
 check("duo_runner._duo_exec_round_task builds fresh ToolRoundState per round",
       "_chunk_trs" not in duo_exec_src and "_trs = ToolRoundState(" in duo_exec_src)
 
+preloop_src = (ROOT / "core" / "duo_coder_preloop.py").read_text(encoding="utf-8")
+check("duo_coder_preloop pins _coder_ctx_override when VRAM/timeout cascade downshifts ctx",
+      "if _coder_ctx_try < _coder_ctx_post:\n                                _coder_ctx_override = _coder_ctx_try" in preloop_src
+      and preloop_src.index("_coder_ctx_override = _coder_ctx_try") < preloop_src.index("_coder_ctx_post = _coder_ctx_try"))
+
 # LlamaClient slot_ref cleanup when _recover_model_port raises on 404 or ConnectError
 from backend import llama_client as LC  # noqa: E402
 
