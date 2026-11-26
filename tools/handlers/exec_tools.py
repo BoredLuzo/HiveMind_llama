@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from utils.file import _inline_check_workspace
+from utils.file import _inline_check_workspace, _is_junction, _is_protected_path, is_secret_path
 from tools.errors import tool_error_response as _tool_error_response
 import asyncio
+import glob
 import os
 import re
 import shutil
+import stat
 import sys
 
 _BASH_BIN = shutil.which("bash") or "/bin/sh"  # X6 (audit r2): bash-less distros
@@ -147,15 +149,96 @@ _ACTIVATES_VENV_RE = re.compile(
     r"(?:^|\s)(?:source|\.)\s+['\"]?(?:\.?[/\\])?(?:\.venv|venv)[/\\](?:Scripts|bin)[/\\]activate\b",
     re.IGNORECASE,
 )
-_WIN_BASH_VENV_PATH_RE = re.compile(
-    r"(?:^|(?<=[\s;&|(]))(\.?\\?(?:\.venv|venv)\\Scripts\\[\w.\-]+)",
-    re.IGNORECASE,
+from ._win_shims import (
+    _POSIX_DRIVE_PATH_RE,  # noqa: F401 (re-export)
+    _POSIX_TMP_PATH_RE,  # noqa: F401 (re-export)
+    _SEARCH_NO_MATCH_VERBS,
+    _SEARCH_OR_AWK_VERBS,  # noqa: F401 (re-export)
+    _SED_AWK_VERBS,  # noqa: F401 (re-export)
+    _WIN_BASH_VENV_PATH_RE,  # noqa: F401 (re-export)
+    _WIN_NATIVE_DEV_NULL_RE,  # noqa: F401 (re-export)
+    _WIN_NATIVE_DEV_NULL_VERBS,  # noqa: F401 (re-export)
+    _build_win_shell_cmd,
+    _command_verb_before,  # noqa: F401 (re-export)
+    _extract_cmd_verb,
+    _format_timeout_partial,
+    _has_unquoted_token,
+    _iter_ps_unquoted,  # noqa: F401 (re-export)
+    _normalize_win_bash_venv_paths,
+    _parse_shim_tokens,
+    _parse_shim_tokens_quoted,
+    _rewrite_posix_drive_paths,  # noqa: F401 (re-export)
+    _rewrite_win_native_dev_null,
+    _rewrite_win_tmp_paths,
+    _should_rewrite_posix_drive,
+    _split_shim_args,
+    _split_shim_args_quoted,
+    _split_unquoted_and,
+    _tail_slice,
 )
 
 
-def _normalize_win_bash_venv_paths(cmd: str) -> str:
-    """Convert unquoted Windows backslash .venv\\Scripts\\... paths for Git Bash."""
-    return _WIN_BASH_VENV_PATH_RE.sub(lambda m: m.group(1).replace("\\", "/"), str(cmd or ""))
+def _is_search_no_match(cmd: str, returncode: int, stdout: str, stderr: str) -> bool:
+    """Return True when a standalone grep/rg command exited 1 strictly with 0 matches."""
+    if returncode != 1 or (stdout or "").strip() or (stderr or "").strip():
+        return False
+    s = str(cmd or "")
+    quote: str | None = None
+    last_pipe_start = 0
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if quote is None:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+                i += 1
+                continue
+            if ch == "&":
+                # Allow fd redirections like 2>&1 or &>file inside a single grep command
+                if i > 0 and s[i - 1] == ">":
+                    i += 1
+                    continue
+                if i + 1 < n and s[i + 1] == ">":
+                    i += 2
+                    continue
+                return False
+            if ch in ";\n\r":
+                return False
+            if s.startswith("||", i):
+                return False
+            if ch == "|":
+                last_pipe_start = i + 1
+                i += 1
+                continue
+            i += 1
+        elif quote == "'":
+            if ch == "'":
+                quote = None
+            i += 1
+        else:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == '"':
+                quote = None
+            i += 1
+
+    last_seg = s[last_pipe_start:].strip()
+    if not last_seg:
+        return False
+    return _extract_cmd_verb(last_seg) in _SEARCH_NO_MATCH_VERBS
+
+
+
+
+_UV_PIP_INSTALL_SEG_RE = re.compile(
+    r"^\s*(?:\w+=\S+\s+)*uv(?:\.exe)?\s+pip\s+install\b",
+    re.IGNORECASE,
+)
 
 
 def _is_unscoped_pip_install(cmd: str, workspace: Path | None) -> bool:
@@ -173,7 +256,7 @@ def _is_unscoped_pip_install(cmd: str, workspace: Path | None) -> bool:
         if (
             _PIP_INSTALL_SEG_RE.match(seg)
             and not _EXPLICIT_VENV_FLAG_RE.search(seg)
-            and not (_creates_venv and _activates_venv)
+            and not (_creates_venv and (_activates_venv or _UV_PIP_INSTALL_SEG_RE.match(seg)))
         ):
             return True
     return False
@@ -185,8 +268,7 @@ def _tool_env_with_python(workspace: Path | None = None) -> dict:
     return _tool_env(workspace=workspace)
 
 _DANGEROUS_PATTERNS = [
-    "rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /*", "rm -rf ~/*",
-    "dd if=", "mkfs.", ":(){ :|:& };:", "chmod 777 /", "chmod -R 777 /",
+    "dd if=", "mkfs.", ":(){ :|:& };:",
     "> /dev/sda", "> /dev/nvme", "> /dev/hda",
 ]
 
@@ -256,7 +338,7 @@ _WIN_DANGEROUS_PATTERNS = [
     "remove-item -recurse -force c:\\", "remove-item -recurse -force c:/",
     "rd /s /q c:\\", "rd /s /q c:/",
     "del /f /s /q c:\\", "del /f /s /q c:/",
-    "format ", "diskpart", "cipher /w",
+    "cipher /w",
     "\\\\.\\physicaldrive", "bootrec /fixmbr", "bcdedit /delete",
 ]
 
@@ -311,10 +393,18 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
             _py_argv, _py_timeout, str(workspace), _env, line_cap=300
         )
         if _timed_out:
+            _py_partial_out, _py_partial_err, _py_partial_msg = _format_timeout_partial(
+                stdout_raw, stderr_raw
+            )
             return _tool_error_response(
                 "RUN_PYTHON_TIMEOUT",
-                "Python execution timed out.",
+                "Python execution timed out." + _py_partial_msg,
                 tool="run_python",
+                details={
+                    "timeout_s": int(_py_timeout),
+                    "stdout_tail": _py_partial_out[-800:] if _py_partial_out else "",
+                    "stderr_tail": _py_partial_err[-600:] if _py_partial_err else "",
+                },
             )
         stdout = stdout_raw.replace("\r\n", "\n").replace("\r", "").strip()
         stderr = stderr_raw.replace("\r\n", "\n").replace("\r", "").strip()
@@ -336,7 +426,18 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
                 if len(result) > 4000
                 else result
             )
-            return _capped + f"\n[exit code: {_rc}]"
+            if _rc != 0:
+                return _tool_error_response(
+                    "RUN_PYTHON_EXEC_ERROR",
+                    f"Python snippet exited with code {_rc}.\n{_capped}\n[exit code: {_rc}]",
+                    tool="run_python",
+                    details={
+                        "exit_code": int(_rc),
+                        "stdout_tail": stdout[-2000:] if stdout else "",
+                        "stderr_tail": stderr[-2000:] if stderr else "",
+                    },
+                )
+            return f"{_capped}\n[exit code: 0]"
         if _rc == 0:
             return "[run_python: executed successfully — no output produced]"
         return _tool_error_response(
@@ -410,21 +511,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             _SHELL_OPS = ("&", "|", ";", ">", "<", "`", "$(", "\n", "\r", "^")
             _HAS_SHELL_CHAIN = any(op in cmd for op in _SHELL_OPS)
 
-            _mkdir_p_match = _re_win.match(r'mkdir\s+-p\s+(.*)', cmd.strip(), _re_win.DOTALL)
-            if _mkdir_p_match and not _HAS_SHELL_CHAIN:
-                _raw_paths = _mkdir_p_match.group(1).strip()
-                _path_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _raw_paths)
-                _dirs = [_WPath(a or b) for a, b in _path_parts]
+            _mkdir_match = _re_win.match(r'mkdir\s+(.*)', cmd.strip(), _re_win.DOTALL)
+            if _mkdir_match and not _HAS_SHELL_CHAIN:
+                _raw_paths = _mkdir_match.group(1).strip()
+                _, _mkdir_ops = _parse_shim_tokens(
+                    _split_shim_args(_raw_paths), value_flags=("-m", "--mode")
+                )
+                if not _mkdir_ops:
+                    return "[mkdir error]: no directory specified"
+                _dirs = [_WPath(_d) for _d in _mkdir_ops]
                 return _do_mkdir(_dirs)
 
-            _mkdir_plain = _re_win.match(r'mkdir\s+(.*)', cmd.strip(), _re_win.DOTALL)
-            if _mkdir_plain and not _HAS_SHELL_CHAIN:
-                _raw_paths = _mkdir_plain.group(1).strip()
-                _path_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _raw_paths)
-                _dirs = [_WPath(a or b) for a, b in _path_parts]
-                return _do_mkdir(_dirs)
-
-            _touch_match = _re_win.match(r'touch\s+(.*)', cmd.strip())
+            _touch_match = _re_win.match(r'touch\s+(.*)', cmd.strip(), _re_win.DOTALL)
             if _touch_match and _HAS_SHELL_CHAIN:
                 return ("[TOOL_ERROR: SHELL_CHAIN_UNSUPPORTED]\n"
                         "run_bash does not chain commands on Windows (found: "
@@ -434,18 +532,29 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                         "write_file.")
             if _touch_match:
                 _touch_raw = _touch_match.group(1).strip()
-                _touch_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _touch_raw)
-                _touch_files = [a or b for a, b in _touch_parts]
-                # AUDIT-FIX M1 (2026-08-25): Exceptions pro Datei sammeln und
+                _touch_flags, _touch_files = _parse_shim_tokens(
+                    _split_shim_args(_touch_raw),
+                    value_flags=("-t", "-d", "-r", "--date", "--reference"),
+                )
+                if not _touch_files:
+                    return "[touch error]: no target path specified"
+                _touch_no_create = any(
+                    f == "--no-create"
+                    or (f.startswith("-") and not f.startswith("--") and "c" in f[1:])
+                    for f in _touch_flags
+                )
+                # AUDIT-FIX M1 (2026-08-25): collect per-file exceptions
                 _touch_done, _touch_errs = [], []
                 for _tf in _touch_files:
                     try:
                         _tp = _WPath(_tf)
                         if not _tp.is_absolute():
                             _tp = workspace / _tp
-                        # S-SEC (2026-08-23): Lock-Check wie bei mkdir.
+                        # S-SEC (2026-08-23): workspace lock check like mkdir.
                         if (werr := _inline_check_workspace(_tp, _workspace_lock, "run_bash")) is not None:
                             return werr
+                        if _touch_no_create and not _tp.exists():
+                            continue
                         _tp.parent.mkdir(parents=True, exist_ok=True)
                         _tp.touch(exist_ok=True)
                         _touch_done.append(str(_tf))
@@ -455,17 +564,31 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     return "[touch error]: " + "; ".join(_touch_errs)
                 return f"[exit 0 - touched {len(_touch_done)} file(s)]"
 
-            _rm_match = _re_win.match(r'rm\s+(?:-[rRfFiIv]+\s+)*(.*)', cmd.strip())
+            _rm_match = _re_win.match(r'rm\s+(.*)', cmd.strip(), _re_win.DOTALL)
             if _rm_match and cmd.strip().startswith("rm ") and _HAS_SHELL_CHAIN:
                 return ("[TOOL_ERROR: SHELL_CHAIN_UNSUPPORTED]\n"
                         "run_bash does not chain commands on Windows (found a "
                         "shell operator). Run one command per call.")
             if _rm_match and cmd.strip().startswith("rm "):
                 _rm_raw = _rm_match.group(1).strip()
-                _rm_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _rm_raw)
-                _rm_targets = [a or b for a, b in _rm_parts if (a or b) != "--"]
+                _rm_flags, _rm_targets = _parse_shim_tokens_quoted(_split_shim_args_quoted(_rm_raw))
                 if not _rm_targets:
                     return "[rm error]: no target path specified"
+                _rm_force = any(
+                    f == "--force"
+                    or (f.startswith("-") and not f.startswith("--") and "f" in f[1:].lower())
+                    for f in _rm_flags
+                )
+                _rm_recursive = any(
+                    f == "--recursive"
+                    or (f.startswith("-") and not f.startswith("--") and "r" in f[1:].lower())
+                    for f in _rm_flags
+                )
+                _rm_dir = any(
+                    f == "--dir"
+                    or (f.startswith("-") and not f.startswith("--") and "d" in f[1:].lower())
+                    for f in _rm_flags
+                )
                 try:
                     _ws_res = Path(workspace).resolve()
                 except OSError:
@@ -477,13 +600,96 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     except OSError:
                         _lock_res = Path(_workspace_lock)
                 _rm_done, _rm_errs = [], []
-                for _rt in _rm_targets:
+                _concrete_targets: list[tuple[str, Path]] = []
+                for _rt, _was_quoted in _rm_targets:
                     if not _rt.strip():
                         _rm_errs.append(f"{_rt!r}: refusing empty path")
                         continue
-                    _rp = _WPath(_rt)
-                    if not _rp.is_absolute():
-                        _rp = workspace / _rp
+                    if not _was_quoted and glob.has_magic(_rt):
+                        _rt_path = _WPath(_rt)
+                        if ".." in _rt_path.parts:
+                            _rm_errs.append(f"{_rt}: refusing '..' in glob pattern (RUN_BASH_BLOCKED)")
+                            continue
+                        if _rt_path.is_absolute():
+                            _base_p = _rt_path
+                            while glob.has_magic(str(_base_p)) and _base_p.parent != _base_p:
+                                _base_p = _base_p.parent
+                            _pat_p = _rt
+                        else:
+                            _non_magic_parts: list[str] = []
+                            for _pt in _rt_path.parts:
+                                if glob.has_magic(_pt):
+                                    break
+                                _non_magic_parts.append(_pt)
+                            _base_p = workspace.joinpath(*_non_magic_parts) if _non_magic_parts else workspace
+                            _magic_tail = _rt_path.parts[len(_non_magic_parts):]
+                            _pat_p = str(_WPath(glob.escape(str(_base_p))).joinpath(*_magic_tail))
+                        try:
+                            _base_res = _base_p.resolve()
+                        except OSError:
+                            _base_res = _base_p
+                        _checked_base = _inline_check_workspace(_base_res, _workspace_lock, "run_bash")
+                        if _checked_base is not None:
+                            _rm_errs.append(f"{_rt}: {_checked_base}")
+                            continue
+                        _matches = sorted(glob.glob(_pat_p, recursive="**" in _rt))
+                        if not _matches:
+                            if not _rm_force:
+                                _rm_errs.append(f"{_rt}: no matching files")
+                            continue
+                        for _m_str in _matches:
+                            _mp = _WPath(_m_str)
+                            try:
+                                _disp = str(_mp.resolve().relative_to(_ws_res))
+                            except (ValueError, OSError):
+                                _disp = _m_str
+                            _concrete_targets.append((_disp, _mp))
+                    else:
+                        _rp = _WPath(_rt)
+                        if not _rp.is_absolute():
+                            _rp = workspace / _rp
+                        _concrete_targets.append((_rt, _rp))
+
+                def _rm_onexc(func, path, _exc):
+                    try:
+                        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                    except OSError:
+                        pass
+                    func(path)
+
+                for _disp, _rp in _concrete_targets:
+                    _is_junc = _is_junction(_rp)
+                    if _is_junc:
+                        try:
+                            _junc_abs = Path(os.path.abspath(str(_rp)))
+                        except OSError:
+                            _junc_abs = _rp
+                        if (
+                            _junc_abs == _ws_res
+                            or (_lock_res is not None and _junc_abs == _lock_res)
+                            or _ws_res.is_relative_to(_junc_abs)
+                            or (_lock_res is not None and _lock_res.is_relative_to(_junc_abs))
+                        ):
+                            _rm_errs.append(f"{_disp}: refusing to delete workspace root (RUN_BASH_BLOCKED)")
+                            continue
+                        if _is_protected_path(_junc_abs) or is_secret_path(_junc_abs, _ws_res):
+                            _rm_errs.append(f"{_disp}: protected or secret path blocked (RUN_BASH_BLOCKED)")
+                            continue
+                        _checked_j = _inline_check_workspace(_rp.parent, _workspace_lock, "run_bash")
+                        if _checked_j is not None:
+                            _rm_errs.append(f"{_disp}: {_checked_j}")
+                            continue
+                        try:
+                            os.rmdir(_rp)
+                            _rm_done.append(_disp)
+                        except OSError as _rme:
+                            _rm_errs.append(f"{_disp}: {_rme}")
+                        continue
+
+                    _checked_pre = _inline_check_workspace(_rp, _workspace_lock, "run_bash")
+                    if _checked_pre is not None:
+                        _rm_errs.append(f"{_disp}: {_checked_pre}")
+                        continue
                     try:
                         _rp_res = _rp.resolve()
                     except OSError:
@@ -495,25 +701,40 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                         or _ws_res.is_relative_to(_rp_res)
                         or (_lock_res is not None and _lock_res.is_relative_to(_rp_res))
                     ):
-                        _rm_errs.append(f"{_rt}: refusing to delete workspace root (RUN_BASH_BLOCKED)")
+                        _rm_errs.append(f"{_disp}: refusing to delete workspace root (RUN_BASH_BLOCKED)")
                         continue
                     # Validate path is within workspace
                     _checked = _inline_check_workspace(_rp_res, _workspace_lock, "run_bash")
                     if _checked is not None:
-                        _rm_errs.append(f"{_rt}: {_checked}")
+                        _rm_errs.append(f"{_disp}: {_checked}")
+                        continue
+                    if not _rp.is_symlink() and not _rp_res.exists():
+                        if not _rm_force:
+                            _rm_errs.append(f"{_disp}: no such file or directory")
                         continue
                     try:
                         if _rp.is_symlink():
                             _rp.unlink()
                         elif _rp_res.is_dir():
-                            shutil.rmtree(_rp_res, ignore_errors=True)
-                        elif _rp_res.exists():
+                            if not (_rm_recursive or _rm_dir):
+                                _rm_errs.append(f"{_disp}: is a directory (use -r)")
+                                continue
+                            if _rm_recursive:
+                                if _rm_force:
+                                    shutil.rmtree(_rp_res, onexc=_rm_onexc)
+                                else:
+                                    shutil.rmtree(_rp_res)
+                            else:
+                                os.rmdir(_rp_res)
+                        else:
                             _rp_res.unlink()
-                        _rm_done.append(_rt)
+                        _rm_done.append(_disp)
                     except Exception as _rme:
-                        _rm_errs.append(f"{_rt}: {_rme}")
+                        _rm_errs.append(f"{_disp}: {_rme}")
                 if _rm_errs:
                     return "[rm error]: " + "; ".join(_rm_errs)
+                if not _rm_done:
+                    return "[exit 0 - nothing to remove]"
                 return f"[exit 0 - removed: {', '.join(_rm_done)}]"
 
             # POSIX-DRIVE-FIX (2026-10-17, live): the model writes `/c/Users/...`
@@ -526,11 +747,11 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             #      model then looped on quoting/`C:` theories)
             # Forward slashes are accepted by bash itself AND by native Windows
             # binaries (python.exe/node.exe), so `C:/Users/...` is the only form
-            # that works on both sides. The lookbehind also refuses a slash in
-            # front (`a/b/c`, `http://x/c/y`) - those are not drive mounts.
+            # that works on both sides. Only genuine existing drive mounts are
+            # rewritten so sed/grep/awk patterns (`/a/`, `/c/foo`) stay intact.
             _cmd_unix_fixed = re.sub(
-                r'(?<![\w/])/([a-zA-Z])/',
-                lambda _m: _m.group(1).upper() + ":/",
+                r'(?<![^\s=:\x27"])/([a-zA-Z])/(?=[A-Za-z0-9._~-]{2}|[A-Za-z0-9._~-]/[A-Za-z0-9._~-])',
+                lambda _m: (_m.group(1).upper() + ":/") if _should_rewrite_posix_drive(cmd, _m) else _m.group(0),
                 cmd)
             if _cmd_unix_fixed != cmd:
                 cmd = _cmd_unix_fixed
@@ -569,8 +790,8 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 if str(_cd_resolved).rstrip("\\/").lower() == str(_ws_resolved).rstrip("\\/").lower():
                     _cmd_translated = _cd_rest
 
-            if " && " in _cmd_translated:
-                _and_parts = _cmd_translated.split(" && ")
+            _and_parts = _split_unquoted_and(_cmd_translated)
+            if len(_and_parts) > 1:
                 _ps_seq = []
                 for _ap in _and_parts[:-1]:
                     _ps_seq.append(_ap.strip())
@@ -587,11 +808,15 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     + _cmd_translated
                 )
 
-            if "2>&1" in _cmd_translated:
+            if _has_unquoted_token(_cmd_translated, "2>&1"):
                 _cmd_translated = (
-                    "$ErrorActionPreference='SilentlyContinue'; "
-                    + "& { " + _cmd_translated + " } 2>&1 | ForEach-Object { \"$_\" }; "
-                    + "if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 0 }"
+                    "$ErrorActionPreference='Continue'; $__ok=$true; "
+                    + "& { " + _cmd_translated + " } 2>&1 | ForEach-Object { "
+                    + "if ($_ -is [System.Management.Automation.ErrorRecord] "
+                    + "-and $_.Exception -isnot [System.Management.Automation.RemoteException]) { $__ok=$false }; "
+                    + "\"$_\" }; "
+                    + "if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE } "
+                    + "elseif (-not $__ok) { exit 1 } else { exit 0 }"
                 )
 
         _cmd_l = cmd.lower()
@@ -623,28 +848,6 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
 
         _ka_task = asyncio.create_task(_keep_alive()) if _is_build else None
         try:
-            _needs_pip_shim = (
-                sys.platform == "win32"
-                and bool(re.search(r"(?:^|[\s;&|(])pip3?\b", cmd))
-            )
-            _needs_py3_shim = (
-                sys.platform == "win32"
-                and bool(re.search(r"(?:^|[\s;&|(])python3\b", cmd))
-            )
-            _ps_shims = (
-                ("function pip { python -m pip @args }; function pip3 { python -m pip @args }; " if _needs_pip_shim else "")
-                + ("function python3 { python @args }; " if _needs_py3_shim else "")
-            )
-            _bash_shims = (
-                ('pip() { python -m pip "$@"; }; pip3() { python -m pip "$@"; }; ' if _needs_pip_shim else "")
-                + ('python3() { python "$@"; }; ' if _needs_py3_shim else "")
-            )
-            # OEM-Codepage (z.B. cp850) — bytes.decode() (UTF-8) produzierte
-            _ps_cmd = (
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
-                + _ps_shims + _cmd_translated
-                if sys.platform == "win32" else _cmd_translated
-            )
             _win_bash_exe = ""
             if sys.platform == "win32" and _run_bash_shell_mode() == "bash":
                 _win_bash_exe = _windows_bash_path()
@@ -655,14 +858,19 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 # VENV-SHIMS (2026-11-19): uv venvs ship python.exe without
                 # pip.exe or python3.exe; bare `pip`/`python3` fell through PATH
                 # to global/broken Python installations.
-                _bash_cmd = _normalize_win_bash_venv_paths(cmd)
-                _stream_cmd = [_win_bash_exe, "-c", _bash_shims + _bash_cmd]
-            else:
-                _stream_cmd = (
-                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ps_cmd]
-                    if sys.platform == "win32"
-                    else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
+                _bash_cmd = _rewrite_win_native_dev_null(
+                    _rewrite_win_tmp_paths(_normalize_win_bash_venv_paths(cmd))
                 )
+                _stream_cmd = _build_win_shell_cmd(
+                    _bash_cmd, mode="bash", win_bash=_win_bash_exe, orig_cmd=cmd
+                )
+            elif sys.platform == "win32":
+                # OEM-Codepage (e.g. cp850) — bytes.decode() (UTF-8) corrupted non-ASCII
+                _stream_cmd = _build_win_shell_cmd(
+                    _cmd_translated, mode="powershell", orig_cmd=cmd
+                )
+            else:
+                _stream_cmd = [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
             # BENCH-CONTAINER (2026-11-10): external benchmarks can bind-mount
             # the workspace into the task image. Commands must then run in that
             # image (real deps/test runner), while file tools keep editing the
@@ -696,6 +904,9 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
         if timed_out:
             # S-SEC (2026-08-23): tree kill now happens IN _stream_proc per
             # the result actively coaches there; server/watcher patterns
+            _partial_out, _partial_err, _partial_block = _format_timeout_partial(
+                stdout_raw, stderr_raw
+            )
             _longrun = re.search(
                 r"(http\.server|uvicorn|flask|gunicorn|npm\s+(run\s+)?(dev|start)|vite|next\s+dev|watch)",
                 str(cmd).lower())
@@ -710,11 +921,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             )
             return _tool_error_response(
                 "RUN_BASH_TIMEOUT",
-                f"run_bash timed out after {_bash_timeout}s. Consider splitting the command." + _hint,
-                tool="run_bash" ,
-                details={"cmd": str(cmd)[:400], "timeout_s": int(_bash_timeout)})
+                f"run_bash timed out after {_bash_timeout}s. Consider splitting the command."
+                + _partial_block
+                + _hint,
+                tool="run_bash",
+                details={
+                    "cmd": str(cmd)[:400],
+                    "timeout_s": int(_bash_timeout),
+                    "stdout_tail": _partial_out[-800:] if _partial_out else "",
+                    "stderr_tail": _partial_err[-600:] if _partial_err else "",
+                })
 
-        stdout = stdout_raw.strip()
+        stdout = stdout_raw.strip("\r\n")
         stderr = stderr_raw.strip()
         # SHELL-NAME (2026-10-15): computed unconditionally - the NONZERO
         # error must name the shell that ran so a PS-syntax-into-bash
@@ -722,26 +940,30 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
         _shell_name = ("bash (Git Bash)" if _win_bash_exe
                        else "powershell.exe (Windows)" if sys.platform == "win32"
                        else "bash")
+        if _is_search_no_match(cmd, returncode, stdout, stderr):
+            return "[run_bash: exit 1 — no matches found]"
         result = ""
         if stderr:
             result += f"[stderr]\n{stderr}\n---\n"
         result += stdout
         if returncode != 0:
             result += f"\n[exit code: {returncode}]"
-        if returncode != 0 and not stdout:
+        if returncode != 0 and not stdout.strip():
             result += f"\n[shell: {_shell_name}]"
+        _shell_note = ""
         if returncode != 0 and _win_bash_exe \
                 and "command not found" in (stderr or "").lower() \
                 and re.search(r"(Test-Path|Get-ChildItem|Get-Content|Remove-Item|"
                               r"\$LASTEXITCODE|\$env:)", cmd):
             # the model emitted POWERSHELL syntax into the bash shell -
             # coach it instead of letting it loop on the same error
-            result += ("\n[shell note: the shell is bash (Git Bash). Use POSIX syntax "
-                       "- ls, cat, rm, cp, test -d; PowerShell cmdlets like "
-                       "Get-ChildItem/Test-Path do not exist here.]")
+            _shell_note = ("\n[shell note: the shell is bash (Git Bash). Use POSIX syntax "
+                           "- ls, cat, rm, cp, test -d; PowerShell cmdlets like "
+                           "Get-ChildItem/Test-Path do not exist here.]")
+            result += _shell_note
 
         _is_docker_detached = (
-            returncode == 0 and not result
+            returncode == 0 and not result.strip()
             and ("docker compose" in _cmd_l or "docker-compose" in _cmd_l)
             and " -d" in _cmd_l
         )
@@ -765,12 +987,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
         if returncode != 0:
             if not result:
                 _result_tail = "(no output)"
-            elif len(result) > 3400:
-                _raw_tail = result[-3400:]
-                _nl = _raw_tail.find("\n")
-                _result_tail = ("...\n" + _raw_tail[_nl + 1:]) if 0 <= _nl < 200 else ("..." + _raw_tail)
-            else:
+            elif len(result) <= 3400:
                 _result_tail = result
+            elif stderr and stdout.strip():
+                _err_part = _tail_slice(stderr, 1400)
+                _out_budget = max(600, 3400 - len(_err_part) - 60 - len(_shell_note))
+                _out_part = _tail_slice(stdout, _out_budget)
+                _result_tail = (
+                    f"[stderr]\n{_err_part}\n---\n{_out_part}"
+                    f"\n[exit code: {returncode}]{_shell_note}"
+                )
+            else:
+                _result_tail = _tail_slice(result, 3400)
             _err = _tool_error_response(
                 "RUN_BASH_NONZERO",
                 f"run_bash exited with code {returncode} (shell: {_shell_name}).\n{_result_tail}",
@@ -953,8 +1181,23 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
                 _p_str = str(_raw_p or "").strip()
                 if not _p_str:
                     continue
+                if _p_str.startswith("-"):
+                    return _tool_error_response(
+                        "INVALID_ARGUMENT",
+                        f"Test target '{_p_str}' must not start with '-'.",
+                        tool="run_tests",
+                        details={"path": _p_str},
+                    )
+                _file_part, _sep, _node_id = _p_str.partition("::")
+                if not _file_part:
+                    return _tool_error_response(
+                        "INVALID_ARGUMENT",
+                        f"Test target '{_p_str}' has no file path before '::'.",
+                        tool="run_tests",
+                        details={"path": _p_str},
+                    )
                 try:
-                    _cand = (_ws_root / _p_str).resolve()
+                    _cand = (_ws_root / _file_part).resolve()
                     _rel = _cand.relative_to(_ws_root).as_posix()
                 except ValueError:
                     return _tool_error_response(
@@ -963,7 +1206,21 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
                         tool="run_tests",
                         details={"path": _p_str, "workspace": str(_ws_root)},
                     )
-                _scoped_paths.append(_rel or ".")
+                except (OSError, RuntimeError) as _tpe:
+                    return _tool_error_response(
+                        "INVALID_ARGUMENT",
+                        f"Invalid test target '{_p_str}': {_tpe}",
+                        tool="run_tests",
+                        details={"path": _p_str},
+                    )
+                if _rel.startswith("-"):
+                    return _tool_error_response(
+                        "INVALID_ARGUMENT",
+                        f"Test target '{_p_str}' must not start with '-'.",
+                        tool="run_tests",
+                        details={"path": _p_str},
+                    )
+                _scoped_paths.append((_rel or ".") + (_sep + _node_id if _sep else ""))
         else:
             try:
                 from core.state import settings as _hs_settings
@@ -1075,26 +1332,49 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
         _cmd = _INSTALL_CMDS[manager].format(pkgs=packages)
     if dev and manager == "npm":
         _cmd += " --save-dev"
-    from tools.runner import _run_inline_tool as _dispatch_bash
-    _res = await _dispatch_bash("run_bash", {"cmd": _cmd}, workspace_lock=workspace_lock)
-    # TOOL-LABEL-FIX (2026-10-17, live): install_package runs its command
-    # through the run_bash handler, so every failure came back labelled
-    #   [TOOL_ERROR:RUN_BASH_NONZERO] run_bash: run_bash exited with code 1
-    # for a call the model made as install_package (screenshot: "install_package
-    # · pip: pygame" followed by a run_bash error). Confusing in the chat, in
-    # the error-rollup rollup keys and in the telemetry. Re-label the wrapper.
-    if "RUN_BASH_NONZERO" in _res or "RUN_BASH_EXEC_ERROR" in _res:
-        _code = "INSTALL_FAILED" if "RUN_BASH_NONZERO" in _res else "INSTALL_EXEC_ERROR"
-        _body = _res
-        for _tag in ("[TOOL_ERROR:RUN_BASH_NONZERO]", "[TOOL_ERROR:RUN_BASH_EXEC_ERROR]"):
-            _body = _body.replace(_tag, "")
-        _body = _body.replace("run_bash: run_bash exited with code",
-                              f"install_package: '{manager} install {packages}' failed, exit code")
-        _body = _body.replace("run_bash exited with code",
-                              f"install_package: '{manager} install {packages}' failed, exit code")
-        _body = _body.replace("run_bash execution error",
-                              f"install_package: '{manager} install {packages}' execution error")
+    from tools.runner import (
+        _in_approved_funnel as _ap_funnel_cv,
+        _run_inline_tool as _dispatch_bash,
+    )
+    _ap_tok = _ap_funnel_cv.set(True)
+    try:
+        _res = await _dispatch_bash(
+            "run_bash", {"cmd": _cmd}, workspace_lock=workspace_lock or str(workspace),
+        )
+    finally:
+        _ap_funnel_cv.reset(_ap_tok)
+    _relabel_map = (
+        ("RUN_BASH_NONZERO", "INSTALL_FAILED"),
+        ("RUN_BASH_EXEC_ERROR", "INSTALL_EXEC_ERROR"),
+        ("RUN_BASH_TIMEOUT", "INSTALL_TIMEOUT"),
+        ("RUN_BASH_BLOCKED", "INSTALL_BLOCKED"),
+    )
+    _res_s = _res.lstrip()
+    _matched_relabel = next(
+        (pair for pair in _relabel_map if _res_s.startswith(f"[TOOL_ERROR:{pair[0]}]")),
+        None,
+    )
+    if _matched_relabel is not None:
+        _old_tag, _code = _matched_relabel
+        _body = _res_s[len(f"[TOOL_ERROR:{_old_tag}]"):]
+        _prefix_note = f"install_package: '{manager} install {packages}'"
+        for _pat, _rep in (
+            ("run_bash: run_bash exited with code", f"{_prefix_note} failed, exit code"),
+            ("run_bash exited with code", f"{_prefix_note} failed, exit code"),
+            ("run_bash: run_bash execution error", f"{_prefix_note} execution error"),
+            ("run_bash execution error", f"{_prefix_note} execution error"),
+            ("run_bash: run_bash timed out", f"{_prefix_note} timed out"),
+            ("run_bash timed out", f"{_prefix_note} timed out"),
+            ("run_bash: Command blocked:", f"{_prefix_note} blocked:"),
+            ("run_bash blocked", f"{_prefix_note} blocked"),
+        ):
+            if _pat in _body:
+                _body = _body.replace(_pat, _rep, 1)
+                break
+        if _body.lstrip().startswith("run_bash:"):
+            _body = " " + _prefix_note + ": " + _body.lstrip()[len("run_bash:"):].lstrip()
         _body = _body.replace('"tool": "run_bash"', '"tool": "install_package"')
+        _body = re.sub(r'"code"\s*:\s*"' + re.escape(_old_tag) + r'"', f'"code": "{_code}"', _body)
         _res = f"[TOOL_ERROR:{_code}]" + _body
     # SOURCE-BUILD-HINT (2026-09-15, broadened + shared 2026-10-17): when pip
     # has no prebuilt wheel for this venv's Python it silently switches to an
@@ -1186,59 +1466,87 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
     _job = _ToolJob.confine(proc)
     LINE_CAP = line_cap
     MAX_LINE_BYTES = 65536
-    stdout_buf: deque = deque(maxlen=LINE_CAP)
-    stderr_buf: deque = deque(maxlen=LINE_CAP)
 
-    async def drain(stream, buf: deque):
+    class _HeadTailLineBuf:
+        def __init__(self, cap: int) -> None:
+            self.cap = max(1, int(cap))
+            self.head_cap = min(60, self.cap // 4) if self.cap >= 4 else 0
+            self.tail_cap = max(1, self.cap - self.head_cap)
+            self.head: list[str] = []
+            self.tail: deque[str] = deque(maxlen=self.tail_cap)
+            self.total = 0
+
+        def append(self, line: str) -> None:
+            self.total += 1
+            if len(self.head) < self.head_cap:
+                self.head.append(line)
+            else:
+                self.tail.append(line)
+
+        def render(self) -> str:
+            if self.total <= self.cap:
+                return "\n".join(self.head + list(self.tail))
+            dropped = self.total - (len(self.head) + len(self.tail))
+            banner = (
+                f"[... {dropped} line(s) omitted of {self.total} total "
+                f"(line cap {self.cap}) — narrow output with head/tail/sed -n/grep ...]"
+            )
+            return "\n".join(self.head + [banner] + list(self.tail))
+
+    stdout_buf = _HeadTailLineBuf(LINE_CAP)
+    stderr_buf = _HeadTailLineBuf(LINE_CAP)
+
+    async def drain(stream, buf: _HeadTailLineBuf):
         if stream is None:
             return
         pending = bytearray()
         truncated = False
-        while True:
-            chunk = await stream.read(16384)
-            if not chunk:
-                break
-            start = 0
+        try:
             while True:
-                nl = chunk.find(b"\n", start)
-                if nl == -1:
-                    tail = chunk[start:]
+                chunk = await stream.read(16384)
+                if not chunk:
+                    break
+                start = 0
+                while True:
+                    nl = chunk.find(b"\n", start)
+                    if nl == -1:
+                        tail = chunk[start:]
+                        if not truncated:
+                            room = MAX_LINE_BYTES - len(pending)
+                            if len(tail) > room:
+                                pending.extend(tail[:room])
+                                truncated = True
+                            else:
+                                pending.extend(tail)
+                        break
+                    seg = chunk[start:nl]
                     if not truncated:
                         room = MAX_LINE_BYTES - len(pending)
-                        if len(tail) > room:
-                            pending.extend(tail[:room])
+                        if len(seg) > room:
+                            pending.extend(seg[:room])
                             truncated = True
                         else:
-                            pending.extend(tail)
-                    break
-                seg = chunk[start:nl]
-                if not truncated:
-                    room = MAX_LINE_BYTES - len(pending)
-                    if len(seg) > room:
-                        pending.extend(seg[:room])
-                        truncated = True
-                    else:
-                        pending.extend(seg)
+                            pending.extend(seg)
+                    line_txt = pending.decode(errors="replace").rstrip("\r")
+                    if truncated:
+                        line_txt += " ...[line truncated]"
+                    buf.append(line_txt)
+                    pending.clear()
+                    truncated = False
+                    start = nl + 1
+        finally:
+            if pending:
                 line_txt = pending.decode(errors="replace").rstrip("\r")
                 if truncated:
                     line_txt += " ...[line truncated]"
                 buf.append(line_txt)
-                pending.clear()
-                truncated = False
-                start = nl + 1
-        if pending:
-            line_txt = pending.decode(errors="replace").rstrip("\r")
-            if truncated:
-                line_txt += " ...[line truncated]"
-            buf.append(line_txt)
 
     try:
         try:
             await asyncio.wait_for(
-                asyncio.gather(drain(proc.stdout, stdout_buf), drain(proc.stderr, stderr_buf)),
+                asyncio.gather(drain(proc.stdout, stdout_buf), drain(proc.stderr, stderr_buf), proc.wait()),
                 timeout=timeout_s,
             )
-            await proc.wait()
         except asyncio.TimeoutError:
             # nachgelagertem /IM-Massaker auf powershell.exe.
             if _job is not None:
@@ -1250,7 +1558,7 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
                     proc.kill()
                 except OSError:
                     pass
-            return "\n".join(stdout_buf), "\n".join(stderr_buf), -1, True
+            return stdout_buf.render(), stderr_buf.render(), -1, True
         except asyncio.CancelledError:
             if _job is not None:
                 _job.terminate()
@@ -1263,7 +1571,7 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
                     pass
             raise
 
-        return "\n".join(stdout_buf), "\n".join(stderr_buf), proc.returncode or 0, False
+        return stdout_buf.render(), stderr_buf.render(), proc.returncode or 0, False
     finally:
         _tr = getattr(proc, "_transport", None)
         if _tr is not None:
@@ -1274,19 +1582,39 @@ async def _stream_proc(cmd: list[str], timeout_s: int, cwd: str, env: dict,
 
 _DANGEROUS_RM_ROOT_RE = re.compile(
     r"\brm\s+(?:[^|&;\n]*\s)?(?:-[a-z]*[rR][a-z]*|--recursive)\s+"
-    r"(?:-[a-z]+\s+|--\S+\s+)*(?:/(?:\*|\s|$)|~(?:/\*|\s|$)|\.(?:/\*|\s|$))",
+    r"(?:(?:-[a-z]+|--\S*)\s+)*(?:[^|&;\n)\s]+\s+)*"
+    r"""['"]?(?:/+(?:\*|['"]?(?:[\s;&|)]|$))|/[a-z]/(?:\*|['"]?(?:[\s;&|)]|$))|~(?:/+(?:\*|['"]?(?:[\s;&|)]|$))|['"]?(?:[\s;&|)]|$))|\.\.?(?:/+(?:\*|['"]?(?:[\s;&|)]|$))|['"]?(?:[\s;&|)]|$))|[a-z]:[/\\](?:\*|['"]?(?:[\s;&|)]|$)))""",
+    re.IGNORECASE,
+)
+_DANGEROUS_CHMOD_ROOT_RE = re.compile(
+    r"\bchmod\s+(?:(?:-[a-z]*R[a-z]*|--recursive)\s+)*0?777\s+/(?:\*|[\s;&|)]|$)",
+    re.IGNORECASE,
+)
+_WIN_DANGEROUS_FORMAT_RE = re.compile(
+    r"(?:^|[;&|(\n])\s*(?:cmd(?:\.exe)?\s+/[ck]\s+)?(?:[a-z]:[/\\][^\s;|&]*[/\\])?format(?:\.com|\.exe)?\s+(?:(?:/\S+\s+)*[a-z]:|\S+\s+[a-z]:)",
+    re.IGNORECASE,
+)
+_WIN_DANGEROUS_DISKPART_RE = re.compile(
+    r"(?:^|[;&|(\n])\s*(?:cmd(?:\.exe)?\s+/[ck]\s+)?(?:[a-z]:[/\\][^\s;|&]*[/\\])?diskpart(?:\.exe)?(?:\s|$|[;&|)])",
     re.IGNORECASE,
 )
 
 
 def _bash_blocklisted(cmd: str) -> str | None:
-    _c = (cmd or "").lower()
+    _c = (cmd or "").strip().lower()
     pats = _DANGEROUS_PATTERNS + (_WIN_DANGEROUS_PATTERNS if sys.platform == "win32" else [])
     for _d in pats:
         if _d in _c:
             return _d
     if _DANGEROUS_RM_ROOT_RE.search(_c):
         return "rm -r <root/home/cwd>"
+    if _DANGEROUS_CHMOD_ROOT_RE.search(_c):
+        return "chmod 777 /"
+    if sys.platform == "win32":
+        if _WIN_DANGEROUS_FORMAT_RE.search(_c):
+            return "format <drive>:"
+        if _WIN_DANGEROUS_DISKPART_RE.search(_c):
+            return "diskpart"
     return None
 
 

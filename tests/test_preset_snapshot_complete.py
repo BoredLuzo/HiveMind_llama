@@ -37,7 +37,8 @@ _EXPECTED_EXCLUDED = {"git_token", "_registry", "models_dir",
                       "lsp_servers", "lsp_forward_workspace_settings",
                       "llama_extra_args", "duo_tool_sandbox",
                       "duo_tool_sandbox_max_mem_mb", "duo_tool_sandbox_max_procs",
-                      "duo_tool_sandbox_max_cpu_s", "debug_api_enabled",
+                      "duo_tool_sandbox_max_cpu_s", "duo_tool_sandbox_posix_rlimits",
+                      "debug_api_enabled",
                       "workspace",
                       # BOOKKEEPING (2026-10-28): written by the apply path
                       # itself, never stored in a snapshot

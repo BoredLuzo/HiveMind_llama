@@ -207,7 +207,9 @@ voice_models/
 _*.py
 !__init__.py
 !core/duo/_*.py
+!deploy/_common.py
 !tools/handlers/_shared.py
+!tools/handlers/_win_shims.py
 !tests/_harness.py
 !tests/_silent_choice.py
 *.zip

@@ -32,7 +32,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 import urllib.error
@@ -125,19 +124,12 @@ def _hf_lfs_sha256(repo: str, path: str) -> str:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    """Write via a unique temp file + os.replace.
-
-    models.json IS the model registry: a crash (or a second fetch run)
-    mid-write used to leave a truncated file behind and the backend silently
-    resolved nothing until the next scan.
-    """
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    """Write via a unique temp file + os.replace."""
     try:
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
+        from deploy._common import atomic_write_text as _awt
+    except ImportError:
+        from _common import atomic_write_text as _awt  # type: ignore[import-not-found]
+    _awt(path, text)
 
 
 
@@ -436,12 +428,15 @@ SPECS: list[dict] = [
         "disk_gb": "~11.5 GB",
         "hw_req": "16+ GB VRAM  OR  8 GB VRAM + 32+ GB RAM (Looped CPU-MoE Offload, b12600+)",
         "role_hint": "Upgrade: Looped-MoE Agentic Coder + Vision (~15-16 tok/s on 8GB+32GB)",
-        "desc": "Inkling-2-Mini UD-IQ3_XXS (looped MoE coder/reasoning + vision, ~10.9GB + mmproj, needs b12600+)",
-        "repo": "unsloth/Inkling-2-Mini-GGUF",
+        "desc": "Inkling-2-Mini GSQ-RCO-IQ3_XS (looped MoE coder/reasoning + vision, ~10.8GB + mmproj, needs b12600+)",
+        "repo": "abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF",
         "file_regex": [
-            r"(?i)^inkling-2-mini-ud-iq3_xxs\.gguf$",
+            r"(?i)^inkling-2-mini-gsq-rco-iq3_xs\.gguf$",
         ],
-        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_regex": [
+            r"(?i)^mmproj-inkling-2-mini-bf16\.gguf$",
+            r"(?i)^mmproj[-_.]f16\.gguf$",
+        ],
         "mmproj_dest": "mmproj-Inkling-2-Mini-F16.gguf",
     },
 ]
@@ -524,71 +519,22 @@ HARDWARE_TIERS: list[dict] = [
 
 def probe_hardware() -> tuple[float, float, str]:
     """Return (vram_gb, ram_gb, gpu_name) without external packages."""
-    ram_gb = 0.0
-    vram_gb = 0.0
-    gpu_name = ""
     try:
-        import ctypes
-        if sys.platform == "win32":
-            class _MEM(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-            st = _MEM()
-            st.dwLength = ctypes.sizeof(_MEM)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
-                ram_gb = round(st.ullTotalPhys / (1024 ** 3), 1)
-        elif Path("/proc/meminfo").is_file():
-            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-                if line.startswith("MemTotal:"):
-                    ram_gb = round(int(line.split()[1]) / (1024 ** 2), 1)
-                    break
-    except (OSError, ValueError, AttributeError):
-        pass
-    if sys.platform == "win32":
-        try:
-            import winreg
-            base = r"SYSTEM\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as k:
-                idx = 0
-                while True:
-                    try:
-                        sub = winreg.EnumKey(k, idx)
-                        idx += 1
-                    except OSError:
-                        break
-                    try:
-                        with winreg.OpenKey(k, sub) as sk:
-                            sz, _ = winreg.QueryValueEx(sk, "HardwareInformation.qwMemorySize")
-                            desc, _ = winreg.QueryValueEx(sk, "DriverDesc")
-                            raw = int.from_bytes(sz, "little") if isinstance(sz, (bytes, bytearray)) else int(sz)
-                            gb = round(raw / (1024 ** 3), 1)
-                            if gb > vram_gb:
-                                vram_gb = gb
-                                gpu_name = str(desc).strip()
-                    except OSError:
-                        pass
-        except (ImportError, OSError, ValueError):
-            pass
+        from deploy._common import (
+            probe_nvidia_smi_vram as _pnv,
+            probe_ram_gb as _pram,
+            probe_windows_registry_vram as _pwin,
+        )
+    except ImportError:
+        from _common import (  # type: ignore[import-not-found]
+            probe_nvidia_smi_vram as _pnv,
+            probe_ram_gb as _pram,
+            probe_windows_registry_vram as _pwin,
+        )
+    ram_gb = _pram()
+    vram_gb, gpu_name = _pwin()
     if vram_gb <= 0:
-        try:
-            out = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
-                text=True, timeout=3, stderr=subprocess.DEVNULL,
-            ).strip()
-            for line in out.splitlines():
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) == 2:
-                    gb = round(float(parts[1]) / 1024.0, 1)
-                    if gb > vram_gb:
-                        vram_gb = gb
-                        gpu_name = parts[0]
-        except (OSError, ValueError, ImportError, subprocess.SubprocessError):
-            pass
+        vram_gb, gpu_name = _pnv()
     try:
         cfg = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
         cfg_vram = float(cfg.get("vram_budget_gb") or 0.0)
@@ -1084,6 +1030,9 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
             if g.name.lower() not in _known_filename_tags():
                 _record_known_filename(g.name, _spec_tag)
             families.add(_spec_tag.split(":")[0])
+        elif (_known_tag := _known_filename_tags().get(g.name.lower())):
+            mapping.setdefault(_known_tag, str(g))
+            families.add(_known_tag.split(":")[0])
         elif names:
             mapping.setdefault(names[0], str(g))
             families.add(names[0].split(":")[0])

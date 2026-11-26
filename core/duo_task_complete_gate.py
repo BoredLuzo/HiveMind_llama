@@ -24,6 +24,7 @@ from core.tool_executor import ToolExecResult
 from core.duo.preflight import (
     completion_verdict, needs_test_verification, _await_with_hb,
 )
+from utils.tool import run_bash_confirmed_exit_zero as _run_bash_confirmed_exit_zero
 
 logger = logging.getLogger("hivemind.duo")
 
@@ -113,6 +114,7 @@ class _DuoTaskCompleteGateState:
 _WRITE_RESET_TOOLS = frozenset({
     "write_file", "write_file_append", "edit_file",
     "patch_file", "replace_lines", "apply_patch",
+    "edit_ast", "lsp_format",
 })
 
 
@@ -149,6 +151,9 @@ def _green_exec_depth(dtool_msgs: list | None) -> tuple[int, bool]:
         elif tname == "run_tests":
             if not is_err and "[TEST-RESULT] ✅" in content:
                 suite_green = True
+        elif tname == "task_complete":
+            if not is_err and "[AUTO-TEST]" in content and "[TEST-RESULT] ✅" in content:
+                suite_green = True
         elif tname in ("run_bash", "run_python"):
             if is_err:
                 continue
@@ -159,7 +164,7 @@ def _green_exec_depth(dtool_msgs: list | None) -> tuple[int, bool]:
                     or content.strip().startswith("[run_python: executed successfully")
                 )
             else:
-                passed = not ec or int(ec[-1]) == 0
+                passed = _run_bash_confirmed_exit_zero(content)
             if not passed:
                 continue
             tc_id = str(msg.get("tool_call_id") or "")

@@ -163,8 +163,10 @@ check("5b plan advance carries touched paths",
       and "touched_paths=_touched" in _pr)
 
 _te = (ROOT / "core" / "tool_executor.py").read_text(encoding="utf-8", errors="replace")
+_ut = (ROOT / "utils" / "tool.py").read_text(encoding="utf-8", errors="replace")
 check("5c run_bash verify requires the genuine [exit code: 0] marker",
-      "_ec_matches and int(_ec_matches[-1]) == 0" in _te)
+      "_run_bash_confirmed_exit_zero(content)" in _te
+      and "int(matches[-1]) == 0" in _ut)
 
 _wh = (ROOT / "core" / "wedge_handoff.py").read_text(encoding="utf-8", errors="replace")
 check("5d run_bash is wedge-tracked",

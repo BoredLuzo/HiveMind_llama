@@ -37,12 +37,15 @@ def src(name: str) -> str:
     return (ROOT / name).read_text(encoding="utf-8", errors="replace")
 
 
-server = src("server.py")
+server = src("server.py") + "\n" + src("routers/voice.py") + "\n" + src("routers/gateway.py")
 
 # ── (a) endpoints ───────────────────────────────────────────────────────────
-check("GET /stt/status exists", '@app.get("/stt/status")' in server)
-check("POST /stt exists", '@app.post("/stt")' in server)
-seg = server.split('@app.post("/stt")', 1)[1].split('@app.post("/gateway/heartbeat"', 1)[0]
+_stt_st_m = '@router.get("/stt/status")' if '@router.get("/stt/status")' in server else '@app.get("/stt/status")'
+_stt_m = '@router.post("/stt")' if '@router.post("/stt")' in server else '@app.post("/stt")'
+_stt_end = '@router.post("/documents/extract")' if _stt_m.startswith("@router.") else '@app.post("/gateway/heartbeat"'
+check("GET /stt/status exists", _stt_st_m in server)
+check("POST /stt exists", _stt_m in server)
+seg = server.split(_stt_m, 1)[1].split(_stt_end, 1)[0]
 check("the audio is the raw request body", "await request.body()" in seg)
 check("no multipart upload (no python-multipart needed)",
       "UploadFile" not in seg and "File(" not in seg and "Form(" not in seg)
@@ -53,9 +56,10 @@ check("the language comes from the engine, not the request",
 check("disabled -> 409", 'status_code=409' in seg)
 check("engine errors -> 400", "status_code=400" in seg)
 check("the error payload is the engine's code dict", ".as_dict()" in seg)
+_stt_st_end = '@router.get("/tts/status")' if _stt_st_m.startswith("@router.") else '@app.post("/stt")'
 check("the status endpoint never breaks the UI",
       (lambda st: "try:" in st and "except " in st and "status_code=200" in st)(
-          server.split('@app.get("/stt/status")', 1)[1].split('@app.post("/stt")', 1)[0]))
+          server.split(_stt_st_m, 1)[1].split(_stt_st_end, 1)[0]))
 
 # ── (c) cleanup / caps / logging ────────────────────────────────────────────
 check("the temp WAV is cleaned up in a finally block",

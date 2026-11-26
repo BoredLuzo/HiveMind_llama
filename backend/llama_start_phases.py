@@ -82,6 +82,30 @@ def _live_cfg(name: str, local_val, init_val):
     return getattr(_llama_cfg, name, local_val)
 
 
+async def _try_vram_reclaim_wait(
+    mgr, model: str, num_ctx: int, exclude_slot_id, fit: CanFitResult,
+    *, extra_needed_mib: float, stall_abort_s: float,
+    require_ext: bool = False, ext_est: float = 0.0,
+) -> tuple[CanFitResult, bool]:
+    """Wait once for a recently-killed slot's VRAM reclaim and re-run can_fit."""
+    try:
+        need_total = int(fit.needed_mib + fit.margin_mib)
+        if (not require_ext or ext_est > 0) and fit.free_mib < need_total:
+            reclaimed = await wait_for_vram_reclaim(
+                need_total, timeout_sec=20, stall_abort_s=stall_abort_s,
+            )
+            if reclaimed:
+                new_fit = mgr.can_fit(
+                    model, num_ctx, exclude_slot_id=exclude_slot_id,
+                    extra_needed_mib=extra_needed_mib,
+                )
+                return new_fit, True
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+            AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_exc:
+        logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
+    return fit, False
+
+
 def _live_gpu_device() -> int:
     """Resolve active GPU device index honoring VULKAN_DEVICE and GPU_DEVICE."""
     if VULKAN_DEVICE != _INIT_VULKAN_DEVICE:
@@ -2108,27 +2132,16 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
     if not _fit.ok:
         # RECLAIM-WAIT (2026-10-03): a just-killed slot (planner evict,
         # adopt-kill) releases its VRAM a few seconds LATE on Vulkan.
-        # The pre-flight then saw the dying slot's VRAM as "external"
-        # and hard-blocked a load that fit fine seconds earlier (live:
-        # coder with fresh mmproj blocked at external=2985 MiB right
-        # after the planner kill). Wait once for the reclaim, then
-        # re-check with the same grace rules as the evict path.
-        try:
-            _need_total = int(_fit.needed_mib + _fit.margin_mib)
-            if _fit.free_mib < _need_total:
-                _reclaimed = await wait_for_vram_reclaim(
-                    _need_total, timeout_sec=20, stall_abort_s=8.0
-                )
-                if _reclaimed:
-                    logger.info(
-                        "[PRE-FLIGHT] VRAM reclaimed after wait - re-checking fit for %s @ctx=%d",
-                        model, num_ctx,
-                    )
-                    _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
-                                        extra_needed_mib=_moe_cache_used)
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_exc:
-            logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
+        # Wait once for the reclaim, then re-check with the same grace rules.
+        _fit, _rw_pre = await _try_vram_reclaim_wait(
+            self, model, num_ctx, slot.slot_id, _fit,
+            extra_needed_mib=_moe_cache_used, stall_abort_s=8.0,
+        )
+        if _rw_pre:
+            logger.info(
+                "[PRE-FLIGHT] VRAM reclaimed after wait - re-checking fit for %s @ctx=%d",
+                model, num_ctx,
+            )
     #      gepinnte Slots bleiben unantastbar).
     if not _fit.ok:
         _recovered = False
@@ -2379,6 +2392,10 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
             try:
                 from .llama_vram_table import _VRAM_TABLE as _VRAM_TBL
                 _avail_models = set(list_available_models() or [])
+                _ub_cands = int(_live_cfg("LLAMA_UBATCH", getattr(_llama_cfg, "LLAMA_UBATCH", 256), 256) or 256)
+                _cand_margin = ubatch_extra_mib(_ub_cands) + int(VRAM_PRE_FLIGHT_MARGIN_MIB)
+                _cand_free_mib = float(_fit.free_mib or 0.0)
+                _cand_is_cpu = (_live_cfg("GPU_BACKEND", GPU_BACKEND, _INIT_GPU_BACKEND) == "cpu")
                 for _sm, _gb in sorted(_VRAM_TBL.items(), key=lambda kv: kv[1]):
                     _base = _sm.split(":")[0].lower()
                     if _sm.lower() == _strip_alias(model).lower():
@@ -2388,7 +2405,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     if _avail_models and _sm not in _avail_models:
                         continue
                     try:
-                        if self.can_fit(_sm, 4096, exclude_slot_id=slot.slot_id).ok:
+                        if _cand_is_cpu or (vram_of_moe(_sm, 4096) * 1024 + _cand_margin) <= _cand_free_mib:
                             _cands.append(_sm)
                     except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                             AttributeError, IndexError) as _e:
@@ -2423,41 +2440,29 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                         break
             except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
                 _max_fit_ctx = 0
-            # RECLAIM-WAIT (2026-10-03): a just-killed slot (planner
-            # evict, adopt-kill) releases its VRAM a few seconds LATE on
-            # Vulkan - the pre-flight then counted the dying process as
-            # "external" and hard-blocked (live: coder mmproj load
-            # blocked 2s after the planner kill, run aborted). Wait once
-            # for the reclaim and re-check before blocking.
-            try:
-                _need_total = int(_fit.needed_mib + _fit.margin_mib)
-                if _ext_est > 0 and _fit.free_mib < _need_total:
-                    _rw = await wait_for_vram_reclaim(
-                        _need_total, timeout_sec=20, stall_abort_s=10.0
+            # RECLAIM-WAIT (2026-10-03): wait once for dying slot reclaim before blocking.
+            _fit, _rw_post = await _try_vram_reclaim_wait(
+                self, model, num_ctx, getattr(slot, "slot_id", None), _fit,
+                extra_needed_mib=_moe_cache_used, stall_abort_s=10.0,
+                require_ext=True, ext_est=_ext_est,
+            )
+            if _rw_post:
+                if not _fit.ok and _draft_save_mib > 0.0:
+                    _fit, _moe_cache_used, _draft_dropped = _try_drop_external_drafter(
+                        self, slot, cmd, model, num_ctx, _fit,
+                        _moe_cache_used, _draft_save_mib,
                     )
-                    if _rw:
-                        _fit = self.can_fit(model, num_ctx,
-                                            exclude_slot_id=getattr(slot, "slot_id", None),
-                                            extra_needed_mib=_moe_cache_used)
-                        if not _fit.ok and _draft_save_mib > 0.0:
-                            _fit, _moe_cache_used, _draft_dropped = _try_drop_external_drafter(
-                                self, slot, cmd, model, num_ctx, _fit,
-                                _moe_cache_used, _draft_save_mib,
-                            )
-                            if _draft_dropped:
-                                _draft_save_mib = 0.0
-                                _new_lm = await _refresh_load_mode_on_draft_drop(
-                                    cmd, model, load_mode_cfg,
-                                )
-                                if _new_lm:
-                                    _load_mode = _new_lm
-                        logger.info(
-                            "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
-                            model, num_ctx, "OK" if _fit.ok else "BLOCK",
+                    if _draft_dropped:
+                        _draft_save_mib = 0.0
+                        _new_lm = await _refresh_load_mode_on_draft_drop(
+                            cmd, model, load_mode_cfg,
                         )
-            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                    AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_exc:
-                logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
+                        if _new_lm:
+                            _load_mode = _new_lm
+                logger.info(
+                    "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
+                    model, num_ctx, "OK" if _fit.ok else "BLOCK",
+                )
             if not _fit.ok and not _llama_cfg.VRAM_PREFLIGHT_GATE:
                 # GATE-DISABLED (2026-10-11, settings vram_preflight_gate):
                 # the estimate can be wrong for foreign models - attempt the

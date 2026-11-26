@@ -86,7 +86,7 @@ def parse_tool_error(result: str) -> dict | None:
         #   "[TOOL_ERROR: READ_REQUIRED]\nAction: edit_file BLOCKED on '<path>'"
         # parse_tool_error las tool="Action" -> tool_call_failed(txt, "edit_file")
         if tool == "Action":
-            _m2 = re.match(r"(edit_file|patch_file|write_file|write_file_append|replace_lines|read_file|search_code|find_files|list_dir|run_bash|run_tests|run_python|task_complete|git_commit)\b", msg)
+            _m2 = re.match(r"(edit_file|patch_file|write_file|write_file_append|replace_lines|apply_patch|edit_ast|lsp_format|read_file|search_code|find_files|list_dir|run_bash|run_tests|run_python|task_complete|git_commit)\b", msg)
             if _m2:
                 tool = _m2.group(1)
     return {
@@ -127,6 +127,6 @@ def tool_error_has_code(result: str, code: str, tool_name: str | None = None) ->
     if not err:
         txt = str(result or "")
         return f"[TOOL_ERROR:{code}" in txt
-    if tool_name and err.get("tool", "") != tool_name:
+    if tool_name and err.get("tool", "") not in ("", tool_name):
         return False
     return err.get("code", "") == code

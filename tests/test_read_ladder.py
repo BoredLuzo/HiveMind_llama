@@ -137,38 +137,52 @@ check("same path 3x: only the loop-detection result, no hint appended",
       len([m for m in _h1.msgs if m.get("role") == "user"]) == 0,
       f" ({len([m for m in _h1.msgs if m.get('role') == 'user'])} user msg(s))")
 
-# C2: eight DIFFERENT paths -> wide trigger fires
+# C1b: 8-12 different paths in ONE parallel batch must NOT fire Read-Ladder
+_h_par = _Harness()
+_h_par.round([_call(i, f"p{i}.js") for i in range(10)])
+check("parallel batch of 10 different files stays silent (counts as 1 round)",
+      len(_h_par.hints()) == 0 and _h_par.trs.wide_read_streak[0] == 1,
+      f"(hints={len(_h_par.hints())}, streak={_h_par.trs.wide_read_streak[0]})")
+
+# C2: eight DIFFERENT paths across separate rounds -> wide trigger fires
 _h2 = _Harness()
-_h2.round([_call(i, f"f{i}.txt") for i in range(8)])
-check("8 different paths: hint fires", len(_h2.hints()) == 1,
+for i in range(8):
+    _h2.round([_call(i, f"f{i}.txt")])
+check("8 different paths across rounds: hint fires", len(_h2.hints()) == 1,
       f" ({len(_h2.hints())} hint(s))")
 check("wide hint names the kind", "different files" in str(_h2.hints()[0]["content"])
       if _h2.hints() else False)
 
-# C3: seven different paths -> still silent (no early nagging)
+# C3: seven different paths across separate rounds -> still silent (no early nagging)
 _h3 = _Harness()
-_h3.round([_call(i, f"g{i}.txt") for i in range(7)])
-check("7 different paths: still silent", len(_h3.hints()) == 0,
+for i in range(7):
+    _h3.round([_call(i, f"g{i}.txt")])
+check("7 different paths across rounds: still silent", len(_h3.hints()) == 0,
       f" ({len(_h3.hints())} hint(s))")
 
 # C4: the hint fires once per run, even with more reads afterwards
 _h4 = _Harness()
-_h4.round([_call(i, f"h{i}.txt") for i in range(8)])
-_h4.round([_call(i, f"i{i}.txt") for i in range(8)])
+for i in range(8):
+    _h4.round([_call(i, f"h{i}.txt")])
+for i in range(8):
+    _h4.round([_call(100 + i, f"i{i}.txt")])
 check("hint fires once per run", len(_h4.hints()) == 1,
       f" ({len(_h4.hints())} hint(s))")
 
 # C5: a write resets both counters -> no hint after 7 reads + write + 7 reads
 _h5 = _Harness()
-_h5.round([_call(i, f"j{i}.txt") for i in range(7)])
+for i in range(7):
+    _h5.round([_call(i, f"j{i}.txt")])
 _h5.round([_call(99, "out.py", tool="write_file")])
-_h5.round([_call(i, f"k{i}.txt") for i in range(7)])
+for i in range(7):
+    _h5.round([_call(100 + i, f"k{i}.txt")])
 check("write resets the streak (no hint)", len(_h5.hints()) == 0,
       f" ({len(_h5.hints())} hint(s))")
 
-# C6: read-only mode stays silent even with a wide streak
+# C6: read-only mode stays silent even with a wide multi-round streak
 _h6 = _Harness(tool_mode="duo_readonly")
-_h6.round([_call(i, f"m{i}.txt") for i in range(8)])
+for i in range(8):
+    _h6.round([_call(i, f"m{i}.txt")])
 check("duo_readonly: no read-ladder hint", len(_h6.hints()) == 0,
       f" ({len(_h6.hints())} hint(s))")
 

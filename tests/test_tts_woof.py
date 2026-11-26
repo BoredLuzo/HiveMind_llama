@@ -231,7 +231,11 @@ def main() -> int:
 
             # ── (c) Settings, Server, UI, Setup, Updater & Docs wiring ──────────
             settings_src = _settings_src()
-            server_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+            server_src = (
+                (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+                + "\n"
+                + (ROOT / "routers" / "voice.py").read_text(encoding="utf-8", errors="replace")
+            )
             html_src = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
             app_src = read_all_ui_js()
             bat_src = (ROOT / "deploy" / "setup_voice.bat").read_text(encoding="utf-8", errors="replace")
@@ -242,7 +246,8 @@ def main() -> int:
 
             check("settings defines tts_backend defaulting to pocket",
                   '"tts_backend":' in settings_src and '"pocket"' in settings_src)
-            check("server exposes POST /tts/fetch", '@app.post("/tts/fetch")' in server_src)
+            check("server exposes POST /tts/fetch",
+                  '@app.post("/tts/fetch")' in server_src or '@router.post("/tts/fetch")' in server_src)
             check("server /tts/voices supports backend param", "backend: str = \"\"" in server_src or "backend: str =" in server_src)
             check("HTML has tts-backend-sel and tts-download-row",
                   'id="tts-backend-sel"' in html_src and 'id="tts-download-row"' in html_src)

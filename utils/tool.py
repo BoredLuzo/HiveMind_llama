@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 import re
 
-_RE_UNESCAPED_BACKSLASH = re.compile(r'\\([^\\/"bfnrtu])')
+_RE_JSON_ESCAPE_OR_BARE = re.compile(r'\\(\\|["/bfnrt]|u[0-9a-fA-F]{4})|\\(.)')
 
 
 def _repair_json_backslashes(raw: str) -> str:
-    """Escapes unescaped backslashes in a JSON text (Windows paths)."""
-    return _RE_UNESCAPED_BACKSLASH.sub(r'\\\\\1', raw)
+    """Escapes lone unescaped backslashes in JSON text without breaking valid escapes."""
+    return _RE_JSON_ESCAPE_OR_BARE.sub(
+        lambda m: m.group(0) if m.group(1) is not None else r'\\' + m.group(2),
+        raw,
+    )
 
 
 def parse_tool_args(raw) -> dict:
@@ -481,11 +484,20 @@ def salvage_truncated_write_args(raw: str, tool_name: str = "write_file") -> dic
 def run_bash_failed(result: str) -> bool:
     from tools.errors import parse_tool_error as _parse_tool_error
     txt = str(result or "")
+    if txt.startswith("[run_bash: exit 0"):
+        return False
     _terr = _parse_tool_error(txt)
-    if _terr and str(_terr.get("tool", "") or "") == "run_bash":
+    if _terr and str(_terr.get("tool", "") or "") in ("", "run_bash"):
         return True
     low = txt.lower()
-    if txt.startswith("[run_bash error:"):
+    if txt.startswith((
+        "[run_bash error:",
+        "[rm error]:",
+        "[mkdir error]:",
+        "[touch error]:",
+        "[DESTRUCTIVE GATE: DECLINED]",
+        "[USER INPUT — tool NOT executed]",
+    )):
         return True
     if "[run_bash: timeout" in low:
         return True
@@ -498,7 +510,18 @@ def run_bash_failed(result: str) -> bool:
         # LAST match wins: the real marker is appended at the very end of the
         # output; an earlier literal "[exit code: 0]" (echoed by the model)
         # must not mask a genuine non-zero exit.
-        matches = __import__("re").findall(r"\[exit code:\s*(-?\d+)", txt)
+        matches = re.findall(r"\[exit code:\s*(-?\d+)", txt)
         if matches and int(matches[-1]) != 0:
             return True
     return False
+
+
+def run_bash_confirmed_exit_zero(result: str) -> bool:
+    """Return True only when *result* shows a genuine server-confirmed exit-0 run_bash run."""
+    txt = str(result or "")
+    if not txt or run_bash_failed(txt):
+        return False
+    if txt.lstrip().startswith("[run_bash: exit 0"):
+        return True
+    matches = re.findall(r"\[exit code:\s*(-?\d+)\]", txt)
+    return bool(matches) and int(matches[-1]) == 0

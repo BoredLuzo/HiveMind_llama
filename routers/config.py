@@ -115,7 +115,8 @@ _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       "lsp_servers", "lsp_forward_workspace_settings",
                       "llama_extra_args", "duo_tool_sandbox",
                       "duo_tool_sandbox_max_mem_mb", "duo_tool_sandbox_max_procs",
-                      "duo_tool_sandbox_max_cpu_s", "debug_api_enabled",
+                      "duo_tool_sandbox_max_cpu_s", "duo_tool_sandbox_posix_rlimits",
+                      "debug_api_enabled",
                       "workspace",
                       # BOOKKEEPING (2026-10-28, preset audit): these three are
                       # written by the apply path itself (active_preset, both
@@ -1231,47 +1232,10 @@ _MODEL_PROFILE_KEY_SCHEMA: dict[str, str] = {
     "extra_args": "str_list",
 }
 
-_SAMPLING_NUMERIC_BOUNDS: dict[str, tuple[float, float, bool]] = {
-    "temperature": (0.0, 2.0, False),
-    "top_p": (0.0, 1.0, False),
-    "top_k": (0.0, 1000.0, True),
-    "min_p": (0.0, 1.0, False),
-    "presence_penalty": (-2.0, 2.0, False),
-    "repetition_penalty": (0.5, 2.0, False),
-    "repeat_penalty": (0.5, 2.0, False),
-    "seed": (-1.0, 2147483647.0, True),
-    "thinking_budget": (0.0, 131072.0, True),
-}
-_SAMPLING_BOOL_KEYS = frozenset({"preserve_thinking", "cache_prompt"})
-
-
-def _validate_sampling_block(block: dict, prefix: str = "sampling") -> str | None:
-    for k, v in block.items():
-        if v is None:
-            continue
-        if k in _SAMPLING_BOOL_KEYS:
-            if not isinstance(v, bool):
-                return f"{prefix}.{k} requires boolean or null"
-        elif k in _SAMPLING_NUMERIC_BOUNDS:
-            lo, hi, is_int = _SAMPLING_NUMERIC_BOUNDS[k]
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
-                return f"{prefix}.{k} requires finite number or null"
-            if is_int and not isinstance(v, int):
-                return f"{prefix}.{k} requires integer or null"
-            if float(v) < lo or float(v) > hi:
-                return f"{prefix}.{k} must be between {lo:g} and {hi:g}"
-        elif k == "reasoning_effort":
-            if not isinstance(v, str) or v.strip().lower() not in (
-                "auto", "none", "on", "minimal", "low", "medium", "high", "xhigh", "max"
-            ):
-                return f"{prefix}.{k} must be one of auto/none/on/minimal/low/medium/high/xhigh/max or null"
-        elif isinstance(v, dict):
-            err = _validate_sampling_block(v, f"{prefix}.{k}")
-            if err:
-                return err
-        else:
-            return f"unsupported sampling key '{prefix}.{k}'"
-    return None
+from model_configs.profile_validation import (
+    validate_capabilities_dict as _validate_capabilities_dict,
+    validate_sampling_block as _validate_sampling_block,
+)
 
 
 def _validate_model_profile_key(key: str, val) -> str | None:
@@ -1313,11 +1277,8 @@ def _validate_model_profile_key(key: str, val) -> str | None:
         if not isinstance(val, dict):
             return f"key '{key}' requires an object or null"
         if key == "capabilities":
-            for ck, cv in val.items():
-                if ck not in ("thinking", "vision", "tool_call"):
-                    return f"unsupported capability '{ck}'"
-                if cv is not None and not isinstance(cv, bool):
-                    return f"capabilities.{ck} requires boolean or null"
+            _, cap_err = _validate_capabilities_dict(val, drop_none=False)
+            return cap_err
         elif key == "sampling":
             return _validate_sampling_block(val)
     return None

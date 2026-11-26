@@ -101,23 +101,18 @@ def _resolve_ws(ws_override: str | None) -> str:
     return str(Path(_ws_default()).resolve())
 
 
-async def _ws_reject_reason(request: Request) -> str | None:
-    """SILENT-FALLBACK GUARD (2026-10-25 audit): _ws_from_body/_ws_from_query
-    DROP a workspace candidate that is not a directory on THIS machine, and
-    the endpoints then resolve the DEFAULT workspace — a reset/checkout/stash
-    meant for project X would land on the default repo with no error at all
-    (documented real case: a UI keeps sending a path that does not exist on
-    this machine). Every /git endpoint that accepts a workspace therefore
-    rejects an explicit-but-dead path with 400 instead of guessing. Returns
-    the offending path, or None when no candidate was supplied (empty means
-    "use the default" — unchanged behavior) or the path exists."""
+async def _ws_reject_reason(request: Request, body: dict | None = None) -> str | None:
+    """Reject explicit non-existent workspace paths with 400 instead of falling back silently."""
     cand = ""
-    try:
-        _data = await request.json()
-        if isinstance(_data, dict):
-            cand = str(_data.get("workspace") or "").strip()
-    except Exception:
-        cand = ""
+    if isinstance(body, dict):
+        cand = str(body.get("workspace") or "").strip()
+    elif getattr(request, "method", "") != "GET" and callable(getattr(request, "json", None)):
+        try:
+            _data = await request.json()
+            if isinstance(_data, dict):
+                cand = str(_data.get("workspace") or "").strip()
+        except Exception:
+            cand = ""
     if not cand:
         cand = str(request.query_params.get("workspace") or "").strip()
     if cand and not Path(cand).is_dir():
@@ -528,17 +523,20 @@ async def git_init_ep(request: Request):
 
 
 async def _git_body_ws(request: Request) -> tuple[dict, str, JSONResponse | None]:
-    _bad_ws = await _ws_reject_reason(request)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    body = data if isinstance(data, dict) else {}
+    _bad_ws = await _ws_reject_reason(request, body=body)
     if _bad_ws:
         return {}, "", JSONResponse(
             {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
             status_code=400,
         )
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    return data if isinstance(data, dict) else {}, _resolve_ws(await _ws_from_body(request)), None
+    raw_ws = str(body.get("workspace") or "").strip() or str(request.query_params.get("workspace") or "").strip()
+    ws_override = raw_ws if raw_ws and Path(raw_ws).is_dir() else None
+    return body, _resolve_ws(ws_override), None
 
 
 @router.post("/reset")

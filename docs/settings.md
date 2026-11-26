@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**312 settings keys.**
+**313 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -150,6 +150,7 @@ its comment) in either file, then re-run the generator.
 | `duo_tool_sandbox_max_cpu_s` | int | `0` | yes | POSIX only (Linux/macOS): RLIMIT_CPU seconds per tool child. 0 = unset. |
 | `duo_tool_sandbox_max_mem_mb` | int | `4096` | yes | Job resource limits (0 = unlimited) for run_bash/run_python/background. |
 | `duo_tool_sandbox_max_procs` | int | `64` | yes |  |
+| `duo_tool_sandbox_posix_rlimits` | bool | `False` | yes | POSIX only: opt-in enforcement of RLIMIT_AS/RLIMIT_NPROC (off by default). |
 | `duo_tool_thinking_budget_cap` | int | `0` | yes | TOOL-THINKING BUDGET CAP: upper bound for the per-round thinking budget in agentic tool rounds (only has an effect when tool thinking is on via duo_coder_tool_thinking / the reactive auto mode). 0 = no cap (model default). On a 35B-A3B at ~14-20 tok/s every <think> block before… |
 | `duo_tree_scout_enabled` | bool | `True` | yes |  |
 | `duo_tree_scout_max_depth` | int | `4` | yes |  |

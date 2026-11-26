@@ -155,8 +155,8 @@ RUNTIME ENVIRONMENT:
   contents already provided in your context). Never reconstruct old_text from
   memory — after a context compression, earlier file contents are SUMMARIES,
   not verbatim text, and a memory-based edit fails with old_text-not-found.
-- If edit_file reports old_text not found: the error includes the CURRENT file
-  head. Build your next edit from that excerpt directly - no re-read needed.
+- If edit_file reports old_text not found: inspect the error excerpt first; if
+  the target region is not shown, call read_file on that path and copy old_text verbatim.
   - read_file refuses FULL reads of very large files by CHARACTER budget
     (the file on disk is fine): inspect bigger files with start_line/end_line
     ranges. Never rewrite or delete a file just because a partial read looks
@@ -169,7 +169,7 @@ RUNTIME ENVIRONMENT:
   when you need implementation bodies or exact edit anchors.
 - The shell used by run_bash and the path/command syntax are platform-specific —
   follow the OS/runtime note that is appended to this system prompt for the
-  current machine (PowerShell on Windows, bash on Unix).
+  current machine (Git Bash or PowerShell on Windows, bash on Unix).
 - Paths: use workspace-relative paths with forward slashes (e.g. `src/file.py`);
   absolute paths inside the workspace root also work (all tools normalize them).
 - When all requested changes are done, call task_complete
@@ -178,8 +178,8 @@ RUNTIME ENVIRONMENT:
 RULES:
 - Follow existing code patterns shown in snippets
 - Preserve imports, class structures, function signatures from snippets
-- read_file starts reading large files — then immediately edit/write before exploring
-  further. Do NOT read more than 2 files without making a change.
+- Read the files relevant to your task first (batch related read_file calls
+  when helpful), then move directly to implementing instead of endlessly re-reading.
 - One file per edit_file/write_file call (for multi-file diffs, use a patch tool when available).
 - Large writes: write the complete file in ONE write_file call within your
   WRITE RULES char target. If a call is cut off by the output token limit,
@@ -214,7 +214,7 @@ Start with a tool call when you can. A plan restatement costs an extra round.
 
 - Pick the right first tool for the plan step (read_file, write_file, edit_file, search_code, etc.).
   Only call read_file if the target file was NOT covered in pre-explore results.
-- During implementation: 1 edit + 1 run_bash per round. Avoid two reads in a row.
+- During implementation: once you have read the relevant files, focus on editing and verifying instead of extra reads.
   Before calling task_complete: if you edited any file since your last run_bash,
   run your tests one final time — failing tests mean the work is not done yet.
 - Large files: one write_file call per file within your WRITE RULES char
@@ -237,7 +237,7 @@ RULES:
 - When you receive [CTX CRITICAL]: stop all read_file calls immediately and switch to writing/editing.
 - When you receive a [CTX: ~N% full] warning: finish the current read sequence, then write.
 - Never call read_file on the same file more than twice without an edit in between.
-- If tests fail 3x with the same error: stop, call task_complete with status=blocked and reason.
+- If tests fail 3x with the same error: stop, call task_complete with build_status='blocked' and the blocker in blockers.
 - Work directly; don't describe what you will do.
 """
 
@@ -261,7 +261,7 @@ The user message may contain a [Plan Briefing] with implementation guidance.
 
 - You have ONE implementation pass — work through it and write all files.
 - Use write_file to write a file's full content (create OR overwrite); use
-  edit_file for targeted SEARCH/REPLACE edits of an existing file. Verify with run_bash.
+  edit_file (old_text/new_text) for targeted edits of an existing file. Verify with run_bash.
 - Read a file ONLY if you need its current content for a targeted edit.
 - After reading: edit/write that file next, then move to the next file.
 - DO NOT restate or summarize the briefing. Start with a tool call.
@@ -293,9 +293,8 @@ DUO_CODER_UNEXPLORED = """
 CODEBASE — UNEXPLORED:
 
 No exploration ran. If files are not already pre-seeded in your messages, find
-the target files (find_files or search_code), then read ONE file and edit/write
-it before reading the next.
-Do NOT read all files upfront — interleave: read one → edit/write it → next file.
+the target files (find_files or search_code), then read the target files you
+need (keep reads focused on relevant files) and start implementing.
 """
 
 
@@ -330,7 +329,7 @@ RULES:
 - Do not continue executing the old plan.
 - Check written_files above to assess what is already done.
 - Identify the root cause of the deviation — one sentence.
-- Your next tool call must either: (a) directly fix the blocking issue, or (b) call task_complete with status=blocked and a clear reason.
+- Your next tool call must either: (a) directly fix the blocking issue, or (b) call task_complete with build_status='blocked' and the blocker in blockers.
 - Do not output text describing your replan. Execute it immediately with a tool call.
 """
 
@@ -679,7 +678,7 @@ CONTEXT STRUCTURE (in your system prompt):
 WORKFLOW — follow this order:
 1. Review existing code snippets — they show what already exists
 2. If snippets are missing or insufficient for a file: call read_file BEFORE editing
-3. Implement the plan step using edit_file or edit_file (for targeted edits)
+3. Implement the plan step using write_file or edit_file (for targeted edits)
 4. Verify with run_bash if the project has a test runner
 
 RULES:

@@ -418,8 +418,10 @@ function _liveMdRender(body, force) {
       if (!_liveMdTrailT) {
         _liveMdTrailT = setTimeout(function () {
           _liveMdTrailT = null;
-          body._liveDirty = true;
-          _liveMdRender(body, true);
+          body._liveDirty = false;
+          _liveMdLastAt = 0;
+          _liveMdTick = 0;
+          _liveMdRender(body, false);
         }, _liveMdMinMs);
       }
       return;

@@ -10,17 +10,21 @@ from pathlib import Path
 
 from tools.errors import tool_error_response as _tool_error_response
 from core.send_files import SendFileError, is_written_file, resolve_workspace_file
+from utils.file import _inline_check_workspace
 
 
 async def _inline_tool_send_file(args: dict, workspace: Path,
                                  workspace_lock: str | None) -> str:
     raw = str((args or {}).get("path") or "").strip()
+    _eff_lock = workspace_lock or str(workspace)
     try:
         target = resolve_workspace_file(workspace, raw)
     except SendFileError as exc:
         return _tool_error_response(
             "SEND_FILE_BLOCKED", str(exc), tool="send_file",
             details={"path": raw[:300]})
+    if err := _inline_check_workspace(target, _eff_lock, "send_file"):
+        return err
 
     # Only files this run wrote itself. This is what keeps the tool from
     # becoming an arbitrary-file exfiltration channel for a poisoned model.

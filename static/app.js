@@ -19,15 +19,19 @@ async function init() {
   }
 
   _step('loadChatHistory', loadChatHistory);  // non-blocking: populate Saved Chats immediately alongside model/settings boot
-  await _step('loadModels', loadModels);
-  await _step('clear_session', () => fetch('/memory/clear_session', {method:'POST'}).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }));  // Seitenreload = neuer Chat
-  await _step('loadAgentMap', loadAgentMap);
+  await Promise.all([
+    _step('loadModels', loadModels),
+    _step('clear_session', () => fetch('/memory/clear_session', {method:'POST'}).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); })),  // Seitenreload = neuer Chat
+    _step('loadAgentMap', loadAgentMap)
+  ]);
   await _step('loadSettings', loadSettings);    // renderAgentCards now uses S.currentAssignments
   if (S.duoWebsearch || S.pipelineWebsearch || S.automapPipelineWebsearch) checkWebsearchStatus();
-  await _step('loadPresets', loadPresets);
-  await _step('loadMemory', loadMemory);
-  await _step('loadVisionConfig', loadVisionConfig);
-  await _step('loadSpecialAgentsConfig', loadSpecialAgentsConfig);
+  await Promise.all([
+    _step('loadPresets', loadPresets),
+    _step('loadMemory', loadMemory),
+    _step('loadVisionConfig', loadVisionConfig),
+    _step('loadSpecialAgentsConfig', () => loadSpecialAgentsConfig(S._lastSettings))
+  ]);
   _step('loadSoulStatus', loadSoulStatus);
   _step('buildAgentForceButtons', buildAgentForceButtons);
   try {
@@ -47,21 +51,24 @@ function _wireAppEvents() {
     _updateSendState();
   });
   _updateSendState();
+  function _attachImageFile(file, label, failPrefix) {
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = function(ev) {
+      // PASTE-DOWNSCALE (2026-10-03): shared 1568px path for paste + drag&drop.
+      _downscaleImage(ev.target.result, function(_url, _meta) {
+        if (!_url) { showStatus('\u26A0 ' + failPrefix + ' could not be converted to JPEG \u2014 image dropped.'); return; }
+        _imgConvertNotice(_meta, label);
+        S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
+        renderImgPreview();
+      });
+    };
+    r.readAsDataURL(file);
+  }
   document.getElementById('input').addEventListener('paste', function(e) {
     Array.from(e.clipboardData.items).forEach(function(item) {
       if (!item.type.startsWith('image/')) return;
-      const r = new FileReader();
-      r.onload = function(ev) {
-        // PASTE-DOWNSCALE (2026-10-03): same 1568px path as drag&drop:
-        // screenshots pasted full-res used to skip it entirely.
-        _downscaleImage(ev.target.result, function(_url, _meta) {
-          if (!_url) { showStatus('⚠ Pasted GIF/WebP could not be converted to JPEG — image dropped.'); return; }
-          _imgConvertNotice(_meta, '');
-          S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
-          renderImgPreview();
-        });
-      };
-      r.readAsDataURL(item.getAsFile());
+      _attachImageFile(item.getAsFile(), '', 'Pasted GIF/WebP');
     });
   });
   const chatCol = document.querySelector('.chat-col');
@@ -70,16 +77,7 @@ function _wireAppEvents() {
     e.preventDefault();
     Array.from(e.dataTransfer.files).forEach(function(file) {
       if (!file.type.startsWith('image/')) return;
-      const r = new FileReader();
-      r.onload = function(ev) {
-        _downscaleImage(ev.target.result, function(_url, _meta) {
-          if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
-          _imgConvertNotice(_meta, file.name);
-          S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
-          renderImgPreview();
-        });
-      };
-      r.readAsDataURL(file);
+      _attachImageFile(file, file.name, file.name + ': this GIF/WebP');
     });
   });
 

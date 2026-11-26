@@ -52,6 +52,17 @@ ROOT = Path(__file__).parent.parent
 
 
 def _src(rel):
+    if rel == "hivemind_gateway/bridge.py":
+        return "\n".join(
+            (ROOT / "hivemind_gateway" / name).read_text(encoding="utf-8")
+            for name in ("bridge.py", "bridge_voice.py", "bridge_relay.py", "bridge_commands.py")
+        )
+    if rel == "server.py":
+        return (
+            (ROOT / "server.py").read_text(encoding="utf-8")
+            + "\n"
+            + (ROOT / "routers" / "gateway.py").read_text(encoding="utf-8")
+        )
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
@@ -69,7 +80,7 @@ def test_stale_handled_everywhere():
 
 def test_start_route_serialized():
     src = _src("server.py")
-    seg = src.split("async def gateway_start")[1].split("@app.post")[0]
+    seg = src.split("async def gateway_start")[1].split("@router.post")[0]
     lock = "_gateway_start_lock" in seg
     spawn_inside = "        subprocess.Popen" in seg
     thread = "asyncio.to_thread" in seg

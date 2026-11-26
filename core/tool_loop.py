@@ -424,7 +424,7 @@ class ToolLoop:
             elif _tl_user_eff in _TL_POS_RE:
                 _want_think = _tl_supports
             else:
-                _want_think = bool(self.cfg.thinking) and (_tl_supports or bool(self.cfg.thinking))
+                _want_think = bool(self.cfg.thinking)
             # N1: Model-aware sampling profile
             _smp = get_sampling_profile(
                 self.cfg.model,
@@ -452,7 +452,7 @@ class ToolLoop:
             )
             _payload = {
                 "model": self.cfg.model,
-                "messages": normalize_system_messages(_msgs_to_parts(_tool_messages)),
+                "messages": [],
                 "tools": _tools_payload,
                 "stream": self.cfg.stream,
                 # INCLUDE-USAGE (2026-10-10): b11456 ships the usage+timings
@@ -507,7 +507,6 @@ class ToolLoop:
                 if _cmp_msgs is not _tool_messages or len(_cmp_msgs) != _len_before_cmp:
                     _sanitize_upto = 0
                 _tool_messages = _cmp_msgs
-                _payload["messages"] = normalize_system_messages(_msgs_to_parts(_tool_messages))
 
             _san_removed = sanitize_invalid_tool_call_history(_tool_messages, start=_sanitize_upto)
             if (
@@ -530,8 +529,7 @@ class ToolLoop:
                 )
                 _tool_messages[-1] = _prev_user
             _sanitize_upto = len(_tool_messages)
-            if _san_removed:
-                _payload["messages"] = normalize_system_messages(_msgs_to_parts(_tool_messages))
+            _payload["messages"] = normalize_system_messages(_msgs_to_parts(_tool_messages))
 
             if int(self.cfg.num_ctx or 0) > 0 and int(_payload.get("max_tokens") or 0) > 0:
                 from utils.token import estimate_ctx_tokens as _tl_est_ctx
@@ -757,9 +755,10 @@ class ToolLoop:
                         )
 
                     # ── Error tracking ──
-                    if tool_call_failed(_result, _name):
+                    _failed = tool_call_failed(_result, _name)
+                    if _failed:
                         state.tool_errors += 1
-                    if _name in _tool_names_for_guard and not tool_call_failed(_result, _name):
+                    if _name in _tool_names_for_guard and not _failed:
                         state.verify_mutation_serial += 1
                     if _name == "run_bash" and not _run_bash_failed(_result):
                         state.verify_last_ok_serial = max(state.verify_last_ok_serial, state.verify_mutation_serial)

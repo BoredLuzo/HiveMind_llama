@@ -491,6 +491,12 @@ SUITES = [
     ("metrics_and_reasoning_ui", "tests/test_metrics_and_reasoning_ui.py", 60),
     ("gateway_thinking_and_chat_continuity", "tests/test_gateway_thinking_and_chat_continuity.py", 60),
     ("view_image_tool", "tests/test_view_image_tool.py", 30),
+    ("run_bash_audit_fixes", "tests/test_run_bash_audit_fixes.py", 60),
+    ("wave1_guards_and_tools", "tests/test_wave1_guards_and_tools.py", 60),
+    ("wave2_tools_and_bash", "tests/test_wave2_tools_and_bash.py", 60),
+    ("wave3_guards_tools_prompts", "tests/test_wave3_guards_tools_prompts.py", 60),
+    ("wave4_audit_consolidation", "tests/test_wave4_audit_consolidation.py", 60),
+    ("perf_and_cleanup_wave5", "tests/test_perf_and_cleanup_wave5.py", 45),
 
 ]
 
@@ -515,7 +521,7 @@ _SUBPROCESS_HEAVY_SUITES = {
     "installer_sim", "update_zip_layout", "chat_real_roundtrip",
     "tts_engine", "stt_audio", "agentic_audit",
     "write_guard_and_explore_truth", "preflight_matrix",
-    "run_bash_drive_paths", "duo_e2e_smoke", "gateway_lint_gate",
+    "run_bash_drive_paths", "run_bash_audit_fixes", "wave2_tools_and_bash", "wave3_guards_tools_prompts", "wave4_audit_consolidation", "duo_e2e_smoke", "gateway_lint_gate",
     "glm_deep_audit_wave2", "updater_optionals",
 }
 

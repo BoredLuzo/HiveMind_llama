@@ -716,29 +716,14 @@ async def run_pipeline(ctx):
             _ag_temp, _ag_think, _ag_budget, _ag_max, _ag_smp = _resolve_stage_call(ctx, a, _synth_mdl)
             from core.model_sampling import (
                 POSITIVE_REASONING_EFFORTS as _PIPE_POS_RE,
-                clamp_reasoning_effort_for_model as _clamp_pipe_re,
+                format_reasoning_effort_status as _fmt_pipe_re,
                 model_supports_thinking as _pipe_mst,
                 normalize_reasoning_effort as _norm_pipe_re,
             )
             _pipe_user_eff = _norm_pipe_re((ctx.settings or {}).get("reasoning_effort"))
-            if _pipe_user_eff == "none":
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
-                })
-            elif _pipe_user_eff in _PIPE_POS_RE:
-                if _pipe_mst(_synth_mdl):
-                    _pipe_mapped = _clamp_pipe_re(_synth_mdl, _pipe_user_eff)
-                    _pipe_sfx = f" → {_pipe_mapped}" if (_pipe_mapped and _pipe_mapped != _pipe_user_eff) else ""
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": f"🧠 Reasoning effort: {_pipe_user_eff} (composer override){_pipe_sfx}",
-                    })
-                else:
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": f"ℹ️ Reasoning effort ({_pipe_user_eff}) skipped — {_synth_mdl} does not support reasoning",
-                    })
+            _pipe_st = _fmt_pipe_re(_synth_mdl, _pipe_user_eff, supported=_pipe_mst(_synth_mdl))
+            if _pipe_st:
+                yield await ctx.emit({"type": "status", "content": _pipe_st})
             _pipe_ro_set = False
             if _ag_think and _pipe_user_eff in _PIPE_POS_RE and _pipe_mst(_synth_mdl):
                 try:

@@ -10,7 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
-BRIDGE = (ROOT / "hivemind_gateway" / "bridge.py").read_text(encoding="utf-8")
+BRIDGE = "\n".join(
+    (ROOT / "hivemind_gateway" / name).read_text(encoding="utf-8")
+    for name in ("bridge.py", "bridge_voice.py", "bridge_relay.py", "bridge_commands.py")
+)
 
 passed = failed = 0
 

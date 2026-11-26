@@ -23,11 +23,6 @@ try:
 except Exception:
     _VRAM_LOOKUP_GB: dict[str, float] = {}
 
-try:
-    from backend.llama_compat import force_kill_all as _force_kill_all
-except ImportError:
-    _force_kill_all = None
-
 logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="/vram", tags=["VRAM"])
@@ -317,9 +312,6 @@ async def set_vram_budget(req: Request):
     import copy as _vram_copy
     await asyncio.to_thread(save_settings, _vram_copy.deepcopy(settings))
     _invalidate_vram_status_cache()
-    _verify = load_settings()
-    logger.info("[VRAM-BUDGET] After save: settings['vram_budget_gb']=%s, verify_reload=%s",
-                 settings.get("vram_budget_gb"), _verify.get("vram_budget_gb"))
     return {"ok": True, "vram_budget_gb": gb}
 
 

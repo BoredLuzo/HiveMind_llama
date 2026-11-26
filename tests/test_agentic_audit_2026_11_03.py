@@ -196,7 +196,8 @@ check("5e the third ladder hit accepts", _g3 == "allow" and _res_obj.task_comple
 
 # ── 6. terminal stream frames + browser-side gap marker ─────────────────────
 check("6a the done frame bypasses the queue cap",
-      "DONE-ALWAYS" in SRV and 'elif isinstance(_chunk, str) and \'"type": "done"\' in _chunk:' in SRV)
+      "_is_done_frame = isinstance(_chunk, str) and '\"type\": \"done\"' in _chunk" in SRV
+      and "if _q.qsize() < 5000 or _is_done_frame:" in SRV)
 check("6b the server emits a stream_gap frame", '"type": "stream_gap"' in SRV)
 check("6c the web UI handles stream_gap", "'stream_gap': function(d)" in APPJS)
 check("6d the journal carries and filters the chat id",

@@ -22,9 +22,15 @@ _active = False        # single-flight
 _LAST_SUB_FINISH_REASON: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_sub_last_finish_reason", default=""
 )
+_SUB_CFG_CV: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "_sub_cfg_cv", default=None
+)
 
 
 def _cfg() -> dict:
+    cached = _SUB_CFG_CV.get()
+    if cached is not None:
+        return cached
     data: dict = {}
     try:
         from settings import load_settings
@@ -40,8 +46,8 @@ def _cfg() -> dict:
     return data
 
 
-def _s(key: str, default):
-    return _cfg().get(key, default)
+def _s(key: str, default, cfg: dict | None = None):
+    return (cfg if cfg is not None else _cfg()).get(key, default)
 
 
 class GateBlocked(Exception):
@@ -119,13 +125,13 @@ def _resolve_subagent_ladder(cfg: dict) -> list[str]:
     return list(_LADDER_DEFAULT)
 
 
-async def pick_delegate_model() -> tuple[str, int]:
+async def pick_delegate_model(cfg: dict | None = None) -> tuple[str, int]:
 
-    cfg = _cfg()
+    cfg = cfg if cfg is not None else _cfg()
     ladder = _resolve_subagent_ladder(cfg)
-    min_ram = float(_s("subagent_lite_min_free_ram_gb", 5.0))
-    margin = int(_s("subagent_lite_safety_margin_mib", 256))
-    ctx_default = int(_s("subagent_lite_ctx_default", 8192))
+    min_ram = float(_s("subagent_lite_min_free_ram_gb", 5.0, cfg))
+    margin = int(_s("subagent_lite_safety_margin_mib", 256, cfg))
+    ctx_default = int(_s("subagent_lite_ctx_default", 8192, cfg))
 
     ram = _available_ram_gb()
     if ram is not None and ram < min_ram:
@@ -171,7 +177,8 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
 
     global _active, _last_block_ts
 
-    if not bool(_s("subagent_lite_enabled", False)):
+    cfg = _cfg()
+    if not bool(_s("subagent_lite_enabled", False, cfg)):
         return "Subagent disabled — researching inline."
     if _active:
         return "Subagent already busy — researching inline."
@@ -179,9 +186,10 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
     # LEAK-FIX (audit 2026-11-03): the cooldown and GateBlocked early returns
     # left _active True forever (the finally only covered the later try), so
     # the first blocked attempt disabled the subagent until process restart.
+    _cfg_tok = _SUB_CFG_CV.set(cfg)
     try:
         now = time.time()
-        if now - _last_block_ts < float(_s("subagent_lite_cooldown_s", 60)):
+        if now - _last_block_ts < float(_s("subagent_lite_cooldown_s", 60, cfg)):
             return "Subagent in cooldown (recently blocked) — researching inline."
 
         try:
@@ -193,7 +201,7 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
         try:
             return await asyncio.wait_for(
                 _run_sub_loop(task, workspace_lock, model, ctx),
-                timeout=float(_s("subagent_lite_timeout_s", 120)),
+                timeout=float(_s("subagent_lite_timeout_s", 120, cfg)),
             )
         except asyncio.TimeoutError:
             return ("Subagent exceeded the time limit — partial results "
@@ -201,6 +209,7 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
         except Exception as e:
             return f"Subagent error ({type(e).__name__}) — research inline."
     finally:
+        _SUB_CFG_CV.reset(_cfg_tok)
         _active = False
 
 
@@ -245,7 +254,9 @@ def _tool_schemas() -> list[dict]:
     return build_tool_schemas(_ALLOWED_TOOLS, "read-only tool")
 
 
-async def _call_model_with_meta(port: int, model: str, messages: list[dict]) -> tuple[dict, str]:
+async def _call_model_with_meta(
+    port: int, model: str, messages: list[dict], cfg: dict | None = None
+) -> tuple[dict, str]:
     """Non-stream Chat-Call mit Tools. Returns (assistant message dict, finish_reason)."""
     from core.llm_transport import post_chat_json
 
@@ -254,7 +265,7 @@ async def _call_model_with_meta(port: int, model: str, messages: list[dict]) -> 
         "messages": messages,
         "stream": False,
         "temperature": 0.6,
-        "max_tokens": int(_s("subagent_lite_max_tokens", 700)),
+        "max_tokens": int(_s("subagent_lite_max_tokens", 700, cfg)),
         "tools": _tool_schemas(),
     }
     res = await post_chat_json(
@@ -267,19 +278,25 @@ async def _call_model_with_meta(port: int, model: str, messages: list[dict]) -> 
     return res.message, str(getattr(res, "finish_reason", "") or "")
 
 
-async def _call_model(port: int, model: str, messages: list[dict]) -> dict:
+async def _call_model(
+    port: int, model: str, messages: list[dict], cfg: dict | None = None
+) -> dict:
     """Non-stream Chat-Call mit Tools. Returns raw assistant message dict."""
-    msg, finish_reason = await _call_model_with_meta(port, model, messages)
+    if cfg is not None:
+        msg, finish_reason = await _call_model_with_meta(port, model, messages, cfg=cfg)
+    else:
+        msg, finish_reason = await _call_model_with_meta(port, model, messages)
     _LAST_SUB_FINISH_REASON.set(finish_reason)
     return msg
 
 
 async def _run_sub_loop(task: str, workspace_lock: str | None,
-                        model: str, ctx: int) -> str:
+                        model: str, ctx: int, cfg: dict | None = None) -> str:
     from backend.llama_server_manager import manager
     from core.toolcall_sanitize import sanitize_invalid_tool_call_history
 
-    max_tools = int(_s("subagent_lite_max_tools", 12))
+    cfg = cfg if cfg is not None else _cfg()
+    max_tools = int(_s("subagent_lite_max_tools", 12, cfg))
     was_loaded_before = any(
         _same_model(getattr(s, "model", ""), model) and getattr(s, "is_running", False)
         for s in (getattr(manager, "_slots", []) or [])

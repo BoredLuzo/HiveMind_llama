@@ -132,14 +132,20 @@ except D.DocumentError as exc:
 MAIN = (ROOT / "hivemind_gateway" / "main.py").read_text(encoding="utf-8")
 AUTH = (ROOT / "hivemind_gateway" / "auth.py").read_text(encoding="utf-8")
 CLIENT = (ROOT / "hivemind_gateway" / "hive_client.py").read_text(encoding="utf-8")
-SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
+SERVER = (
+    (ROOT / "server.py").read_text(encoding="utf-8")
+    + "\n"
+    + (ROOT / "routers" / "voice.py").read_text(encoding="utf-8")
+)
 
 check("4a the document branch exists", "p.document_file_id" in MAIN)
 check("4b documents are parsed with mime + name",
       "document_file_id" in AUTH and "document_name" in AUTH)
 check("4c pdf mime triggers the document path", '"application/pdf"' in AUTH)
 check("4d text files are accepted too", '".txt"' in AUTH and '".md"' in AUTH)
-check("4e the engine endpoint exists", '@app.post("/documents/extract")' in SERVER)
+check("4e the engine endpoint exists",
+      '@router.post("/documents/extract")' in SERVER
+      or '@app.post("/documents/extract")' in SERVER)
 check("4f the client posts the raw body", "/documents/extract" in CLIENT)
 check("4g scanned PDFs point at photos", "DOC_NO_TEXT" in MAIN)
 check("4h a too-long document answers honestly",

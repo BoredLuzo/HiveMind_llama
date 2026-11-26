@@ -34,9 +34,11 @@ check("2c refreshAllSelects preserves Follow Duo-Coder & saveAgentModelDirect al
       and "key !== 'duo_critic'" in JS.split("async function saveAgentModelDirect(", 1)[1][:150])
 
 _cfg_src = (ROOT / "routers" / "config.py").read_text(encoding="utf-8")
+_pv_src = (ROOT / "model_configs" / "profile_validation.py").read_text(encoding="utf-8")
 check("2d routers/config handles duo_critic empty model & seed sampling bound & all_model direct_model clear",
       'elif key == "duo_critic" and "model" in d:' in _cfg_src
-      and '"seed": (-1.0, 2147483647.0, True)' in _cfg_src
+      and '"seed": (-1.0, 2147483647.0, True)' in _pv_src
+      and "validate_sampling_block" in _cfg_src
       and 'settings.pop("direct_model", None)' in _cfg_src.split("async def set_all_model", 1)[1][:600])
 
 # ── 3. models_registry._merge recursive dict merge ───────────────────────────
@@ -233,7 +235,8 @@ with tempfile.TemporaryDirectory(prefix="hm_split_w_") as _td_sp:
 
 _srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("10j server /stream and app.js pass subagent_lite_enabled",
-      'if "subagent_lite_enabled" in body:' in _srv_src
+      ('if "subagent_lite_enabled" in body:' in _srv_src
+       or ('"subagent_lite_enabled"' in _srv_src and "_model_overrides[_bool_key]" in _srv_src))
       and "subagent_lite_enabled: S.subagentLite !== false" in _app_js)
 
 _mr_ref.refresh()

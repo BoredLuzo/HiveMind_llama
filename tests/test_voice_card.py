@@ -35,7 +35,11 @@ check = h.check
 
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 app = read_all_ui_js()
-server = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+server = (
+    (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+    + "\n"
+    + (ROOT / "routers" / "voice.py").read_text(encoding="utf-8", errors="replace")
+)
 from settings_source import settings_source as _settings_src
 settings = _settings_src()
 
@@ -112,7 +116,9 @@ check("the test never starts a run",
 # ── (f) /stt/fetch ─────────────────────────────────────────────────────────
 fseg = ""
 if '/stt/fetch' in server:
-    fseg = server.split('@app.post("/stt/fetch")', 1)[1].split('@app.post("/stt")', 1)[0]
+    _dec = '@router.post("/stt/fetch")' if '@router.post("/stt/fetch")' in server else '@app.post("/stt/fetch")'
+    _dec_stt = '@router.post("/stt")' if '@router.post("/stt")' in server else '@app.post("/stt")'
+    fseg = server.split(_dec, 1)[1].split(_dec_stt, 1)[0]
 check("/stt/fetch exists", bool(fseg))
 check("it validates the model key", "if key not in stt_engine.MODELS" in fseg)
 check("it refuses a parallel download", 'status_code=409' in fseg and "running" in fseg)

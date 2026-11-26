@@ -12,6 +12,7 @@ suffixes. PATH, HOME, locale and toolchain variables survive.
 """
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 import sys
@@ -128,22 +129,49 @@ def _find_system_python(path_env: str, *, exclude_dir: Path | None = None) -> Pa
     return None
 
 
-def _engine_venv_dir() -> Path | None:
-    """Return engine interpreter's bin/Scripts dir only when running inside a venv."""
-    if not sys.executable:
+@functools.lru_cache(maxsize=4)
+def _engine_venv_dir_cached(exe: str, prefix: str, base_prefix: str) -> Path | None:
+    if not exe:
         return None
     try:
-        py = Path(sys.executable)
+        py = Path(exe)
         if not py.is_file():
             return None
         in_venv = (
-            getattr(sys, "base_prefix", sys.prefix) != sys.prefix
+            base_prefix != prefix
             or (py.parent.parent / "pyvenv.cfg").is_file()
             or "venv" in py.parent.parent.name.lower()
         )
         return py.parent if in_venv else None
     except (OSError, TypeError, ValueError):
         return None
+
+
+def _engine_venv_dir() -> Path | None:
+    """Return engine interpreter's bin/Scripts dir only when running inside a venv."""
+    return _engine_venv_dir_cached(
+        sys.executable or "", sys.prefix, getattr(sys, "base_prefix", sys.prefix)
+    )
+
+
+@functools.lru_cache(maxsize=8)
+def _clean_path_entries(cur_path: str, eng_norm: str) -> tuple[str, ...]:
+    """Resolve and strip engine venv directory entries from PATH (cached)."""
+    filtered: list[str] = []
+    for raw_entry in cur_path.split(os.pathsep) if cur_path else []:
+        if not raw_entry:
+            continue
+        if eng_norm:
+            try:
+                e_norm = str(Path(raw_entry.strip().strip('"')).resolve())
+            except OSError:
+                e_norm = raw_entry.strip().strip('"')
+            if sys.platform == "win32":
+                e_norm = e_norm.lower()
+            if e_norm == eng_norm:
+                continue
+        filtered.append(raw_entry)
+    return tuple(filtered)
 
 
 def resolve_workspace_python(
@@ -174,20 +202,20 @@ def tool_env(extra: dict | None = None, *, workspace: str | Path | None = None) 
 
     Priority:
       1. Workspace .venv / venv (prepended + VIRTUAL_ENV set)
-      2. Real system Python on PATH (engine venv appended as fallback only so
-         HiveMind's own server venv does not shadow or leak into user projects)
+      2. Real system Python on PATH (engine venv stripped from front and appended
+         as fallback so HiveMind's server venv does not shadow user projects)
       3. Engine venv prepended ONLY when no real system Python exists (e.g.
          uv-only Windows installs with only the WindowsApps stub).
     """
     out = scrubbed_env(extra)
     cur_path = out.get("PATH", "")
-    eng_dir: Path | None = None
-    try:
-        py = Path(sys.executable)
-        if py.is_file():
-            eng_dir = py.parent
-    except (OSError, TypeError, ValueError):
-        eng_dir = None
+    eng_dir = _engine_venv_dir()
+    eng_norm = ""
+    if eng_dir is not None:
+        try:
+            eng_norm = str(eng_dir.resolve()).lower() if sys.platform == "win32" else str(eng_dir.resolve())
+        except OSError:
+            eng_norm = str(eng_dir).lower() if sys.platform == "win32" else str(eng_dir)
 
     # Never leak HiveMind's own engine VIRTUAL_ENV into child workspaces
     if eng_dir is not None and out.get("VIRTUAL_ENV"):
@@ -200,19 +228,43 @@ def tool_env(extra: dict | None = None, *, workspace: str | Path | None = None) 
     ws_py = workspace_venv_python(workspace)
     has_sys_py = _find_system_python(cur_path, exclude_dir=eng_dir) is not None
 
+    # Strip engine venv dir from cur_path when real system Python exists so the
+    # engine venv cannot stay ahead of it on PATH.
+    filtered_entries = list(
+        _clean_path_entries(cur_path, eng_norm if (eng_dir is not None and has_sys_py) else "")
+    )
+
     parts: list[str] = []
     if ws_py is not None:
         parts.append(str(ws_py.parent))
         out["VIRTUAL_ENV"] = str(ws_py.parent.parent)
     if eng_dir is not None and not has_sys_py:
         parts.append(str(eng_dir))
-    if cur_path:
-        parts.append(cur_path)
+    parts.extend(filtered_entries)
     if eng_dir is not None and has_sys_py:
         parts.append(str(eng_dir))
+    elif eng_dir is None and sys.executable:
+        try:
+            sys_dir = str(Path(sys.executable).parent)
+            sys_norm = sys_dir.lower() if sys.platform == "win32" else sys_dir
+            existing_norms = {
+                (p.strip().strip('"').lower() if sys.platform == "win32" else p.strip().strip('"'))
+                for p in parts
+            }
+            if sys_norm not in existing_norms:
+                parts.append(sys_dir)
+        except (OSError, TypeError, ValueError):
+            pass
     if parts:
         out["PATH"] = os.pathsep.join(parts)
 
     out["PYTHONIOENCODING"] = "utf-8"
     out["PYTHONUTF8"] = "1"
+    if sys.platform == "win32":
+        # Prevent Git Bash / MSYS2 from auto-converting POSIX-looking args
+        # like `/api/users` or `/foo/bar` into `C:/Program Files/Git/...`
+        # when invoking native Windows binaries (python.exe, node.exe, git.exe).
+        # Genuine `/c/Users/...` paths are normalized to `C:/Users/...` by run_bash.
+        out.setdefault("MSYS_NO_PATHCONV", "1")
+        out.setdefault("MSYS2_ARG_CONV_EXCL", "*")
     return out

@@ -11,13 +11,13 @@ import dataclasses
 import logging
 
 from core.duo_helpers import _collect_new_explore_paths, _explore_size_tolerance
+from core.tool_executor import WRITE_TOOLS as _BASE_WRITE_TOOLS
 from hive_functions.chunking import compute_bash_changed, resolve_explore_reset
 
 logger = logging.getLogger("hivemind.duo")
 
 _EXPLORE_TOOLS = {"find_files", "search_code", "list_dir", "read_file"}
-_WRITE_TOOLS = {"write_file", "edit_file", "patch_file", "write_file_append",
-                "replace_lines", "undo_last", "run_bash", "run_python"}
+_WRITE_TOOLS = set(_BASE_WRITE_TOOLS) | {"undo_last", "run_bash", "run_python", "run_tests"}
 
 
 @dataclasses.dataclass

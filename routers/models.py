@@ -14,7 +14,10 @@ from routing.model_automap import _VISION_PREPROCESSING_ALLOWLIST
 from core.model_sampling import _model_profile
 from core.state import settings, S_models_cache, registry_all
 from backend import api_tags as _bk_tags
-from routers.config import _validate_sampling_block
+from model_configs.profile_validation import (
+    validate_capabilities_dict as _validate_capabilities_dict,
+    validate_sampling_block as _validate_sampling_block,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -191,20 +194,9 @@ def _validate_user_profile_payload(raw: dict, clean_model: str) -> tuple[dict | 
                 continue
             return None, "key 'extra_args' requires a list of strings, string, or null"
         if key == "capabilities":
-            if val is None:
-                clean_payload[key] = None
-                continue
-            if not isinstance(val, dict):
-                return None, "key 'capabilities' requires an object or null"
-            clean_caps: dict[str, bool] = {}
-            for ck, cv in val.items():
-                if ck not in ("thinking", "vision", "tool_call"):
-                    return None, f"unsupported capability '{ck}'"
-                if cv is None:
-                    continue
-                if not isinstance(cv, bool):
-                    return None, f"capabilities.{ck} requires boolean or null"
-                clean_caps[ck] = cv
+            clean_caps, cap_err = _validate_capabilities_dict(val, drop_none=True)
+            if cap_err:
+                return None, cap_err
             if clean_caps:
                 clean_payload[key] = clean_caps
             continue

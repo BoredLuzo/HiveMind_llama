@@ -9,7 +9,8 @@ import logging
 import shutil
 import sys
 
-from infra.child_env import scrubbed_env
+from infra.child_env import resolve_workspace_python, tool_env
+from tools.sandbox import kill_tree_and_reap as _lint_kill_reap
 
 _LINT_ARGVS: dict[str, tuple[str, ...]] = {
     "python": ("python", "-m", "py_compile"),
@@ -19,14 +20,17 @@ _LINT_ARGVS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _build_lint_argv(lang: str, p: Path) -> list[str] | None:
+def _build_lint_argv(lang: str, p: Path, workspace: Path | None = None) -> list[str] | None:
     """Return an argv list for a built-in per-file linter, or None."""
     base = _LINT_ARGVS.get(lang)
     if not base:
         return None
     argv = list(base)
     if lang == "python":
-        argv[0] = sys.executable or ("python" if sys.platform == "win32" else "python3")
+        resolved_py = resolve_workspace_python(workspace) if workspace is not None else None
+        argv[0] = str(resolved_py) if resolved_py is not None else (
+            sys.executable or ("python" if sys.platform == "win32" else "python3")
+        )
     else:
         argv[0] = shutil.which(argv[0]) or argv[0]
     argv.append(str(p))
@@ -52,22 +56,26 @@ def _resolve_pyright_cmd() -> list[str] | None:
 
 async def _pyright_lint_result(cmd_prefix: list[str], p: "Path", workspace: "Path") -> str:
 
+    r = None
     try:
         r = await asyncio.create_subprocess_exec(
             *cmd_prefix, "--outputjson", str(p),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=str(workspace), env=scrubbed_env())
+            cwd=str(workspace), env=tool_env(workspace=workspace))
         out, err = await asyncio.wait_for(r.communicate(), 12)
     except asyncio.TimeoutError:
-        try:
-            r.kill()
-        except Exception:
-            pass
+        if r is not None:
+            await _lint_kill_reap(r)
         return ("\n[lint/python WARNING: pyright timed out after 12s — type errors may be "
                 "unreported. Check manually or run tests to verify.]")
     except Exception as _pe:
         return (f"\n[lint/python WARNING: pyright crashed ({type(_pe).__name__}) — type errors "
                 "may be unreported. Verify manually or run tests.]")
+    finally:
+        if r is not None:
+            _tr_p = getattr(r, "_transport", None)
+            if _tr_p is not None:
+                _tr_p.close()
     raw = out.decode(errors="replace")
     try:
         data = json.loads(raw)
@@ -120,7 +128,7 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
         lint_tpl = cfg.get("lint_cmd")
         if not lint_tpl or "{file}" not in lint_tpl:
             return ""
-        argv = _build_lint_argv(lang, p)
+        argv = _build_lint_argv(lang, p, workspace=workspace)
         if not argv:
             return ""
         r = None
@@ -128,7 +136,7 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
             r = await asyncio.create_subprocess_exec(
                 *argv,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                cwd=str(workspace), env=scrubbed_env())
+                cwd=str(workspace), env=tool_env(workspace=workspace))
             out, err = await asyncio.wait_for(r.communicate(), 8)
             stdout = out.decode(errors="replace").strip()
             stderr = err.decode(errors="replace").strip()
@@ -147,13 +155,15 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
             return f"\n[lint/{lang} ERROR — fix before continuing]:\n{msg}"
         except asyncio.TimeoutError:
             if r is not None:
-                try:
-                    r.kill()
-                except OSError:
-                    pass
+                await _lint_kill_reap(r)
             return f"\n[lint/{lang} WARNING: lint timed out after 8s — syntax may have errors that were NOT detected.\nCheck manually or run build commands to verify.]"
         except Exception as _le:
             return f"\n[lint/{lang} WARNING: lint crashed ({type(_le).__name__}) — syntax may have unreported errors.\nVerify manually or run build commands.]"
+        finally:
+            if r is not None:
+                _tr_l = getattr(r, "_transport", None)
+                if _tr_l is not None:
+                    _tr_l.close()
     except ImportError:
         return ""
     except Exception:

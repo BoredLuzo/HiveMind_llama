@@ -806,6 +806,8 @@ function _getModelColor(name) {
 
 // ETag for /vram/status — prevents log spam: identical responses → 304 no content
 var _vramEtag = null;
+var _vramLastData = null;
+var _vramInFlight = null;
 // DECL-FIX: missing var declarations — without these, strict mode throws a ReferenceError
 // because _vramPending was only set via assignment (not var).
 var _vramPending = false;
@@ -857,14 +859,20 @@ async function refreshVram(fromTimer) {
   try {
     var headers = {};
     if (_vramEtag) headers['If-None-Match'] = _vramEtag;
-    var resp = await fetch('/vram/status', {headers: headers});
+    var p = fetch('/vram/status', {headers: headers}).then(async function(resp) {
+      if (resp.status === 304) return {notModified: true, data: _vramLastData || {models: []}};
+      var d = await resp.json();
+      _vramEtag = resp.headers.get('ETag') || null;
+      _vramLastData = d;
+      return {notModified: false, data: d};
+    });
+    _vramInFlight = p;
+    var res = await p;
 
     // 304 Not Modified: nothing changed → skip the UI update, no log spam
-    if (resp.status === 304) return;
+    if (res.notModified) return;
 
-    var data  = await resp.json();
-    // remember the new ETag
-    _vramEtag = resp.headers.get('ETag') || null;
+    var data = res.data;
 
     var TOTAL = data.budget_gb || 8.0;
     _vramBudgetGb = TOTAL;
@@ -1066,6 +1074,7 @@ async function refreshVram(fromTimer) {
     }
   } finally {
     _vramPending = false;
+    _vramInFlight = null;
     if (_vramTimerId) { clearTimeout(_vramTimerId); _vramTimerId = null; }
     if (_vramOpen) {
       var _ms = _vramFastMode ? Math.min(_vramRefreshInterval, 2000) : _vramRefreshInterval;
@@ -1223,10 +1232,12 @@ async function refreshAvailableModels() {
   var list = document.getElementById('available-models-list');
   if (!list) return;
   try {
-    // all three in parallel: models, VRAM status, VRAM table (cached from the 2nd call)
+    // all three in parallel: models, VRAM status, VRAM table (reusing active fetches when concurrent)
+    var modelsP = S._modelsInFlight || (S._modelsInFlight = fetch('/models').then(function(r){return r.json();}).finally(function(){ S._modelsInFlight = null; }));
+    var vramP = (_vramInFlight ? _vramInFlight.then(function(r){ return r.data || {models:[]}; }) : fetch('/vram/status').then(function(r){return r.json();})).catch(function(){return {models:[]};});
     var [modelsResp, vramResp, table] = await Promise.all([
-      fetch('/models').then(function(r){return r.json();}),
-      fetch('/vram/status').then(function(r){return r.json();}).catch(function(){return {models:[]};}).catch(function(){return {models:[]};})
+      modelsP,
+      vramP
     ].concat([_getVramTable()]));
     _availModels = (modelsResp.models || []).map(function(m) {
       var n = typeof m === 'string' ? m : m.name || m;

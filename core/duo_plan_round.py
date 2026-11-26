@@ -64,12 +64,12 @@ async def _duo_plan_tracker_round(
                         "content": (
                             "⛔ [CRITICAL STALL] Maximum replans reached, "
                             "no progress detected for 6+ rounds. "
-                            "Call task_complete(status='blocked', reason='max_replans_exhausted')."
+                            'Call task_complete(status={"completed": [], "blockers": ["max_replans_exhausted"], "build_status": "blocked"}).'
                         ),
                     })
                     dtool_msgs.append({"role": "user", "content": (
                         "[CRITICAL STALL] All replans exhausted without progress. "
-                        "Call task_complete(status='blocked', reason='max_replans_exhausted') "
+                        'Call task_complete(status={"completed": [], "blockers": ["max_replans_exhausted"], "build_status": "blocked"}) '
                         "immediately. Do NOT read or write files."
                     )})
                 else:

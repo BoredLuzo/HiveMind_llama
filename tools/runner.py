@@ -130,6 +130,10 @@ _external_dispatch: _contextvars.ContextVar = _contextvars.ContextVar(
     "_external_dispatch", default=False
 )
 
+_in_approved_funnel: _contextvars.ContextVar[bool] = _contextvars.ContextVar(
+    "_in_approved_funnel", default=False
+)
+
 
 def _is_external_dispatch() -> bool:
     return bool(_external_dispatch.get(False))
@@ -1549,11 +1553,11 @@ _DESTRUCTIVE_BASH_PATTERNS = [
     # SQL destructive
     r"\bDROP\s+TABLE\b",
     r"\bDROP\s+DATABASE\b",
-    r"\bTRUNCATE\b",
+    r"\bTRUNCATE\s+TABLE\b",
     # System
     r"\bStop-Computer\b",
     r"\bRestart-Computer\b",
-    r"\bShutdown\b",
+    r"(?:^|[;&|]\s*|\bsudo\s+)shutdown(?:\.exe)?(?=\s|$|[;|&])",
     r"\btaskkill\b",
     # Permission changes
     r"\bicacls\b",
@@ -1573,22 +1577,21 @@ _DESTRUCTIVE_BASH_PATTERNS = [
     # invocation context (paren or quote); pipe cradles stay covered
     # by their own patterns.
     r"\bInvoke-Expression\b",
-    r"\biex\s*[(\(\x27]",
+    r"\biex\s*[(\x27\"]",
     r"\bschtasks\s+\/(create|change|delete)",
     r"(curl|wget|iwr|Invoke-WebRequest)[^|;]*\|\s*(iex|Invoke-Expression|sh|bash|powershell)",
     r"\|\s*(iex|Invoke-Expression)\b",
 ]
-# CHMOD-GATE-SCOPE (2026-09-19): 'chmod +x script.sh' ist auf POSIX
-# Routinelast (Container/Builds) — das bare chmod-Pattern hat dort jeden
-# Aufruf durch den Destructive-Gate geschleust. POSIX gated nur rekursives
-# chmod; Windows behält das strenge Pattern (dort ist chmod exotisch).
-if os.name != "nt":
-    _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+(-R|--recursive)\b")
-    # Linux audit 2026-11-03: chmod -w/-x strips access without -R and was
-    # ungated; +x stays routine and is not matched.
-    _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+(-R\s+)?-[rwx]")
-else:
-    _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+[-+]\w")
+# CHMOD-GATE-SCOPE (2026-09-19): 'chmod +x script.sh' is routine under POSIX
+# and Git Bash; POSIX rules gate recursive/removal chmods, while Windows
+# PowerShell-only keeps the stricter pattern.
+_CHMOD_POSIX_PATTERNS = (
+    r"\bchmod\s+(-R|--recursive)\b",
+    r"\bchmod\s+(-R\s+)?-[rwx]",
+)
+_CHMOD_WIN_PATTERNS = (
+    r"\bchmod\s+[-+]\w",
+)
 
 
 _DESTRUCTIVE_BASH_PATTERNS_CS = [
@@ -1596,17 +1599,32 @@ _DESTRUCTIVE_BASH_PATTERNS_CS = [
     r"\bgit\s+(?:-(?:[cC]|-git-dir|-work-tree|-namespace)\s+\S+\s+|-\S+\s+)*branch\b[^|&;\n]*\s-(?:D|f\w*d|d\w*f)(?=\s|$|[;|&])",
 ]
 
+_DESTRUCTIVE_BASH_RE_CS = tuple((p, re.compile(p)) for p in _DESTRUCTIVE_BASH_PATTERNS_CS)
+_DESTRUCTIVE_BASH_RE_CI = tuple((p, re.compile(p, re.IGNORECASE)) for p in _DESTRUCTIVE_BASH_PATTERNS)
+_CHMOD_POSIX_RE = tuple((p, re.compile(p, re.IGNORECASE)) for p in _CHMOD_POSIX_PATTERNS)
+_CHMOD_WIN_RE = tuple((p, re.compile(p, re.IGNORECASE)) for p in _CHMOD_WIN_PATTERNS)
+
+
+def _chmod_is_posix_mode() -> bool:
+    if os.name != "nt":
+        return True
+    try:
+        from tools.handlers.exec_tools import _run_bash_shell_mode
+        return _run_bash_shell_mode() == "bash"
+    except (ImportError, AttributeError):
+        return False
+
 
 def _is_destructive_bash(cmd: str) -> str | None:
     """Return matching pattern description if command is destructive, else None."""
-    import re as _dre
     _cmd_raw = str(cmd)
-    for _pat in _DESTRUCTIVE_BASH_PATTERNS_CS:
-        if _dre.search(_pat, _cmd_raw):
+    for _pat, _rx in _DESTRUCTIVE_BASH_RE_CS:
+        if _rx.search(_cmd_raw):
             return _pat
     _cmd_lower = _cmd_raw.lower()
-    for _pat in _DESTRUCTIVE_BASH_PATTERNS:
-        if _dre.search(_pat, _cmd_lower, _dre.IGNORECASE):
+    _chmod_pats = _CHMOD_POSIX_RE if _chmod_is_posix_mode() else _CHMOD_WIN_RE
+    for _pat, _rx in (*_DESTRUCTIVE_BASH_RE_CI, *_chmod_pats):
+        if _rx.search(_cmd_lower):
             return _pat
     return None
 
@@ -1630,8 +1648,12 @@ _DESTRUCTIVE_PYTHON_PATTERNS = [
     r"\bos\.unlink\s*\(",
     r"\bos\.rmdir\s*\(",
     r"\bos\.renames\s*\(",
+    r"\.unlink\s*\(",
+    r"\.rmdir\s*\(",
     r"\bwinreg\.(CreateKey|DeleteKey|SetValue)\s*\(",
 ]
+
+_DESTRUCTIVE_PYTHON_RE = tuple((p, re.compile(p)) for p in _DESTRUCTIVE_PYTHON_PATTERNS)
 
 # An absolute-path open is only destructive when it WRITES. The old blanket
 # pattern gated read-only snippets like open('C:/x/script.js', 'r') and made
@@ -1639,6 +1661,8 @@ _DESTRUCTIVE_PYTHON_PATTERNS = [
 _ABS_OPEN_CALL = re.compile(
     r"\bopen\s*\(\s*(['\"])(?P<path>(?:/|[A-Za-z]:[/\\]|~|\.\.)[^'\"\n]*)"
     r"\1(?P<args>.*?)\)", re.DOTALL)
+_ABS_PATHLIB_WRITE = re.compile(
+    r"\bPath\s*\(\s*(['\"])(?:/|[A-Za-z]:[/\\]|~|\.\.)[^'\"\n]*\1\s*\)\s*\.write_(?:text|bytes)\s*\(")
 _OPEN_WRITE_MODE = re.compile(
     r"(?:\bmode\s*=\s*)?(['\"])(?P<mode>[rbt]*[wax+][rbt+]*)\1", re.IGNORECASE)
 
@@ -1656,11 +1680,12 @@ def _absolute_open_write(code: str) -> bool:
 
 def _is_destructive_python(code: str) -> str | None:
     """Return matching pattern if Python code contains destructive patterns."""
-    import re as _dre
     _code = str(code)
-    for _pat in _DESTRUCTIVE_PYTHON_PATTERNS:
-        if _dre.search(_pat, _code):
+    for _pat, _rx in _DESTRUCTIVE_PYTHON_RE:
+        if _rx.search(_code):
             return _pat
+    if _ABS_PATHLIB_WRITE.search(_code):
+        return "absolute-path Path.write_text/write_bytes"
     if _absolute_open_write(_code):
         return "absolute-path open in write/append mode"
     return None
@@ -1786,10 +1811,11 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
             pass
 
     _answer_lower = _answer.strip().lower() if isinstance(_answer, str) else ""
+    _answer_head = _answer.split("|", 1)[0].strip().lower() if isinstance(_answer, str) else ""
     # "1"/"approve": the ask card may be answered with the approval buttons
-    # ("approve once") — treat those as confirmation, not as a decline.
-    if _answer_lower in ("ja", "yes", "y", "ok", "ausfuehren", "execute", "go",
-                         "confirm", "1", "approve", "once", "einmal"):
+    # ("approve once", possibly with "|note") — treat those as confirmation.
+    if _answer_head in ("ja", "yes", "y", "ok", "ausfuehren", "execute", "go",
+                        "confirm", "1", "approve", "once", "einmal"):
         import logging as _dgl3
         _dgl3.getLogger("hivemind.tools").info(
             "[GATE] Destructive action CONFIRMED: %s — %s | cmd=%s",
@@ -1835,21 +1861,13 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
     )
 
 
-async def _run_inline_tool(
+def _prepare_inline_call(
     name: str,
-    args: dict,
-    workspace_lock: str | None = None,
-    *,
-    tool_mode: str | None = None,
-    include_websearch: bool = False,
-    include_git: bool | None = None) -> str:
-    """Primary inline-tool dispatch using the unified handler map."""
-    workspace = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
-
-    # S3 (2026-10-31 audit): the endpoint never sets up a run context, so the
-    # budget ContextVars below would be fresh per call = unlimited. Seed the
-    # shared windowed counters so the settings limits also apply on the
-    # contextless /internal/tool/exec path (and I3's mcp budget with them).
+    tool_mode: str | None,
+    include_websearch: bool,
+    include_git: bool | None,
+) -> tuple[str | None, set, set, set]:
+    """Seed run ContextVars and validate mode/MCP/phone restrictions for inline tools."""
     if _is_external_dispatch():
         _seed_external_budgets()
 
@@ -1874,20 +1892,22 @@ async def _run_inline_tool(
     # ONE choke point for every mode/phase — anything outside the safe set
     # (read-only + web + dialog) is rejected before mode/MCP/read-guard checks.
     if _tools_restricted_run.get() and name not in _PHONE_SAFE_TOOLS:
-        return _tool_error_response(
+        _err = _tool_error_response(
             "PHONE_RESTRICTED",
             f"Tool '{name}' is blocked: phone runs are restricted to web "
             "+ read-only tools (UI toggle 'Restrict phone runs').",
             tool=name,
             mode=str(tool_mode or ""),
             details={"allowed_tools": sorted(_PHONE_SAFE_TOOLS)})
+        return _err, _read_set, _any_read_set, _written_set
     if (tool_mode and bool(name) and name.startswith("mcp_")
             and not _mcp_allowed_in_mode(tool_mode)):
-        return _tool_error_response(
+        _err = _tool_error_response(
             "TOOL_NOT_ALLOWED",
             f"Tool '{name}' is an MCP tool and mode '{tool_mode}' has no MCP "
             f"access. Modes with MCP access: {', '.join(sorted(_MCP_TOOL_MODES))}.",
             tool=name, mode=tool_mode)
+        return _err, _read_set, _any_read_set, _written_set
     if tool_mode and not (bool(name) and name.startswith("mcp_")):
         _eff_git = include_git
         _eff_sub = None
@@ -1903,16 +1923,31 @@ async def _run_inline_tool(
         _allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch,
                                         include_git=_eff_git, include_subagent=_eff_sub)
         if name not in _allowed:
-            return _tool_error_response(
+            _err = _tool_error_response(
                 "TOOL_NOT_ALLOWED",
                 f"Tool '{name}' is not allowed in mode '{tool_mode}'.",
                 tool=name,
                 mode=tool_mode ,
                 details={"allowed_tools": sorted(_allowed)})
+            return _err, _read_set, _any_read_set, _written_set
 
+    return None, _read_set, _any_read_set, _written_set
+
+
+def _enforce_read_write_guards(
+    name: str,
+    args: dict,
+    workspace: Path,
+    tool_mode: str | None,
+    _read_set: set,
+    _any_read_set: set,
+    _written_set: set,
+) -> tuple[str | None, str]:
+    """Enforce read-before-edit, redundant read, MCP-enable, dead-tool, and fuzzy path guards."""
     _resolve_hint = ""     # fuzzy path resolution hint for edit tools
 
-    if name in ("edit_file", "patch_file", "write_file", "write_file_append", "replace_lines") and "path" in args:
+    if name in ("edit_file", "patch_file", "write_file", "write_file_append",
+                "replace_lines", "edit_ast", "lsp_format") and "path" in args:
         _resolve_hint = ""
         raw_path = args["path"]
         # T5 (audit r2): build the probe via the SAME MSYS-stripping
@@ -1942,14 +1977,14 @@ async def _run_inline_tool(
                     f"Reason: File has not been read in this session.\n"
                     f"Fix: Call read_file('{raw_path}') first, then use edit_file to modify it.\n"
                     f"Note: This file already exists. write_file is only for creating "
-                    f"NEW files — use edit_file (SEARCH/REPLACE) to modify it instead."
-                )
+                    f"NEW files — use edit_file (old_text/new_text) to modify it instead."
+                ), _resolve_hint
             return _normalize_meta_paths(
                 f"[TOOL_ERROR: READ_REQUIRED]\n"
                 f"Action: {name} BLOCKED on '{raw_path}'\n"
                 f"Reason: File has not been read in this session.\n"
                 f"Fix: Call read_file('{raw_path}') first, then retry {name}."
-            )
+            ), _resolve_hint
         # WRITE-GUARD duo_full (2026-09-06): re-enabled ONLY for the destructive
         # alias write_file on an existing file never seen in this run. The
         # original RELAX (2026-09-02) blocked write_file AND edit_file in
@@ -1983,7 +2018,7 @@ async def _run_inline_tool(
                 f"edit_file(path, old_text, new_text) or apply_patch.\n"
                 f"Note: write_file with full content is only for creating NEW files.\n"
                 f"      To disable this guard set duo_write_guard_enabled=false."
-            )
+            ), _resolve_hint
     elif name == "apply_patch" and (args.get("patch") or args.get("diff")):
         _guard_active_ap = (not _is_external_dispatch() and _read_guard_enabled()
                             and (tool_mode or "") not in ("duo_full", "duo_core", "duo_lean"))
@@ -2008,11 +2043,10 @@ async def _run_inline_tool(
                         f"Action: apply_patch BLOCKED on '{_ap_raw}'\n"
                         f"Reason: File has not been read in this session.\n"
                         f"Fix: Call read_file('{_ap_raw}') first, then retry apply_patch."
-                    )
+                    ), _resolve_hint
 
     if name == "read_file" and "path" in args:
         _rp_str = _normalize_tool_path(args["path"], workspace)
-        _any_read_set.add(_rp_str)
         _ctx_set = _files_in_context.get(None)
         if _ctx_set and _rp_str in _ctx_set:
             import logging as _logging
@@ -2021,14 +2055,27 @@ async def _run_inline_tool(
                 _rp_str
             )
         if _rp_str in _read_set and not args.get("start_line") and not args.get("end_line"):
-            _skip_msg = _normalize_meta_paths(
-                f"[SKIP: '{args.get('path')}' already read in this session. "
-                f"The full content is in your context above. "
-                f"Do NOT call read_file on this path again. "
-                f"Use edit_file or write_file directly.]"
-            )
-            _record_read_file_stat(_rp_str, len(_skip_msg))
-            return _skip_msg
+            _skip_stale = False
+            _prev_sig = _read_signatures.get(_rp_str)
+            if _prev_sig is not None:
+                try:
+                    _cur_fp = _inline_resolve_path(workspace, args["path"])
+                    _cur_st = _cur_fp.stat()
+                    if (_cur_st.st_mtime_ns, _cur_st.st_size) != _prev_sig:
+                        _skip_stale = True
+                except OSError:
+                    _skip_stale = True
+            if _skip_stale:
+                _read_set.discard(_rp_str)
+            else:
+                _skip_msg = _normalize_meta_paths(
+                    f"[SKIP: '{args.get('path')}' already read in this session. "
+                    f"The full content is in your context above. "
+                    f"Do NOT call read_file on this path again. "
+                    f"Use edit_file or write_file directly.]"
+                )
+                _record_read_file_stat(_rp_str, len(_skip_msg))
+                return _skip_msg, _resolve_hint
 
     # DEAD-NAME GUARD (audit 2026-10-17): a handler that exists but is offered by
     # NO mode (today: patch_file) was still reachable in the duo path - the model
@@ -2044,11 +2091,12 @@ async def _run_inline_tool(
         try:
             from infra import mcp_client as _mcp_mod
             if not _mcp_mod.enabled():
-                return _tool_error_response(
+                _err = _tool_error_response(
                     "MCP_DISABLED",
                     f"Tool '{name}' belongs to an MCP server, but the MCP client "
                     f"is disabled (settings: mcp_client_enabled).",
                     tool=name)
+                return _err, _resolve_hint
         except (ImportError, AttributeError, TypeError):
             pass
     if name and name not in _OFFERED_TOOL_NAMES_UNION and not _is_mcp_tool:
@@ -2056,11 +2104,12 @@ async def _run_inline_tool(
         _lg_dead = _lg_dead_mod.getLogger("hivemind.tools")
         _lg_dead.warning("[TOOL-DEAD] '%s' is not offered by any tool mode - rejected",
                          name)
-        return _tool_error_response(
+        _err = _tool_error_response(
             "TOOL_NOT_FOUND",
             f"Unknown tool '{name}'. Use one of the tools that are available in "
             f"this run.",
             tool=name, mode=str(tool_mode or ""))
+        return _err, _resolve_hint
     _path_based_tools = {"read_file", "get_signatures", "patch_file", "edit_file", "write_file", "replace_lines", "search_code"}
     _WRITE_TOOLS_NO_FUZZY = {"patch_file", "edit_file", "write_file", "write_file_append", "replace_lines"}
     if name in _path_based_tools and "path" in args:
@@ -2080,6 +2129,296 @@ async def _run_inline_tool(
                         corrected_ext = _fuzzy_resolve_path(_with_ext, str(workspace))
                         if corrected_ext:
                             args["path"] = corrected_ext
+    return None, _resolve_hint
+
+
+async def _post_dispatch_inline_hooks(
+    name: str,
+    args: dict,
+    workspace: Path,
+    workspace_lock: str | None,
+    _result: str,
+    _appr_note: str,
+    _resolve_hint: str,
+    _write_existed_before: bool,
+    _ap_existed_before: set[str],
+    _read_set: set,
+    _any_read_set: set,
+    _written_set: set,
+) -> str:
+    """Apply taint wrapping, approval notes, read/write/bash/ProjectState tracking, and path normalization."""
+    # TAINT-WRAP (2026-11-02): web/MCP/browser results are marked as data
+    # and the source is recorded (see tools/taint.py). Approval cards are
+    # controlled solely by the user's toggle / per-run force.
+    try:
+        from tools import taint as _taint
+        _result = _taint.wrap_result(name, _result)
+    except ImportError:
+        pass
+
+    if _appr_note:
+        # user note from the approval card rides along with the result,
+        # so the model reads the guidance together with the outcome
+        _result = f"{_result}\n[USER NOTE]: {_appr_note}"
+
+    if name == "read_file" and "path" in args:
+        _is_range_read = bool(args.get("start_line") or args.get("end_line"))
+        _rp_ok = _normalize_tool_path(args["path"], workspace)
+        if _result.startswith("[TOOL_ERROR"):
+            if _rp_ok not in _read_set:
+                _any_read_set.discard(_rp_ok)
+        else:
+            _is_truncated = "[FILE TRUNCATED" in _result or "[TRUNCATED:" in _result
+            if _is_truncated:
+                if not _is_range_read:
+                    _read_set.discard(_rp_ok)
+            elif not _is_range_read:
+                _read_set.add(_rp_ok)
+            # H-audit: record ONLY successful reads (including truncated reads,
+            # excluding _read_set skip when truncated) - a BINARY_FILE /
+            # FILE_TOO_LARGE error used to arm the gates for unseen content.
+            _any_read_set.add(_rp_ok)
+            _record_read_file_stat(_rp_ok, len(str(_result or "")))
+            # T2 (audit r2): the signature block used to run on ANY
+            # outcome at its own indent level - a FAILED re-read
+            # refreshed the signature for content the model never saw,
+            # arming the fuzzy-edit stale-gate bypass. Success-only.
+            try:
+                _rs_fp = _inline_resolve_path(workspace, args.get("path", ""))
+                _rs_fp = _rs_fp.resolve()
+                _rs_st = _rs_fp.stat()
+                _rs_key = _normalize_tool_path(str(_rs_fp), workspace)
+                if _rs_key not in _read_signatures:
+                    while len(_read_signatures) >= 2048:
+                        _read_signatures.pop(next(iter(_read_signatures)), None)
+                _read_signatures[_rs_key] = (
+                    _rs_st.st_mtime_ns, _rs_st.st_size)
+            except OSError:
+                pass
+
+    # WRITTEN-SET (2026-08-21, extended 2026-11-04): every successful
+    # file mutation counts as run-written, not only write_file/append.
+    def _record_written_path(_w_raw: str) -> None:
+        _w_res = _fuzzy_resolve_path(_w_raw, str(workspace)) or _w_raw
+        _w_fp = Path(_w_res)
+        if not _w_fp.is_absolute():
+            _w_fp = workspace / _w_fp
+        try:
+            _w_fp = _w_fp.resolve()
+        except Exception:
+            pass
+        # Register in the one canonical spelling core.send_files
+        # compares against, so send_file matches no matter how the
+        # model spelled the path (separators, drive case, /C:/...).
+        # core.send_files is stdlib-only; the import stays lazy to
+        # keep this module's import graph unchanged.
+        try:
+            from core.send_files import (
+                canonical_workspace_path as _canon_ws)
+            _w_key = _canon_ws(str(_w_fp), workspace)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            _w_key = ""
+        if not _w_key:
+            # Old spelling as fallback - same rules, fewer fixes.
+            _w_key = _normalize_tool_path(str(_w_fp), workspace)
+        if _w_key:
+            _written_set.add(_w_key)
+            _rid_w = str(_current_run_id.get(None) or "")
+            if _rid_w:
+                if _rid_w not in _files_written_by_run:
+                    while len(_files_written_by_run) >= 128:
+                        _files_written_by_run.pop(next(iter(_files_written_by_run)), None)
+                _files_written_by_run.setdefault(
+                    _rid_w, set()).add(_w_key)
+        _norm_w = _normalize_tool_path(str(_w_fp), workspace)
+        if _norm_w:
+            _read_set.discard(_norm_w)
+            try:
+                _w_st = _w_fp.stat()
+                _read_signatures[_norm_w] = (_w_st.st_mtime_ns, _w_st.st_size)
+            except OSError:
+                _read_signatures.pop(_norm_w, None)
+
+    _ap_targets: list[str] = []
+    _ap_live_targets: list[str] = []
+    if not _result.startswith("[TOOL_ERROR"):
+        if name in ("write_file", "write_file_append", "edit_file",
+                    "patch_file", "replace_lines", "edit_ast", "lsp_format") and args.get("path"):
+            _record_written_path(str(args["path"]))
+        elif name == "apply_patch" and (args.get("patch") or args.get("diff")):
+            from tools.patch_diff import patch_targets as _patch_targets_post
+            _ap_patch_txt = str(args.get("patch") or args.get("diff") or "")
+            _ap_targets = _patch_targets_post(_ap_patch_txt)
+            _ap_live_targets = _patch_targets_post(_ap_patch_txt, include_delete=False)
+            for _ap_fp_str in _ap_live_targets:
+                _record_written_path(_ap_fp_str)
+        elif name == "undo_last":
+            _read_set.clear()
+            _read_signatures.clear()
+
+    if name in ("write_file", "edit_file", "patch_file", "replace_lines", "write_file_append", "lsp_format"):
+        if not _result.startswith("[TOOL_ERROR") and args.get("path"):
+            try:
+                import json as _json_call
+                _call_chars = len(_json_call.dumps(args, ensure_ascii=False))
+                _diff = get_transaction().diff_for(
+                    _inline_resolve_path(workspace, args["path"]),
+                    call_chars=_call_chars,
+                )
+                if _diff:
+                    _result += "\n\n[Diff — what changed]\n```diff\n" + _diff + "\n```"
+            except Exception:
+                pass
+            # POST-WRITE-LSP (2026-10-31): attach compact diagnostics
+            # LSP-FIRST (2026-11-08): the LSP result wins when it ran;
+            # otherwise the file_ops lint block stays as the fallback.
+            # Silent by design - a broken/missing server must never turn
+            # a successful write into a tool error.
+            if name != "lsp_format":
+                try:
+                    from tools.handlers.lsp import (
+                        auto_diagnostics_block as _lsp_auto,
+                        merge_post_write_diagnostics as _lsp_merge,
+                        notify_watched_change as _lsp_watch,
+                    )
+                    _lsp_created = (name == "write_file" and not _write_existed_before)
+                    if _lsp_watch(workspace, [args["path"]], created=_lsp_created):
+                        await asyncio.sleep(0)
+                    _lsp_note, _lsp_handled = await _lsp_auto(
+                        workspace, args["path"], return_status=True)
+                    _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
+                except (ImportError, OSError, RuntimeError, ValueError,
+                        AttributeError, TypeError):
+                    pass
+            # AUTO-TEST-ON-EDIT (G#2 lever, 2026-11-11): opt-in
+            # (duo_auto_test_on_edit, default False) same-turn run of the
+            # testmap-mapped tests for the edited file. Bounded (timeout +
+            # per-run cap + signature dedup) and silent on any wiring
+            # problem; write_file_append is excluded (mid-sequence writes
+            # must not trigger a half-written-file test run).
+            if name not in ("write_file_append", "lsp_format"):
+                try:
+                    from tools.auto_test import auto_test_note as _at_note
+                    _auto = await _at_note(
+                        [str(args.get("path"))], workspace, workspace_lock,
+                        settings=_run_settings_snapshot.get(None))
+                    if _auto:
+                        _result += "\n" + _auto
+                except (ImportError, OSError, AttributeError, TypeError,
+                        ValueError):
+                    pass  # auto_test_note never raises by design
+    elif name == "apply_patch" and not _result.startswith("[TOOL_ERROR") and _ap_targets:
+        try:
+            import json as _json_call_ap
+            _call_chars_ap = len(_json_call_ap.dumps(args, ensure_ascii=False))
+            _ap_diffs = [
+                _d for _ap_fp in _ap_targets
+                for _d in [get_transaction().diff_for(
+                    _inline_resolve_path(workspace, _ap_fp),
+                    call_chars=_call_chars_ap,
+                )]
+                if _d
+            ]
+            if _ap_diffs:
+                _result += "\n\n[Diff — what changed]\n```diff\n" + "\n".join(_ap_diffs) + "\n```"
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+            _ap_diffs = []
+        if _ap_live_targets:
+            try:
+                from tools.handlers.lsp import (
+                    auto_diagnostics_block as _lsp_auto,
+                    merge_post_write_diagnostics as _lsp_merge,
+                    notify_watched_change as _lsp_watch,
+                )
+                _ap_created = [t for t in _ap_live_targets if t not in _ap_existed_before]
+                _ap_changed = [t for t in _ap_live_targets if t in _ap_existed_before]
+                _notified = 0
+                if _ap_created:
+                    _notified += _lsp_watch(workspace, _ap_created, created=True)
+                if _ap_changed:
+                    _notified += _lsp_watch(workspace, _ap_changed, created=False)
+                if _notified:
+                    await asyncio.sleep(0)
+                _ap_lsp_results = await asyncio.gather(*(
+                    _lsp_auto(workspace, _ap_live, return_status=True)
+                    for _ap_live in _ap_live_targets[:4]
+                ))
+                _all_lsp_handled = bool(_ap_lsp_results) and all(_h for _, _h in _ap_lsp_results)
+                _lsp_notes = "\n\n".join(_n for _n, _ in _ap_lsp_results if _n)
+                if _all_lsp_handled:
+                    _result = _lsp_merge(_result, _lsp_notes, True)
+                elif _lsp_notes:
+                    _result = _result.rstrip() + "\n\n" + _lsp_notes
+            except (ImportError, OSError, RuntimeError, ValueError,
+                    AttributeError, TypeError):
+                pass
+
+    if name in ("run_bash", "install_package") and not _result.startswith("[TOOL_ERROR"):
+        _cmd_low = str((args or {}).get("cmd", "") or "").lower()
+        if (name == "install_package"
+                or any(k in _cmd_low for k in ("pip install", "uv pip", "uv add", "uv sync", "venv"))):
+            try:
+                from tools.handlers.lsp import notify_config_changed as _lsp_cfg_refresh
+                _lsp_cfg_refresh(workspace, languages=("python",))
+            except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _cfg_err:
+                logger.debug("[LSP] post-install config refresh skipped: %s", _cfg_err)
+
+    # ── ProjectState: record build steps ──
+    _ps = _current_project_state.get()
+    if _ps is not None and name in ("write_file", "edit_file", "apply_patch", "run_bash", "run_tests", "task_complete"):
+        _path = args.get("path", "")
+        _is_success = not _result.startswith("[TOOL_ERROR")
+        if name in ("write_file", "edit_file"):
+            _action = "create" if name == "write_file" else "edit"
+            _ps.add_build_step(_action, _path, _is_success,
+                               f"{'Erstellt' if _action == 'create' else 'Bearbeitet'}: {Path(_path).name}")
+        elif name == "apply_patch":
+            for _pt_step in (_ap_targets or ["patch"]):
+                _ps.add_build_step("edit", _pt_step, _is_success,
+                                   f"Bearbeitet: {Path(_pt_step).name}")
+        elif name == "run_bash":
+            _cmd = args.get("cmd", "") or args.get("command", "")
+            _action = "test" if any(kw in str(_cmd).lower() for kw in ("test", "pytest", "npm test", "cargo test", "go test")) else "verify"
+            if _is_success:
+                from utils.tool import run_bash_failed as _rb_failed
+                _is_success = not _rb_failed(_result)
+            _ps.add_build_step(_action, None, _is_success,
+                               f"{_action}: {str(_cmd)[:80]}")
+        elif name == "task_complete":
+            _summary = str(args.get("summary", "") or args.get("result", ""))[:100]
+            _ps.add_build_step("complete", None, _is_success,
+                               _summary or "Task completed")
+
+    if _resolve_hint:
+        _result = _resolve_hint + _result
+    return _normalize_meta_paths(_result)
+
+
+async def _run_inline_tool(
+    name: str,
+    args: dict,
+    workspace_lock: str | None = None,
+    *,
+    tool_mode: str | None = None,
+    include_websearch: bool = False,
+    include_git: bool | None = None) -> str:
+    """Primary inline-tool dispatch using the unified handler map."""
+    workspace = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
+
+    # S3 (2026-10-31 audit): the endpoint never sets up a run context, so the
+    # budget ContextVars below would be fresh per call = unlimited. Seed the
+    # shared windowed counters so the settings limits also apply on the
+    # contextless /internal/tool/exec path (and I3's mcp budget with them).
+    _prep_err, _read_set, _any_read_set, _written_set = _prepare_inline_call(
+        name, tool_mode, include_websearch, include_git,
+    )
+    if _prep_err is not None:
+        return _prep_err
+    _guard_err, _resolve_hint = _enforce_read_write_guards(
+        name, args, workspace, tool_mode, _read_set, _any_read_set, _written_set,
+    )
+    if _guard_err is not None:
+        return _guard_err
     if bool(name) and name.startswith("mcp_"):
         # MCP-CLIENT (beta): one branch, no handler entry - the tool set is
         # dynamic and must not disturb the static handler map or its pins.
@@ -2179,7 +2518,7 @@ async def _run_inline_tool(
             except (ImportError, AttributeError, TypeError):
                 pass
         _appr_note = ""
-        if name in _APPROVAL_TOOLS:
+        if name in _APPROVAL_TOOLS and not _in_approved_funnel.get():
             _appr = await _check_action_approval(name, args or {}, workspace)
             if _appr is not None:
                 _kind, _payload = _appr
@@ -2233,241 +2572,11 @@ async def _run_inline_tool(
         finally:
             _dispatch_active_cv.reset(_tok)
 
-        # TAINT-WRAP (2026-11-02): web/MCP/browser results are marked as data
-        # and the source is recorded (see tools/taint.py). Approval cards are
-        # controlled solely by the user's toggle / per-run force.
-        try:
-            from tools import taint as _taint
-            _result = _taint.wrap_result(name, _result)
-        except ImportError:
-            pass
-
-        if _appr_note:
-            # user note from the approval card rides along with the result,
-            # so the model reads the guidance together with the outcome
-            _result = f"{_result}\n[USER NOTE]: {_appr_note}"
-
-        if name == "read_file" and "path" in args:
-            _is_range_read = bool(args.get("start_line") or args.get("end_line"))
-            _rp_ok = _normalize_tool_path(args["path"], workspace)
-            if "[FILE TRUNCATED" in _result or "[TRUNCATED:" in _result:
-                if not _is_range_read:
-                    _read_set.discard(_rp_ok)
-            elif _result.startswith("[TOOL_ERROR"):
-                if _rp_ok not in _read_set:
-                    _any_read_set.discard(_rp_ok)
-            elif not _result.startswith("[TOOL_ERROR"):
-                # H-audit: record ONLY successful reads - a BINARY_FILE /
-                # FILE_TOO_LARGE result used to arm the skip + the fuzzy-edit
-                # gate for content the model never saw.
-                if not _is_range_read:
-                    _read_set.add(_rp_ok)
-                _any_read_set.add(_rp_ok)
-                _record_read_file_stat(_rp_ok, len(str(_result or "")))
-                # T2 (audit r2): the signature block used to run on ANY
-                # outcome at its own indent level - a FAILED re-read
-                # refreshed the signature for content the model never saw,
-                # arming the fuzzy-edit stale-gate bypass. Success-only.
-                try:
-                    _rs_fp = Path(workspace) / args.get("path", "")
-                    if not _rs_fp.is_absolute():
-                        _rs_fp = workspace / _rs_fp
-                    _rs_fp = _rs_fp.resolve()
-                    _rs_st = _rs_fp.stat()
-                    _rs_key = _normalize_tool_path(str(_rs_fp), workspace)
-                    if _rs_key not in _read_signatures:
-                        while len(_read_signatures) >= 2048:
-                            _read_signatures.pop(next(iter(_read_signatures)), None)
-                    _read_signatures[_rs_key] = (
-                        _rs_st.st_mtime_ns, _rs_st.st_size)
-                except OSError:
-                    pass
-
-        # WRITTEN-SET (2026-08-21, extended 2026-11-04): every successful
-        # file mutation counts as run-written, not only write_file/append.
-        def _record_written_path(_w_raw: str) -> None:
-            _w_res = _fuzzy_resolve_path(_w_raw, str(workspace)) or _w_raw
-            _w_fp = Path(_w_res)
-            if not _w_fp.is_absolute():
-                _w_fp = workspace / _w_fp
-            try:
-                _w_fp = _w_fp.resolve()
-            except Exception:
-                pass
-            # Register in the one canonical spelling core.send_files
-            # compares against, so send_file matches no matter how the
-            # model spelled the path (separators, drive case, /C:/...).
-            # core.send_files is stdlib-only; the import stays lazy to
-            # keep this module's import graph unchanged.
-            try:
-                from core.send_files import (
-                    canonical_workspace_path as _canon_ws)
-                _w_key = _canon_ws(str(_w_fp), workspace)
-            except (ImportError, OSError, RuntimeError, ValueError):
-                _w_key = ""
-            if not _w_key:
-                # Old spelling as fallback - same rules, fewer fixes.
-                _w_key = _normalize_tool_path(str(_w_fp), workspace)
-            if _w_key:
-                _written_set.add(_w_key)
-                _rid_w = str(_current_run_id.get(None) or "")
-                if _rid_w:
-                    if _rid_w not in _files_written_by_run:
-                        while len(_files_written_by_run) >= 128:
-                            _files_written_by_run.pop(next(iter(_files_written_by_run)), None)
-                    _files_written_by_run.setdefault(
-                        _rid_w, set()).add(_w_key)
-
-        _ap_targets: list[str] = []
-        _ap_live_targets: list[str] = []
-        if not _result.startswith("[TOOL_ERROR"):
-            if name in ("write_file", "write_file_append", "edit_file",
-                        "patch_file", "replace_lines", "edit_ast", "lsp_format") and args.get("path"):
-                _record_written_path(str(args["path"]))
-            elif name == "apply_patch" and (args.get("patch") or args.get("diff")):
-                from tools.patch_diff import patch_targets as _patch_targets_post
-                _ap_patch_txt = str(args.get("patch") or args.get("diff") or "")
-                _ap_targets = _patch_targets_post(_ap_patch_txt)
-                _ap_live_targets = _patch_targets_post(_ap_patch_txt, include_delete=False)
-                for _ap_fp_str in _ap_live_targets:
-                    _record_written_path(_ap_fp_str)
-
-        if name in ("write_file", "edit_file", "patch_file", "replace_lines", "write_file_append", "lsp_format"):
-            if not _result.startswith("[TOOL_ERROR") and args.get("path"):
-                try:
-                    import json as _json_call
-                    _call_chars = len(_json_call.dumps(args, ensure_ascii=False))
-                    _diff = get_transaction().diff_for(
-                        _inline_resolve_path(workspace, args["path"]),
-                        call_chars=_call_chars,
-                    )
-                    if _diff:
-                        _result += "\n\n[Diff — what changed]\n```diff\n" + _diff + "\n```"
-                except Exception:
-                    pass
-                # POST-WRITE-LSP (2026-10-31): attach compact diagnostics
-                # LSP-FIRST (2026-11-08): the LSP result wins when it ran;
-                # otherwise the file_ops lint block stays as the fallback.
-                # Silent by design - a broken/missing server must never turn
-                # a successful write into a tool error.
-                if name != "lsp_format":
-                    try:
-                        from tools.handlers.lsp import (
-                            auto_diagnostics_block as _lsp_auto,
-                            merge_post_write_diagnostics as _lsp_merge,
-                            notify_watched_change as _lsp_watch,
-                        )
-                        _lsp_created = (name == "write_file" and not _write_existed_before)
-                        if _lsp_watch(workspace, [args["path"]], created=_lsp_created):
-                            await asyncio.sleep(0)
-                        _lsp_note, _lsp_handled = await _lsp_auto(
-                            workspace, args["path"], return_status=True)
-                        _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
-                    except (ImportError, OSError, RuntimeError, ValueError,
-                            AttributeError, TypeError):
-                        pass
-                # AUTO-TEST-ON-EDIT (G#2 lever, 2026-11-11): opt-in
-                # (duo_auto_test_on_edit, default False) same-turn run of the
-                # testmap-mapped tests for the edited file. Bounded (timeout +
-                # per-run cap + signature dedup) and silent on any wiring
-                # problem; write_file_append is excluded (mid-sequence writes
-                # must not trigger a half-written-file test run).
-                if name not in ("write_file_append", "lsp_format"):
-                    try:
-                        from tools.auto_test import auto_test_note as _at_note
-                        _auto = await _at_note(
-                            [str(args.get("path"))], workspace, workspace_lock,
-                            settings=_run_settings_snapshot.get(None))
-                        if _auto:
-                            _result += "\n" + _auto
-                    except (ImportError, OSError, AttributeError, TypeError,
-                            ValueError):
-                        pass  # auto_test_note never raises by design
-        elif name == "apply_patch" and not _result.startswith("[TOOL_ERROR") and _ap_targets:
-            try:
-                import json as _json_call_ap
-                _call_chars_ap = len(_json_call_ap.dumps(args, ensure_ascii=False))
-                _ap_diffs = [
-                    _d for _ap_fp in _ap_targets
-                    for _d in [get_transaction().diff_for(
-                        _inline_resolve_path(workspace, _ap_fp),
-                        call_chars=_call_chars_ap,
-                    )]
-                    if _d
-                ]
-                if _ap_diffs:
-                    _result += "\n\n[Diff — what changed]\n```diff\n" + "\n".join(_ap_diffs) + "\n```"
-            except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
-                _ap_diffs = []
-            if _ap_live_targets:
-                try:
-                    from tools.handlers.lsp import (
-                        auto_diagnostics_block as _lsp_auto,
-                        merge_post_write_diagnostics as _lsp_merge,
-                        notify_watched_change as _lsp_watch,
-                    )
-                    _ap_created = [t for t in _ap_live_targets if t not in _ap_existed_before]
-                    _ap_changed = [t for t in _ap_live_targets if t in _ap_existed_before]
-                    _notified = 0
-                    if _ap_created:
-                        _notified += _lsp_watch(workspace, _ap_created, created=True)
-                    if _ap_changed:
-                        _notified += _lsp_watch(workspace, _ap_changed, created=False)
-                    if _notified:
-                        await asyncio.sleep(0)
-                    _ap_lsp_results = await asyncio.gather(*(
-                        _lsp_auto(workspace, _ap_live, return_status=True)
-                        for _ap_live in _ap_live_targets[:4]
-                    ))
-                    _all_lsp_handled = bool(_ap_lsp_results) and all(_h for _, _h in _ap_lsp_results)
-                    _lsp_notes = "\n\n".join(_n for _n, _ in _ap_lsp_results if _n)
-                    if _all_lsp_handled:
-                        _result = _lsp_merge(_result, _lsp_notes, True)
-                    elif _lsp_notes:
-                        _result = _result.rstrip() + "\n\n" + _lsp_notes
-                except (ImportError, OSError, RuntimeError, ValueError,
-                        AttributeError, TypeError):
-                    pass
-
-        if name in ("run_bash", "install_package") and not _result.startswith("[TOOL_ERROR"):
-            _cmd_low = str((args or {}).get("cmd", "") or "").lower()
-            if (name == "install_package"
-                    or any(k in _cmd_low for k in ("pip install", "uv pip", "uv add", "uv sync", "venv"))):
-                try:
-                    from tools.handlers.lsp import notify_config_changed as _lsp_cfg_refresh
-                    _lsp_cfg_refresh(workspace, languages=("python",))
-                except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _cfg_err:
-                    logger.debug("[LSP] post-install config refresh skipped: %s", _cfg_err)
-
-        # ── ProjectState: record build steps ──
-        _ps = _current_project_state.get()
-        if _ps is not None and name in ("write_file", "edit_file", "apply_patch", "run_bash", "run_tests", "task_complete"):
-            _path = args.get("path", "")
-            _is_success = not _result.startswith("[TOOL_ERROR")
-            if name in ("write_file", "edit_file"):
-                _action = "create" if name == "write_file" else "edit"
-                _ps.add_build_step(_action, _path, _is_success,
-                                   f"{'Erstellt' if _action == 'create' else 'Bearbeitet'}: {Path(_path).name}")
-            elif name == "apply_patch":
-                for _pt_step in (_ap_targets or ["patch"]):
-                    _ps.add_build_step("edit", _pt_step, _is_success,
-                                       f"Bearbeitet: {Path(_pt_step).name}")
-            elif name == "run_bash":
-                _cmd = args.get("cmd", "") or args.get("command", "")
-                _action = "test" if any(kw in str(_cmd).lower() for kw in ("test", "pytest", "npm test", "cargo test", "go test")) else "verify"
-                if _is_success:
-                    from utils.tool import run_bash_failed as _rb_failed
-                    _is_success = not _rb_failed(_result)
-                _ps.add_build_step(_action, None, _is_success,
-                                   f"{_action}: {str(_cmd)[:80]}")
-            elif name == "task_complete":
-                _summary = str(args.get("summary", "") or args.get("result", ""))[:100]
-                _ps.add_build_step("complete", None, _is_success,
-                                   _summary or "Task completed")
-
-        if _resolve_hint:
-            _result = _resolve_hint + _result
-        return _normalize_meta_paths(_result)
+        return await _post_dispatch_inline_hooks(
+            name, args, workspace, workspace_lock, _result,
+            _appr_note, _resolve_hint, _write_existed_before,
+            _ap_existed_before, _read_set, _any_read_set, _written_set,
+        )
     return _tool_error_response(
         "TOOL_NOT_FOUND",
         f"Unknown inline tool '{name}'.",

@@ -258,10 +258,6 @@ function _getActiveEffortState(v) {
   };
 }
 
-function _getActiveEffortContext() {
-  return _getActiveEffortState().ctxText;
-}
-
 function _syncReasoningOverrideBadges() {
   if (typeof document === 'undefined' || !document.querySelectorAll) return;
   var mainEff = _normalizeReasoningEffort(S.reasoningEffort);

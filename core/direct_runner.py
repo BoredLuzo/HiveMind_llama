@@ -301,25 +301,10 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             model, agent=_agent, settings=_settings_dict, role="direct",
         )
         _dt_user_eff = _dt_norm_re(_settings_dict.get("reasoning_effort"))
-        if _dt_user_eff == "none":
-            yield {
-                "type": "status",
-                "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
-            }
-        elif _dt_user_eff in _DT_POS_RE:
-            if _dt_mst(model):
-                from core.model_sampling import clamp_reasoning_effort_for_model as _dt_clamp_re
-                _dt_map = _dt_clamp_re(model, _dt_user_eff)
-                _dt_sfx = f" → {_dt_map}" if (_dt_map and _dt_map != _dt_user_eff) else ""
-                yield {
-                    "type": "status",
-                    "content": f"🧠 Reasoning effort: {_dt_user_eff} (composer override){_dt_sfx}",
-                }
-            else:
-                yield {
-                    "type": "status",
-                    "content": f"ℹ️ Reasoning effort ({_dt_user_eff}) skipped — {model} does not support reasoning",
-                }
+        from core.model_sampling import format_reasoning_effort_status as _fmt_dt_re_st
+        _dt_st = _fmt_dt_re_st(model, _dt_user_eff, supported=_dt_mst(model))
+        if _dt_st:
+            yield {"type": "status", "content": _dt_st}
         if _think and _dt_user_eff in _DT_POS_RE and _dt_mst(model):
             from backend.manager_load import set_reasoning_override as _set_dt_ro
             _set_dt_ro(_mgr, model, True)
@@ -1097,25 +1082,10 @@ async def _run_direct_inner(ctx):
             )
             _dir_user_eff = _dir_norm_re((ctx.settings or {}).get("reasoning_effort"))
             if not _direct_tools_active:
-                if _dir_user_eff == "none":
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
-                    })
-                elif _dir_user_eff in _DIR_POS_RE:
-                    if _dir_mst(_direct_model):
-                        from core.model_sampling import clamp_reasoning_effort_for_model as _dir_clamp_re
-                        _dir_map = _dir_clamp_re(_direct_model, _dir_user_eff)
-                        _dir_sfx = f" → {_dir_map}" if (_dir_map and _dir_map != _dir_user_eff) else ""
-                        yield await ctx.emit({
-                            "type": "status",
-                            "content": f"🧠 Reasoning effort: {_dir_user_eff} (composer override){_dir_sfx}",
-                        })
-                    else:
-                        yield await ctx.emit({
-                            "type": "status",
-                            "content": f"ℹ️ Reasoning effort ({_dir_user_eff}) skipped — {_direct_model} does not support reasoning",
-                        })
+                from core.model_sampling import format_reasoning_effort_status as _fmt_dir_re_st
+                _dir_st = _fmt_dir_re_st(_direct_model, _dir_user_eff, supported=_dir_mst(_direct_model))
+                if _dir_st:
+                    yield await ctx.emit({"type": "status", "content": _dir_st})
             _dir_ro_set = False
             if _direct_think and _dir_user_eff in _DIR_POS_RE and _dir_mst(_direct_model):
                 try:

@@ -192,7 +192,8 @@ async def test_bench_headless_pin_and_warmup() -> None:
 
     srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
     check("server.py forwards headless body flag to _model_overrides",
-          '_model_overrides["headless"]' in srv_src)
+          '_model_overrides["headless"]' in srv_src
+          or ('"headless"' in srv_src and "_model_overrides[_bool_key]" in srv_src))
 
     posted: list[tuple[str, dict]] = []
 

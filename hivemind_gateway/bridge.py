@@ -18,10 +18,7 @@ send() (the owner choke point).
 """
 from __future__ import annotations
 
-import copy
-import dataclasses
 import datetime as _dt
-import json
 import logging
 import time
 
@@ -30,53 +27,26 @@ from httpx import HTTPError
 import asyncio
 from . import render
 from .hive_client import HiveUnreachable
-from .send import PolicyViolation
 from .telegram_api import TelegramApiError
 
-STOP_REASON_TEXT = {
-    "model_load_failed":
-        "❌ Model could not be loaded (VRAM blocked? "
-        "Stop other model runs on the PC and send again).",
-    "vram_preflight_block":
-        "❌ VRAM block: another model run is active on the PC. "
-        "End it and send again.",
-    "timeout": "⏱ Run ended due to timeout.",
-    "hard_stop": "⏹ Run was hard-aborted.",
-    "graceful_stop": "⏹ Run was stopped gracefully.",
-    "aborted": "⏹ Run was aborted.",
-    "loop_detected": "⏹ Run aborted (repetition loop detected).",
-    "wedge_escalated": "⏹ Run aborted (wedged edit, "
-                       "repair failed).",
-    "halted": "⏹ Run halted.",
-    "max_tool_rounds": "⏹ Run stopped at the round limit (partial "
-                       "result below, if any).",
-}
-FINAL_CHUNK_LIMIT = 3
-STALE_JOURNAL_S = 180.0
-# JOURNAL-AFTER (audit A2): a cursor past the window makes the server return
-# the response meta with EMPTY frames — used by the second-run peek, which
-# reads only run_id/active/done/aborted.
-JOURNAL_META_ONLY_AFTER = 1 << 30
-
-# Run modes accepted via /mode (the /stream BODY field - the browser
-# UI's own mode in settings stays untouched). Friendly aliases map to
-# the engine's names (index.html mode buttons). "agentic" is a phone-side
-# COMPOSITE: engine mode "auto" + duo_agentic_mode body flag (the engine
-# reads that key straight from the /stream body).
-MODE_CHOICES = ("auto", "agentic", "simple", "pipeline", "automap")
-MODE_ALIASES = {"chat": "simple", "direct": "simple"}
-_MODE_DESCRIPTIONS = {
-    "auto": "duo agent with full tools (files/shell/git) - use for tasks",
-    "agentic": "duo + agentic loop (thorough, slower)",
-    "simple": "quick chat: talking + web only, NO file tools",
-    "pipeline": "pipeline run",
-    "automap": "auto-mapping run",
-}
-
-
-def _now() -> float:
-    return time.monotonic()
-
+from .bridge_commands import (  # noqa: F401
+    MODE_ALIASES,
+    MODE_CHOICES,
+    STALE_JOURNAL_S,
+    _MODE_DESCRIPTIONS,
+    _BridgeCommandsMixin,
+)
+from .bridge_relay import (  # noqa: F401
+    JOURNAL_META_ONLY_AFTER,
+    _BridgeRelayMixin,
+    _card_did_matches,
+    _now,
+)
+from .bridge_voice import (  # noqa: F401
+    FINAL_CHUNK_LIMIT,
+    STOP_REASON_TEXT,
+    _BridgeVoiceMixin,
+)
 
 def _to_epoch(stamp) -> float | None:
     """Parse an epoch number or naive/aware ISO timestamp into a UTC epoch float."""
@@ -125,14 +95,9 @@ def _card_cb_data(prefix: str, rid: str, choice: str, did_tok: str = "") -> str:
     return f"{prefix}:{rid}:{choice}:{did_tok}" if did_tok else f"{prefix}:{rid}:{choice}"
 
 
-def _card_did_matches(expected_did: str, card_did: str) -> bool:
-    """Fail-closed check: require exact card_did when expected_did is non-empty."""
-    if expected_did:
-        return bool(card_did) and card_did == expected_did
-    return not card_did
 
 
-class RunBridge:
+class RunBridge(_BridgeVoiceMixin, _BridgeRelayMixin, _BridgeCommandsMixin):
     def __init__(self, hive, state, cfg, messenger):
         """messenger must provide:
         async send_message(text) -> dict (telegram result, has message_id)
@@ -340,11 +305,16 @@ class RunBridge:
             return ph_path, True
         return "", False
 
-    def _format_workspace_label(self, ws: str, is_placeholder: bool) -> str:
+    def _format_workspace_label(
+        self, ws: str, is_placeholder: bool, *, short_name: bool = False
+    ) -> str:
         if is_placeholder:
             return "default_workspace (placeholder)"
         if not ws:
             return "engine default"
+        if short_name:
+            from pathlib import Path as _P
+            return _P(ws).name or ws
         return self._short_path(ws)
 
     async def workspace_for_chat(self, chat_id: str) -> str:
@@ -448,20 +418,6 @@ class RunBridge:
             self._log_note(f"failure notice could not be sent: {exc}")
         return text
 
-    async def _progress_ok(self) -> bool:
-        """telegram_progress_msgs=false silences the info channel.
-
-        Evaluated lazily and cached for a few seconds: the bridge emits progress
-        in tight loops and the settings call is an HTTP round trip.
-        """
-        now = time.monotonic()
-        cached = getattr(self, "_progress_cache", None)
-        if cached and now - cached[0] < 5.0:
-            return cached[1]
-        ok = await self._progress_msgs()
-        self._progress_cache = (now, ok)
-        return ok
-
     async def _flush_thinking(self, text: str, *, label: str = "") -> None:
         """Send buffered model/planner reasoning to Telegram if progress msgs are on."""
         raw = (text or "").strip()
@@ -559,6 +515,147 @@ class RunBridge:
             self._log_note(f"send_file upload failed: {_sf_exc}")
             await self.ms.send_message(
                 "⚠️ File upload failed; the run continues.")
+
+    @staticmethod
+    def _format_steer_note(ev: dict) -> str:
+        st_txt = str(ev.get("content") or "").strip()
+        if not (st_txt or ev.get("images")):
+            return ""
+        note = "🧭 Steer picked up: " + (st_txt[:300] or "(image)")
+        if ev.get("images"):
+            note += f" (+{ev.get('images')} img)"
+        return note
+
+    @staticmethod
+    def _format_file_change_line(ev: dict) -> str:
+        fp = str(ev.get("path") or "").replace("\\", "/").split("/")[-1]
+        op = str(ev.get("op") or "write")
+        ln = ev.get("lines")
+        return f"📝 {fp} ({op}" + (f", {ln} lines)" if ln else ")")
+
+    async def _flush_thinking_pair(
+        self, pair: list[str], *, swallow_errors: bool = False
+    ) -> None:
+        for idx, label in ((0, "Planning"), (1, "Reasoning")):
+            buf = pair[idx]
+            if str(buf or "").strip():
+                if swallow_errors:
+                    try:
+                        await self._flush_thinking(buf, label=label)
+                        pair[idx] = ""
+                    except (TelegramApiError, OSError):
+                        pass
+                else:
+                    await self._flush_thinking(buf, label=label)
+                    pair[idx] = ""
+
+    @staticmethod
+    def _compute_card_did(
+        rid: str,
+        decision_id: str,
+        preview: str,
+        *,
+        kind: str,
+        ui_mirror: bool = False,
+    ) -> str:
+        """Compute callback card_did synchronously before send_message."""
+        if kind == "ask":
+            if ui_mirror:
+                ask_low = preview.lower()
+                if "yes" in ask_low and "no" in ask_low and (
+                    "confirm" in ask_low or "reply with" in ask_low
+                ):
+                    return _fit_card_did_token(
+                        "ask", rid, ("yes", "no", "later"), decision_id
+                    )
+            return ""
+        return _fit_card_did_token("appr", rid, ("1", "2", "3"), decision_id)
+
+    async def _send_approval_or_ask_card(
+        self,
+        rid: str,
+        decision_id: str,
+        tool: str,
+        preview: str,
+        *,
+        kind: str,
+        question: str = "",
+        ui_mirror: bool = False,
+        did_tok: str | None = None,
+    ) -> str:
+        """Relay an approval or ask_user card to Telegram; returns card_did token."""
+        if did_tok is None:
+            did_tok = self._compute_card_did(
+                rid, decision_id, preview, kind=kind, ui_mirror=ui_mirror
+            )
+        if kind == "ask":
+            if ui_mirror:
+                ask_low = preview.lower()
+                if "yes" in ask_low and "no" in ask_low and (
+                    "confirm" in ask_low or "reply with" in ask_low
+                ):
+                    await self.ms.send_message(
+                        f"❓ The agent asks (run {rid})\n\n"
+                        f"{preview}\n\n"
+                        "Buttons below - or type your own answer as "
+                        "text (e.g. 'yes, but skip the force flag').\n"
+                        "(This is the agent's own question - NOT the "
+                        "approval gate.)",
+                        reply_markup={"inline_keyboard": [
+                            [{"text": "✅ Yes",
+                              "callback_data": _card_cb_data("ask", rid, "yes", did_tok)},
+                             {"text": "⛔ No",
+                              "callback_data": _card_cb_data("ask", rid, "no", did_tok)}],
+                            [{"text": "⏳ Later",
+                              "callback_data": _card_cb_data("ask", rid, "later", did_tok)}],
+                        ]},
+                    )
+                    return did_tok
+                await self.ms.send_message(
+                    f"❓ The agent asks (run {rid})\n\n"
+                    f"{preview}\n\n"
+                    "Reply with your answer as text - it goes "
+                    "straight back to the agent.\n"
+                    "(This is the agent's own question - NOT the "
+                    "approval gate.)",
+                )
+                return ""
+            await self.ms.send_message(
+                f"❓ The agent asks (run {rid})\n\n"
+                f"{question[:2500]}\n\n"
+                "Reply with your answer as text - it goes straight back to "
+                "the agent. /stop aborts.\n"
+                "(This is the agent's own question - NOT the approval gate.)",
+            )
+            return ""
+        if ui_mirror:
+            body_txt = (
+                f"🛡 Approval needed (UI run {rid})\n\n"
+                f"tool: {tool}\n\n"
+                f"{preview}\n\n"
+                "Buttons below; or reply 1 (once) / 3 (deny) as text.\n"
+                "'2' remembers EXACTLY this call for this chat."
+            )
+        else:
+            body_txt = (
+                f"🛡 Approval needed (run {rid})\n\n"
+                f"tool: {tool}\n\n"
+                f"{preview[:2500]}\n\n"
+                "Buttons below; or reply 1 (once) / 2 (always, this chat) / "
+                "3 (deny)."
+            )
+        await self.ms.send_message(
+            body_txt,
+            reply_markup={"inline_keyboard": [[
+                {"text": "✅ Once",
+                 "callback_data": _card_cb_data("appr", rid, "1", did_tok)},
+                {"text": "📁 Always (chat)",
+                 "callback_data": _card_cb_data("appr", rid, "2", did_tok)},
+                {"text": "⛔ Deny",
+                 "callback_data": _card_cb_data("appr", rid, "3", did_tok)},
+            ]]},
+        )
+        return did_tok
 
     @staticmethod
     def _tool_line(ev: dict) -> str | None:
@@ -690,36 +787,23 @@ class RunBridge:
         self.state.data.setdefault("open_approvals", {})[rid] = {
             "decision_id": decision_id, "tool": tool, "kind": kind}
         self.state.save()
-        did_tok = _fit_card_did_token("appr", rid, ("1", "2", "3"), decision_id)
+        did_tok = self._compute_card_did(
+            rid, decision_id, preview, kind=kind, ui_mirror=False
+        )
         self._open_own_approval = {"rid": rid, "decision_id": decision_id,
                                    "card_did": did_tok,
                                    "tool": tool, "sig": _sig,
                                    "base_sig": _base_sig, "kind": kind}
-        if kind == "ask":
-            # ASK-USER (own phone run): a question is not an approval card.
-            # The engine's pause accepts free text as the answer, so relay
-            # it as a plain question and let the next text message through.
-            await self.ms.send_message(
-                f"❓ The agent asks (run {rid})\n\n"
-                f"{question[:2500]}\n\n"
-                "Reply with your answer as text - it goes straight back to "
-                "the agent. /stop aborts.\n"
-                "(This is the agent's own question - NOT the approval gate.)")
-            return
-        await self.ms.send_message(
-            f"🛡 Approval needed (run {rid})\n\n"
-            f"tool: {tool}\n\n"
-            f"{preview[:2500]}\n\n"
-            "Buttons below; or reply 1 (once) / 2 (always, this chat) / "
-            "3 (deny).",
-            reply_markup={"inline_keyboard": [[
-                {"text": "✅ Once",
-                 "callback_data": _card_cb_data("appr", rid, "1", did_tok)},
-                {"text": "📁 Always (chat)",
-                 "callback_data": _card_cb_data("appr", rid, "2", did_tok)},
-                {"text": "⛔ Deny",
-                 "callback_data": _card_cb_data("appr", rid, "3", did_tok)},
-            ]]})
+        _sent_card = False
+        try:
+            await self._send_approval_or_ask_card(
+                rid, decision_id, tool, preview,
+                kind=kind, question=question, ui_mirror=False, did_tok=did_tok,
+            )
+            _sent_card = True
+        finally:
+            if not _sent_card and (self._open_own_approval or {}).get("sig") == _sig:
+                self._open_own_approval = None
 
     async def _poll_own_approval(self, run_id: str, stop_ev: asyncio.Event,
                                  appr_mode: str) -> None:
@@ -865,12 +949,7 @@ class RunBridge:
         # from the engine settings (one fetch for restriction + models +
         # approval mode): the duo planner inherits the coder model unless
         # duo_planner_model is set (core/duo_runner.py:1038).
-        if _run_is_ph:
-            _ws_short = "default_workspace (placeholder)"
-        elif _run_ws:
-            _ws_short = _run_ws.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-        else:
-            _ws_short = "engine default"
+        _ws_short = self._format_workspace_label(_run_ws, _run_is_ph, short_name=True)
         _restricted = True
         _s: dict = {}
         try:
@@ -1112,12 +1191,11 @@ class RunBridge:
                         await self._relay_own_approval(ev)
                 elif etype == "agent":
                     # R4: phase switches as own lines (Planner / Code / …)
-                    if planner_think.strip():
-                        await self._flush_thinking(planner_think, label="Planning")
-                        planner_think = ""
-                    if tick_think.strip():
-                        await self._flush_thinking(tick_think, label="Reasoning")
-                        tick_think = ""
+                    _tp = [planner_think, tick_think]
+                    try:
+                        await self._flush_thinking_pair(_tp)
+                    finally:
+                        planner_think, tick_think = _tp
                     _ph = str(ev.get("content") or "").strip()
                     if _ph and _ph != last_phase:
                         await self.ms.send_message(f"→ {_ph}")
@@ -1166,11 +1244,7 @@ class RunBridge:
                                 "being summarized to stay under the "
                                 "limit)…")
                 elif etype == "file_change":
-                    _ofp = str(ev.get("path") or "").replace(
-                        "\\", "/").split("/")[-1]
-                    _ofc = (f"📝 {_ofp} ({ev.get('op') or 'write'}"
-                            + (f", {ev.get('lines')} lines)"
-                               if ev.get("lines") else ")"))
+                    _ofc = self._format_file_change_line(ev)
                     if _ofc != self._last_tool_line:
                         await self.ms.send_message(_ofc)
                         self._last_tool_line = _ofc
@@ -1216,14 +1290,8 @@ class RunBridge:
                     elif _cnt % 5 == 0:
                         await self.ms.send_message(f"{line} (repeat #{_cnt})")
                 elif etype == "steer":
-                    # STEER CARD (2026-10-06): the phone typed the steer -
-                    # confirm on its own message that the run picked it up
-                    # (a status edit would be overwritten by the next tick).
-                    _st_txt = str(ev.get("content") or "").strip()
-                    if _st_txt or ev.get("images"):
-                        _note = "🧭 Steer picked up: " + (_st_txt[:300] or "(image)")
-                        if ev.get("images"):
-                            _note += f" (+{ev.get('images')} img)"
+                    _note = self._format_steer_note(ev)
+                    if _note:
                         await self.ms.send_message(_note)
                 elif etype == "status":
                     last_status = str(ev.get("content") or "")[:120]
@@ -1268,18 +1336,11 @@ class RunBridge:
                         "and is mirrored here.")
             raise  # engine truly unreachable: keep the honest failure path
         finally:
-            if planner_think.strip():
-                try:
-                    await self._flush_thinking(planner_think, label="Planning")
-                except (TelegramApiError, OSError):
-                    pass
-                planner_think = ""
-            if tick_think.strip():
-                try:
-                    await self._flush_thinking(tick_think, label="Reasoning")
-                except (TelegramApiError, OSError):
-                    pass
-                tick_think = ""
+            _tp_fin = [planner_think, tick_think]
+            try:
+                await self._flush_thinking_pair(_tp_fin, swallow_errors=True)
+            finally:
+                planner_think, tick_think = _tp_fin
             _approval_poll_stop.set()
             if _approval_poll_task is not None:
                 try:
@@ -1315,2056 +1376,3 @@ class RunBridge:
                 self._clear_run()
         return final_note
 
-    async def _preload_voice(self) -> None:
-        """Warm the TTS sidecar at run start when the result may be a voice note.
-
-        This is what makes a phone-only flow work without touching the PC: the
-        engine is up before the answer arrives, so the first spoken sentence costs
-        ~1 s instead of a ~12 s sidecar start. Best effort - a failure only means
-        the first sentence is late, never that the run fails.
-        """
-        try:
-            s = await self.hive.settings()
-        except (HiveUnreachable, HTTPError, OSError):
-            return
-        if not (s or {}).get("tts_enabled", False):
-            return
-        mode = str((s or {}).get("telegram_result_mode") or "both").strip().lower()
-        if mode == "text" and not (s or {}).get("telegram_voice_out", False):
-            return
-        try:
-            await self.hive.warm_voice()
-        except (HiveUnreachable, HTTPError, OSError) as exc:
-            self._log_note(f"voice preload skipped: {exc}")
-
-    async def _result_mode(self) -> str:
-        """text | voice | both for the FINAL answer (telegram_result_mode).
-
-        "voice" is the pure results channel: the model-generated answer as a
-        voice note, the progress lines stay text (telegram_progress_msgs can drop
-        those too). Falls back to "both" when the setting is missing or invalid so
-        an old settings.json never silences a run.
-        """
-        try:
-            s = await self.hive.settings()
-        except (HiveUnreachable, HTTPError, OSError):
-            return "both"
-        mode = str((s or {}).get("telegram_result_mode") or "both").strip().lower()
-        return mode if mode in ("text", "voice", "both") else "both"
-
-    async def _progress_msgs(self) -> bool:
-        try:
-            s = await self.hive.settings()
-        except (HiveUnreachable, HTTPError, OSError):
-            return True
-        return bool((s or {}).get("telegram_progress_msgs", True))
-
-    async def _voice_out_enabled(self) -> bool:
-        """cfg.voice_out (gateway.toml) OR the engine's telegram_voice_out."""
-        if self.cfg.voice_out:
-            return True
-        try:
-            s = await self.hive.settings()
-        except (HiveUnreachable, HTTPError, OSError):
-            return False
-        return bool((s or {}).get("telegram_voice_out", False))
-
-    _voice_sent: bool = False
-
-    async def _maybe_voice_answer(self, answer: str) -> None:
-        """VOICE OUT (1.4, opt-in): send the final answer as a voice note.
-
-        Never blocks or fails the run: every error is logged as a note and the
-        text answer is already on its way/in the chat. The engine applies the
-        voice and speed from the settings (cosette, 1.08x by default) and caps
-        the text at 600 characters itself.
-        """
-        answer = (answer or "").strip()
-        if not answer:
-            return
-        self._voice_sent = False
-        if not await self._voice_out_enabled():
-            return
-        try:
-            ogg, code = await self.hive.tts(answer)
-        except (HiveUnreachable, HTTPError, OSError) as exc:
-            self._log_note(f"voice answer skipped: {exc}")
-            return
-        if not ogg:
-            self._log_note(f"voice answer skipped: {code or 'no audio'}")
-            return
-        try:
-            await self.ms.send_voice(ogg, 0)
-            self._voice_sent = True
-        except (PolicyViolation, HiveUnreachable, HTTPError, OSError, TelegramApiError) as exc:
-            self._log_note(f"voice answer send failed: {exc}")
-
-    async def _finish(self, chat_id, q, parts, stop_reason, error_text,
-                      denied, status_id, truncated: bool = False) -> str:
-        answer = "".join(parts).strip()
-        answer = render.filter_secrets(answer)
-        if truncated:
-            answer = (answer + "\n\n[⚠️ Answer incomplete: tokens were dropped "
-                      "by the Telegram rate limit.]").strip()
-        notes = []
-        if denied:
-            notes.append(f"🔒 {denied} approval(s) auto-denied.")
-        if stop_reason == "error":
-            text = f"❌ Run error: {error_text or 'unknown'}"
-        elif stop_reason and stop_reason != "completed":
-            base = STOP_REASON_TEXT.get(
-                stop_reason, f"⏹ Run finished ({stop_reason}).")
-            text = base + (f"\n\n{answer}" if answer else "")
-        elif answer:
-            text = answer
-        else:
-            text = "⏹ Run finished without any text output."
-        for n in notes:
-            text += "\n" + n
-
-        # RESULT-MODE (1.4.2): text | voice | both. "voice" only makes sense for
-        # a real answer - an error or an empty result stays text, otherwise the
-        # owner would get silence with no explanation.
-        _mode = await self._result_mode() if stop_reason != "error" and answer else "both"
-        # a voice-only channel must still carry the SAFETY lines: auto-denied
-        # approvals and a stop reason that is not "completed" are information the
-        # owner cannot get anywhere else.
-        _safety_note = bool(notes) or (stop_reason or "completed") != "completed"
-        if _mode == "voice":
-            if stop_reason != "error" and answer:
-                await self._maybe_voice_answer(answer)
-                if not self._voice_sent:
-                    chunks = render.split_message(text)
-                    if len(chunks) > FINAL_CHUNK_LIMIT:
-                        await self.ms.send_document(text.encode("utf-8"), "result.txt")
-                    else:
-                        for chunk in chunks:
-                            await self._send_chunk(chunk)
-                elif _safety_note:
-                    _tail = "\n".join([n for n in notes] +
-                                       ([] if (stop_reason or "completed") == "completed"
-                                        else [STOP_REASON_TEXT.get(
-                                            stop_reason, f"⏹ Run finished ({stop_reason}).")]))
-                    if _tail.strip():
-                        await self._send_chunk(_tail.strip())
-            else:
-                chunks = render.split_message(text)
-                if len(chunks) > FINAL_CHUNK_LIMIT:
-                    await self.ms.send_document(text.encode("utf-8"), "result.txt")
-                else:
-                    for c in chunks:
-                        await self._send_chunk(c)
-        else:
-            chunks = render.split_message(text)
-            if len(chunks) > FINAL_CHUNK_LIMIT:
-                await self.ms.send_document(
-                    text.encode("utf-8"), "result.txt")
-            else:
-                for c in chunks:
-                    await self._send_chunk(c)
-            # VOICE OUT: the clean answer (no ❌/⏹ decorations) as a voice note,
-            # only when the mode includes voice and the run produced text.
-            if stop_reason != "error" and answer and _mode == "both":
-                await self._maybe_voice_answer(answer)
-        try:
-            await self._write_turn(
-                chat_id, {"role": "assistant", "content": text})
-        except (HiveUnreachable, OSError) as exc:
-            self._log_note(f"assistant turn write failed: {exc}")
-        if status_id is not None:
-            await self._edit_status(status_id, "✅ done.")
-        return text
-
-    # -- busy heuristic against the server journal ------------------------
-
-    async def _journal_busy(self) -> str | None:
-        try:
-            j = await self.hive.journal()
-        except (HiveUnreachable, OSError):
-            return None  # offline is handled by the run itself
-        if not isinstance(j, dict) or not j.get("active"):
-            return None
-        if j.get("done") or j.get("aborted"):
-            return None
-        age = time.time() - float(j.get("ts") or 0)
-        if age > STALE_JOURNAL_S:
-            return None
-        rid = str(j.get("run_id") or "?")
-        return (f"⏳ A run is already active ({rid}) - probably started "
-                "from the browser/UI. There is deliberately no "
-                "queue.")
-
-    # -- commands -----------------------------------------------------------
-
-    async def stop(self) -> str:
-        run = self.state.data.get("active_run") or {}
-        rid = run.get("run_id")
-        if not rid:
-            if run:
-                # P0 (edge audit 2026-11-03): the engine may still be starting.
-                # Clearing the latch here made the late run_id frame crash and
-                # left the engine run alive. Ask for a stop; the run_id frame
-                # aborts as soon as it arrives.
-                self._stop_requested = True
-                return ("⏹ Stop requested - the run will be aborted as soon "
-                        "as the engine confirms it.")
-            # ORPHAN-STOP (audit 2026-11-03): after a restart the latch may
-            # be cleared while the engine still runs (adopted as mirror).
-            # /stop must still be able to abort it via the journal.
-            try:
-                _j = await self.hive.journal() if hasattr(self.hive, "journal") else None
-            except (HiveUnreachable, OSError):
-                _j = None
-            _jid = ""
-            if isinstance(_j, dict) and _j.get("active") and not _j.get("done"):
-                _jid = str(_j.get("run_id") or "")
-            if _jid:
-                try:
-                    await self.hive.abort_run(_jid)
-                    return f"⏹ Abort sent for {_jid}."
-                except (HiveUnreachable, OSError, HTTPError) as exc:
-                    return f"❌ /stop failed ({exc}) - the run may still be running."
-            return "No run active."
-        try:
-            resp = await self.hive.abort_run(rid)
-            code = getattr(resp, "status_code", 500)
-            if code == 404:
-                # 2026-10-05 (live): 404 = the engine no longer knows this
-                # run (it already ended). Clear the latch EITHER WAY - a
-                # failed fallback must not leave active_run latched, or
-                # every further text gets the busy note until restart.
-                # The run's own chat_id is the reliable fallback target
-                # (tg_chat can be absent after a state wipe).
-                self._clear_run()
-                chat_id = (run.get("chat_id")
-                           or (self._tg_chat() or {}).get("hive_chat_id")
-                           or "")
-                if chat_id:
-                    await self.hive.abort_chat(chat_id)
-                    return (f"⏹ Run {rid} was unknown to the server - "
-                            "chat abort sent as fallback; run cleared.")
-                return (f"⏹ Run {rid} was unknown to the server - it "
-                        "had already ended; run cleared.")
-            if code < 300:
-                self._stop_requested = True
-                return f"⏹ Abort sent for {rid}."
-            # A rejected abort is NOT a success: the run may still hold VRAM.
-            return (f"❌ /stop not accepted (HTTP {code}) - run {rid} may "
-                    "still be running, please check the PC!")
-        except HTTPError as exc:
-            # deep audit N6: raise_for_status in the fallback must not
-            # break the visible-failure invariant of /stop
-            return (f"❌ /stop failed ({exc}) - run {rid} may still "
-                    "be running, please check the PC!")
-        except (HiveUnreachable, OSError) as exc:
-            # /stop must fail VISIBLY: an orphaned run holds VRAM
-            return f"❌ /stop failed ({exc}) - run {rid} may still " \
-                   "be running, please check the PC!"
-
-    async def new_chat_busy_note(self) -> str | None:
-        """Return a busy message if an own or UI/engine run is active, else None."""
-        if self._run_lock.locked() or self.state.data.get("active_run"):
-            return self._busy_note()
-        return await self._journal_busy()
-
-    async def prepare_new_chat(self) -> dict:
-        """Check whether /new should ask before clearing default_workspace files."""
-        busy = await self.new_chat_busy_note()
-        if busy:
-            return {"status": "busy", "text": busy}
-        fn = getattr(self.hive, "placeholder_status", None)
-        ph: dict = {}
-        if fn is not None:
-            res = await fn()
-            ph = res if isinstance(res, dict) else {}
-        files = list(ph.get("files") or [])
-        if files:
-            return {
-                "status": "confirm",
-                "files": files,
-                "count": int(ph.get("count") or len(files)),
-                "path": str(ph.get("path") or ""),
-            }
-        text = await self.new_chat(clear_placeholder=True)
-        return {"status": "done", "text": text}
-
-    async def new_chat(self, *, clear_placeholder: bool = True) -> str:
-        busy = await self.new_chat_busy_note()
-        if busy:
-            return busy
-        cleared = 0
-        if clear_placeholder:
-            clear_fn = getattr(self.hive, "clear_placeholder", None)
-            if clear_fn is not None:
-                try:
-                    res = await clear_fn()
-                except HTTPError as exc:
-                    if getattr(getattr(exc, "response", None), "status_code", None) == 409:
-                        return ("⏳ An active HiveMind run is in progress — "
-                                "cannot clear default_workspace.")
-                    raise
-                if isinstance(res, dict):
-                    cleared = int(res.get("cleared") or 0)
-        now_ts = time.time()
-        title = "[TG] Telegram " + _dt.datetime.now().astimezone() \
-            .strftime("%Y-%m-%d %H:%M")
-        created = await self.hive.create_chat(title)
-        mapping = {
-            "hive_chat_id": str(created["id"]),
-            "title": title,
-            "created_at": created.get("chat", {}).get("created_at", ""),
-            "new_chat_ts": now_ts,
-        }
-        self.state.data["tg_chat"] = mapping
-        self.state.data.pop("followed_chat", None)
-        self.state.data.pop("pinned_chat", None)
-        self.state.save()
-        extra = (f"\n🧹 Cleared {cleared} file(s) from default_workspace."
-                 if cleared > 0 else "")
-        return f"🆕 New HiveMind chat: {title} ({mapping['hive_chat_id']}).{extra}"
-
-    async def decider_text(self, arg: str) -> str:
-        """DECIDER (2026-10-22): /decider bare = status, on|off|shadow =
-        set routing_decider in the ENGINE settings. off frees the encoder
-        model (~1.8 GB RAM); on loads it lazily at the next decision."""
-        _a = (arg or "").strip().lower()
-        try:
-            s = await self.hive.settings()
-        except (HiveUnreachable, OSError) as exc:
-            return f"❌ Engine unreachable: {exc}"
-        if not _a:
-            _m = (s or {}).get("routing_decider") or "off"
-            _mdl = (s or {}).get("routing_decider_model") or "default"
-            return (f"🎛 Decider: {_m} (on|off|shadow)\n"
-                    f"model: {_mdl}\n"
-                    "off frees the encoder RAM; on routes via the CPU encoder.")
-        if _a not in ("on", "off", "shadow"):
-            return "❌ /decider on|off|shadow"
-        try:
-            await self.hive.patch_settings({"routing_decider": _a})
-        except (HiveUnreachable, OSError) as exc:
-            return f"❌ Engine unreachable: {exc}"
-        extra = (" - the encoder model is freed from RAM." if _a == "off"
-                 else " - the model loads at the next decision.")
-        return f"🎛 Decider: {_a}{extra}"
-
-    async def status_text(self) -> str:
-        run = self.state.data.get("active_run") or {}
-        mapping = self._tg_chat() or {}
-        mode = self.state.data.get("mode") or "engine default"
-        ov = self.state.data.get("run_overrides") or {}
-        tools = self.state.data.get("tools")
-        tools_txt = ("on" if tools is True else "off" if tools is False
-                     else "engine default")
-        _restr = getattr(self.ms, "phone_restricted", True)
-        restr_txt = ("web + text only" if _restr
-                     else "off" if _restr is False else "unknown")
-        # audit G1 + version-skew detection: state the invariant plainly -
-        # the gateway forces the approval gate for every phone run, but
-        # ONLY if the engine lifts the body key (gateway_overrides marker).
-        if getattr(self.ms, "engine_gate_support", True):
-            gate_line = ("approvals: phone runs gated (ask/deny per /gate; "
-                         "UI runs follow the engine toggle live)")
-        else:
-            gate_line = ("⚠️ gate enforcement INACTIVE - engine too old; "
-                         "switch on duo_action_approval_enabled in the UI")
-        # ACTIVE-RUN VISIBILITY (2026-10-16, live report): /status showed
-        # "active run: none" while an agentic coder run was active in the
-        # UI - the gateway state only tracks PHONE runs. Ask the engine
-        # journal (unscoped = most recently active run) so a UI run shows
-        # too; when it IS the phone run, no extra line.
-        own = str(run.get("run_id") or "")
-        engine_extra = ""
-        try:
-            j = await self.hive.journal()
-        except (HiveUnreachable, OSError, ValueError):
-            engine_extra = "engine run: unknown (engine unreachable)"
-        else:
-            _jid = str((j or {}).get("run_id") or "")
-            if _jid and (j or {}).get("active") \
-                    and not (j or {}).get("done") \
-                    and not (j or {}).get("aborted") \
-                    and _jid != own:
-                engine_extra = f"engine run (UI): {_jid[:18]}…"
-        active_txt = f"active run: {own}" if own else "active run: none"
-        if engine_extra:
-            active_txt += "\n" + engine_extra
-        # ROUTING VISIBILITY (2026-10-22, user request): /status shows the
-        # decider state, planner source and model — so a spoken note's route
-        # is explainable from the phone.
-        try:
-            _settings_fn = getattr(self.hive, "settings", None)
-            _rs = await _settings_fn() if _settings_fn else {}
-        except (HiveUnreachable, OSError, AttributeError):
-            _rs = {}  # fakes/old engines without a settings endpoint
-        _rd = str((_rs or {}).get("routing_decider") or "").strip()
-        _mode_now = str(mode or "").lower()
-        if _mode_now in ("chat", "simple", "direct"):
-            # ROUTING-N/A: a conversational mode answers directly; the decider
-            # is never consulted, so naming it here only caused confusion.
-            _routing = f"routing: not used in {_mode_now} mode"
-        elif _rd:
-            _routing = (f"routing: decider {_rd}"
-                        + (f" · planner {(_rs or {}).get('routing_planner') or 'auto'}"
-                           if (_rs or {}).get("routing_planner") else "")
-                        + f" · model {(_rs or {}).get('routing_decider_model') or 'default'}")
-        else:
-            _routing = "routing: decider off (keyword rules)"
-        _pin = self._pinned_chat()
-        _ui_cid, _ui_title = ("", "")
-        if _pin is None and hasattr(self.hive, "get_chats"):
-            _ui_cid, _ui_title = await self._ui_chat_target_info()
-        if _pin:
-            _active_cid = str(_pin["hive_chat_id"])
-            _active_title = str(_pin.get("title") or "").strip()
-            _chat_line = (f"{_active_title[:42]} ({_active_cid}) [pinned]"
-                          if _active_title and _active_title != _active_cid
-                          else f"{_active_cid} [pinned]")
-        elif _ui_cid:
-            _active_cid = _ui_cid
-            _chat_line = (f"{_ui_title[:42]} ({_ui_cid}) [follow-UI]"
-                          if _ui_title and _ui_title != _ui_cid
-                          else f"{_ui_cid} [follow-UI]")
-        else:
-            _active_cid = str(mapping.get("hive_chat_id") or "")
-            _chat_line = (_active_cid + " [TG]") if _active_cid else "- none yet"
-        _ws_cid = _active_cid
-        _ws_map = mapping.get("workspace") or ""
-        if _ws_cid:
-            _ws_res, _ws_is_ph = await self.resolve_chat_workspace(_ws_cid)
-            _ws_txt = self._format_workspace_label(_ws_res, _ws_is_ph)
-        elif _ws_map:
-            _ws_txt = self._short_path(_ws_map)
-        else:
-            _ws_ph = await self._placeholder_info()
-            _ws_txt = ("default_workspace (placeholder)"
-                       if _ws_ph.get("path") else "engine default")
-        _eff_m = str(ov.get("reasoning_effort") or (_rs or {}).get("reasoning_effort") or "auto")
-        _eff_p = str(ov.get("planner_reasoning_effort") or (_rs or {}).get("planner_reasoning_effort") or "auto")
-        _eff_txt = _eff_m + (f" · planner: {_eff_p}" if _eff_p != "auto" else "")
-        return (
-            "📡 Gateway status\n"
-            "\n"
-            f"chat: {_chat_line}\n"
-            f"workspace: {_ws_txt}\n"
-            f"mode: {mode}  (phone runs only)\n"
-            f"effort: {_eff_txt}\n"
-            f"model: {ov.get('model') or 'engine default'}\n"
-            f"ctx: planner {ov.get('planner_ctx') or '-'} · coder "
-            f"{ov.get('coder_ctx') or '-'}\n"
-            f"tools (simple runs): {tools_txt}\n"
-            f"phone restrict: {restr_txt}\n"
-            f"verbose: {'on' if self.verbose else 'off'}\n"
-            f"{_routing}\n"
-            "\n"
-            f"{gate_line}\n"
-            f"engine: {getattr(self.ms, 'engine_version', '?')}\n"
-            "\n"
-            f"{active_txt}")
-
-    def toggle_verbose(self) -> str:
-        self.verbose = not self.verbose
-        self.state.data["verbose"] = self.verbose
-        self.state.save()
-        return f"Verbose: {'on' if self.verbose else 'off'}"
-
-    # -- /mode: telegram-side run mode (stream BODY field, never settings)
-
-    def effective_phone_mode(self, engine_settings: dict) -> tuple[str, str]:
-        """(mode, source) for a phone run.
-
-        The UI owns the default: a `/mode` override only survives while the
-        engine mode is unchanged since it was set. Changing the mode in the
-        browser therefore flips Telegram back to the frontend mode.
-        """
-        override = str(self.state.data.get("mode") or "").strip()
-        engine_mode = str((engine_settings or {}).get("mode") or "").strip()
-        seen = str(self.state.data.get("mode_engine_seen") or "")
-        if override:
-            if engine_mode and seen and engine_mode != seen:
-                self.state.data["mode"] = ""
-                self.state.data["mode_engine_seen"] = ""
-                self.state.save()
-                return (engine_mode, "frontend")
-            return (override, "phone")
-        return (engine_mode or "auto", "frontend")
-
-    async def mode_text(self, arg: str) -> str:
-        """/mode            -> current mode + per-mode explanations
-        /mode <name>      -> set for TELEGRAM runs only
-        /mode off         -> follow the engine settings again
-        Aliases: chat|direct -> simple."""
-        arg = (arg or "").strip().lower()
-        listing = "\n".join(
-            f"  • {name} - {_MODE_DESCRIPTIONS[name]}"
-            for name in MODE_CHOICES)
-        if not arg:
-            current = self.state.data.get("mode") or ""
-            head = (f"Mode (Telegram): {current}" if current
-                    else "Mode (Telegram): engine default")
-            return (head + "\n\n" + listing +
-                    "\n\nSet with /mode <name>; /mode off follows the "
-                    "engine settings again. Phone-only - the browser UI "
-                    "keeps its own mode.")
-        if arg in ("off", "aus", "default"):
-            self.state.data["mode"] = ""
-            self.state.data["mode_engine_seen"] = ""
-            self._invalidate_chat_runconf()
-            self.state.save()
-            return ("Mode (Telegram): engine default\n\n"
-                    "Runs now follow the engine settings again.")
-        name = MODE_ALIASES.get(arg, arg)
-        if name not in MODE_CHOICES:
-            return ("❌ Unknown mode.\n\n" + listing +
-                    "\n\nSet with /mode <name> or /mode off.")
-        self.state.data["mode"] = name
-        # MODE-BASELINE: remember the engine mode AT THE MOMENT of the
-        # override. Filling it lazily on the next run meant a UI change made
-        # in between never counted as a change, and a stale "auto" override
-        # kept the phone on the decider route while the browser said chat.
-        try:
-            _s = await self.hive.settings()
-            self.state.data["mode_engine_seen"] = str((_s or {}).get("mode") or "")
-        except (HiveUnreachable, OSError, AttributeError, ValueError):
-            self.state.data["mode_engine_seen"] = ""
-        self._invalidate_chat_runconf()
-        self.state.save()
-        why = ("File-capable - use this for tasks."
-               if name != "simple" else
-               "NO file tools here - talk + web only!")
-        return (f"Mode (Telegram): {name}\n\n"
-                f"  • {_MODE_DESCRIPTIONS[name]}\n"
-                f"{why}\n\n"
-                "Phone-only - the browser UI keeps its own mode.")
-
-    # -- /models, /setModel, /cancel: model + ctx/preset selection -------
-
-    PENDING_TTL_S = 600
-
-    def _stream_overrides(self, ov_store=None) -> dict:
-        """Model/ctx keys for a run: from the chat's pinned run config
-        (chat_runconf, ov_store) or the owner's current defaults. Merged
-        into the run's settings snapshot by the engine (chat_run.py:154).
-        Empty unless configured."""
-        ov = (ov_store if ov_store is not None
-              else self.state.data.get("run_overrides")) or {}
-        out: dict = {}
-        model = ov.get("model")
-        if model:
-            out["duo_planner_model"] = model
-            out["duo_coder_model"] = model
-        # /planner override: a SEPARATE planner model (duo runs)
-        planner_model = ov.get("planner_model")
-        if planner_model:
-            out["duo_planner_model"] = planner_model
-        # deep audit N5: clamp - the engine clamps the planner ctx at
-        # 131072 but NOT the coder ctx; a fat-fingered phone value must
-        # not wedge the shared VRAM
-        pctx = ov.get("planner_ctx")
-        if pctx:
-            out["duo_planner_ctx_target"] = min(int(pctx), 131072)
-            out["duo_planner"] = True
-        cctx = ov.get("coder_ctx")
-        if cctx:
-            out["duo_coder_ctx_agentic"] = min(int(cctx), 131072)
-            out["duo_coder_ctx_normal"] = min(int(cctx), 131072)
-        tools = self.state.data.get("tools")
-        tier = str(self.state.data.get("direct_tools_tier") or "").strip().lower()
-        if tier in ("off", "websearch", "readonly", "mcp", "python", "full"):
-            tier = "readonly" if tier in ("websearch", "readonly") else tier
-            out["direct_tools_tier"] = tier
-            out["direct_tools_enabled"] = tier != "off"
-        elif tools is not None:
-            out["direct_tools_enabled"] = bool(tools)
-        for _rk in ("reasoning_effort", "planner_reasoning_effort"):
-            _rv = str(ov.get(_rk) or "").strip().lower()
-            if _rv and _rv != "auto":
-                out[_rk] = _rv
-        # audit G1: FORCE the engine's approval gate for every phone run -
-        # this restores the documented "gated tools are auto-denied from
-        # the phone" invariant even when the engine-global toggle
-        # (duo_action_approval_enabled, default false) is off. The body
-        # can only raise the gate to ON, never lower it. 2026-10-05: the
-        # owner can opt out for assistant-style use (phone runs that
-        # SHOULD write files) via gateway.toml force_approval_gate=false -
-        # with it off, the engine-global toggle alone governs the gate.
-        if self.cfg.force_approval_gate:
-            out["duo_action_approval_enabled"] = True
-        return out
-
-    def _chat_runconf(self, chat_id: str, engine_settings: dict) -> dict:
-        """The phone-side parameters this chat started with.
-
-        Owner rule (2026-10-28): UI runs use the UI settings, phone chats
-        use the phone settings, and ANSWERING inside an existing chat keeps
-        the parameters that chat started with. Only a phone command
-        (/mode, /setModel, /ctx, /planner) changes them - it drops the pin
-        (_invalidate_chat_runconf) and the next run re-snapshots the new
-        defaults. The engine settings stay shared with the UI; only these
-        overrides are pinned per chat."""
-        store = self.state.data.setdefault("chat_runconf", {})
-        conf = store.get(chat_id)
-        if conf is None:
-            _eff, _src = self.effective_phone_mode(engine_settings)
-            conf = {"run_overrides": copy.deepcopy(
-                        self.state.data.get("run_overrides") or {}),
-                    "mode": (_eff if _src == "phone" else "")}
-            store[chat_id] = conf
-            self.state.save()
-        return conf
-
-    def _invalidate_chat_runconf(self) -> None:
-        """A phone command changed the phone defaults - drop every chat pin
-        so the next run re-snapshots them (the command wins over the pin)."""
-        if self.state.data.pop("chat_runconf", None) is not None:
-            self.state.save()
-
-    def _pending(self) -> dict | None:
-        p = self.state.data.get("pending_setup")
-        if not p:
-            return None
-        if time.time() - float(p.get("ts", 0)) > self.PENDING_TTL_S:
-            self.state.data["pending_setup"] = None
-            self.state.save()
-            return None
-        return p
-
-    async def models_text(self) -> str:
-        try:
-            data = await self.hive.get_models()
-        except (HiveUnreachable, OSError) as exc:
-            return f"🔌 HiveMind unreachable: {exc}"
-        models = data.get("models") or []
-        profs = {p.get("name"): p for p in (data.get("profiles") or [])}
-        if not models:
-            return "No models found (empty engine response)."
-        lines = ["Available models:"]
-        for i, m in enumerate(models, 1):
-            p = profs.get(m, {})
-            flags = [f for f, on in (("thinking", p.get("thinking")),
-                                     ("vision", p.get("vision")),
-                                     ("tools", p.get("tool_call"))) if on]
-            lines.append(f"{i}. {m}"
-                         + (f" [{'+'.join(flags)}]" if flags else ""))
-        lines.append("Choose with /setModel <number>")
-        return "\n".join(lines)
-
-    async def set_model(self, arg: str) -> str:
-        """Pick a model by /models number - applies IMMEDIATELY to
-        upcoming runs (no quiz). ctx via /ctx, preset via /preset."""
-        try:
-            idx = int((arg or "").strip())
-        except ValueError:
-            return ("Usage: /setModel <number> - /models lists the "
-                    "numbers. ctx via /ctx <number>, preset via /preset.")
-        try:
-            data = await self.hive.get_models()
-        except (HiveUnreachable, OSError) as exc:
-            return f"🔌 HiveMind unreachable: {exc}"
-        models = data.get("models") or []
-        if not (1 <= idx <= len(models)):
-            return (f"❌ {idx} out of range 1–{len(models)}. List: /models")
-        name = models[idx - 1]
-        prof = next((p for p in (data.get("profiles") or [])
-                     if p.get("name") == name), {})
-        can_think = bool(prof.get("thinking"))
-        ov = self.state.data.setdefault("run_overrides", {})
-        ov["model"] = name
-        self.state.data["pending_setup"] = None
-        self._invalidate_chat_runconf()
-        self.state.save()
-        out = f"✅ Model set: {name}"
-        if not can_think:
-            out += " (cannot think)"
-        out += ("\nctx via /ctx <number> (0 = engine default), "
-                "preset via /preset <number>.\nApplies to upcoming "
-                "phone runs.")
-        return out
-
-    async def ctx_text(self, arg: str) -> str:
-        """/ctx <number|off> - context override for coder + planner."""
-        a = (arg or "").strip().lower()
-        ov = self.state.data.setdefault("run_overrides", {})
-        if a in ("", "status"):
-            cur = ov.get("coder_ctx") or ov.get("planner_ctx")
-            return ("ctx override: "
-                    + (f"{cur} tokens" if cur else "off (engine default)")
-                    + ".\nSet with /ctx <number> (0 = off). Applies to "
-                    "upcoming duo/agentic phone runs.")
-        if a in ("0", "off", "aus"):
-            ov.pop("coder_ctx", None)
-            ov.pop("planner_ctx", None)
-            self._invalidate_chat_runconf()
-            self.state.save()
-            return "ctx override cleared - engine defaults apply."
-        if not a.isdigit():
-            return "❌ /ctx <number> (tokens) or /ctx off."
-        ov["coder_ctx"] = int(a)
-        ov["planner_ctx"] = int(a)
-        self._invalidate_chat_runconf()
-        self.state.save()
-        return (f"✅ ctx: {a} tokens (coder + planner target) - applies "
-                "to upcoming duo/agentic phone runs.")
-
-    async def planner_text(self, arg: str) -> str:
-        """/planner <no|off> - separate planner model for duo runs."""
-        a = (arg or "").strip()
-        ov = self.state.data.setdefault("run_overrides", {})
-        if a in ("", "status"):
-            cur = ov.get("planner_model")
-            return ("planner model: " + (cur or "inherits the coder model")
-                    + ".\n/planner <number from /models> | /planner off")
-        if a in ("off", "aus"):
-            ov.pop("planner_model", None)
-            self._invalidate_chat_runconf()
-            self.state.save()
-            return "planner model cleared - inherits the coder model."
-        try:
-            idx = int(a)
-        except ValueError:
-            return "❌ /planner <number from /models> | /planner off"
-        try:
-            data = await self.hive.get_models()
-        except (HiveUnreachable, OSError) as exc:
-            return f"🔌 HiveMind unreachable: {exc}"
-        models = data.get("models") or []
-        if not (1 <= idx <= len(models)):
-            return f"❌ {idx} out of range 1–{len(models)}. List: /models"
-        ov["planner_model"] = models[idx - 1]
-        self._invalidate_chat_runconf()
-        self.state.save()
-        return f"✅ planner model: {models[idx - 1]} (duo runs)."
-
-    async def preset_text(self, arg: str) -> str:
-        """/preset <no> - load a preset globally (phone + UI)."""
-        a = (arg or "").strip()
-        if not a.isdigit() or int(a) < 1:
-            return "Usage: /preset <number>."
-        try:
-            raw = await self.hive.get_presets()
-        except (HiveUnreachable, OSError) as exc:
-            return f"🔌 Presets unavailable: {exc}"
-        names = sorted(raw.keys()) if isinstance(raw, dict) else \
-            [x if isinstance(x, str) else str(x.get("name", "?"))
-             for x in (raw or [])]
-        pick = int(a)
-        if pick > len(names):
-            return f"❌ Preset {pick} out of range 1–{len(names)}."
-        resp = await self.hive.load_preset(names[pick - 1])
-        if getattr(resp, "status_code", 500) >= 300:
-            return (f"❌ Preset '{names[pick - 1]}' could not be loaded - "
-                    "nothing changed.")
-        return (f"✅ Preset '{names[pick - 1]}' loaded (global - phone + "
-                "UI).")
-
-    async def chat_text(self, arg: str) -> str:
-        """/chat [number|id|auto] - inspect or pin active HiveMind chat."""
-        a = (arg or "").strip()
-        al = a.lower()
-        if al in ("auto", "off", "unpin", "clear", "reset"):
-            had = self.state.data.pop("pinned_chat", None) is not None
-            if had:
-                self.state.save()
-            follow_s = "follow-UI" if self.follow_ui_enabled() else "[TG] default"
-            return (f"🔓 Chat unpinned — back to automatic ({follow_s})."
-                    if had else f"Chat is already automatic ({follow_s}).")
-        if a:
-            cached = list(self.state.data.get("last_chat_list") or [])
-            if a.isdigit() and not cached:
-                chats = await self.hive.get_chats()
-                cached = [
-                    {"id": str(c.get("id") or ""), "title": str(c.get("title") or "Untitled")}
-                    for c in (chats or [])[:10] if isinstance(c, dict) and c.get("id")
-                ]
-            picked = None
-            if a.isdigit():
-                idx = int(a)
-                if 1 <= idx <= len(cached):
-                    picked = cached[idx - 1]
-                elif cached:
-                    return f"❌ {idx} out of range 1–{len(cached)}. List: /chat"
-            if picked is None:
-                chats = await self.hive.get_chats()
-                for c in chats or []:
-                    if not isinstance(c, dict):
-                        continue
-                    cid = str(c.get("id") or "")
-                    if cid == a or cid.startswith(a):
-                        picked = {"id": cid, "title": str(c.get("title") or "Untitled")}
-                        break
-            if picked is None or not picked.get("id"):
-                return f"❌ Chat '{a}' not found. Run /chat to list recent chats."
-            cid = str(picked["id"])
-            title = str(picked.get("title") or "Untitled")
-            self.state.data["pinned_chat"] = {"hive_chat_id": cid, "title": title}
-            self.state.data.pop("followed_chat", None)
-            self._invalidate_chat_runconf()
-            self.state.save()
-            return (f"📌 Pinned chat: {title[:48]} ({cid})\n"
-                    "All Telegram messages stay in this chat until /new or /chat auto.")
-
-        chats = await self.hive.get_chats()
-        pin = self._pinned_chat()
-        tg = self._tg_chat() or {}
-        ui_cid, _ = await self._ui_chat_target_info()
-        active_cid = (str(pin["hive_chat_id"]) if pin
-                      else (ui_cid or str(tg.get("hive_chat_id") or "")))
-        items = [c for c in (chats or []) if isinstance(c, dict) and c.get("id")][:10]
-        self.state.data["last_chat_list"] = [
-            {"id": str(c.get("id")), "title": str(c.get("title") or "Untitled")}
-            for c in items
-        ]
-        self.state.save()
-        if pin:
-            hdr = f"📌 Pinned: {str(pin.get('title') or pin['hive_chat_id'])[:42]} ({pin['hive_chat_id']})"
-        elif ui_cid:
-            hdr = f"🔗 Auto (follow-UI): {ui_cid}"
-        elif active_cid:
-            hdr = f"💬 Auto (TG chat): {active_cid}"
-        else:
-            hdr = "💬 No active chat yet"
-        lines = [hdr, ""]
-        if not items:
-            lines.append("No saved HiveMind chats found.")
-        else:
-            lines.append("Recent chats:")
-            for i, c in enumerate(items, 1):
-                cid = str(c.get("id"))
-                title = str(c.get("title") or "Untitled").replace("\n", " ")[:38]
-                cnt = int(c.get("msg_count") or 0)
-                mark = " ◀ active" if cid == active_cid else ""
-                lines.append(f"{i}. {title} ({cid}, {cnt}m){mark}")
-        lines.append("")
-        lines.append("Pin: /chat <number> · Unpin: /chat auto · Fresh: /new")
-        return "\n".join(lines)
-
-    async def effort_text(self, arg: str) -> str:
-        """/effort [planner] [level|auto] - thinking effort override for phone runs."""
-        aliases = {
-            "auto": "auto", "default": "auto", "reset": "auto",
-            "off": "none", "none": "none", "disabled": "none", "false": "none", "0": "none",
-            "on": "on", "enabled": "on", "true": "on", "1": "on",
-            "min": "minimal", "minimal": "minimal",
-            "low": "low", "med": "medium", "medium": "medium",
-            "high": "high", "max": "max", "xhigh": "max", "maximum": "max",
-        }
-        tokens = [t.strip().lower() for t in (arg or "").split() if t.strip()]
-        ov = self.state.data.setdefault("run_overrides", {})
-        if not tokens or (tokens == ["planner"]):
-            try:
-                _s = await self.hive.settings()
-            except (HiveUnreachable, OSError, ValueError):
-                _s = {}
-            _pm = str(ov.get("reasoning_effort") or "")
-            _pp = str(ov.get("planner_reasoning_effort") or "")
-            _em = str((_s or {}).get("reasoning_effort") or "auto")
-            _ep = str((_s or {}).get("planner_reasoning_effort") or "auto")
-            return (
-                "🧠 Thinking effort (Telegram):\n"
-                f"  Direct / Coder: {_pm + ' (phone)' if _pm else _em + ' (engine)'}\n"
-                f"  Planner: {_pp + ' (phone)' if _pp else _ep + ' (engine)'}\n\n"
-                "Set: /effort <auto|off|minimal|low|medium|high|max>\n"
-                "Planner: /effort planner <auto|off|low|medium|high|max>"
-            )
-        target_key = "reasoning_effort"
-        target_lbl = "Direct / Coder"
-        if tokens[0] in ("planner", "plan"):
-            target_key = "planner_reasoning_effort"
-            target_lbl = "Planner"
-            tokens = tokens[1:]
-        if len(tokens) != 1 or tokens[0] not in aliases:
-            return "❌ Use /effort [planner] <auto|off|on|minimal|low|medium|high|max>."
-        level = aliases[tokens[0]]
-        if level == "auto":
-            ov.pop(target_key, None)
-            msg = f"🧠 Effort ({target_lbl}): auto (follows engine/UI defaults)."
-        else:
-            ov[target_key] = level
-            msg = f"🧠 Effort ({target_lbl}): {level} (applies to upcoming phone runs)."
-        self._invalidate_chat_runconf()
-        self.state.save()
-        return msg
-
-    def reset_overrides(self) -> str:
-        self.state.data["run_overrides"] = {}
-        self.state.data["pending_setup"] = None
-        self.state.save()
-        return ("Model/CTX overrides cleared - upcoming runs use "
-                "the engine settings again.")
-
-    # -- P10: run takeover - mirror a UI/engine run to the phone ---------
-
-    def _mirror(self) -> dict:
-        if not hasattr(self, "_mirror_state"):
-            self._mirror_state = {"run_id": None, "after": 0,
-                                  "status_msg_id": None,
-                                  "last_status": "", "approval_sig": None,
-                                  "approval_decision_id": "",
-                                  "approval_card_did": "",
-                                  "approval_tool": "",
-                                  "other_run_noted": "", "last_phase": "",
-                                  "tool_relay_seen": {},
-                                  "answer_parts": [],
-                                  "tick_think": "",
-                                  "planner_think": "",
-                                  "last_tick": 0.0}
-        return self._mirror_state
-
-    def _mirror_reset(self, m: dict) -> None:
-        """End a mirror session - every reset site must clear the approval
-        card metadata too (G2: decision_id/tool of the relayed card)."""
-        m.update({"run_id": None, "after": 0, "status_msg_id": None,
-                  "last_status": "", "approval_sig": None,
-                  "approval_decision_id": "", "approval_card_did": "",
-                  "approval_tool": "",
-                  "other_run_noted": "", "last_phase": "",
-                  "tool_relay_seen": {}, "answer_parts": [],
-                  "tick_think": "", "planner_think": "",
-                  "ctx_marks": set(), "ctx_compression_noted": False,
-                  "answer_sent_upto": 0})
-        # A new mirror run may legitimately send the same filename again.
-        self._sent_files.clear()
-
-    def _own_run_id(self) -> str | None:
-        run = self.state.data.get("active_run") or {}
-        return run.get("run_id")
-
-    def _mirror_enabled(self, engine_settings: dict) -> bool:
-        """The UI toggle (telegram_mirror_enabled) gates the takeover.
-        Key absent = off (fail-closed, same rule as the veto)."""
-        return bool(engine_settings.get("telegram_mirror_enabled"))
-
-    async def mirror_tick(self) -> None:
-        """One mirror step (called every few seconds from the mirror
-        task). Watches the engine journal for an active run that is NOT
-        the gateway's own, relays it to the phone, relays approval
-        cards. Never raises."""
-        try:
-            await self._mirror_tick_inner()
-        except (HiveUnreachable, OSError) as exc:
-            self._log_note(f"mirror tick: engine unreachable ({exc})")
-        except (TelegramApiError, ValueError, TypeError, KeyError,
-                AttributeError) as exc:
-            # deep audit N3: a malformed frame must not silently kill the
-            # mirror task - log and continue with the next tick
-            self._log_note(f"mirror tick failed: {type(exc).__name__}: {exc}")
-
-    def _parse_done(self, frames: list | None) -> str | None:
-        """stop_reason of the LAST done frame in the journal, if any."""
-        for raw in reversed(frames or []):
-            if isinstance(raw, str) and '"type": "done"' in raw:
-                try:
-                    payload = json.loads(raw[6:])
-                    return str(payload.get("stop_reason") or "completed")
-                except (ValueError, TypeError):
-                    continue
-        return None
-
-    async def _mirror_tick_inner(self) -> None:
-        m = self._mirror()
-        try:
-            s = await self.hive.settings()
-        except (HiveUnreachable, OSError, ValueError):
-            return  # engine unreachable: nothing to mirror, keep quiet
-        # UI toggle telegram_phone_restricted: stash for /status + the
-        # supervisor heartbeat (best-effort view, refreshed every tick);
-        # missing key = restricted (safe default)
-        if hasattr(self.ms, "phone_restricted"):
-            self.ms.phone_restricted = bool(s.get("telegram_phone_restricted",
-                                                  True))
-        if not self._mirror_enabled(s):
-            if m["run_id"]:
-                self._mirror_reset(m)
-                await self.ms.send_message(
-                    "📴 Mirror ended (setting off in the UI).")
-            return
-        # audit G7: once a session is active, fetch THAT run's journal -
-        # the unscoped endpoint answers with the most recently ACTIVE run,
-        # which can be the wrong one when a second run starts.
-        # JOURNAL-AFTER (audit A2, 2026-10-23): m["after"] is the logical
-        # frame cursor this mirror already maintains — send it so the server
-        # slices and the tick stops re-downloading the whole window. The
-        # done/abort branch below still receives the tail frames it parses
-        # (they lie AFTER the cursor by definition).
-        j = await self.hive.journal(m["run_id"], after=int(m.get("after") or 0)) \
-            if m["run_id"] else await self.hive.journal(after=JOURNAL_META_ONLY_AFTER)
-        if not isinstance(j, dict) or not j.get("active") \
-                or j.get("done") or j.get("aborted"):
-            # nothing active: end a session, report how it ended
-            if m["run_id"]:
-                rid, frames = m["run_id"], j.get("frames") \
-                    if isinstance(j, dict) else None
-                reason = self._parse_done(frames) or "finished"
-                # R6 FAZIT ON EARLY DONE (owner report, live 10:2x): a
-                # run that finished between two ticks landed HERE and
-                # the phone got a bare "finished" line - the produced
-                # answer was discarded. Drain accumulated tokens; fall
-                # back to the full journal frames when empty.
-                _acc = (self._accumulate_frames(frames or [])[0]
-                        if isinstance(j, dict) else "")
-                _ans = "".join(m.get("answer_parts") or []).strip() or _acc
-                self._mirror_reset(m)
-                await self._mirror_fazit(rid, _ans, reason)
-            elif isinstance(j, dict) and j.get("done") and not j.get("aborted"):
-                # R6 LATE RESULT (user feedback: messages must arrive): a run
-                # that started AND finished while the mirror was not
-                # attached still delivers its result - once per run id,
-                # only for runs finished during THIS gateway process.
-                _lr_id = str(j.get("run_id") or "")
-                if (_lr_id and float(j.get("ts") or 0) > self._proc_start
-                        and _lr_id not in self._late_relayed
-                        and _lr_id != str(self._own_run_id() or "")):
-                    self._late_relayed.add(_lr_id)
-                    if not j.get("frames") and int(j.get("n") or 0) > 0:
-                        _full = await self.hive.journal(_lr_id, after=0)
-                        if isinstance(_full, dict):
-                            j = _full
-                    _lr_ans, _ = self._accumulate_frames(j.get("frames") or [])
-                    await self._mirror_fazit(
-                        _lr_id, _lr_ans,
-                        self._parse_done(j.get("frames")) or "completed")
-            return
-        rid = str(j.get("run_id") or "")
-        # deep audit N7 (confirmed as G7): while OUR run sits between
-        # POST /stream and its run_id frame, active_run exists with
-        # run_id None - the unscoped journal is then necessarily our own
-        # run. Skip the takeover decision this tick instead of announcing
-        # the gateway's own run as a takeover.
-        _own = self.state.data.get("active_run")
-        if not m["run_id"] and isinstance(_own, dict) \
-                and not _own.get("run_id"):
-            return
-        if rid == str(self._own_run_id() or ""):
-            self._late_relayed.add(rid)  # own path relays it
-            return  # our own run reports natively; do not double-mirror
-        fresh = m["run_id"] != rid
-        if fresh:
-            if not j.get("frames") and int(j.get("n") or 0) > 0:
-                _full = await self.hive.journal(rid, after=0)
-                if isinstance(_full, dict):
-                    j = _full
-            # VOICE-PRELOAD for mirrored runs: the phone gets a voice note for a
-            # desktop run too, so the sidecar must be warm BEFORE the answer is
-            # done (a cold start here cost 48 s on 2026-10-18).
-            await self._preload_voice()
-        if fresh:
-            m.update({"run_id": rid, "after": int(j.get("n") or 0),
-                      "status_msg_id": None, "last_status": "",
-                      "approval_sig": None, "approval_decision_id": "",
-                      "approval_card_did": "",
-                      "approval_tool": "", "other_run_noted": "",
-                      "last_phase": "", "answer_parts": [],
-                      "tick_think": "", "planner_think": "",
-                      "ctx_marks": set(), "ctx_compression_noted": False,
-                      "answer_sent_upto": 0})
-            # R6 CATCH-UP (user feedback: messages must arrive): process the
-            # pre-adoption frames SILENTLY - the answer accumulates so
-            # the fazit relay at done carries the FULL result, and tool
-            # repeats dedupe against pre-adoption calls. No sends here.
-            _catchup_pct = 0
-            _catchup_comp = False
-            _catchup_lim = 0
-            _duo_label = ""
-            _plan_catchup = ""
-            for _raw in (j.get("frames") or []):
-                if not isinstance(_raw, str):
-                    continue
-                try:
-                    _cev = json.loads(
-                        _raw[6:] if _raw.startswith("data: ") else _raw)
-                except ValueError:
-                    continue
-                if _cev.get("type") == "token":
-                    m["answer_parts"].append(str(_cev.get("content") or ""))
-                elif _cev.get("type") == "agent" and m["answer_parts"]:
-                    m["answer_parts"] = []  # phase switch: last phase wins
-                elif _cev.get("type") == "tool_call":
-                    # pre-count so a repeat loop already running before
-                    # the adoption dedupes instead of re-flooding
-                    _tl = self._tool_line(_cev)
-                    if _tl:
-                        _saw = m.setdefault("tool_relay_seen", {})
-                        _saw[_tl] = _saw.get(_tl, 0) + 1
-                        # CATCHUP-TOOL-DIGEST (2026-10-11): tool calls made
-                        # before the mirror bound were relayed never (user request:
-                        # "alle tool calls, nicht nur write/read"). The last
-                        # ones ride the adoption note below.
-                        _ctl = m.setdefault("catchup_tool_lines", [])
-                        if not _ctl or _ctl[-1] != _tl:
-                            _ctl.append(_tl)
-                elif _cev.get("type") == "ctx_meter":
-                    # TG-AUDIT: STATE events are silently skipped in the
-                    # replay (no spam), but the mirror must still land on
-                    # the CURRENT state - milestones already passed are
-                    # pre-marked and a live compression is announced once.
-                    try:
-                        _e = int(_cev.get("est_tokens") or 0)
-                        _l = int(_cev.get("ctx_limit") or 0)
-                    except (TypeError, ValueError):
-                        _e = _l = 0
-                    if _e > 0 and _l > 0:
-                        _catchup_pct = max(_catchup_pct, _e * 100 // _l)
-                        _catchup_lim = _l
-                        _catchup_comp = bool(_cev.get("compressing"))
-                elif _cev.get("type") == "duo_start":
-                    _dl = str(_cev.get("label") or "").strip()
-                    if _dl:
-                        _duo_label = _dl
-                elif _cev.get("type") == "planner_result":
-                    # late adoption: the plan finished before the takeover -
-                    # summarize it into the note instead of dropping it
-                    _pch = _cev.get("chunks") or []
-                    if isinstance(_pch, list) and _pch:
-                        _titles = [str((c.get("title") or c.get("raw") or "")).strip()
-                                   for c in _pch if isinstance(c, dict)]
-                        _titles = [t for t in _titles if t]
-                        if _titles:
-                            _plan_catchup = ("Plan (" + str(len(_titles))
-                                             + " steps): " + " | ".join(_titles))
-                    if not _plan_catchup:
-                        _pth = str(_cev.get("thinking") or "").strip()
-                        if _pth:
-                            _plan_catchup = "Plan: " + _pth
-            if _catchup_pct:
-                m["ctx_marks"] = {t for t in (50, 75, 90)
-                                  if _catchup_pct >= t}
-
-            _note = (f"📢 Engine run taken over (mirror): {rid}\n"
-                     "Your texts are queued (steering), approvals come "
-                     "to you here. /stop aborts it.")
-            if len(j.get("frames") or []) > 80:
-                _note = ("📢 Re-attached to engine run "
-                         f"{rid} (gateway restarted) - mid-run context "
-                         "was rebuilt silently.\n"
-                         "Steering queued, approvals come here. "
-                         "/stop aborts it.")
-            if _duo_label:
-                _note += "\n🤖 " + _duo_label[:200]
-            if _plan_catchup:
-                _note += "\n🧠 " + _plan_catchup[:600]
-            _catchup_tools = (m.get("catchup_tool_lines") or [])[-6:]
-            if _catchup_tools:
-                _nlc = "\n"
-                _note += (_nlc + "🔧" + _nlc.join(
-                    "🔧" + " " + _ct for _ct in _catchup_tools)
-                    + _nlc + "(earlier tool activity, newest last)")
-            await self.ms.send_message(_note)
-            if _catchup_comp and _catchup_lim:
-                await self.ms.send_message(
-                    "🗜 Context is compressing "
-                    f"(~{_catchup_pct}% of {_catchup_lim // 1024}k) - "
-                    "started before the takeover.")
-            m["after"] = int(j.get("n") or 0)
-            return  # next tick streams the delta
-
-        # SECOND-RUN VISIBILITY (2026-10-06, audit T2): while bound to one
-        # run the mirror never looks at another one - a second engine run
-        # used to run entirely unseen on the phone. Peek the unscoped
-        # journal (most-recently-active) once per tick; when a DIFFERENT
-        # active run surfaces, say so once per foreign run id.
-        if m["run_id"]:
-            try:
-                # META-ONLY PEEK (audit A2, 2026-10-23): this peek reads only
-                # run_id/active/done/aborted — a cursor past the window makes
-                # the server return empty frames, so the second-run check
-                # stops hauling the full journal every tick.
-                _j_all = await self.hive.journal(after=JOURNAL_META_ONLY_AFTER)
-                _other = str((_j_all or {}).get("run_id") or "")
-                if (_other and _other != m["run_id"]
-                        and _other != str(self._own_run_id() or "")
-                        and (_j_all or {}).get("active")
-                        and not (_j_all or {}).get("done")
-                        and not (_j_all or {}).get("aborted")
-                        and m.get("other_run_noted") != _other):
-                    m["other_run_noted"] = _other
-                    await self.ms.send_message(
-                        f"ℹ️ Another engine run is active ({_other[:18]}…) - "
-                        f"still mirroring {m['run_id'][:18]}… (only one run "
-                        "mirrors at a time).")
-            except (HiveUnreachable, OSError, ValueError, TypeError,
-                    KeyError, TelegramApiError):
-                pass  # the mirrored run's own relay continues regardless
-
-        # delta frames since last tick (TG-AUDIT 2026-10-07): `n` is the
-        # LOGICAL frame count and `base` the window offset once the
-        # engine's 20k-frame cap sliced old frames away. The old
-        # len(frames)-tracking went BLIND at the cap: the length stayed
-        # pinned while logical frames kept flowing, so every delta - tool
-        # lines, statuses, the fazit answer - was lost forever.
-        frames = j.get("frames") or []
-        _base = int(j.get("base") or 0)
-        after = int(m["after"] or 0)
-        _n_total = int(j.get("n") or (_base + len(frames)))
-        # server.py /run/journal?after=N already returns the pre-sliced delta
-        # frames[max(0, after - _base):] while reporting the window's _base.
-        # Only slice client-side when the server returned the unsliced window
-        # (e.g. legacy/unit-test stubs where _base + len(frames) == _n_total
-        # and after > _base).
-        if after > _base and (_base + len(frames)) == _n_total and len(frames) > max(0, _n_total - after):
-            _start = after - _base
-            new_frames = frames[max(0, _start):] if _start < len(frames) else []
-        else:
-            new_frames = list(frames)
-        m["after"] = _n_total
-        done_reason = self._parse_done(new_frames)
-        last_status = ""
-        tool_lines: list[str] = []
-        # R4 relay: phase/plan/thinking visibility on the phone (persisted in m across ticks)
-        last_phase = m.get("last_phase", "")
-        for raw in new_frames:
-            if not isinstance(raw, str):
-                continue
-            try:
-                ev = json.loads(raw[6:]) if raw.startswith("data: ") else {}
-            except ValueError:
-                continue
-            if ev.get("type") == "status":
-                last_status = str(ev.get("content") or "")[:120]
-            elif ev.get("type") == "token":
-                if (m.get("planner_think") or "").strip():
-                    await self._flush_thinking(m["planner_think"], label="Planning")
-                    m["planner_think"] = ""
-                if (m.get("tick_think") or "").strip():
-                    await self._flush_thinking(m["tick_think"], label="Reasoning")
-                    m["tick_think"] = ""
-                # FAZIT RELAY (2026-10-06, owner report): the takeover never
-                # delivered the run's RESULT - the phone watched status lines
-                # and then got a bare "🏁 completed". Accumulate the answer
-                # tokens; an agent event starts a new phase, so only the LAST
-                # phase's tokens survive (planner/critic tokens use their own
-                # event types and never land here).
-                m["answer_parts"].append(str(ev.get("content") or ""))
-            elif ev.get("type") == "agent":
-                if (m.get("planner_think") or "").strip():
-                    await self._flush_thinking(m["planner_think"], label="Planning")
-                    m["planner_think"] = ""
-                if (m.get("tick_think") or "").strip():
-                    await self._flush_thinking(m["tick_think"], label="Reasoning")
-                    m["tick_think"] = ""
-                if m["answer_parts"]:
-                    m["answer_parts"] = []
-                # R4: phase switches (Planner / Code / Answer) as own lines
-                _ph = str(ev.get("content") or "").strip()
-                if _ph and _ph != last_phase:
-                    await self.ms.send_message(f"→ {_ph}")
-                    last_phase = _ph
-            elif ev.get("type") == "steer":
-                # STEER CARD (2026-10-06): relay the takeover run's steer
-                # pickups as their own phone message.
-                _st_txt = str(ev.get("content") or "").strip()
-                if _st_txt or ev.get("images"):
-                    _note = "🧭 Steer picked up: " + (_st_txt[:300] or "(image)")
-                    if ev.get("images"):
-                        _note += f" (+{ev.get('images')} img)"
-                    await self.ms.send_message(_note)
-            elif ev.get("type") == "planner_result":
-                if (m.get("planner_think") or "").strip():
-                    await self._flush_thinking(m["planner_think"], label="Planning")
-                    m["planner_think"] = ""
-                # Combine structured chunks preview with content/thinking fallbacks
-                _pch = ev.get("chunks") or []
-                _plan = ""
-                if isinstance(_pch, list) and _pch:
-                    _titles = [
-                        str((c.get("title") or c.get("raw") or "")).strip()
-                        for c in _pch if isinstance(c, dict)
-                    ]
-                    _titles = [t for t in _titles if t]
-                    if _titles:
-                        _plan = "Plan (" + str(len(_titles)) + " steps): " + " | ".join(_titles)
-                if not _plan:
-                    _plan = str(ev.get("content") or "")
-                    if not _plan and isinstance(_pch, list):
-                        _plan = "".join(str(c) for c in _pch)
-                if not _plan:
-                    _plan = str(ev.get("thinking") or "").strip()
-                _plan = " ".join(_plan.split())
-                if _plan:
-                    await self.ms.send_message(
-                        "🧠 " + _plan[:600] + ("…" if len(_plan) > 600 else ""))
-            elif ev.get("type") == "duo_round":
-                _rn = ev.get("n")
-                _rt = ev.get("total")
-                _st = str(ev.get("subtask") or "").strip()
-                _msg = f"⚙️ Coder round {_rn}/{_rt}"
-                if _st:
-                    _msg += f": {_st[:110]}"
-                await self.ms.send_message(_msg)
-            elif ev.get("type") == "duo_start":
-                # MODEL VISIBILITY (2026-10-07, owner): WHICH model with
-                # which settings runs - the label carries model, VRAM, ctx.
-                _lbl = str(ev.get("label") or "").strip()
-                if _lbl:
-                    await self.ms.send_message("🤖 " + _lbl[:200])
-            elif ev.get("type") == "ctx_meter":
-                # CONTEXT/COMPRESSION VISIBILITY (user feedback: the plan did not reach the phone again): milestone lines at 50/75/90 % (once each) and
-                # a one-shot note while the engine compresses context.
-                try:
-                    _est = int(ev.get("est_tokens") or 0)
-                    _lim = int(ev.get("ctx_limit") or 0)
-                except (TypeError, ValueError):
-                    _est = _lim = 0
-                if _est > 0 and _lim > 0:
-                    _pct = _est * 100 // _lim
-                    _marks = m.setdefault("ctx_marks", set())
-                    for _th in (50, 75, 90):
-                        if _pct >= _th and _th not in _marks:
-                            _marks.add(_th)
-                            await self.ms.send_message(
-                                f"🧮 Context {_pct}% "
-                                f"({_est // 1024}k/{_lim // 1024}k tokens)")
-                    _comp = bool(ev.get("compressing"))
-                    if _comp and not m.get("ctx_compression_noted"):
-                        # once per RUN (the flag can flip every frame while
-                        # the engine hovers at the limit - no re-notes)
-                        m["ctx_compression_noted"] = True
-                        await self.ms.send_message(
-                            "🗜 Context compressing (older turns are being "
-                            "summarized to stay under the limit)…")
-            elif ev.get("type") == "file_change":
-                # FILE ACTIVITY (owner): what the coder actually writes.
-                _fp = str(ev.get("path") or "").replace("\\", "/").split("/")[-1]
-                _op = str(ev.get("op") or "write")
-                _ln = ev.get("lines")
-                _fc = f"📝 {_fp} ({_op}" + (f", {_ln} lines)" if _ln else ")")
-                if not tool_lines or tool_lines[-1] != _fc:
-                    tool_lines.append(_fc)
-            elif ev.get("type") == "send_file":
-                # MIRROR-SEND (2026-11-04): a UI-started run that calls
-                # send_file must reach the owner's phone too; the engine
-                # already validated the path, the gateway gates it again.
-                await self._deliver_send_file(ev)
-            elif ev.get("type") == "usage_meta":
-                # CODER OUTPUT (user feedback: relay real coder text instead of a bare
-                # "round finished"): when a coder LLM call ends, relay the
-                # free text it produced since the last relay (token events
-                # only - tool-call payloads are separate events).
-                if str(ev.get("phase") or "") == "coder":
-                    _parts = m.get("answer_parts") or []
-                    _upto = int(m.get("answer_sent_upto") or 0)
-                    _delta = "".join(str(x) for x in _parts[_upto:]).strip()
-                    if len(_delta) >= 40:  # short coder remarks too
-                        m["answer_sent_upto"] = len(_parts)
-                        # AUDIT FIX (1.3.3 release audit): the fazit path
-                        # filters secrets BEFORE sending - the mid-run
-                        # coder relay must not leak past that guard.
-                        _txt = " ".join(
-                            render.filter_secrets(_delta).split())
-                        await self.ms.send_message(
-                            "💬 " + _txt[:700] + ("…" if len(_txt) > 700 else ""))
-            elif ev.get("type") == "planner_thinking_token":
-                m["planner_think"] = (m.get("planner_think") or "") + str(ev.get("content") or "")
-            elif ev.get("type") == "thinking_token":
-                # R4: coder/direct reasoning - buffered across ticks in mirror state
-                m["tick_think"] = (m.get("tick_think") or "") + str(ev.get("content") or "")
-            elif ev.get("type") == "tool_call":
-                if (m.get("tick_think") or "").strip():
-                    await self._flush_thinking(m["tick_think"], label="Reasoning")
-                    m["tick_think"] = ""
-                # Tool-Call-Relay (2026-10-05) + REPEAT-DEDUPE (R6, live
-                # flood 10:21): identical lines (same tool, same args -
-                # model retry loops) relay once, then a compact counter
-                # every 5th repeat. Cross-tick via the mirror state.
-                line = self._tool_line(ev)
-                if not line:
-                    continue
-                _seen = m.setdefault("tool_relay_seen", {})
-                if len(_seen) > 40:
-                    _seen.clear()
-                _cnt = _seen.get(line, 0) + 1
-                _seen[line] = _cnt
-                if _cnt == 1:
-                    tool_lines.append(line)
-                elif _cnt % 5 == 0:
-                    tool_lines.append(f"{line} (repeat #{_cnt})")
-        for tl in tool_lines[-20:]:  # cap per tick, newest win
-            # (user feedback: the plan did not reach the phone again - 6 was too tight once the
-            # file-change lines share the budget with the tool lines)
-            await self.ms.send_message(tl)
-        if last_status and last_status != m["last_status"] \
-                and (_now() - m["last_tick"]) >= self.cfg.status_min_interval_s:
-            if m["status_msg_id"] is None:
-                res = await self.ms.send_message(f"⏳ {last_status} …")
-                m["status_msg_id"] = res.get("message_id")
-            else:
-                await self._edit_status(m["status_msg_id"],
-                                        f"⏳ {last_status} …")
-            m["last_status"] = last_status
-            m["last_tick"] = _now()
-        m["last_phase"] = last_phase  # F5: cross-tick dedupe state
-        if done_reason:
-            if (m.get("planner_think") or "").strip():
-                await self._flush_thinking(m["planner_think"], label="Planning")
-                m["planner_think"] = ""
-            if (m.get("tick_think") or "").strip():
-                await self._flush_thinking(m["tick_think"], label="Reasoning")
-                m["tick_think"] = ""
-            # FAZIT RELAY (2026-10-06, R6-hardened): deliver what the run
-            # PRODUCED, not just the fact that it ended. Empty accumulator
-            # falls back to the full journal frames (late adoption, phase
-            # switches) so the phone always gets the final answer.
-            _ans = "".join(m.get("answer_parts") or []).strip()
-            if not _ans:
-                _ans, _ = self._accumulate_frames(frames)
-            self._mirror_reset(m)
-            await self._mirror_fazit(rid, _ans, done_reason)
-            return
-
-        # approval relay (the point of the takeover)
-        pend = await self.hive.pending_approval(rid)
-        body = pend.json() if hasattr(pend, "json") else {}
-        if getattr(pend, "status_code", 200) == 200 and body.get("active"):
-            if (
-                str(body.get("kind") or "approval") != "ask"
-                and not body.get("decision_id")
-                and not body.get("approval_key")
-                and not body.get("args_hash")
-                and str(body.get("preview") or "").strip().lower().startswith("(generating")
-            ):
-                return
-            sig = f"{body.get('decision_id') or ''}|{body.get('preview') or ''}"
-            if sig != m["approval_sig"]:
-                m["approval_sig"] = sig
-                # G2: remember which card is on the phone, so the phone
-                # decision echoes decision_id + tool and the engine can
-                # drop duplicates / tool mismatches.
-                m["approval_decision_id"] = str(body.get("decision_id") or "")
-                m["approval_card_did"] = ""
-                m["approval_tool"] = str(body.get("tool") or "")
-                m["approval_kind"] = str(body.get("kind") or "approval")
-                # deep audit N2: the pending preview is truncated to 300
-                # chars by the engine; the full command lives in the
-                # journal's tool_call frames - dig it out so the owner
-                # never approves blind.
-                full = self._full_command_from_frames(
-                    j.get("frames"), str(body.get("tool") or ""))
-                preview = full or (str(body.get("preview") or "") + "\n"
-                                   "(server preview truncated - full "
-                                   "command in the UI)")
-                if len(preview) > 2500:
-                    preview = preview[:2500] + " …"
-                if m["approval_kind"] == "ask":
-                    # ASK-USER ON THE PHONE (2026-10-06, owner): an agent
-                    # question is relayed as a TEXT card - the reply IS the
-                    # answer (free text beats 1/3 for open questions).
-                    # YES/NO BUTTONS (2026-10-07, user feedback: the plan did not reach the phone again): a yes/no-shaped question (destructive
-                    # gate) gets tappable buttons; free text still wins
-                    # for own commentary.
-                    _ask_low = preview.lower()
-                    if "yes" in _ask_low and "no" in _ask_low and (
-                            "confirm" in _ask_low or "reply with" in _ask_low):
-                        did_tok = _fit_card_did_token(
-                            "ask", rid, ("yes", "no", "later"),
-                            m["approval_decision_id"])
-                        m["approval_card_did"] = did_tok
-                        await self.ms.send_message(
-                            f"❓ The agent asks (run {rid})\n\n"
-                            f"{preview}\n\n"
-                            "Buttons below - or type your own answer as "
-                            "text (e.g. 'yes, but skip the force flag').\n"
-                            "(This is the agent's own question - NOT the "
-                            "approval gate.)",
-                            reply_markup={"inline_keyboard": [
-                                [{"text": "✅ Yes",
-                                  "callback_data": _card_cb_data("ask", rid, "yes", did_tok)},
-                                 {"text": "⛔ No",
-                                  "callback_data": _card_cb_data("ask", rid, "no", did_tok)}],
-                                [{"text": "⏳ Later",
-                                  "callback_data": _card_cb_data("ask", rid, "later", did_tok)}]]})
-                    else:
-                        await self.ms.send_message(
-                            f"❓ The agent asks (run {rid})\n\n"
-                            f"{preview}\n\n"
-                            "Reply with your answer as text - it goes "
-                            "straight back to the agent.\n"
-                            "(This is the agent's own question - NOT the "
-                            "approval gate.)")
-                else:
-                    did_tok = _fit_card_did_token(
-                        "appr", rid, ("1", "2", "3"),
-                        m["approval_decision_id"])
-                    m["approval_card_did"] = did_tok
-                    await self.ms.send_message(
-                        f"🛡 Approval needed (UI run {rid})\n\n"
-                        f"tool: {body.get('tool')}\n\n"
-                        f"{preview}\n\n"
-                        "Buttons below; or reply 1 (once) / 3 (deny) as text.\n"
-                        "'2' remembers EXACTLY this call for this chat.",
-                        reply_markup={
-                            "inline_keyboard": [[
-                                {"text": "✅ Once",
-                                 "callback_data": _card_cb_data("appr", rid, "1", did_tok)},
-                                {"text": "📁 Always (chat)",
-                                 "callback_data": _card_cb_data("appr", rid, "2", did_tok)},
-                                {"text": "⛔ Deny",
-                                 "callback_data": _card_cb_data("appr", rid, "3", did_tok)},
-                            ]]})
-        elif m["approval_sig"] and not body.get("active"):
-            # R5 (owner): show WHAT happened, not just that the card
-            # closed. Evidence in the journal tail: a fail-closed timeout
-            # denies with a status line; an approved call leaves a
-            # tool_result for the same tool.
-            _appr_tool = str(body.get("tool") or "")
-            _tail = [f for f in (j.get("frames") or [])[-40:]
-                     if isinstance(f, str)]
-            _timed_out = any("DENIED (fail closed)" in f for f in _tail)
-            _ran = any('"type": "tool_result"' in f and _appr_tool in f
-                       for f in _tail)
-            if _timed_out:
-                await self.ms.send_message(
-                    "🛡 The call was auto-DENIED (no answer within the "
-                    "timeout, fail-closed). The model picks another way.")
-            elif _ran and _appr_tool:
-                await self.ms.send_message(
-                    f"✅ Approved in the UI: {_appr_tool} ran on the PC.")
-            else:
-                await self.ms.send_message(
-                    "ℹ️ Card closed (answered in the UI, or timed out).")
-            m["approval_sig"] = None
-            m["approval_decision_id"] = ""
-            m["approval_card_did"] = ""
-
-    async def _mirror_fazit(self, rid: str, answer: str, reason: str) -> None:
-        """FAZIT RELAY (2026-10-06): deliver what the run PRODUCED, not
-        just the fact that it ended. Chunked messages, .txt document past
-        the chunk cap, transcript persistence for handed-over chats;
-        marks the run relayed so the late-result path never re-sends."""
-        _ans = render.filter_secrets((answer or "").strip())  # R3: filter
-        # BEFORE split - per-chunk filtering missed secrets straddling
-        # hard-split boundaries (each half matched no pattern alone)
-        text = STOP_REASON_TEXT.get(
-            reason, f"🏁 Mirror run finished ({reason}).")
-        if reason == "completed":
-            text = "🏁 Mirror run completed."
-        # RESULT-MODE (1.4.2): the mirror path is what the phone gets when a run
-        # was started in the browser. It used to relay text only, so "answers as
-        # voice notes" never fired for a desktop run (owner report: paired, no
-        # audio). Same contract as _finish: both = text + voice, text = text only,
-        # voice = voice only (with a text fallback if the synthesis failed).
-        _mode = (await self._result_mode()) if _ans else "text"
-        if _mode == "voice":
-            await self._maybe_voice_answer(_ans)
-            if not self._voice_sent:
-                _mode = "both"          # no audio -> the text MUST still arrive
-            elif reason not in ("completed", ""):
-                # a non-completed mirror run keeps its status line even when the
-                # answer itself went out as audio
-                await self.ms.send_message(text)
-        if _mode != "voice":
-            _full = (_ans + "\n\n" + text) if _ans else text
-            _chunks = render.split_message(_full)
-            if len(_chunks) > FINAL_CHUNK_LIMIT:
-                await self.ms.send_document(
-                    _ans.encode("utf-8"), "mirror_result.txt")
-                await self.ms.send_message(text)
-            else:
-                for _c in _chunks:
-                    await self.ms.send_message(_c)
-            if _mode == "both" and _ans:
-                await self._maybe_voice_answer(_ans)
-        # PHONE-RUNS-IN-UI: persist the answer into the chat transcript
-        # so the run exists in the UI, not only on the phone.
-        _ho_chat = self._handed_over.pop(rid, None)
-        if _ho_chat and _ans:
-            try:
-                await self._write_turn(_ho_chat, {
-                    "role": "assistant", "content": _ans})
-            except (HiveUnreachable, OSError, HTTPError) as _tw:
-                self._log_note(f"handover transcript write failed: {_tw}")
-        self._late_relayed.add(rid)
-
-    @staticmethod
-    def _accumulate_frames(frames: list) -> tuple[str, str]:
-        """R6 late relay: accumulate (answer, last phase) from journal
-        frames without any sends - used for runs that finished while the
-        mirror was not attached."""
-        parts: list[str] = []
-        phase = ""
-        for raw in frames or []:
-            if not isinstance(raw, str):
-                continue
-            try:
-                ev = json.loads(raw[6:] if raw.startswith("data: ") else raw)
-            except ValueError:
-                continue
-            et = ev.get("type")
-            if et == "token":
-                parts.append(str(ev.get("content") or ""))
-            elif et == "agent" and parts:
-                parts = []  # phase switch: last phase wins
-            elif et == "phase":
-                phase = str(ev.get("content") or phase)
-        return "".join(parts).strip(), phase
-
-    @staticmethod
-    def _full_command_from_frames(frames: list | None, tool: str) -> str:
-        """Last tool_call event for `tool` in the journal frames, with
-        the untruncated command from its extra (sse/events.py keeps
-        extra['cmd'] whole). Empty string when not found."""
-        for raw in reversed(frames or []):
-            if not isinstance(raw, str) or '"type": "tool_call"' not in raw:
-                continue
-            try:
-                ev = json.loads(raw[6:] if raw.startswith("data: ") else raw)
-            except ValueError:
-                continue
-            if ev.get("type") != "tool_call":
-                continue
-            if tool and ev.get("name") != tool:
-                continue
-            extra = ev.get("extra") or {}
-            for key in ("cmd", "path", "url", "query", "code", "package"):
-                v = extra.get(key) or ev.get("label")
-                if isinstance(v, str) and v.strip():
-                    return f"{ev.get('name', tool)}: {v}"
-        return ""
-
-    def mirror_intercept(self, text: str) -> bool:
-        """True = this text belongs to the mirrored engine run (approval
-        answer or steering); the caller must await mirror_send(text)
-        instead of starting a run."""
-        m = self._mirror()
-        return bool(m.get("run_id")) and bool((text or "").strip())
-
-    async def approval_callback(self, callback_id: str, data: str) -> str:
-        """Tappable approval buttons (2026-10-05): callback_data is
-        'appr:<rid>:<1|2|3>' from a card's inline keyboard - mirrored UI
-        runs AND own phone runs (ask mode). The decision rides the SAME
-        path as text answers (decision_id + tool echoed for the engine's
-        duplicate/tool guards); '2' uses the engine's chat-scoped
-        exact-call memory. Returns the toast text for
-        answerCallbackQuery."""
-        m = self._mirror()
-        card_did = ""
-        try:
-            _parts = data.split(":", 3)
-            if len(_parts) == 4:
-                _, rid, answer, card_did = _parts
-            else:
-                _, rid, answer = _parts
-        except ValueError:
-            return "malformed button"
-        if data.startswith("ask:"):
-            # ASK BUTTONS (2026-10-07, user feedback: the plan did not reach the phone again): yes/no cards (destructive gate + agent
-            # yes/no questions) ride the SAME decide_approval path as a
-            # text answer; decision_id/tool from the mirrored card guard
-            # duplicates. Free text stays possible alongside the buttons.
-            # 'later' (owner, 2nd round) does NOT consume the card: the
-            # run keeps waiting and the free-text answer stays open.
-            if answer not in ("yes", "no", "later") \
-                    and not answer.startswith(("y", "n", "l")):
-                return "unknown button"
-            if rid != m.get("run_id") or not m.get("approval_sig"):
-                return "card already gone"
-            expected_did = str(
-                m.get("approval_card_did") or m.get("approval_decision_id") or "")
-            if not _card_did_matches(expected_did, card_did):
-                return "ℹ️ card outdated - nothing changed"
-            if answer.startswith("l"):
-                return "⏳ later - the run waits; answer with text anytime"
-            ask_ans = "yes" if answer.startswith("y") else "no"
-            resp = await self.hive.decide_approval(
-                rid, ask_ans,
-                decision_id=m.get("approval_decision_id") or "",
-                tool=m.get("approval_tool") or "")
-            code = getattr(resp, "status_code", 500)
-            m["approval_sig"] = None
-            m["approval_decision_id"] = ""
-            m["approval_card_did"] = ""
-            if code >= 300:
-                return f"not accepted (HTTP {code})"
-            try:
-                routed = str((resp.json() or {}).get("routed") or "")
-            except (ValueError, TypeError, AttributeError):
-                routed = ""
-            if routed == "duplicate":
-                return "already answered (UI) - nothing changed"
-            if routed == "expired":
-                return "⏱ card already timed out - denied (fail closed)"
-            if routed == "stale":
-                return "ℹ️ card outdated - nothing changed"
-            try:
-                await self.ms.send_message(
-                    "✅ Confirmed (yes) - answer delivered." if ask_ans == "yes"
-                    else "⛔ Declined (no) - answer delivered.")
-            except (TelegramApiError, OSError):
-                pass  # the decision itself is delivered
-            return f"{ask_ans} - delivered"
-        if answer not in ("1", "2", "3"):
-            return "unknown button"
-
-        def _fmt_routed(resp, *, dup_msg: str) -> str:
-            try:
-                routed = str((resp.json() or {}).get("routed") or "")
-            except (ValueError, TypeError, AttributeError):
-                routed = ""
-            if routed == "duplicate":
-                return dup_msg
-            if routed == "expired":
-                return "⏱ card already timed out - the call was denied (fail closed)"
-            if routed == "stale":
-                return "ℹ️ That card is outdated (a newer one replaced it) - nothing changed."
-            if answer == "2":
-                return "always (this chat, this exact call) - delivered"
-            return "allowed (once) - delivered" if answer == "1" else "denied - delivered"
-
-        own = self._open_own_approval or {}
-        if rid == own.get("rid"):
-            expected_own_did = str(
-                own.get("card_did") or own.get("decision_id") or "")
-            if not _card_did_matches(expected_own_did, card_did):
-                return "ℹ️ card outdated - nothing changed"
-            resp = await self.hive.decide_approval(
-                rid, answer,
-                decision_id=own.get("decision_id") or "",
-                tool=own.get("tool") or "")
-            code = getattr(resp, "status_code", 500)
-            if code >= 300:
-                return f"not accepted (HTTP {code})"
-            self._open_own_approval = None
-            self.state.data.setdefault("open_approvals", {}).pop(rid, None)
-            self.state.save()
-            return _fmt_routed(resp, dup_msg="already answered - nothing changed")
-        if rid != m.get("run_id") or not m.get("approval_sig"):
-            return "card already gone"
-        expected_did = str(
-            m.get("approval_card_did") or m.get("approval_decision_id") or "")
-        if not _card_did_matches(expected_did, card_did):
-            return "ℹ️ card outdated - nothing changed"
-        resp = await self.hive.decide_approval(
-            rid, answer,
-            decision_id=m.get("approval_decision_id") or "",
-            tool=m.get("approval_tool") or "")
-        code = getattr(resp, "status_code", 500)
-        if code >= 300:
-            if code == 404:
-                m["approval_sig"] = None
-                m["approval_decision_id"] = ""
-                m["approval_card_did"] = ""
-            return f"not accepted (HTTP {code})"
-        m["approval_sig"] = None
-        m["approval_decision_id"] = ""
-        m["approval_card_did"] = ""
-        return _fmt_routed(resp, dup_msg="already answered (UI) - nothing changed")
-
-    async def mirror_send(self, text: str) -> str:
-        """Route a phone message into the mirrored run: while an APPROVAL
-        card is open, 1/3 answers it ('2'/always does not exist from the
-        phone); while an ASK-USER pause is open, ANY text is the answer
-        (free text beats yes/no for open questions); otherwise steering."""
-        m = self._mirror()
-        rid = m.get("run_id")
-        _pending_kind = ""
-        _pending_did = ""
-        if m.get("approval_sig"):
-            try:
-                _pk = await self.hive.pending_approval(rid)
-                _pk_body = _pk.json() if hasattr(_pk, "json") else {}
-                if _pk_body.get("active"):
-                    _pending_kind = str(_pk_body.get("kind") or "approval")
-                    _pending_did = str(_pk_body.get("decision_id") or "")
-            except (HiveUnreachable, OSError, ValueError):
-                _pending_kind = ""
-        if m.get("approval_sig"):
-            t = (text or "").strip()
-            _kind_now = _pending_kind or (m.get("approval_kind") or "")
-            if _kind_now == "ask" and t not in ("1", "3"):
-                # ASK-USER FREE TEXT (2026-10-06, owner): the phone answer
-                # IS the reply to the agent's question. F3 (audit r3): the
-                # LIVE decision_id from the fetched pending body is used,
-                # not the relay-time one; a stale card routes "stale" and
-                # says so instead of claiming delivery.
-                resp = await self.hive.decide_approval(
-                    rid, t,
-                    decision_id=_pending_did or m.get("approval_decision_id") or "",
-                    tool=m.get("approval_tool") or "")
-                code = getattr(resp, "status_code", 500)
-                if code >= 300:
-                    if code == 404:
-                        m["approval_sig"] = None
-                        m["approval_decision_id"] = ""
-                        m["approval_card_did"] = ""
-                    return (f"❌ Answer not accepted (HTTP {code}) - maybe "
-                            "answered in the UI.")
-                m["approval_sig"] = None
-                m["approval_decision_id"] = ""
-                m["approval_card_did"] = ""
-                try:
-                    _routed = str((resp.json() or {}).get("routed") or "")
-                except (ValueError, TypeError, AttributeError):
-                    _routed = ""
-                if _routed == "stale":
-                    return ("ℹ️ That card is outdated (a newer one "
-                            "replaced it) - nothing changed.")
-                return ("✅ Answer delivered to the agent: " + t[:200])
-            if t == "2":
-                return ("❌ '2' (always allow) deliberately does not "
-                        "exist from the phone - 1 or 3.")
-            if t in ("1", "3"):
-                resp = await self.hive.decide_approval(
-                    rid, t,
-                    decision_id=m.get("approval_decision_id") or "",
-                    tool=m.get("approval_tool") or "")
-                code = getattr(resp, "status_code", 500)
-                if code >= 300:
-                    if code == 404:
-                        m["approval_sig"] = None
-                        m["approval_decision_id"] = ""
-                        m["approval_card_did"] = ""
-                    return (f"❌ Decision not accepted "
-                            f"(HTTP {code}) - maybe answered in the UI.")
-                m["approval_sig"] = None
-                m["approval_decision_id"] = ""
-                m["approval_card_did"] = ""
-                try:
-                    routed = str((resp.json() or {}).get("routed") or "")
-                except (ValueError, TypeError, AttributeError):
-                    routed = ""
-                if routed == "duplicate":
-                    # G2: the UI already answered this card - be honest
-                    # instead of confirming a decision that was dropped.
-                    return ("ℹ️ This card was already answered (UI) - "
-                            "nothing changed.")
-                if routed == "expired":
-                    return ("⏱ card already timed out - the call was "
-                            "denied (fail closed).")
-                if routed == "stale":
-                    return ("ℹ️ That card is outdated (a newer one "
-                            "replaced it) - nothing changed.")
-                return ("✅ allowed (once) - delivered."
-                        if t == "1" else "🛡 denied - delivered.")
-            return ("🛡 An approval is waiting - reply 1 or 3 "
-                    "(or answer it in the UI).")
-        # audit G8: steering bypassed the max_text_chars cap (the intercept
-        # runs before the run-start length check) - cap at the same limit.
-        text = (text or "").strip()[: self.cfg.max_text_chars]
-        resp = await self.hive.steer(rid, text)
-        if getattr(resp, "status_code", 500) == 404:
-            return (f"❌ Run {rid} is no longer active - the mirror "
-                    "ends on the next tick.")
-        return ("🧭 Queued - injected at the next boundary "
-                "(mode dependent; pipeline accepts no steering).")
-
-    async def gate_text(self, arg: str) -> str:
-        """Chat control of the phone approval policy (ask|deny|off) plus
-        the MID-RUN TOGGLE (R4, owner): /gate on|off flips the ENGINE-WIDE
-        duo_action_approval_enabled - that key is read per gated call, so
-        a mirrored UI run picks it up live (cards start/stop mid-run).
-        Posts EXACTLY one gateway-owned key to /settings - the blanket
-        'never touch POST /settings' taboo is amended for this single
-        surgical write by owner decision 2026-10-05 (the UI select writes
-        the same key)."""
-        arg = (arg or "").strip().lower()
-        if arg in ("on", "off"):
-            # R5 (audit): explicit semantics - on = approvals everywhere
-            # (engine-wide toggle + phone ask), off = everywhere off. The
-            # phone policy keys ride along so both surfaces stay consistent.
-            _on = arg == "on"
-            try:
-                await self.hive.set_setting("duo_action_approval_enabled", _on)
-                await self.hive.set_setting(
-                    "telegram_approval_mode", "ask" if _on else "off")
-            except (HiveUnreachable, OSError) as exc:
-                return f"🔌 could not set: {exc}"
-            if hasattr(self.ms, "telegram_approval_mode"):
-                self.ms.telegram_approval_mode = "ask" if _on else "off"
-            # OWNER OVERRIDE (2026-10-07, live "gate ausschalten am handy
-            # verhält sich komisch"): the chat command is the owner's voice
-            # - it lifts the gateway.toml force_approval_gate floor as
-            # well. Without this, /gate off degraded phone runs to DENY
-            # (floor re-pinned the gate: no questions, but shell/write/git
-            # silently refused) while the chat claimed approvals were off.
-            # Persisted in the gateway state; /gate ask|deny does NOT touch
-            # it, and a fresh install falls back to the toml default.
-            self.cfg = dataclasses.replace(
-                self.cfg, force_approval_gate=_on)
-            try:
-                self.state.data["gate_force"] = _on
-                self.state.save()
-            except (OSError, AttributeError, TypeError):
-                pass  # runtime override still active for this process
-            return ("🛡 Approvals " + ("ON - approval cards for gated calls, "
-                    "everywhere (UI + phone); phone runs gated again."
-                    if _on else
-                    "OFF - gated calls run without asking, UI runs included "
-                    "(live, mid-run). Careful. Phone-STARTED runs are "
-                    "ungated too (the safety force is lifted)."))
-        arg = (arg or "").strip().lower()
-        if arg in ("ask", "deny", "off"):
-            try:
-                await self.hive.set_setting("telegram_approval_mode", arg)
-            except (HiveUnreachable, OSError) as exc:
-                return f"🔌 could not set: {exc}"
-            if hasattr(self.ms, "telegram_approval_mode"):
-                self.ms.telegram_approval_mode = arg
-            why = {
-                "ask": "gated calls wait for YOUR tap (1 once / "
-                       "2 always-this-chat / 3 deny).",
-                "deny": "gated calls are auto-denied (safe default).",
-                "off": "no gate force - the engine global toggle "
-                       "decides (ungated when it is off).",
-            }[arg]
-            return (f"🛡 Approval mode (phone runs): {arg}\n\n"
-                    f"  • {why}\n\n"
-                    "Applies from the very next run. The UI select shows "
-                    "the same setting.")
-        cur = getattr(self.ms, "telegram_approval_mode", None)
-        cur_txt = cur if cur in ("ask", "deny", "off") else "deny (default)"
-        _floor = ("safety force ON" if self.cfg.force_approval_gate
-                  else "safety force lifted by /gate")
-        return ("🛡 Approval mode (phone runs): " + cur_txt + "\n"
-                + _floor + "\n\n"
-                "  • ask - gated calls wait for YOUR tap\n"
-                "  • deny - gated calls are auto-denied (safe default)\n"
-                "  • off - no gate force (engine global toggle decides)\n\n"
-                "Set with /gate ask|deny|off; /gate on|off is the master.")
-
-    async def workspace_text(self, arg: str) -> str:
-        """/workspace <path|default> - set the workspace of the [TG] chat so
-        phone runs execute there (chat workspace wins at resolve time)."""
-        path = (arg or "").strip().strip('"').strip("'")
-        if not path:
-            cid = str((self._tg_chat() or {}).get("hive_chat_id") or "")
-            if cid:
-                cur, is_ph = await self.resolve_chat_workspace(cid)
-                label = self._format_workspace_label(cur, is_ph)
-            else:
-                ph = await self._placeholder_info()
-                label = ("default_workspace (placeholder)"
-                         if ph.get("path") else "- not set (engine default)")
-            return (f"Workspace (Telegram): {label}.\n"
-                    "Set with /workspace <path> (or /workspace default).")
-        if path.lower() in ("default", "clear", "reset", "placeholder"):
-            mapping = await self._ensure_chat()
-            chat_id = mapping["hive_chat_id"]
-            r = await self.hive.get_chat(chat_id)
-            r.raise_for_status()
-            chat = r.json()
-            rev = int(chat.get("rev") or 0)
-            for _attempt in (0, 1):
-                resp = await self.hive.put_chat_meta(
-                    chat_id, {"workspace": "", "base_rev": rev})
-                if resp.status_code == 409:
-                    body = resp.json()
-                    rev = int(body.get("rev") or 0)
-                    continue
-                resp.raise_for_status()
-                tg_map = self._tg_chat()
-                if isinstance(tg_map, dict):
-                    tg_map.pop("workspace", None)
-                    self.state.data["tg_chat"] = tg_map
-                    self.state.save()
-                return ("📁 Workspace (Telegram) reset to default_workspace "
-                        "(placeholder).\nFiles in default_workspace stay "
-                        "until /new.")
-            raise HiveUnreachable("workspace reset conflict (409 twice)")
-        # audit G11 / deep-audit N9: the chat workspace IS the tool
-        # confinement root for phone runs - a typo must not silently
-        # re-point the agent. The gateway runs on the same machine, so a
-        # local existence check is authoritative here (POST /settings does
-        # the same for its workspace key). Drive roots are refused: with
-        # G1's gate force they would be safe-ish, but "agent rooted at C:\"
-        # is never what a typo meant.
-        from pathlib import Path as _Path
-        _p = _Path(path)
-        if not _p.exists():
-            return (f"❌ Path does not exist: {path}\n"
-                    "/workspace needs an existing folder.")
-        if not _p.is_dir():
-            return (f"❌ Path is not a folder: {path}\n"
-                    "/workspace needs an existing folder.")
-        try:
-            _p_res = _p.resolve()
-        except OSError:
-            _p_res = _p
-        if _p.parent == _p or _p_res.parent == _p_res:
-            return (f"❌ Drive root ({path}) is deliberately not "
-                    "allowed - please name a concrete folder.")
-        mapping = await self._ensure_chat()
-        chat_id = mapping["hive_chat_id"]
-        if not mapping.get("followed") and not mapping.get("pinned"):
-            tg_map = self._tg_chat()
-            if isinstance(tg_map, dict) and str(tg_map.get("hive_chat_id") or "") == chat_id:
-                tg_map["last_active_ts"] = time.time()
-                self.state.data["tg_chat"] = tg_map
-                self.state.save()
-        r = await self.hive.get_chat(chat_id)
-        r.raise_for_status()
-        chat = r.json()
-        rev = int(chat.get("rev") or 0)
-        for _attempt in (0, 1):
-            resp = await self.hive.put_chat_meta(
-                chat_id, {"workspace": path, "base_rev": rev})
-            if resp.status_code == 409:
-                body = resp.json()
-                rev = int(body.get("rev") or 0)
-                continue
-            resp.raise_for_status()
-            mapping["workspace"] = path
-            if not mapping.get("followed"):
-                self.state.data["tg_chat"] = mapping
-                self.state.save()
-            return (f"📁 Workspace (Telegram) set: {self._short_path(path)}\n"
-                    "Phone runs now work there - the agent can read "
-                    "from this folder. /workspace without an argument "
-                    "shows the current path.")
-        raise HiveUnreachable("workspace write conflict (409 twice)")
-
-    def tools_text(self, arg: str) -> str:
-        """/tools <off|websearch|python|full> - per-run direct access level.
-
-        Mirrors the UI's Chat Tools radio group. It rides the run body
-        (direct_tools_enabled + direct_tools_tier), so the desktop setting
-        stays untouched. File access is still confined to the workspace.
-        """
-        aliases = {"on": "full", "an": "full", "1": "full",
-                   "off": "off", "aus": "off", "0": "off",
-                   "web": "readonly", "websearch": "readonly",
-                   "read": "readonly", "readonly": "readonly",
-                   "mcp": "mcp",
-                   "py": "python", "python": "python",
-                   "full": "full", "all": "full"}
-        labels = {"off": "off (plain chat)", "readonly": "websearch only",
-                  "mcp": "MCP + web + read",
-                  "python": "read + python", "full": "full (read/write/shell)"}
-        a = (arg or "").strip().lower()
-        cur = str(self.state.data.get("direct_tools_tier") or "").strip().lower()
-        if not cur:
-            cur = "full" if self.state.data.get("tools") is True else (
-                "off" if self.state.data.get("tools") is False else "")
-        if not a:
-            cur_txt = labels.get(cur, "engine default")
-            return (f"Direct access (Telegram): {cur_txt}.\n\n"
-                    "  /tools off        - plain chat, no tools\n"
-                    "  /tools websearch  - web search/fetch only\n"
-                    "  /tools mcp        - connected MCP servers + web + read\n"
-                    "  /tools python     - read files + run_python\n"
-                    "  /tools full       - read/write/shell (workspace-locked)")
-        if a not in aliases:
-            return ("❌ Use /tools off | websearch | mcp | python | full.")
-        tier = aliases[a]
-        self.state.data["direct_tools_tier"] = tier
-        self.state.data["tools"] = tier != "off"
-        self.state.save()
-        return (f"Direct access (Telegram): {labels[tier]}. "
-                "Applies to the next phone run; the workspace lock stays on. "
-                "For file/shell access also check /restrict off.")
-
-    async def stop_mirror(self) -> str | None:
-        """Abort the mirrored engine run, if any. Returns the note or
-        None when no mirror session is active."""
-        m = self._mirror()
-        rid = m.get("run_id")
-        if not rid:
-            return None
-        try:
-            resp = await self.hive.abort_run(rid)
-            code = getattr(resp, "status_code", 500)
-        except (HiveUnreachable, OSError) as exc:
-            return (f"❌ /stop for mirror run {rid} failed "
-                    f"({exc}) - may still be running, check the PC!")
-        self._mirror_reset(m)
-        if code == 404:
-            return (f"⏹ Mirror run {rid} was unknown to the server - "
-                    "mirror ended.")
-        return f"⏹ Abort sent for mirror run {rid}."

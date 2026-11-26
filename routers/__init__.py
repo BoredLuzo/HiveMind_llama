@@ -15,10 +15,14 @@ from routers.automations import router as automations_router
 from routers.debug import router as debug_router
 from routers.models import router as models_router
 from routers.mcp import router as mcp_router
+from routers.openai_compat import router as openai_compat_router
+from routers.voice import router as voice_router
+from routers.gateway import router as gateway_router
 
 __all__ = [
     "chats_router", "core_router", "config_router", "context_router",
     "git_router", "soul_router", "learning_router", "vision_router",
     "vram_router", "websearch_router", "skills_router", "automap_router",
     "automations_router", "debug_router", "models_router", "mcp_router",
+    "openai_compat_router", "voice_router", "gateway_router",
 ]

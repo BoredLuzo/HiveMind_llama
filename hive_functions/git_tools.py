@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import os as _os
+import re as _re
 import subprocess
 from pathlib import Path
 
 import logging
 
+from infra.child_env import scrubbed_env as _scrubbed_env
 from settings import load_settings as _load_settings
 
 logger = logging.getLogger("hivemind.git_tools")
@@ -25,7 +27,8 @@ async def _git_run(workspace: str, *cmd: str,
     return await _asyncio.to_thread(
         subprocess.run, list(cmd),
         cwd=workspace, capture_output=True,
-        text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        env=_scrubbed_env())
 
 
 async def _paths_on_disk_or_head(
@@ -60,8 +63,13 @@ def _checkpoint_marker() -> str:
     return f"{_git_prefix()} checkpoint:"
 
 
-def _is_checkpoint_subject(subject: str) -> bool:
-    return subject.strip().lower().startswith(_checkpoint_marker().lower())
+_SHA_RE = _re.compile(r"[0-9a-fA-F]{7,40}")
+
+
+def _is_checkpoint_subject(subject: str, marker_low: str | None = None) -> bool:
+    if marker_low is None:
+        marker_low = _checkpoint_marker().lower()
+    return subject.strip().lower().startswith(marker_low)
 
 
 def _panel_git_identity() -> tuple[str, str]:
@@ -164,6 +172,7 @@ async def push_after_commit(workspace: str) -> str:
     if _token:
         import urllib.parse as _up
         _err = _err.replace(_token, "***")
+        _err = _err.replace(_up.quote(_token, safe=""), "***")
         _err = _err.replace(_up.quote(_token), "***")  # H-audit: url-escaped form in git errors
         _err = _err.replace(_token.replace("@", "%40"), "***")
     return f"❌ auto-push failed: {_err[:200]}"
@@ -320,17 +329,19 @@ async def list_checkpoints(workspace: str, limit: int = 20) -> list[dict]:
     if r.returncode != 0:
         return []
     marker = _checkpoint_marker()
+    marker_low = marker.lower()
+    marker_len = len(marker)
     out: list[dict] = []
     for line in r.stdout.splitlines():
         h, _, rest = line.partition("\t")
         ts, _, subj = rest.partition("\t")
-        if not h or not subj.strip().lower().startswith(marker.lower()):
+        if not h or not subj.strip().lower().startswith(marker_low):
             continue
         out.append({
             "hash": h.strip(),
             "short": h.strip()[:10],
             "ts": int(ts) if str(ts).isdigit() else 0,
-            "label": subj.strip()[len(marker):].strip()[:120],
+            "label": subj.strip()[marker_len:].strip()[:120],
         })
         if len(out) >= n:
             break
@@ -344,9 +355,8 @@ async def exec_git_restore_checkpoint(workspace: str, target: str) -> str:
     first so a restore can never silently destroy uncommitted tracked work;
     untracked files are left in place (documented limitation).
     """
-    import re as _re
     tgt = str(target or "").strip()
-    if not _re.fullmatch(r"[0-9a-fA-F]{7,40}", tgt):
+    if not _SHA_RE.fullmatch(tgt):
         return "❌ restore: target must be a 7-40 character git hash"
     subj = await _git_run(workspace, "git", "show", "-s", "--format=%s", tgt,
                           timeout=15)
@@ -370,11 +380,12 @@ async def _find_fold_base(workspace: str) -> str | None:
     r = await _git_run(workspace, "git", "log", "--pretty=%H %s", "-n", "200")
     if r.returncode != 0:
         return None
+    marker_low = _checkpoint_marker().lower()
     for line in r.stdout.strip().splitlines():
         if not line:
             continue
         h, _, subj = line.partition(" ")
-        if not _is_checkpoint_subject(subj):
+        if not _is_checkpoint_subject(subj, marker_low):
             return h.strip()
     return None
 
@@ -395,10 +406,11 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
 
     cp_count = 0
     _cp_shas: list[str] = []
+    _marker_low = _checkpoint_marker().lower()
     log = await _git_run(workspace, "git", "log", "--pretty=%H%x09%s", "-n", "200")
     for _row in log.stdout.strip().splitlines():
         _sha, _, subj = _row.partition("\t")
-        if subj and _is_checkpoint_subject(subj):
+        if subj and _is_checkpoint_subject(subj, _marker_low):
             cp_count += 1
             _cp_shas.append(_sha)
         else:

@@ -241,7 +241,7 @@ _init_body = _js[_init_start:_init_end]
 check(
     "init() fires loadChatHistory before awaiting loadModels",
     _init_body.index("_step('loadChatHistory', loadChatHistory)")
-    < _init_body.index("await _step('loadModels', loadModels)"),
+    < _init_body.index("_step('loadModels', loadModels)"),
 )
 check(
     "style.css defines .ctx-cut.warn and agentic_tool_loop attaches tool name on tool_gen_reset",

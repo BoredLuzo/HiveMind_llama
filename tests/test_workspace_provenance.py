@@ -93,8 +93,13 @@ check("T12 duo_runner auto-test sites use effective_run_workspace",
 
 # ── WS-ORDER (2026-10-16): the UI-configured project wins over the
 # run-scoped env everywhere a default workspace is derived.
-_srv = (Path(__file__).parent.parent / "server.py").read_text(
-    encoding="utf-8", errors="replace")
+_srv = (
+    (Path(__file__).parent.parent / "server.py").read_text(encoding="utf-8", errors="replace")
+    + "\n"
+    + (Path(__file__).parent.parent / "routers" / "openai_compat.py").read_text(
+        encoding="utf-8", errors="replace"
+    )
+)
 check("T13 server.py v1 lock: settings before env",
       '(settings.get("workspace") or "").strip()\n        or os.environ.get("HIVEMIND_WORKSPACE") or "."' in _srv)
 _git = (Path(__file__).parent.parent / "routers" / "git.py").read_text(

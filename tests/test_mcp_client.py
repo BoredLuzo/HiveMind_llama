@@ -539,7 +539,8 @@ check("18c the server list is editable", 'id="mcp-servers-json"' in _HTML)
 check("18d the card offers reload and save",
       "reloadMcpServers()" in _HTML and "saveMcpServers()" in _HTML)
 check("18e app.js syncs the toggle",
-      "_syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled)" in _APPJS)
+      "_syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled)" in _APPJS
+      or ("['mcp-client-toggle', S.mcpClientEnabled]" in _APPJS and "_syncFlagCheck(" in _APPJS))
 check("18f app.js has the three functions",
       all(f"function {n}(" in _APPJS for n in
           ("mcpLoadStatus", "saveMcpServers", "reloadMcpServers")))

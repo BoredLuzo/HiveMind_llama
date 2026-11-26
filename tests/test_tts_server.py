@@ -43,7 +43,7 @@ def read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8", errors="replace")
 
 
-server = read("server.py")
+server = read("server.py") + "\n" + read("routers/voice.py")
 html = read("index.html")
 app = read_all_ui_js()
 css = read("static/style.css")
@@ -51,11 +51,14 @@ settings = read("settings.py")
 docs = read("docs/settings.md")
 
 # ── (a) endpoints ──────────────────────────────────────────────────────────
-check("GET /tts/status exists", '@app.get("/tts/status")' in server)
-check("GET /tts/voices exists", '@app.get("/tts/voices")' in server)
-check("POST /tts exists", '@app.post("/tts")' in server)
-tseg = server.split('@app.post("/tts")', 1)[1].split('@app.post("/stt/fetch")', 1)[0] \
-    if '@app.post("/tts")' in server else ""
+check("GET /tts/status exists",
+      '@router.get("/tts/status")' in server or '@app.get("/tts/status")' in server)
+check("GET /tts/voices exists",
+      '@router.get("/tts/voices")' in server or '@app.get("/tts/voices")' in server)
+_tts_m = '@router.post("/tts")' if '@router.post("/tts")' in server else '@app.post("/tts")'
+_tts_end = '@router.post("/stt/fetch")' if _tts_m.startswith("@router.") else '@app.post("/stt/fetch")'
+check("POST /tts exists", _tts_m in server)
+tseg = server.split(_tts_m, 1)[1].split(_tts_end, 1)[0] if _tts_m in server else ""
 check("disabled -> 409", "status_code=409" in tseg)
 check("empty text -> 400", "TTS_EMPTY" in tseg and "status_code=400" in tseg)
 check("engine errors -> 400", "tts_engine.TtsError" in tseg)

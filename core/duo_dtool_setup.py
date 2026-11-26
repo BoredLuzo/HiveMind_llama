@@ -109,8 +109,7 @@ async def _duo_dtool_setup(ctx, ps):
     _os_hint = _build_os_hint()
     _dtool_sys_eff = _duo_coder_sys + _os_hint + (
         f"\n\nWorkspace root: {str(_ws_str).replace(chr(92), '/')}\n"
-        "Prefix every file path in tool calls with this exact absolute "
-        "path, written with forward slashes.\n"
+        "Use workspace-relative paths with forward slashes in tool calls (e.g. src/file.py).\n"
     )
     # TOKEN BUDGET:
     #
@@ -214,8 +213,8 @@ async def _duo_dtool_setup(ctx, ps):
                 f"Task: {ctx.user_input}\n\n"
                 f"Plan from exploration:\n{_bridge_explore}\n\n"
                 f"Workspace root: {str(_ws_str).replace(chr(92), '/')}\n"
-                f"Prefix every file path in tool calls with this exact "
-                f"absolute path, written with forward slashes.\n\n"
+                f"Use workspace-relative paths with forward slashes in tool calls "
+                f"(e.g. src/file.py).\n\n"
                 f"Rules:\n"
                 f"- write_file(path, content) writes a file's FULL content — use it to create a NEW file "
                 f"or to overwrite an existing file completely.\n"

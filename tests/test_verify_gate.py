@@ -74,8 +74,14 @@ check("the pre-complete auto-test skips static-only changes",
       and "task_complete accepted without tests" in te)
 check("the static-only acceptance respects the chunk-incomplete guard",
       "deferring to the chunk-complete check" in te)
+from core import tool_executor as _te_skip
+_skip_scan = _te_skip._scan_verify_history([
+    {"role": "tool", "name": "write_file", "content": "ok"},
+    {"role": "tool", "name": "run_tests", "content": "[TEST-RESULT] ⏭ No testable code changed"},
+])
 check("a static-only test skip is not treated as a failed test",
-      '"⏭" not in _content' in te)
+      ('"⏭" not in content' in te or '"⏭" not in _content' in te)
+      and _skip_scan[2] is False and _skip_scan[3] is True)
 check("the static-only skip tells the model to stop calling run_tests",
       "call run_tests again in this run." in te
       and "call run_tests again in this run." in

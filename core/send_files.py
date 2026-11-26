@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from pathlib import Path
 
 # Telegram Bot API: bots may send documents up to 50 MB.
@@ -24,6 +25,7 @@ _SECRET_EXACT = {
     "settings.json", "gateway_state.json", "secrets.json",
     "credentials.json", "auth.json", "id_rsa", "id_ed25519",
     ".git-credentials", ".npmrc", ".pypirc", ".netrc",
+    "gateway.toml", "soul.json", "memories_db.json",
 }
 _SECRET_SUFFIXES = (
     ".pem", ".key", ".pfx", ".p12", ".keystore", ".jks", ".kdbx",
@@ -32,7 +34,29 @@ _SECRET_HINTS = (
     "secret", "token", "password", "passwd", "credential",
     "api_key", "apikey", "private_key", "access_key",
 )
-_BLOCKED_DIRS = {".git", ".ssh", ".aws", ".gnupg"}
+_BLOCKED_DIRS = {".git", ".ssh", ".aws", ".gnupg", "sessions", "chats"}
+
+
+def _is_junction(path: Path) -> bool:
+    """Return True when *path* is a Windows junction / reparse point (stdlib-only)."""
+    isj = getattr(os.path, "isjunction", None)
+    if callable(isj):
+        try:
+            return bool(isj(path))
+        except OSError:
+            return False
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _has_ads_segment(path_str: str) -> bool:
+    """Return True if any non-drive path component contains an NTFS ADS colon."""
+    parts = Path(path_str).parts
+    start = 1 if parts and re.match(r"^[A-Za-z]:[/\\]?$", parts[0]) else 0
+    return any(":" in p for p in parts[start:])
 
 
 class SendFileError(ValueError):
@@ -73,7 +97,7 @@ def canonical_workspace_path(path: str | Path,
     return out.lower() if os.name == "nt" else out
 
 
-def _is_secret_path(p: Path) -> bool:
+def _is_secret_path(p: Path, root: Path | None = None) -> bool:
     name = p.name.rstrip(". ").lower()
     if name in _SECRET_EXACT:
         return True
@@ -83,7 +107,13 @@ def _is_secret_path(p: Path) -> bool:
         return True
     if any(h in name for h in _SECRET_HINTS):
         return True
-    return any(part.lower() in _BLOCKED_DIRS for part in p.parts)
+    check_parts = p.parts
+    if root is not None:
+        try:
+            check_parts = p.relative_to(root).parts
+        except ValueError:
+            check_parts = p.parts
+    return any(part.lower() in _BLOCKED_DIRS for part in check_parts)
 
 
 def resolve_workspace_file(workspace: str | Path, raw: str) -> Path:
@@ -101,9 +131,30 @@ def resolve_workspace_file(workspace: str | Path, raw: str) -> Path:
     text = _normalise_raw(raw)
     if not text:
         raise SendFileError("No file path was given.")
+    if _has_ads_segment(text):
+        raise SendFileError("NTFS alternate data streams are not allowed.")
     candidate = Path(text).expanduser()
     if not candidate.is_absolute():
         candidate = ws / candidate
+    norm_cand = Path(os.path.normpath(str(candidate)))
+    if _has_ads_segment(str(norm_cand)):
+        raise SendFileError("NTFS alternate data streams are not allowed.")
+    try:
+        rel_cand = norm_cand.relative_to(ws)
+    except ValueError:
+        try:
+            rel_cand = norm_cand.relative_to(Path(ws_raw).expanduser())
+        except ValueError:
+            rel_cand = None
+    if rel_cand is not None:
+        cur = ws
+        for part in rel_cand.parts:
+            cur = cur / part
+            try:
+                if cur.is_symlink() or _is_junction(cur):
+                    raise SendFileError("Symlinks and junctions are not allowed.")
+            except OSError:
+                raise SendFileError("The file path cannot be inspected.") from None
     try:
         target = candidate.resolve()
     except (OSError, RuntimeError):
@@ -113,7 +164,7 @@ def resolve_workspace_file(workspace: str | Path, raw: str) -> Path:
     except ValueError:
         raise SendFileError(
             "Only files inside the workspace can be sent.") from None
-    if _is_secret_path(target):
+    if _is_secret_path(target, ws):
         raise SendFileError(
             "That file looks like a secret or credential and is blocked.")
     if not target.is_file():

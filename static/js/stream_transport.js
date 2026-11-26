@@ -6,14 +6,15 @@ function _flushTokenQueueSync() {
   if (!S.curAgent) { _tokenQueue = []; return; }
   var body = document.getElementById('ab-' + S.curAgent.tid) || S.curAgent.body;
   if (!body) { _tokenQueue = []; return; }
-  while (_tokenQueue.length > 0) {
-    var _chunk = _tokenQueue.shift();
+  for (var qi = 0; qi < _tokenQueue.length; qi++) {
+    var _chunk = _tokenQueue[qi];
     if (S.curAgent._inThink) {
       S.curAgent._thinkBuf = (S.curAgent._thinkBuf || '') + _chunk;
     } else {
       _liveMdAppend(body, _chunk);
     }
   }
+  _tokenQueue = [];
   if (body._liveDirty) { body._liveDirty = false; _liveMdRender(body, true); }
 }
 
@@ -30,12 +31,15 @@ function _tokenFlushLoop() {
   // rendered at the end of the frame by _liveMdRender. Segments are reset by
   // _createThinkBlock, tool_call, tool_result (like the old _textRun).
   var count = 0;
-  while (_tokenQueue.length > 0 && count < _TOKEN_PER_FRAME) {
-    var _chunk = _tokenQueue.shift();
+  var qIdx = 0;
+  var tid = S.curAgent.tid;
+  var thinkBlockEl = document.getElementById('tk-' + tid);
+  var thinkBodyEl  = document.getElementById('thb-' + tid);
+  var tktEl        = thinkBodyEl ? document.getElementById('tkt-' + tid) : null;
+  while (qIdx < _tokenQueue.length && count < _TOKEN_PER_FRAME) {
+    var _chunk = _tokenQueue[qIdx++];
     // Think-block routing (same logic as before)
     var combined = (S.curAgent._thinkBuf || '') + _chunk;
-    var thinkBlockEl = document.getElementById('tk-' + S.curAgent.tid);
-    var thinkBodyEl  = document.getElementById('thb-' + S.curAgent.tid);
     if (!S.curAgent._inThink && combined.indexOf('<think>') >= 0) {
       S.curAgent._inThink = true;
       S.curAgent._thinkShown = 0;
@@ -66,7 +70,6 @@ function _tokenFlushLoop() {
           _tn.appendData(visibleThink.slice(_shown));
           S.curAgent._thinkShown = visibleThink.length;
         }
-        var tktEl = document.getElementById('tkt-' + S.curAgent.tid);
         if (tktEl) {
           var _nowTk = Date.now();
           if (!S.curAgent._tktAt || _nowTk - S.curAgent._tktAt >= 500) {
@@ -91,6 +94,7 @@ function _tokenFlushLoop() {
     }
     count++;
   }
+  _tokenQueue = (qIdx >= _tokenQueue.length) ? [] : _tokenQueue.slice(qIdx);
 
   if (count > 0) {
     scrollBtmIfNearBottom(120);
@@ -245,6 +249,7 @@ function doneAgent(elapsed) {
   // THINK-BLOCK-FIX: agent done → reset the think-block reference,
   // so the next agent gets a fresh 🧠 block.
   S._thinkBlockId = null;
+  S._thinkBlockCache = null;
   S.curAgent = null;
 }
 
@@ -927,39 +932,58 @@ function _perfResetRuntimeState() {
 }
 
 // ── GROSSE PERF-BAR UNTEN (AUDIT-R2+ 2026-08-25) ─────────────────────────────
+var _pbbEls = null;
+
 function _pbbEnsure() {
   var _bar = document.getElementById('perf-bar-bottom');
-  if (!_bar || _bar.dataset.built) return;
-  _bar.dataset.built = '1';
-  _bar.innerHTML =
-    '<div id="pbb-head" onclick="_pbbToggle()" title="Collapse/expand">'
-      + '<span class="pbb-chev">\u25be</span><span id="pbb-summary">--</span></div>'
-    + '<div id="pbb-body">'
-      + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item live" id="pbb-ctx" data-tip-title="Context window" data-tip="How much of the model&#39;s context this run has used, and its share of the window. &#39;est&#39; means the number was estimated from characters before the server reported real token counts." role="note" tabindex="0">ctx: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-ctxreuse" data-tip-title="Prefix cache reuse" data-tip="Share of the prompt the server could keep from its cache instead of reading it again. High values mean cheap rounds." role="note" tabindex="0">reuse: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-tok" data-tip-title="Output tokens" data-tip="Tokens generated in this run so far, across all rounds." role="note" tabindex="0">out: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-rate" data-tip-title="Generation rate" data-tip="Tokens per second including prompt processing - the honest end-to-end figure." role="note" tabindex="0">tok/s: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-decode" data-tip-title="Decode rate" data-tip="Tokens per second while the model is writing, prompt processing excluded. This is the number the model itself reports." role="note" tabindex="0">decode: --</span>'
-
-      + '</div>'
-      + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item ok" id="pbb-in" data-tip-title="Prompt tokens (last request)" data-tip="Tokens sent with the most recent request, whole conversation included." role="note" tabindex="0">in: --</span>'
-        + '<span class="ctx-perf-item ok" id="pbb-cached" data-tip-title="Cached tokens" data-tip="Tokens the server served from its prompt cache instead of computing them again." role="note" tabindex="0">cached: --</span>'
-        + '<span class="ctx-perf-item ok" id="pbb-new" data-tip-title="Recomputed tokens" data-tip="Prompt tokens the server had to process again. Large values after a compression or an edited earlier message: that is what makes a round slow." role="note" tabindex="0">recomputed: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-reqs" data-tip-title="Requests" data-tip="Model requests made in this run." role="note" tabindex="0">reqs: --</span>'
-      + '</div>'
-      + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item live" id="pbb-tools" data-tip-title="Tool calls" data-tip="Tool calls in this run: count, total time, and the tool that is running right now (or the last one)." role="note" tabindex="0">tools: --</span>'
-      + '</div></div>';
-  try {
-    if ((_hmStorageGet('hivemind-pbb-collapsed', '') || '') === '1')
-      _bar.classList.add('collapsed');
-  } catch (e) {}
+  if (!_bar) return null;
+  if (_bar.dataset.built && _pbbEls && _pbbEls.bar === _bar) return _pbbEls;
+  if (!_bar.dataset.built) {
+    _bar.dataset.built = '1';
+    _bar.innerHTML =
+      '<div id="pbb-head" onclick="_pbbToggle()" title="Collapse/expand">'
+        + '<span class="pbb-chev">\u25be</span><span id="pbb-summary">--</span></div>'
+      + '<div id="pbb-body">'
+        + '<div class="ctx-perf">'
+          + '<span class="ctx-perf-item live" id="pbb-ctx" data-tip-title="Context window" data-tip="How much of the model&#39;s context this run has used, and its share of the window. &#39;est&#39; means the number was estimated from characters before the server reported real token counts." role="note" tabindex="0">ctx: --</span>'
+          + '<span class="ctx-perf-item live" id="pbb-ctxreuse" data-tip-title="Prefix cache reuse" data-tip="Share of the prompt the server could keep from its cache instead of reading it again. High values mean cheap rounds." role="note" tabindex="0">reuse: --</span>'
+          + '<span class="ctx-perf-item live" id="pbb-tok" data-tip-title="Output tokens" data-tip="Tokens generated in this run so far, across all rounds." role="note" tabindex="0">out: --</span>'
+          + '<span class="ctx-perf-item live" id="pbb-rate" data-tip-title="Generation rate" data-tip="Tokens per second including prompt processing - the honest end-to-end figure." role="note" tabindex="0">tok/s: --</span>'
+          + '<span class="ctx-perf-item live" id="pbb-decode" data-tip-title="Decode rate" data-tip="Tokens per second while the model is writing, prompt processing excluded. This is the number the model itself reports." role="note" tabindex="0">decode: --</span>'
+        + '</div>'
+        + '<div class="ctx-perf">'
+          + '<span class="ctx-perf-item ok" id="pbb-in" data-tip-title="Prompt tokens (last request)" data-tip="Tokens sent with the most recent request, whole conversation included." role="note" tabindex="0">in: --</span>'
+          + '<span class="ctx-perf-item ok" id="pbb-cached" data-tip-title="Cached tokens" data-tip="Tokens the server served from its prompt cache instead of computing them again." role="note" tabindex="0">cached: --</span>'
+          + '<span class="ctx-perf-item ok" id="pbb-new" data-tip-title="Recomputed tokens" data-tip="Prompt tokens the server had to process again. Large values after a compression or an edited earlier message: that is what makes a round slow." role="note" tabindex="0">recomputed: --</span>'
+          + '<span class="ctx-perf-item live" id="pbb-reqs" data-tip-title="Requests" data-tip="Model requests made in this run." role="note" tabindex="0">reqs: --</span>'
+        + '</div>'
+        + '<div class="ctx-perf">'
+          + '<span class="ctx-perf-item live" id="pbb-tools" data-tip-title="Tool calls" data-tip="Tool calls in this run: count, total time, and the tool that is running right now (or the last one)." role="note" tabindex="0">tools: --</span>'
+        + '</div></div>';
+    try {
+      if ((_hmStorageGet('hivemind-pbb-collapsed', '') || '') === '1')
+        _bar.classList.add('collapsed');
+    } catch (e) {}
+  }
+  _pbbEls = {
+    bar: _bar,
+    ctx: document.getElementById('pbb-ctx'),
+    ctxreuse: document.getElementById('pbb-ctxreuse'),
+    tok: document.getElementById('pbb-tok'),
+    rate: document.getElementById('pbb-rate'),
+    decode: document.getElementById('pbb-decode'),
+    inEl: document.getElementById('pbb-in'),
+    cached: document.getElementById('pbb-cached'),
+    newEl: document.getElementById('pbb-new'),
+    reqs: document.getElementById('pbb-reqs'),
+    tools: document.getElementById('pbb-tools'),
+    summary: document.getElementById('pbb-summary'),
+  };
+  return _pbbEls;
 }
 
 function _pbbToggle() {
-  var _bar = document.getElementById('perf-bar-bottom');
+  var _bar = (_pbbEls && _pbbEls.bar) || document.getElementById('perf-bar-bottom');
   if (!_bar) return;
   var _collapsed = _bar.classList.toggle('collapsed');
   _hmStorageSet('hivemind-pbb-collapsed', _collapsed ? '1' : '0');
@@ -967,11 +991,7 @@ function _pbbToggle() {
 if (typeof window !== 'undefined') window._pbbToggle = _pbbToggle;
 
 function _perfEnsureUiRow() {
-  // PERF-CONSOLIDATION (2026-08-26): the top sticky bar (#perf-bar with
-  // ctx-perf row + thin ctx bar) is gone — ALL performance values
-  // now live in the lower, collapsible bar (#perf-bar-bottom).
-  _pbbEnsure();
-  return document.getElementById('perf-bar-bottom');
+  return _pbbEnsure() ? _pbbEls.bar : null;
 }
 
 function _perfLiveOutTokens(finalized) {
@@ -983,7 +1003,8 @@ function _perfLiveOutTokens(finalized) {
 }
 
 function _perfRender(finalized) {
-  if (!_perfEnsureUiRow()) return;
+  var _els = _pbbEnsure();
+  if (!_els || !_els.bar) return;
   var _ctx = Math.max(0, parseInt(S.perfCtxLimit || 0, 10) || 0);
   var _ctxBase = Math.max(0, parseInt(S.perfCtxTokens || 0, 10) || 0);
   var _inFlight = finalized ? 0 : Math.max(0, parseInt(S.perfInFlightTokens || 0, 10) || 0);
@@ -1001,16 +1022,14 @@ function _perfRender(finalized) {
   // decode time only) lives as its own pill in the expanded details.
   var _rateVal = (finalized && _tokRate > 0) ? _tokRate : (_realRate > 0 ? _realRate : _tokRate);
 
-  // BIG PERF BAR AT THE BOTTOM (AUDIT-R2+ 2026-08-25): full live dimensions.
-  var _pbb = document.getElementById('perf-bar-bottom');
+  var _pbb = _els.bar;
   if (_pbb && _pbb.dataset && _pbb.dataset.built) {
     _pbb.classList.add('visible');
     _pbb.style.display = '';
     _pbb.style.opacity = '';
-    var _qId = function (id) { return document.getElementById(id); };
     var _outT = _perfLiveOutTokens(finalized);
     var _e;
-    if ((_e = _qId('pbb-ctx'))) {
+    if ((_e = _els.ctx)) {
       var _ctxTxt = 'ctx: ' + (_ctx > 0 ? (_pct > 0 ? _pct + '%' : '--') : '--');
       if (_ctx > 0 && (_ctxUsed > 0 || _pct > 0)) {
         var _absC = _ctxUsed > 0 ? _fmtTokens(_ctxUsed) + '/' + _fmtTokens(_ctx) : _pct + '%';
@@ -1018,17 +1037,14 @@ function _perfRender(finalized) {
       }
       _e.textContent = _ctxTxt;
     }
-    if ((_e = _qId('pbb-ctxreuse'))) {
+    if ((_e = _els.ctxreuse)) {
       _e.textContent = (S.perfCtxReal > 0 && S.perfCtxReal >= S.perfCtxCached)
         ? 'reuse: ' + Math.round((S.perfCtxCached / S.perfCtxReal) * 100) + '%'
         : 'reuse: --';
     }
-    if ((_e = _qId('pbb-tok'))) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
-    if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + ' t/s';
-    // DECODE-RATE (2026-10-07): the cleaned figure comes from the engine
-    // (llama.cpp predicted_per_second, EMA over coder calls) - reliable,
-    // unlike the earlier event-pulse estimate.
-    if ((_e = _qId('pbb-decode'))) {
+    if ((_e = _els.tok)) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
+    if ((_e = _els.rate)) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + ' t/s';
+    if ((_e = _els.decode)) {
       var _dv = Number(S.perfDecodeEma || 0);
       if (_dv > 0) {
         _e.textContent = 'decode: ' + _dv.toFixed(1) + ' t/s';
@@ -1037,20 +1053,17 @@ function _perfRender(finalized) {
         _e.textContent = 'decode: ' + (_liveDec > 0 ? '~' + _liveDec.toFixed(1) + ' t/s' : '--');
       }
     }
-    // PERF-CONSOLIDATION: consistent '--' placeholders until the first usage_meta arrives
-    if ((_e = _qId('pbb-in'))) _e.textContent = S.runPromptTokens > 0 ? ('in: ' + _fmtTokens(S.runPromptTokens)) : 'in: --';
-    if ((_e = _qId('pbb-cached')))
+    if ((_e = _els.inEl)) _e.textContent = S.runPromptTokens > 0 ? ('in: ' + _fmtTokens(S.runPromptTokens)) : 'in: --';
+    if ((_e = _els.cached))
       _e.textContent = S.runPromptTokens > 0
         ? ('cached: ' + _fmtTokens(S.runCachedTokens) + ' (' + Math.round((S.runCachedTokens / S.runPromptTokens) * 100) + '%)')
         : 'cached: --';
-    if ((_e = _qId('pbb-new')))
+    if ((_e = _els.newEl))
       _e.textContent = S.runPromptTokens > 0
         ? ('recomputed: ' + _fmtTokens(Math.max(0, S.runPromptTokens - S.runCachedTokens)))
         : 'recomputed: --';
-    if ((_e = _qId('pbb-reqs'))) _e.textContent = 'reqs: ' + ((S.runRequestCount || 0) > 0 ? S.runRequestCount : '--');
-    // TOOL METRICS (2026-10-07, owner): count, total time and the last
-    // tool with its duration - live, including a running indicator.
-    if ((_e = _qId('pbb-tools'))) {
+    if ((_e = _els.reqs)) _e.textContent = 'reqs: ' + ((S.runRequestCount || 0) > 0 ? S.runRequestCount : '--');
+    if ((_e = _els.tools)) {
       var _tTxt = 'tools: --';
       if ((S.perfToolCalls || 0) > 0 || S.perfToolStart > 0) {
         _tTxt = 'tools: ' + (S.perfToolCalls || 0)
@@ -1064,10 +1077,8 @@ function _perfRender(finalized) {
       }
       _e.textContent = _tTxt;
     }
-    var _sumEl = _qId('pbb-summary');
+    var _sumEl = _els.summary;
     if (_sumEl) {
-      // SUMMARY-REDESIGN (2026-08-26): collapsed = ctx ABS/LIMIT (P%) · N t/s · M% cached.
-      // reqs deliberately ONLY expanded. Color coding on ctx-% (green <70, amber <90, red ≥90).
       var _parts = [];
       if (_ctx > 0 && (_ctxUsed > 0 || _pct > 0)) {
         var _absTxt = _ctxUsed > 0 ? (_fmtTokens(_ctxUsed) + '/' + _fmtTokens(_ctx)) : String(_pct);

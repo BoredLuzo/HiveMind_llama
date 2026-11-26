@@ -97,13 +97,7 @@ def history_seed(chat_id: str, limit: int = 40) -> list:
     the sidecar "session" for chats without a json.
     NOTE (2026-10-05): the fallback is INVISIBLE here - callers that report
     a source must use history_seed_provenance()."""
-    seed = load_chat_transcript(chat_id, limit=limit)
-    if not seed:
-        try:
-            seed = (_load_chat_context(chat_id) or {}).get("session") or []
-        except (OSError, ValueError):
-            seed = []
-    return _normalize_seed(seed)
+    return history_seed_provenance(chat_id, limit=limit)[0]
 
 
 def get_chat_workspace(chat_id: str) -> str:

@@ -97,8 +97,11 @@ async def _inline_tool_task_complete(args: dict, _workspace: Path, _workspace_lo
         return {"raw": _s}
 
     status = _parse_task_complete_status(args.get("status", {}))
-    completed = status.get("completed", []) if isinstance(status.get("completed"), list) else []
-    blockers = status.get("blockers", []) if isinstance(status.get("blockers"), list) else []
+    completed = list(status.get("completed", [])) if isinstance(status.get("completed"), list) else []
+    blockers = list(status.get("blockers", [])) if isinstance(status.get("blockers"), list) else []
+    _reason = str(args.get("reason") or "").strip()
+    if _reason and _reason not in blockers:
+        blockers.append(_reason)
     build_status = status.get("build_status", "untested")
     lines = [f"[task_complete] Build: {build_status}"]
     if completed:

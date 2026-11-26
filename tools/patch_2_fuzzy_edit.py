@@ -8,9 +8,29 @@ import difflib
 import time
 
 
-def _norm(s: str) -> str:
-    """Normalize trailing whitespace per line for fuzzy comparison."""
-    return "\n".join(l.rstrip() for l in s.splitlines())
+def _split_lines_keepends(s: str) -> list[str]:
+    """Split on LF only while preserving line endings so indices match _norm_lines."""
+    text = str(s or "")
+    if not text:
+        return []
+    parts = text.split("\n")
+    if parts[-1] == "":
+        parts.pop()
+        return [p + "\n" for p in parts]
+    return [p + "\n" for p in parts[:-1]] + [parts[-1]]
+
+
+def _split_raw_lines(s: str) -> list[str]:
+    """Split raw block lines matching _norm_lines count."""
+    n = str(s or "").replace("\r\n", "\n")
+    if n.endswith("\n"):
+        n = n[:-1]
+    return n.split("\n") if n else []
+
+
+def _norm_lines(s: str) -> list[str]:
+    """Normalize line endings + trailing whitespace while preserving blank lines."""
+    return [l.rstrip() for l in _split_raw_lines(s)]
 
 
 def _sliding_line_overlaps(c_lines: list[str], old_lines: list[str]):
@@ -70,9 +90,9 @@ def best_match_location(
     """
     if not old_str or not content:
         return None
-    o_norm = _norm(old_str)
-    old_lines = o_norm.splitlines()
-    c_lines = _norm(content).splitlines()
+    old_lines = _norm_lines(old_str)
+    o_norm = "\n".join(old_lines)
+    c_lines = _norm_lines(content)
     o_len = len(old_lines)
     c_len = len(c_lines)
     if o_len == 0 or o_len > c_len:
@@ -125,11 +145,9 @@ def fuzzy_replace(
     if not old_str or not content:
         return None
 
-    c_norm = _norm(content)
-    o_norm = _norm(old_str)
-
-    old_lines = o_norm.splitlines()
-    c_lines = c_norm.splitlines()
+    old_lines = _norm_lines(old_str)
+    c_lines = _norm_lines(content)
+    o_norm = "\n".join(old_lines)
     o_len = len(old_lines)
     c_len = len(c_lines)
 
@@ -207,9 +225,25 @@ def fuzzy_replace(
     # LINE-GRANULAR SPLICE (2026-09-16): cut exactly the o_len raw lines via
     # keepends — the old char-offset math left CRLF/terminator residue behind
     # the replacement (blank-line artifacts).
-    keepends = content.splitlines(True)
+    keepends = _split_lines_keepends(content)
     if best_start >= len(keepends):
         return None
-    new_body = "" if new_str == "" else (new_str if new_str.endswith("\n") else new_str + "\n")
+    _eol = "\r\n" if "\r\n" in "".join(keepends[best_start:best_start + o_len]) else "\n"
+    if new_str == "":
+        new_body = ""
+    else:
+        _rep_str = new_str
+        actual_raw = [ln.rstrip("\r\n") for ln in keepends[best_start:best_start + o_len]]
+        old_raw = _split_raw_lines(old_str)
+        if any(a != o and a.lstrip() == o.lstrip() for a, o in zip(actual_raw, old_raw)):
+            from tools.patch_diff import reindent_matched_block
+            new_raw = _split_raw_lines(new_str)
+            _reindented = reindent_matched_block(actual_raw, old_raw, new_raw)
+            if _reindented is not None:
+                _rep_str = _eol.join(_reindented) + _eol
+        _rep_norm = _rep_str.replace("\r\n", "\n")
+        if _eol == "\r\n":
+            _rep_norm = _rep_norm.replace("\n", "\r\n")
+        new_body = _rep_norm if _rep_norm.endswith("\n") else _rep_norm + _eol
     result = "".join(keepends[:best_start]) + new_body + "".join(keepends[best_start + o_len:])
     return result if result != content else None

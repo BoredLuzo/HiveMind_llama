@@ -45,8 +45,13 @@ OFFERED = R._refresh_offered_tool_names()
 EXTERNAL = {"hivemind_pipeline"}
 missing_handler = sorted(n for n in OFFERED if n not in MAP and n not in EXTERNAL)
 check("every offered tool has a handler", not missing_handler, f" (missing: {missing_handler})")
+_srv_ext_src = (
+    (ROOT / 'server.py').read_text(encoding='utf-8', errors='replace')
+    + "\n"
+    + (ROOT / 'routers' / 'openai_compat.py').read_text(encoding='utf-8', errors='replace')
+)
 check("the external exceptions are documented",
-      all(n in (ROOT / 'server.py').read_text(encoding='utf-8', errors='replace')
+      all(n in _srv_ext_src
           for n in EXTERNAL))
 
 # ── 2. every handler is offered by at least one mode, or explicitly legacy ─

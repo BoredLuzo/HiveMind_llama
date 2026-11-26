@@ -23,13 +23,18 @@ from typing import TYPE_CHECKING, Callable, Awaitable, cast
 
 from tools.runner import _run_inline_tool
 from tools.limits import READ_LADDER_SAME_PATH, READ_LADDER_WIDE
-from utils.tool import parse_tool_args as _parse_tool_args
+from utils.tool import (
+    parse_tool_args as _parse_tool_args,
+    run_bash_confirmed_exit_zero as _run_bash_confirmed_exit_zero,
+    run_bash_failed as _run_bash_failed,
+)
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from tools.errors import tool_call_failed as _tool_call_failed, tool_error_has_code as _tool_error_has_code, tool_error_response as _tool_error_response
 from core.agentic_duo_state import DuoRoundState
 from core import wedge_handoff as _wedge
 from core.tool_exec_helpers import (
     ToolRoundState,
+    _READ_LADDER_RESET_TOOLS,
     _SYS_PREFIX,
     _invoke_inline_tool,
     _prefetch_readonly_tools, _warn_duplicate_write_targets, _track_focus_path,
@@ -265,10 +270,11 @@ _WRITE_ARG_COMPACT_MIN = 12000
 WRITE_TOOLS: frozenset[str] = frozenset({
     "write_file", "write_file_append", "edit_file",
     "patch_file", "replace_lines", "apply_patch",
+    "edit_ast", "lsp_format",
 })
 _NON_APPEND_WRITE_TOOLS: frozenset[str] = WRITE_TOOLS - {"write_file_append"}
 _EDIT_TOOLS: frozenset[str] = frozenset({
-    "edit_file", "patch_file", "replace_lines", "apply_patch",
+    "edit_file", "patch_file", "replace_lines", "apply_patch", "edit_ast",
 })
 WRITE_STATUSES: frozenset[str] = frozenset({
     "created", "rewrote", "edited", "patched", "write", "append",
@@ -298,6 +304,140 @@ def _looks_like_stub(_raw_s: str) -> bool:
     if _WRITE_STUB_MARK in _low or _APPLIED_DIFF_MARK in _raw_s.lower():
         return True
     return any(_m in _low for _m in _STUB_EXTRA_MARKS)
+
+
+def _extract_run_bash_cmd_at(dtool_msgs: list, msg_idx: int, tc_id: str) -> str:
+    """Look back from a run_bash tool result at `msg_idx` to recover its `cmd` arg."""
+    for prev in reversed(dtool_msgs[:msg_idx]):
+        if prev.get("role") == "assistant" and prev.get("tool_calls"):
+            matched_tc = None
+            first_rb = None
+            for tc in prev["tool_calls"]:
+                if tc.get("function", {}).get("name") == "run_bash":
+                    if first_rb is None:
+                        first_rb = tc
+                    if tc_id and tc.get("id") == tc_id:
+                        matched_tc = tc
+                        break
+            pick = matched_tc or first_rb
+            if pick is not None:
+                try:
+                    raw_a = pick.get("function", {}).get("arguments")
+                    if isinstance(raw_a, dict):
+                        return str(raw_a.get("cmd") or "")
+                    return str(json.loads(raw_a or "{}").get("cmd") or "")
+                except (json.JSONDecodeError, TypeError, ValueError, KeyError):
+                    return ""
+            return ""
+    return ""
+
+
+_RUN_BASH_TEST_CMD_RE = re.compile(
+    r"\b(pytest|python\s+-m\s+pytest|npm\s+(run\s+)?test|vitest|jest|cargo\s+test|go\s+test|mvn\s+test|dotnet\s+test)\b",
+    re.IGNORECASE,
+)
+_RUN_BASH_PYTEST_FILE_RE = re.compile(r"\bpython3?\s+\S*test\S*\.py\b")
+_VERIFY_PASS_SIGNAL_RE = re.compile(
+    r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
+    r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))"
+)
+_EXIT_CODE_RE = re.compile(r"\[exit code:\s*(\d+)\]")
+
+
+def _scan_auto_test_preflight(dtool_msgs: list) -> tuple[int, int, int, int]:
+    """Single-pass scan over `dtool_msgs` for task_complete auto-test gating.
+
+    Returns (last_non_append_idx, last_append_idx, last_ok_write_idx, last_real_test_idx).
+    """
+    te_write_idx = -1
+    te_append_idx = -1
+    last_write_idx_at = -1
+    last_test_idx_at = -1
+    for idx, msg in enumerate(dtool_msgs):
+        if msg.get("role") != "tool":
+            continue
+        tname = msg.get("name", "")
+        content = str(msg.get("content") or "")
+        if tname in _NON_APPEND_WRITE_TOOLS:
+            te_write_idx = idx
+        elif tname == "write_file_append":
+            te_append_idx = idx
+        if tname in WRITE_TOOLS and not _tool_call_failed(content, tname):
+            last_write_idx_at = idx
+        elif tname == "run_tests" and not content.startswith("[AUTO-TEST]"):
+            last_test_idx_at = idx
+        elif tname == "run_bash":
+            cmd = _extract_run_bash_cmd_at(dtool_msgs, idx, str(msg.get("tool_call_id") or ""))
+            if _RUN_BASH_TEST_CMD_RE.search(cmd) or _RUN_BASH_PYTEST_FILE_RE.search(cmd):
+                last_test_idx_at = idx
+    return te_write_idx, te_append_idx, last_write_idx_at, last_test_idx_at
+
+
+def _scan_verify_history(dtool_msgs: list) -> tuple[int, int, bool, bool, bool, bool, int]:
+    """Scan `dtool_msgs` for task_complete edit/bash verification ordering."""
+    last_edit_idx = -1
+    last_bash_idx = -1
+    last_bash_failed = False
+    last_bash_verified = False
+    last_bash_timed_out = False
+    any_verified_exec = False
+    last_append_idx = -1
+    for idx, m in enumerate(dtool_msgs):
+        if m.get("role") != "tool":
+            continue
+        tname = m.get("name", "")
+        content = str(m.get("content") or "")
+        if tname in WRITE_TOOLS and not _tool_call_failed(content, tname):
+            last_edit_idx = idx
+            any_verified_exec = False
+        if tname == "write_file_append" and not _tool_call_failed(content, tname):
+            last_append_idx = idx
+        elif tname == "run_bash":
+            last_bash_idx = idx
+            is_timeout = _tool_error_has_code(content, "RUN_BASH_TIMEOUT", "run_bash")
+            if _run_bash_failed(content) or _tool_call_failed(content, "run_bash"):
+                last_bash_failed = True
+                last_bash_verified = False
+                last_bash_timed_out = is_timeout
+            else:
+                last_bash_failed = False
+                last_bash_timed_out = False
+                last_bash_verified = bool(
+                    _run_bash_confirmed_exit_zero(content)
+                    and _VERIFY_PASS_SIGNAL_RE.search(content)
+                )
+                if last_bash_verified:
+                    any_verified_exec = True
+        elif tname == "run_python":
+            last_bash_idx = idx
+            last_bash_timed_out = False
+            ec_matches = _EXIT_CODE_RE.findall(content)
+            if (ec_matches and int(ec_matches[-1]) != 0) or _tool_call_failed(content, "run_python"):
+                last_bash_failed = True
+                last_bash_verified = False
+            else:
+                last_bash_failed = False
+                last_bash_verified = bool(
+                    (ec_matches and int(ec_matches[-1]) == 0 and _VERIFY_PASS_SIGNAL_RE.search(content))
+                    or content.lstrip().startswith("[run_python: executed successfully")
+                )
+                if last_bash_verified:
+                    any_verified_exec = True
+        elif tname == "run_tests":
+            last_bash_idx = idx
+            last_bash_timed_out = False
+            last_bash_failed = (
+                "[TEST-RESULT] ✅" not in content
+                and "[TEST-RESULT] ⚠️" not in content
+                and "⏭" not in content
+            )
+            last_bash_verified = not last_bash_failed
+            if last_bash_verified:
+                any_verified_exec = True
+    return (
+        last_edit_idx, last_bash_idx, last_bash_failed,
+        last_bash_verified, last_bash_timed_out, any_verified_exec, last_append_idx,
+    )
 
 
 def _args_str_len(raw_args) -> int:
@@ -681,6 +821,7 @@ async def _execute_tool_round_impl(
             break
 
     _pre_results: dict[int, str] = pre_results if pre_results is not None else {}
+    _round_counted_wide_read = False
 
     for _i, _dtc_call in enumerate(tool_calls):
         # P3 (audit 2026-11-03): same truthiness guard as the prefetch above —
@@ -1011,23 +1152,11 @@ async def _execute_tool_round_impl(
                             needs_test_verification as _needs_tests)
                     except (ImportError, AttributeError, TypeError):
                         _needs_tests = None
+                    (
+                        _te_write_idx, _te_append_idx, _last_write_idx_at, _last_test_idx_at
+                    ) = _scan_auto_test_preflight(dtool_msgs)
                     if (_needs_tests is not None and _te_written
                             and not _needs_tests(_te_written)):
-                        # CHUNK-INCOMPLETE (audit 2026-11-04): do not accept a
-                        # static-only completion while the last mutation was a
-                        # write_file_append; that is how a split file was
-                        # delivered truncated. Fall through to the normal
-                        # ordered check, which owns _chunk_incomplete_p().
-                        _te_append_idx = -1
-                        _te_write_idx = -1
-                        for _te_i, _te_m in enumerate(dtool_msgs):
-                            if _te_m.get("role") != "tool":
-                                continue
-                            _te_n = _te_m.get("name", "")
-                            if _te_n in _NON_APPEND_WRITE_TOOLS:
-                                _te_write_idx = _te_i
-                            elif _te_n == "write_file_append":
-                                _te_append_idx = _te_i
                         if _te_append_idx > _te_write_idx:
                             _logger.info(
                                 "[AUTO-TEST] static-only but last write was an "
@@ -1039,43 +1168,6 @@ async def _execute_tool_round_impl(
                                 len(_te_written))
                             result.task_complete_called = True
                             break
-                    _last_write_idx_at = -1
-                    _last_test_idx_at = -1
-                    for _at_idx, _at_m in enumerate(dtool_msgs):
-                        if _at_m.get("role") != "tool":
-                            continue
-                        _at_name = _at_m.get("name", "")
-                        _at_content = str(_at_m.get("content") or "")
-                        if _at_name in WRITE_TOOLS:
-                            _last_write_idx_at = _at_idx
-                        elif _at_name == "run_tests" and not _at_content.startswith("[AUTO-TEST]"):
-                            _last_test_idx_at = _at_idx
-                        # ANTI-SPOOF (2026-09-13): a run_bash result only counts
-                        # as a test run if the COMMAND evidence is real — the
-                        # model can echo "[TEST-RESULT] ✅" (or the word
-                        # "pytest") into stdout, so bare content matches no
-                        # longer qualify.
-                        elif _at_name == "run_bash":
-                            _at_cmd = ""
-                            for _at_prev in reversed(dtool_msgs[:_at_idx]):
-                                if _at_prev.get("role") == "assistant" and _at_prev.get("tool_calls"):
-                                    for _at_tc in _at_prev["tool_calls"]:
-                                        if _at_tc.get("function", {}).get("name") == "run_bash":
-                                            _at_cmd = ""
-                                            try:
-                                                _at_args = _at_tc.get("function", {}).get("arguments")
-                                                if isinstance(_at_args, dict):
-                                                    _at_cmd = str(_at_args.get("cmd") or "")
-                                                else:
-                                                    _at_cmd = str(json.loads(_at_args or "{}").get("cmd") or "")
-                                            except (json.JSONDecodeError, TypeError, ValueError, KeyError):
-                                                _at_cmd = ""
-                                            break
-                                    break
-                            if re.search(r"\b(pytest|python\s+-m\s+pytest|npm\s+(run\s+)?test|vitest|jest|cargo\s+test|go\s+test|mvn\s+test|dotnet\s+test)\b",
-                                         _at_cmd, re.IGNORECASE) \
-                               or re.search(r"\bpython3?\s+\S*test\S*\.py\b", _at_cmd):
-                                _last_test_idx_at = _at_idx
                     if _last_test_idx_at <= _last_write_idx_at:
                         _logger.info("[AUTO-TEST] No test run since last edit - running run_tests")
                         try:
@@ -1094,9 +1186,8 @@ async def _execute_tool_round_impl(
                         # AUTO-TEST-CAP (2026-09-17): the only tool message that
                         # bypassed _cap_tool_result — large suites injected 1k+
                         # tokens. The status checks below use the original
-                        # _at_res; history gets a bounded copy.
-                        dtool_msgs.append({"role": "tool", "content": "[AUTO-TEST]" + _at_res[:1200],
-                                            "tool_call_id": _dtc_call.get("id", _dname), "name": "run_tests"})
+                        # _at_res; history gets a bounded footer on task_complete.
+                        _append_tool_footer(dtool_msgs, "[AUTO-TEST]" + _at_res[:1200])
                         try:
                             await hooks.emit({"type": "token",
                                 "content": f"\n🧪 Auto-Test vor task_complete:\n{_at_res[:500]}\n"})
@@ -1144,94 +1235,11 @@ async def _execute_tool_round_impl(
                         break
 
                 # ── Ordered bash check: last run_bash must be AFTER last edit AND successful ──
-                # (Bei aktivem Auto-Test: BLOCKED → continue, ALLOWED → break oben —
-                _last_edit_idx  = -1
-                _last_bash_idx   = -1
-                _last_bash_failed = False
-                _last_bash_verified = False
-                _last_bash_timed_out = False
-                _any_verified_exec = False
-                _last_append_idx = -1
-                _last_tool_name = ""
-                for _idx, _m in enumerate(dtool_msgs):
-                    if _m.get("role") != "tool":
-                        continue
-                    _tname = _m.get("name", "")
-                    _last_tool_name = _tname
-                    if _tname in WRITE_TOOLS:
-                        _last_edit_idx = _idx
-                        _any_verified_exec = False
-                    if _tname == "write_file_append":
-                        _last_append_idx = _idx
-                    elif _tname == "run_bash":
-                        _content = str(_m.get("content") or "")
-                        _last_bash_idx = _idx
-                        # ANTI-SPOOF (2026-09-13): the genuine marker is
-                        # appended at the very END of the output — take the
-                        # LAST [exit code: N] match so an earlier echoed
-                        # "[exit code: 0]" cannot mask a real non-zero exit.
-                        _ec_matches = re.findall(r'\[exit code:\s*(\d+)\]', _content)
-                        _is_timeout = _tool_error_has_code(_content, "RUN_BASH_TIMEOUT", "run_bash")
-                        if (_ec_matches and int(_ec_matches[-1]) != 0) or _tool_call_failed(_content, "run_bash"):
-                            _last_bash_failed = True
-                            _last_bash_verified = False
-                            _last_bash_timed_out = _is_timeout
-                        else:
-                            _last_bash_failed = False
-                            _last_bash_timed_out = False
-                            # ANTI-SPOOF-2 (audit 2026-10-24): "passed/success"
-                            # keywords are model-echoable. Verification counts
-                            # ONLY with the server's genuine exit-0 marker
-                            # ([run_bash: exit 0] prefix or trailing [exit code: 0]).
-                            _bash_ok_marker = (
-                                (_ec_matches and int(_ec_matches[-1]) == 0)
-                                or _content.lstrip().startswith("[run_bash: exit 0")
-                            )
-                            _last_bash_verified = bool(
-                                _bash_ok_marker
-                                and re.search(
-                                    r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
-                                    r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
-                                    _content,
-                                ))
-                            if _last_bash_verified:
-                                _any_verified_exec = True
-                    elif _tname == "run_python":
-                        _content = str(_m.get("content") or "")
-                        _last_bash_idx = _idx
-                        _last_bash_timed_out = False
-                        _ec_matches = re.findall(r'\[exit code:\s*(\d+)\]', _content)
-                        if _ec_matches and int(_ec_matches[-1]) != 0:
-                            _last_bash_failed = True
-                            _last_bash_verified = False
-                        elif _tool_call_failed(_content, "run_python"):
-                            _last_bash_failed = True
-                            _last_bash_verified = False
-                        else:
-                            _last_bash_failed = False
-                            _last_bash_verified = bool(
-                                _ec_matches and int(_ec_matches[-1]) == 0
-                                and re.search(
-                                    r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
-                                    r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
-                                    _content,
-                                ))
-                            if _last_bash_verified:
-                                _any_verified_exec = True
-                    elif _tname == "run_tests":
-                        _content = str(_m.get("content") or "")
-                        _last_bash_idx = _idx
-                        _last_bash_timed_out = False
-                        # A static-only skip ("⏭") is not a failed test run;
-                        # treating it as red produced a false VERIFY FAILED
-                        # nudge and a run_tests/task_complete loop.
-                        _last_bash_failed = (
-                            "[TEST-RESULT] ✅" not in _content
-                            and "[TEST-RESULT] ⚠️" not in _content
-                            and "⏭" not in _content)
-                        _last_bash_verified = not _last_bash_failed
-                        if _last_bash_verified:
-                            _any_verified_exec = True
+                (
+                    _last_edit_idx, _last_bash_idx, _last_bash_failed,
+                    _last_bash_verified, _last_bash_timed_out,
+                    _any_verified_exec, _last_append_idx,
+                ) = _scan_verify_history(dtool_msgs)
 
                 def _chunk_incomplete_p():
 
@@ -1345,15 +1353,23 @@ async def _execute_tool_round_impl(
                     _wedge_ws, _dname, _focus_path, _raw_s, _dresult)
                 if (not result.loop_detected
                         and _wedge.detect_wedge(_wedge_ws, _focus_path, _wedge_repeat)):
-                    result.wedge_file = _focus_path
-                    _logger.warning(
-                        "[WEDGE] %s wedged on %s (streak=%d) — handoff signal",
-                        _dname, _focus_path,
-                        _wedge.streak_of(_wedge_ws, _focus_path))
-                    _pair_unexecuted_tool_calls(
-                        dtool_msgs, tool_calls, _i + 1, "[skipped: round stopped early]"
-                    )
-                    break
+                    if _dname == "run_bash":
+                        _wedge.note_edit_success(_wedge_ws, _focus_path)
+                        if not _recovery_saturated(dtool_msgs):
+                            _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
+                                f"[WEDGE] run_bash '{_focus_path}' repeatedly failed — "
+                                "switch strategy or inspect files directly with read_file."
+                            ))
+                    else:
+                        result.wedge_file = _focus_path
+                        _logger.warning(
+                            "[WEDGE] %s wedged on %s (streak=%d) — handoff signal",
+                            _dname, _focus_path,
+                            _wedge.streak_of(_wedge_ws, _focus_path))
+                        _pair_unexecuted_tool_calls(
+                            dtool_msgs, tool_calls, _i + 1, "[skipped: round stopped early]"
+                        )
+                        break
             if _total_tool_errors[0] >= _err_cap:
                 if not _recovery_saturated(dtool_msgs):
                     _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
@@ -1434,6 +1450,15 @@ async def _execute_tool_round_impl(
         # same path already in context is stale (the file on disk changed). Evict
         # it immediately so the model neither wastes context nor trusts outdated
         # content for follow-up edits.
+        if (_dname == "run_bash"
+                and _run_bash_confirmed_exit_zero(_dresult)
+                and not _tool_call_failed(_dresult, "run_bash")):
+            for _rb_rk in ("RUN_BASH_NONZERO", "RUN_BASH_TIMEOUT", "RUN_BASH_BLOCKED"):
+                trs.tool_error_retries[_rb_rk] = 0
+            _wedge_ws_rb = getattr(trs, "wedge_state", None)
+            if _wedge_ws_rb is not None and _focus_path:
+                _wedge.note_edit_success(_wedge_ws_rb, _focus_path)
+
         if (
             _dname in WRITE_TOOLS
             and _focus_path
@@ -1449,6 +1474,17 @@ async def _execute_tool_round_impl(
                 if _dname == "apply_patch"
                 else [_focus_path]
             )
+            for _sp_ap in (_stale_targets or [_focus_path]):
+                if _sp_ap:
+                    for _ap_k in (
+                        _sp_ap,
+                        f"pf_not_found:{_sp_ap}",
+                        f"pf_non_unique:{_sp_ap}",
+                        f"ef_malformed:{_sp_ap}",
+                        f"nb_{_sp_ap}",
+                        f"noop:{_sp_ap}",
+                    ):
+                        trs.attempts_per_file.pop(_ap_k, None)
             if _wedge_ws is not None:
                 for _sp_w in (_stale_targets or [_focus_path]):
                     if _sp_w:
@@ -1542,13 +1578,24 @@ async def _execute_tool_round_impl(
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
         # ── Read-file ladder tracker (persistent across rounds) ──
+        _rl_range_read = bool(
+            _dname == "read_file"
+            and (isinstance(_dargs, dict) and (_dargs.get("start_line") or _dargs.get("end_line")))
+        )
+        _rl_failed_or_skip = bool(
+            _tool_call_failed(_dresult, _dname)
+            or str(_dresult or "").startswith("[SKIP:")
+        )
         _update_read_ladder(
             trs, _dname, _args_parse_failed, _focus_path or "",
-            range_read=bool(
-                _dname == "read_file"
-                and (isinstance(_dargs, dict) and (_dargs.get("start_line") or _dargs.get("end_line")))
-            ),
+            range_read=_rl_range_read,
+            count_wide=(not _round_counted_wide_read),
+            failed_or_skipped=_rl_failed_or_skip,
         )
+        if _dname == "read_file" and not _args_parse_failed and not _rl_range_read and not _rl_failed_or_skip:
+            _round_counted_wide_read = True
+        elif _dname in _READ_LADDER_RESET_TOOLS:
+            _round_counted_wide_read = False
         if _dname != "task_complete":
             trs.tc_consecutive[0] = 0
         _consecutive_reads = trs.consecutive_reads[0]
@@ -1556,7 +1603,13 @@ async def _execute_tool_round_impl(
         _read_ladder_fired = trs.read_ladder_fired[0]
 
         # ── Loop detection ──
-        _args_str = _raw_s
+        if isinstance(_dargs, dict):
+            try:
+                _args_str = json.dumps(_dargs, sort_keys=True, ensure_ascii=False)
+            except (TypeError, ValueError):
+                _args_str = _raw_s
+        else:
+            _args_str = _raw_s
         _new_sig = _dname + "|" + hashlib.md5(_args_str.encode("utf-8", errors="replace")).hexdigest()
         if not str(_dresult or "").startswith("[SKIP:"):
             trs.call_sigs.append(_new_sig)
@@ -1591,8 +1644,32 @@ async def _execute_tool_round_impl(
                     f"DO NOT call run_bash again with the same approach.\n"
                     f"STOP and pick a DIFFERENT tool. Your full toolset:\n{_menu}\n"
                     f"Re-read the actual files (read_file), inspect the failing test file "
-                    f"directly, or call task_complete(status='blocked', reason='...') if you "
+                    f'directly, or call task_complete(status={{"completed": [...], "blockers": ["..."], "build_status": "blocked"}}) if you '
                     f"are genuinely stuck. Choose a non-run_bash action now."
+                )})
+                trs.call_sigs.clear()
+                break
+            if (_dname in ("edit_file", "patch_file", "replace_lines", "apply_patch", "write_file", "write_file_append")
+                    and trs.edit_loop_recoveries[0] < 1):
+                trs.edit_loop_recoveries[0] += 1
+                trs.recovered_loop_sigs.update(trs.call_sigs[-6:])
+                if _focus_path:
+                    try:
+                        from context.compression import _drop_read_guard_paths as _drop_rg_loop
+                        _drop_rg_loop([_focus_path])
+                    except (ImportError, OSError, RuntimeError, ValueError):
+                        pass
+                await hooks.emit({"type": "status", "content": f"[Tool loop: {_loop_label} ({_dname}) — injecting recovery hint]"})
+                _pair_unexecuted_tool_calls(
+                    dtool_msgs, tool_calls, _i + 1, "[loop-detection: skipped]"
+                )
+                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                    f"[LOOP DETECTED] {_dname} was called repeatedly with identical arguments ({_loop_label}) "
+                    f"without advancing the file.\n"
+                    f"STOP repeating that {_dname} call. Re-read the target file with read_file "
+                    f"(verify exact whitespace and content), then apply a corrected edit or rewrite "
+                    f"the file cleanly with write_file. If you are genuinely stuck, call "
+                    f'task_complete(status={{"completed": [...], "blockers": ["..."], "build_status": "blocked"}}).'
                 )})
                 trs.call_sigs.clear()
                 break
@@ -1627,7 +1704,7 @@ async def _execute_tool_round_impl(
                     "and NO file changed since the first failure - an unchanged retry "
                     "will fail again. Change the command (the error names the shell "
                     "that ran), pick a different tool, or call "
-                    "task_complete(status='blocked', reason='...')."
+                    'task_complete(status={"completed": [...], "blockers": ["..."], "build_status": "blocked"}).'
                 ))
 
         # ── Read-file ladder: reads without any write/edit ──
@@ -1659,13 +1736,24 @@ async def _execute_tool_round_impl(
                     f"call write_file or edit_file on it NOW. Do NOT read any more files until you've "
                     f"made a change."
                 ))
+                await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_ladder_n}x reads without a write — hint injected]\n"})
+                trs.read_ladder_fired[0] = True
+                trs.consecutive_reads[0] = 0
+                trs.wide_read_streak[0] = 0
             else:
                 _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d wide=%d",
                              _consecutive_reads, _wide_read_streak)
-            await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_ladder_n}x reads without a write — hint injected]\n"})
-            trs.read_ladder_fired[0] = True
-            trs.consecutive_reads[0] = 0
-            trs.wide_read_streak[0] = 0
+
+        _cur_sig = trs.call_sigs[-1] if trs.call_sigs else ""
+        if (
+            _dname in WRITE_TOOLS
+            and _focus_path
+            and not _tool_call_failed(_dresult, _dname)
+            and _cur_sig
+            and _cur_sig not in trs.recovered_loop_sigs
+            and _cur_sig not in trs.call_sigs[:-1]
+        ):
+            trs.edit_loop_recoveries[0] = 0
 
     _warn_duplicate_write_targets(tool_calls, dtool_msgs)
 
@@ -1692,6 +1780,7 @@ async def _execute_tool_round_impl(
                 + ". The current file state (from your most recent write/edit or the "
                 "newest read_file) is authoritative. Do NOT edit based on the older copy."
             ))
+        trs.superseded_paths.clear()
 
     # Track last tool call for plan tracker
     result.last_tool_name = _dname

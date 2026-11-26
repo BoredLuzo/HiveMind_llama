@@ -37,7 +37,6 @@ import json
 import logging
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -1005,28 +1004,9 @@ class _LspConnection:
 
 
 async def kill_tree(proc, *, force: bool = False) -> None:
-    """Best effort kill of the whole child process tree.
-
-    Mirrors infra/mcp_client._kill_tree (audit C6, 2026-10-31) but is kept
-    local so the LSP client stays stdlib-only (mcp_client pulls httpx).
-    taskkill /T reaches grandchildren (npx-style wrappers), and it runs via
-    to_thread so its latency never freezes the event loop.
-    """
-    pid = getattr(proc, "pid", None)
-    if not pid:
-        return
-    try:
-        if sys.platform == "win32":
-            await asyncio.to_thread(
-                subprocess.run,
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True, timeout=10,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        else:
-            sig = signal.SIGKILL if force else signal.SIGTERM
-            os.killpg(os.getpgid(pid), sig)
-    except (OSError, subprocess.SubprocessError, ProcessLookupError):
-        pass
+    """Best effort kill of the whole child process tree (delegates to infra.proc_kill)."""
+    from infra.proc_kill import kill_tree as _shared_kill_tree
+    await _shared_kill_tree(proc, force=force)
 
 
 class LspManager:

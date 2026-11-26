@@ -285,7 +285,7 @@ async def _phase_vram(ctx, state: dict):
         _tool_think_auto_mode = "off"
     from core.model_sampling import (
         POSITIVE_REASONING_EFFORTS as _VRAM_POS_RE,
-        clamp_reasoning_effort_for_model as _clamp_vram_re,
+        format_reasoning_effort_status as _vram_fmt_re,
         model_supports_thinking as _mst_vram,
         normalize_reasoning_effort as _norm_re_vram,
     )
@@ -305,27 +305,14 @@ async def _phase_vram(ctx, state: dict):
         _effective_tool_think_toggle = False
         _tool_think_auto_mode = "off"
         _coder_tool_think = False
-        yield await ctx.emit({
-            "type": "status",
-            "content": "🧠 Reasoning effort: none (composer override — thinking disabled)",
-        })
-    elif _user_eff in _VRAM_POS_RE:
-        if _exec_native_think:
-            _effective_tool_think_toggle = True
-            _exec_supports_thinking = True
-            _exec_has_thinking = True
-            _coder_tool_think = True
-            _mapped_vram = _clamp_vram_re(exec_mdl, _user_eff)
-            _map_sfx = f" → {_mapped_vram}" if (_mapped_vram and _mapped_vram != _user_eff) else ""
-            yield await ctx.emit({
-                "type": "status",
-                "content": f"🧠 Reasoning effort: {_user_eff} (composer override){_map_sfx}",
-            })
-        else:
-            yield await ctx.emit({
-                "type": "status",
-                "content": f"ℹ️ Reasoning effort ({_user_eff}) skipped — {exec_mdl} does not support reasoning",
-            })
+    elif _user_eff in _VRAM_POS_RE and _exec_native_think:
+        _effective_tool_think_toggle = True
+        _exec_supports_thinking = True
+        _exec_has_thinking = True
+        _coder_tool_think = True
+    _vram_re_st = _vram_fmt_re(exec_mdl, _user_eff, supported=_exec_native_think)
+    if _vram_re_st:
+        yield await ctx.emit({"type": "status", "content": _vram_re_st})
     if _user_eff != "auto":
         pass
     elif ctx.duo_config.coder_tool_thinking_explicit and _coder_tool_think:

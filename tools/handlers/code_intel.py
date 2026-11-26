@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from utils.file import (
     _inline_resolve_path,
     _inline_check_workspace,
@@ -36,7 +36,10 @@ async def _inline_tool_get_signatures(args: dict, workspace: Path, workspace_loc
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "get_signatures"):
         return err
-    max_items = int(args.get("max_items") or 400)
+    try:
+        max_items = int(args.get("max_items") or 400)
+    except (TypeError, ValueError):
+        max_items = 400
     max_items = max(20, min(400, max_items))  # H-audit: schema says max 400
     _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
     if _sig_fn is None:
@@ -70,7 +73,10 @@ async def _inline_tool_find_references(args: dict, workspace: Path, workspace_lo
         p = workspace
     if err := _inline_check_workspace(p, workspace_lock, "find_references"):
         return err
-    max_items = int(args.get("max_items") or 160)
+    try:
+        max_items = int(args.get("max_items") or 160)
+    except (TypeError, ValueError):
+        max_items = 160
     max_items = max(20, min(160, max_items))  # H-audit: schema says max 160
     _fr_fn = _shared.find_references_report if callable(_shared.find_references_report) else None
     if _fr_fn is None:
@@ -262,7 +268,14 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
                             return found[:_FIND_LIMIT], True
                 return found, False
 
-            sub_pat = pattern[3:] if pattern.startswith("**/") else pattern
+            _has_full_match = hasattr(PurePosixPath, "full_match")
+            _glob_rx = None
+            if not _has_full_match:
+                _pat_rx = re.escape(pattern).replace(r"/\*\*/", r"(?:/|/.+/)")
+                if _pat_rx.startswith(r"\*\*/"):
+                    _pat_rx = r"(?:.+/)?" + _pat_rx[5:]
+                _pat_rx = _pat_rx.replace(r"\*\*", r".*").replace(r"\*", r"[^/]*").replace(r"\?", r"[^/]")
+                _glob_rx = re.compile(rf"^{_pat_rx}$")
             for dp, dns, fns in os.walk(base, followlinks=False):
                 dp_path = Path(dp)
                 dns[:] = [
@@ -272,11 +285,14 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
                 for fn in sorted(fns):
                     fp = dp_path / fn
                     rel_s = fp.relative_to(base).as_posix()
-                    if not (
-                        fnmatch.fnmatch(rel_s, pattern)
-                        or fnmatch.fnmatch(fn, sub_pat)
-                        or fnmatch.fnmatch(rel_s, sub_pat)
-                    ):
+                    _matched_fn = (
+                        PurePosixPath(rel_s).full_match(pattern)
+                        if _has_full_match
+                        else bool(_glob_rx.match(rel_s))
+                    )
+                    if not _matched_fn and "/" not in pattern:
+                        _matched_fn = fnmatch.fnmatch(fn, pattern)
+                    if not _matched_fn:
                         continue
                     if is_secret_path(rel_s):
                         continue
@@ -317,47 +333,34 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
             "INVALID_ARGUMENT",
             "search_code requires a non-empty pattern. Provide a search term or regex.",
             tool="search_code")
+    _sc_raw = _inline_resolve_path(workspace, args.get("path", "."))
+    if err := _inline_check_workspace(_sc_raw, _workspace_lock, "search_code"):
+        return err
     try:
-        _sc_p = (workspace / args.get("path", ".")).resolve()
-    except Exception:
-        _sc_p = Path(workspace / args.get("path", "."))
+        _sc_p = _sc_raw.resolve()
+    except OSError:
+        _sc_p = _sc_raw
     if err := _inline_check_workspace(_sc_p, _workspace_lock, "search_code"):
         return err
     path = str(_sc_p)
     _is_dir = _sc_p.is_dir()
     _is_win = sys.platform == "win32"
-    # Shell-injection safe, regex-preserving sanitizer: Only strip $
-    # (subexpression/variable expansion), ` (escape char), and quotes.
-    # Parentheses, braces, ^, etc. are safe inside PowerShell double-quoted
-    _strip_chars = "$`\"'"
-    _safe_pat = pattern
-    for _c in _strip_chars:
-        _safe_pat = _safe_pat.replace(_c, '')
-    _safe_path = path
-    for _c in _strip_chars:
-        _safe_path = _safe_path.replace(_c, '')
 
     # ARGV, NOT SHELL (audit 2026-10-17): search_code is a READ-ONLY tool that
     # runs without an approval prompt, so it must never hand a shell a string
-    # built from model input. The old shell form needed "2>nul" / "| head -50"
-    # and left %VAR% expansion on Windows open (cmd expands %NAME% even inside
-    # double quotes). Every backend is now an argument list and the line cap is
-    # applied here.
+    # built from model input. Every backend runs directly via create_subprocess_exec
+    # argv (no shell metacharacter stripping needed).
     cmds: list[list[str]] = []
     if shutil.which("rg"):
         cmds.append(["rg", "--no-heading", "-n", "--", pattern, path])
     if _is_win:
-        if not _HAS_REGEX_META.search(pattern):
-            if _is_dir:
-                cmds.append(["findstr", "/s", "/n", "/i", "/L", f"/C:{_safe_pat}",
-                             _safe_path.rstrip("\\") + "\\*"])
-            else:
-                cmds.append(["findstr", "/n", "/i", "/L", f"/C:{_safe_pat}", _safe_path])
+        if not _is_dir and not _HAS_REGEX_META.search(pattern) and "\n" not in pattern and "\r" not in pattern:
+            cmds.append(["findstr", "/n", "/L", f"/C:{pattern}", path])
     else:
         if _is_dir:
-            cmds.append(["grep", "-rn", "--", _safe_pat, path])
+            cmds.append(["grep", "-rn", "--", pattern, path])
         else:
-            cmds.append(["grep", "-n", "--", _safe_pat, path])
+            cmds.append(["grep", "-n", "--", pattern, path])
 
     _any_executed = False
     _backend_completed = False
@@ -423,7 +426,10 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
             raw_text = out.decode(errors="replace").strip()
             if not raw_text:
                 return None
-            safe_text = filter_secret_search_rows(raw_text).strip()
+            safe_text = (
+                filter_secret_search_rows(raw_text, _workspace_lock or workspace)
+                if _is_dir else raw_text
+            ).strip()
             if not safe_text:
                 return None
             lines = safe_text.splitlines()
@@ -495,21 +501,29 @@ def _python_content_search(
     if root.is_file():
         if root.is_symlink() or _is_junction(root) or is_secret_path(root, root.parent):
             return None
+        try:
+            if root.stat().st_size > max_file_bytes:
+                return None
+        except OSError:
+            return None
         files = [root]
     else:
         files = []
     if not files:
         for dp, dns, fns in os.walk(root, followlinks=False):
-            dns[:] = [
-                d for d in sorted(dns)
-                if d not in _SKIP_SEARCH_DIRS
-                and not (Path(dp) / d).is_symlink()
-                and not _is_junction(Path(dp) / d)
-            ]
+            dp_path = Path(dp)
+            _kept_dirs: list[str] = []
+            for d in sorted(dns):
+                if d in _SKIP_SEARCH_DIRS:
+                    continue
+                sub = dp_path / d
+                if not sub.is_symlink() and not _is_junction(sub):
+                    _kept_dirs.append(d)
+            dns[:] = _kept_dirs
             for fn in sorted(fns):
                 if len(files) >= max_files:
                     break
-                p = Path(dp) / fn
+                p = dp_path / fn
                 if p.is_symlink() or _is_junction(p):
                     continue
                 try:
@@ -535,8 +549,6 @@ def _python_content_search(
                 return "\n".join(hits)
             return None
         try:
-            if fp.stat().st_size > max_file_bytes:
-                continue
             data = fp.read_bytes()
         except OSError:
             continue

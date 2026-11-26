@@ -115,14 +115,15 @@ check("custom max_attempts=3: 500 attempt 1 -> True (cap not hit yet)",
 
 # ── 7. source guards: both call sites rewired, 404 path untouched ──────────
 _src = (ROOT / "backend" / "llama_client.py").read_text(encoding="utf-8")
-check("chat() and chat_stream() both use _should_retry_http_status",
-      _src.count("_should_retry_http_status(") >= 3)  # 1 def + 2 call sites
+_retry_helper = _src.split("async def _maybe_retry_http_status", 1)[1].split("\n    async def ", 1)[0]
+check("chat() and chat_stream() both use _should_retry_http_status via _maybe_retry_http_status",
+      "def _should_retry_http_status(" in _src
+      and "_should_retry_http_status(" in _retry_helper
+      and _src.count("self._maybe_retry_http_status(") >= 2)
 check("old bare transient-retry condition is gone",
       "in _TRANSIENT_HTTP_STATUSES and attempt" not in _src)
-check("404 recovery path unchanged in chat()",
-      "r.status_code == 404 and attempt < max_attempts - 1" in _src)
-check("404 recovery path unchanged in chat_stream()",
-      _src.count("r.status_code == 404 and attempt < max_attempts - 1") == 2)
+check("404 recovery path preserved inside shared retry helper for chat() and chat_stream()",
+      "status_code == 404 and attempt < max_attempts - 1" in _retry_helper)
 
 
 # ── 8. integration: chat() vs a fake llama-server (hermetic) ───────────────

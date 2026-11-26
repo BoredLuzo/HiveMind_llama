@@ -99,6 +99,7 @@ var EVENT_HANDLERS = {
             var _tkCut = document.getElementById(S._thinkBlockId);
             if (_tkCut) _tkCut.classList.remove('live');
             S._thinkBlockId = null;
+            S._thinkBlockCache = null;
           }
           if (typeof rmEl === 'function') rmEl('status-el');
           var _cutDiv = document.createElement('div');
@@ -540,6 +541,7 @@ var EVENT_HANDLERS = {
       var _tkRst = document.getElementById(S._thinkBlockId);
       if (_tkRst) _tkRst.classList.remove('live');
       S._thinkBlockId = null;
+      S._thinkBlockCache = null;
     }
   },
 
@@ -602,25 +604,44 @@ var EVENT_HANDLERS = {
       if (typeof rmEl === 'function') rmEl('status-el');
       if (!S._thinkBlockId) {
         S._thinkBlockId = _createThinkBlock();
+        S._thinkBlockCache = null;
       }
-      var _tbEl = S._thinkBlockId ? document.getElementById(S._thinkBlockId) : null;
+      var _tc = S._thinkBlockCache;
+      var _tbEl = (_tc && _tc.id === S._thinkBlockId && _tc.el && _tc.el.isConnected !== false)
+        ? _tc.el
+        : (S._thinkBlockId ? document.getElementById(S._thinkBlockId) : null);
       if (!_tbEl) return;
+      if (!_tc || _tc.el !== _tbEl) {
+        var _thbEl0 = _tbEl.querySelector('.think-body');
+        _tc = {
+          id: S._thinkBlockId,
+          el: _tbEl,
+          bodyEl: _thbEl0,
+          tokEl: _tbEl.querySelector('.th-tokens'),
+          textNode: null
+        };
+        S._thinkBlockCache = _tc;
+      }
       _tbEl.style.display = '';
       _tbEl.classList.add('live');
       if (_tbEl.dataset.userToggled !== '1') _tbEl.classList.add('open');
-      var _thbEl = _tbEl.querySelector('.think-body');
+      var _thbEl = _tc.bodyEl;
       if (_thbEl) {
         // PERF (2026-10-23): O(delta) append on a persistent text node — the
         // old `textContent +=` copied the whole block on EVERY event (O(n²)
         // over long thinking streams), plus a layout-forcing scroll per event.
-        var _tn = _thbEl.firstChild;
-        if (!(_tn && _tn.nodeType === Node.TEXT_NODE)) {
-          _thbEl.textContent = '';
-          _tn = document.createTextNode('');
-          _thbEl.appendChild(_tn);
+        var _tn = _tc.textNode;
+        if (!_tn || _tn.parentNode !== _thbEl) {
+          _tn = _thbEl.firstChild;
+          if (!(_tn && _tn.nodeType === Node.TEXT_NODE)) {
+            _thbEl.textContent = '';
+            _tn = document.createTextNode('');
+            _thbEl.appendChild(_tn);
+          }
+          _tc.textNode = _tn;
         }
         _tn.appendData(d.content || '');
-        var _tktEl = _tbEl.querySelector('.th-tokens');
+        var _tktEl = _tc.tokEl;
         var _nowTk = Date.now();
         if (_tktEl && (!_thbEl._tktAt || _nowTk - _thbEl._tktAt >= 500)) {
           _thbEl._tktAt = _nowTk;
@@ -843,6 +864,7 @@ var EVENT_HANDLERS = {
     S.curAgent._inThink  = false;
   }
   S._thinkBlockId = null;
+  S._thinkBlockCache = null;
   S._coderHadToolCall = false;
   var _isChunkRound = !!d.subtask;
   // CHUNK-WINDOW-DEDUP-FIX (2026-08-31): save the chunk number BEFORE advancing it
@@ -1055,6 +1077,7 @@ var EVENT_HANDLERS = {
         if (S.curAgent.body) S.curAgent.body.classList.add('live');
         if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons(_existingCoderBlock);
         S._thinkBlockId = null;
+        S._thinkBlockCache = null;
       } else {
         startDuoAgent('coder', 'Coder', d.model || '', 'R' + d.round);
       }
@@ -2094,6 +2117,7 @@ var EVENT_HANDLERS = {
       var _tkOld = document.getElementById(S._thinkBlockId);
       if (_tkOld) _tkOld.classList.remove('live');
       S._thinkBlockId = null;
+      S._thinkBlockCache = null;
     }
     // Write-phase separator: visual marker before first write after reads-only phase
     if (/^(edit_file|patch_file|replace_lines|write_file_append|edit_ast)$/.test(d.name) && !S._coderHadWriteCall) {

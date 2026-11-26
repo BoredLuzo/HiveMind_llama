@@ -70,11 +70,36 @@ def clear() -> None:
     _TAINT.set(set())
 
 
+_LOCAL_UNTRUSTED_ERROR_CODES = frozenset({
+    "WEBSEARCH_UNAVAILABLE", "WEBSEARCH_FAILED", "WEBSEARCH_BUDGET_EXHAUSTED",
+    "WEBFETCH_UNAVAILABLE", "WEBFETCH_FAILED", "WEB_FETCH_FAILED", "WEBFETCH_BUDGET_EXHAUSTED",
+    "MCP_UNAVAILABLE", "MCP_BUDGET_EXHAUSTED", "MCP_CALL_FAILED",
+    "INVALID_ARGUMENT", "MISSING_ARG", "TOOL_NOT_ALLOWED", "TOOL_EXEC_CRASH",
+    "GATE_NO_RUN_ID", "PHONE_RESTRICTED",
+})
+
+
 def wrap_result(name: str, text: str) -> str:
     """Wrap a tool result from an untrusted source (idempotent)."""
     if not is_untrusted_tool(name) or not isinstance(text, str) or not text:
         return text
+    stripped = text.lstrip()
+    if stripped.startswith("[TOOL_ERROR"):
+        from tools.errors import parse_tool_error
+        err = parse_tool_error(text)
+        code = (err or {}).get("code", "")
+        if code in _LOCAL_UNTRUSTED_ERROR_CODES:
+            return text
+        if code == "MCP_TOOL_ERROR":
+            mark(name)
+            header, sep, body = stripped.partition("\n")
+            if body.lstrip().startswith("[UNTRUSTED CONTENT"):
+                return text
+            if ":" not in header.split("]", 1)[-1]:
+                header = f"{header} {name}:"
+            wrapped_body = MARKER_OPEN.format(src=name) + body + MARKER_CLOSE
+            return f"{header}\n{wrapped_body}" if sep else f"{header}{wrapped_body}"
     mark(name)
-    if text.lstrip().startswith("[UNTRUSTED CONTENT"):
+    if stripped.startswith("[UNTRUSTED CONTENT"):
         return text
     return MARKER_OPEN.format(src=name) + text + MARKER_CLOSE

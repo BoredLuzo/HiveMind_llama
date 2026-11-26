@@ -118,16 +118,8 @@ def _as_sampling_dict(settings: dict, key: str, default: dict) -> dict:
     if not isinstance(raw, dict):
         logger.warning("[FLAGS] %s=%r is not an object - keeping current sampling", key, raw)
         return dict(default)
-    clean: dict[str, float | int] = {}
-    for sk in _SAMPLING_KEYS:
-        if sk not in raw:
-            continue
-        sv = raw[sk]
-        if isinstance(sv, bool) or not isinstance(sv, (int, float)):
-            continue
-        if not math.isfinite(float(sv)):
-            continue
-        clean[sk] = int(sv) if sk in ("top_k", "seed") else float(sv)
+    from core.model_sampling import _sanitize_unprofiled_sampling
+    clean = _sanitize_unprofiled_sampling(raw)
     if not clean:
         logger.warning("[FLAGS] %s has no valid sampling fields - keeping current sampling", key)
         return dict(default)

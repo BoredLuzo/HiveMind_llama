@@ -84,7 +84,7 @@ async def _duo_inloop_planner(ctx, ps):
     if _run_thinking_now:
         from core.model_sampling import (
             POSITIVE_REASONING_EFFORTS as _ILP_POS_RE,
-            clamp_reasoning_effort_for_model as _ilp_clamp_re,
+            format_reasoning_effort_status as _ilp_fmt_re,
             model_supports_thinking as _ilp_mst,
             normalize_reasoning_effort as _ilp_norm_re,
             resolve_planner_effort_settings as _ilp_res_cfg,
@@ -98,24 +98,13 @@ async def _duo_inloop_planner(ctx, ps):
             _ilp_eff_thinking = True
         else:
             _ilp_eff_thinking = bool(_exec_has_thinking)
-        if _ilp_user_eff == "none":
-            yield await ctx.emit({
-                "type": "status",
-                "content": "🧠 Planner reasoning effort: none (sidebar override — planner thinking disabled)",
-            })
-        elif _ilp_user_eff in _ILP_POS_RE:
-            if _ilp_supports:
-                _ilp_map = _ilp_clamp_re(exec_mdl, _ilp_user_eff)
-                _ilp_sfx = f" → {_ilp_map}" if (_ilp_map and _ilp_map != _ilp_user_eff) else ""
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": f"🧠 Planner reasoning effort: {_ilp_user_eff} (sidebar override){_ilp_sfx}",
-                })
-            else:
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": f"ℹ️ Planner reasoning effort ({_ilp_user_eff}) skipped — {exec_mdl} does not support reasoning",
-                })
+        _ilp_st = _ilp_fmt_re(
+            exec_mdl, _ilp_user_eff, supported=_ilp_supports,
+            scope_label="Planner reasoning effort", source_label="sidebar",
+            disable_target="planner thinking",
+        )
+        if _ilp_st:
+            yield await ctx.emit({"type": "status", "content": _ilp_st})
         ctx.exec_ctrl.transition(AgentState.PLANNING)
         ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
         yield await ctx.emit({"type": "status",

@@ -135,15 +135,8 @@ def disable_thinking_in_payload(
         "thinking": False,
         "thinking_budget": 0,
     }
-    _mdl = str(payload.get("model") or "")
-    if _mdl:
-        from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_dt
-        if _clamp_dt(_mdl, "none") == "none":
-            out["reasoning_effort"] = "none"
-        else:
-            out.pop("reasoning_effort", None)
-    else:
-        out["reasoning_effort"] = "none"
+    from core.model_sampling import set_disabled_reasoning_effort as _set_dt_disabled_re
+    _set_dt_disabled_re(out, str(payload.get("model") or ""), empty_keeps_none=True)
     if max_tokens is not None and int(max_tokens) > 0:
         out["max_tokens"] = int(max_tokens)
     ctk = dict(out.get("chat_template_kwargs") or {})
@@ -614,15 +607,9 @@ async def _handle_tool_loop_http_error(
                 payload = dict(payload)
                 payload.pop("thinking", None)
                 payload.pop("thinking_budget", None)
+                from core.model_sampling import set_disabled_reasoning_effort as _set_err_re
                 _err_mdl = str(getattr(cfg, "model", "") or payload.get("model") or "")
-                if _err_mdl:
-                    from core.model_sampling import clamp_reasoning_effort_for_model as _clamp_err
-                    if _clamp_err(_err_mdl, "none") == "none":
-                        payload["reasoning_effort"] = "none"
-                    else:
-                        payload.pop("reasoning_effort", None)
-                else:
-                    payload.pop("reasoning_effort", None)
+                _set_err_re(payload, _err_mdl, empty_keeps_none=False)
                 _ctk = dict(payload.get("chat_template_kwargs") or {})
                 _ctk["enable_thinking"] = False
                 _ctk.pop("preserve_thinking", None)

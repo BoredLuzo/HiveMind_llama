@@ -257,6 +257,26 @@ res, hooks, msgs, rs, seen, ltl = run_round([
 check("non-bash loop detected", res.loop_detected is True)
 check("non-bash loop aborted msg", any("loop-detection: aborted" in str(m.get("content", "")) for m in msgs))
 
+# 10c. edit_file 3x identical loop -> 1x soft recovery, 2nd loop aborts.
+_HANDLERS["edit_file"] = "[TOOL_ERROR:EDIT_FILE_NOOP] edit_file: no change"
+_edit_trs = _fresh_state()
+_edit_msgs = []
+_edit_call = tc("edit_file", {"path": "presets.js", "old_text": "x", "new_text": "y"})
+res1, hooks1, _edit_msgs, _, _, _ = run_round(
+    [_edit_call, _edit_call, _edit_call], dtool_msgs=_edit_msgs, trs=_edit_trs)
+check("edit_file 1st loop uses soft recovery (not aborted)",
+      res1.loop_detected is False
+      and _edit_trs.edit_loop_recoveries[0] == 1
+      and len(_edit_trs.call_sigs) == 0
+      and any("LOOP DETECTED" in str(m.get("content", "")) and "write_file" in str(m.get("content", ""))
+              for m in _edit_msgs if m.get("role") == "user"))
+_edit_call2 = tc("edit_file", {"path": "presets.js", "old_text": "a", "new_text": "b"})
+res2, hooks2, _edit_msgs, _, _, _ = run_round(
+    [_edit_call2, _edit_call2, _edit_call2], dtool_msgs=_edit_msgs, trs=_edit_trs)
+check("edit_file 2nd loop hard-aborts",
+      res2.loop_detected is True
+      and any("loop-detection: aborted" in str(m.get("content", "")) for m in _edit_msgs))
+
 # ── 11. File-change tracking (write_file) ───────────────────────────────
 _HANDLERS["write_file"] = "[write_file: created 'x.txt' (+3 lines)]"
 res, hooks, msgs, rs, seen, ltl = run_round([tc("write_file", {"path": "x.txt", "content": "a\nb\nc"})])

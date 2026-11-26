@@ -175,8 +175,12 @@ def resolve_explore_reset(round_tool_names: set, bash_changed, current_value: in
 def compute_bash_changed(snap_before: dict | None, snap_after: dict | None) -> bool | None:
 
 
-    if not snap_before or snap_after is None:
+    if snap_before is None or snap_after is None:
         return None
+    if not snap_before:
+        return False if not snap_after else None
+    if any(p not in snap_before for p in snap_after):
+        return True
     return any(signature_changed(b, snap_after.get(p)) for p, b in snap_before.items())
 
 
@@ -458,7 +462,7 @@ def build_chunk_context(
         else:
             _explore_rule = (
                 "CRITICAL RULE: The codebase analysis below contains SUMMARIES only — NOT full source code. "
-                "You MUST call read_file on ANY file you plan to edit BEFORE using edit_file or edit_file. "
+                "You MUST call read_file on ANY file you plan to edit BEFORE using write_file or edit_file. "
                 "NEVER edit a file based on the summary alone — you will produce wrong code.\n\n"
             )
         _EXPLORE_CTX_CAP = explore_cap  # CTX-AWARE (2026-08-12)

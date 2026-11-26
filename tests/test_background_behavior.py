@@ -323,7 +323,7 @@ try:
     procs = {}
     for i in range(bg._MAX_PROCESSES):
         hd = f"h{i:02d}aaaa".ljust(12, "b")
-        procs[hd] = FakeProc(pid=100 + i, running=(i == 0))
+        procs[hd] = FakeProc(pid=100 + i, running=True)
         _add_entry(hd, procs[hd], 100.0 + i, cmd=f"old{i}")
         handles.append(hd)
     r9 = bg.start_background("new cmd")
@@ -338,8 +338,22 @@ try:
     check("eviction terminated the oldest RUNNING proc via kill_tree",
           sandbox_calls["kill_tree"] == [procs[handles[0]]]
           and procs[handles[0]].calls == ["terminate", "wait(3)"])
-    check("already-exited entries are untouched by eviction",
+    check("remaining running entries are untouched by eviction",
           all(bg._REGISTRY[h]["proc"].calls == [] for h in handles[1:]))
+
+    # --- mixed live + exited eviction prefers oldest EXITED entry ----------
+    _clear_registry()
+    sandbox_calls["kill_tree"].clear()
+    _add_entry("live_old_000", FakeProc(pid=200, running=True), 10.0, cmd="live_oldest")
+    for i in range(1, bg._MAX_PROCESSES - 1):
+        _add_entry(f"live_mid_{i:03d}", FakeProc(pid=200 + i, running=True), 20.0 + i, cmd=f"live{i}")
+    _add_entry("dead_mid_000", FakeProc(pid=299, running=False), 50.0, cmd="exited_done")
+    r_mixed = bg.start_background("after exited")
+    check("mixed live+exited registry evicts exited entry before older live process",
+          r_mixed["ok"] is True
+          and r_mixed["evicted"]["handle"] == "dead_mid_000"
+          and "live_old_000" in bg._REGISTRY
+          and sandbox_calls["kill_tree"] == [])
 finally:
     _restore()
     _clear_registry()

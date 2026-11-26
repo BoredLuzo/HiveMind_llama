@@ -126,6 +126,29 @@ def _trim_query(raw: str, max_chars: int) -> str:
     return (cut[:last_space] if last_space > 30 else cut).strip()
 
 
+_WS_CHAT_PATTERNS = (
+    re.compile(r'^(hi|hey|hello|thanks|thank you|ok|okay|yes|no|sure|great|cool|good|bad|please)\b'),
+    re.compile(r'^(how are you|what are you doing|tell me about yourself|can you explain briefly)'),
+)
+_WS_HARD_TRIGGERS = (
+    re.compile(r'\b(2025|2026|current(ly)?|latest|newest?|recent(ly)?|up-to-date)\b'),
+    re.compile(r'\b(changelog|release\s*notes?|patch\s*notes?)\b'),
+    re.compile(r'\b(version\s*\d|v\d+\.\d+)\b'),
+    re.compile(r'(error|exception|traceback|stacktrace|stack trace)'),
+    re.compile(r'(not found|404|403|500|503|connection refused|timeout)'),
+    re.compile(r'\b(how\s+to\s+(install|use|configure|set\s*up|enable|fix))\b'),
+    re.compile(r'\b(install(ation)?|pip\s+install|npm\s+(install|i\b)|apt(-get)?\s+install)\b'),
+    re.compile(r'\b(api\s+(key|docs?|reference|endpoint)|sdk|library|package|module)\b'),
+    re.compile(r'\b(setup\s+(guide|tutorial)|getting\s+started|quickstart)\b'),
+)
+_WS_QUESTION_RE = re.compile(r'\b(what\s+is|what\s+are|how\s+does|how\s+do|explain|describe)\b')
+_WS_SOFT_TRIGGERS = (
+    re.compile(r'\b(docs?|documentation|reference|manual|handbook)\b'),
+    re.compile(r'\b(example|tutorial|guide|sample|demo|walkthrough)\b'),
+    re.compile(r'\b(best\s+practice|recommendation|standard|convention)\b'),
+)
+
+
 def _extract_ws_query(user_input: str) -> str | None:
     """
     P2: Smart websearch auto-trigger.
@@ -145,53 +168,18 @@ def _extract_ws_query(user_input: str) -> str | None:
     if len(raw) < 8 or len(raw) > 800:
         return None
 
-    # Pure conversation ─ skip (English + German)
-    _CHAT_PATTERNS = [
-        r'^(hi|hey|hello|thanks|thank you|ok|okay|yes|no|sure|great|cool|good|bad|please)\b',
-        r'^(how are you|what are you doing|tell me about yourself|can you explain briefly)',
-    ]
-    for pat in _CHAT_PATTERNS:
-        if re.search(pat, text):
-            return None
+    # Pure conversation ─ skip
+    if any(pat.search(text) for pat in _WS_CHAT_PATTERNS):
+        return None
 
     # ─── Hard triggers (always search) ─────────────────────────────────────────
-    _HARD_TRIGGERS = [
-        # Time-sensitive / recency
-        r'\b(2025|2026|current(ly)?|latest|newest?|recent(ly)?|up-to-date)\b',
-        r'\b(changelog|release\s*notes?|patch\s*notes?)\b',
-        r'\b(version\s*\d|v\d+\.\d+)\b',
-
-        # Errors & debugging
-        r'(error|exception|traceback|stacktrace|stack trace)',
-        r'(not found|404|403|500|503|connection refused|timeout)',
-
-        # Docs & installation
-        r'\b(how\s+to\s+(install|use|configure|set\s*up|enable|fix))\b',
-        r'\b(install(ation)?|pip\s+install|npm\s+(install|i\b)|apt(-get)?\s+install)\b',
-        r'\b(api\s+(key|docs?|reference|endpoint)|sdk|library|package|module)\b',
-        r'\b(setup\s+(guide|tutorial)|getting\s+started|quickstart)\b',
-    ]
-    for pat in _HARD_TRIGGERS:
-        if re.search(pat, text):
-            return _trim_query(raw, 120)
+    if any(pat.search(text) for pat in _WS_HARD_TRIGGERS):
+        return _trim_query(raw, 120)
 
     # ─── Soft triggers (only when question-form detected) ───────────────────────
-    _IS_QUESTION = (
-        text.endswith("?")
-        or re.search(
-            r'\b(what\s+is|what\s+are|how\s+does|how\s+do|explain|describe)\b',
-            text
-        )
-    )
-    _SOFT_TRIGGERS = [
-        r'\b(docs?|documentation|reference|manual|handbook)\b',
-        r'\b(example|tutorial|guide|sample|demo|walkthrough)\b',
-        r'\b(best\s+practice|recommendation|standard|convention)\b',
-    ]
-    if _IS_QUESTION:
-        for pat in _SOFT_TRIGGERS:
-            if re.search(pat, text):
-                return _trim_query(raw, 100)
+    _IS_QUESTION = text.endswith("?") or bool(_WS_QUESTION_RE.search(text))
+    if _IS_QUESTION and any(pat.search(text) for pat in _WS_SOFT_TRIGGERS):
+        return _trim_query(raw, 100)
 
     return None
 
@@ -238,12 +226,23 @@ def extract_memory_note_fallback(text: str) -> tuple[str | None, str | None]:
     return f"note_{slug[:28]}", clean
 
 
+_EX_MEM_FIXED = (
+    (re.compile(r'my\s+name\s+is\s+(\S+(?:\s+\S+)?)'), 'name'),
+    (re.compile(r"(?:i\s+come\s+from|i'?m\s+from)\s+(\S+(?:\s+\S+))(?:\s+come)?\s*$"), 'herkunft'),
+    (re.compile(r"(?:i'?m|i\s+am)\s+(.{2,50}?)\s*$"), 'ich_bin'),
+)
+_EX_MEM_DYNA_1 = re.compile(r'^my\s+(\w+)\s+(.+?)\s+is\s*$')
+_EX_MEM_DYNA_2 = re.compile(r'^my\s+(\w[\w ]{0,20}?)\s*(?:\bis\b|=|:)\s*(.+)')
+_EX_MEM_DYNA_3 = re.compile(r'^(\w[\w ]{0,25}?)\s*(?:\bis\b|=|:)\s*(.+)')
+_EX_MEM_DYNA_4 = re.compile(r'^(\w+)\s+(.+?)\s+is\s*$')
+_EX_MEM_STOP = frozenset({'ich', 'das', 'die', 'der', 'er', 'sie', 'es', 'wir', 'i', 'it', 'that', 'this'})
+
+
 def _extract_memory(text: str):
     t = strip_memory_command_wrappers(text)
     if not t:
         return None, None
-    tl = t.lower()
-    core = tl
+    core = t.lower()
     corig = t
 
     def _ov(vl):
@@ -251,27 +250,25 @@ def _extract_memory(text: str):
         p  = core.find(vl)
         return corig[p:p+len(vl)].strip() if p >= 0 else vl
 
-    m = re.search(r'my\s+name\s+is\s+(\S+(?:\s+\S+)?)', core)
-    if m: return 'name', _ov(m.group(1))
-    m = re.search(r"(?:i\s+come\s+from|i'?m\s+from)\s+(\S+(?:\s+\S+))(?:\s+come)?\s*$", core)
-    if m: return 'herkunft', _ov(m.group(1))
-    m = re.search(r"(?:i'?m|i\s+am)\s+(.{2,50}?)\s*$", core)
+    for pat, key in _EX_MEM_FIXED:
+        m = pat.search(core)
+        if m:
+            return key, _ov(m.group(1))
+    m = _EX_MEM_DYNA_1.match(core)
     if m:
-        val = m.group(1).strip()
-        return 'ich_bin', _ov(val)
-    m = re.match(r'my\s+(\w+)\s+(.+?)\s+is\s*$', core)
-    if m: return m.group(1).strip(), _ov(m.group(2).strip())
-    m = re.match(r'my\s+(\w[\w ]{0,20}?)\s*(?:\bis\b|=|:)\s*(.+)', core)
-    if m: return m.group(1).strip().replace(' ', '_'), _ov(m.group(2))
-    m = re.match(r'(\w[\w ]{0,25}?)\s*(?:\bis\b|=|:)\s*(.+)', core)
+        return m.group(1).strip(), _ov(m.group(2).strip())
+    m = _EX_MEM_DYNA_2.match(core)
+    if m:
+        return m.group(1).strip().replace(' ', '_'), _ov(m.group(2))
+    m = _EX_MEM_DYNA_3.match(core)
     if m:
         k = m.group(1).strip().replace(' ', '_')
-        if k not in ('ich','er','sie','es','wir','das','die','der','i') and len(k) < 35:
+        if k not in ('ich', 'er', 'sie', 'es', 'wir', 'das', 'die', 'der', 'i') and len(k) < 35:
             return k, _ov(m.group(2))
-    m = re.match(r'(\w+)\s+(.+?)\s+is\s*$', core)
+    m = _EX_MEM_DYNA_4.match(core)
     if m:
         k = m.group(1).strip()
-        if len(k) < 20 and k not in ('ich','das','die','der','er','sie','wir','i','it','that','this'):
+        if len(k) < 20 and k not in _EX_MEM_STOP:
             return k, _ov(m.group(2).strip())
     return None, None
 

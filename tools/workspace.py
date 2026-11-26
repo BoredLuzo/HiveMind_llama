@@ -19,7 +19,7 @@ class WorkspaceTransaction:
 
 
     def __init__(self):
-        self._snapshots: dict[str, str | None] = {}
+        self._snapshots: dict[str, bytes | None] = {}
         self._active = False
 
     def begin(self):
@@ -33,7 +33,7 @@ class WorkspaceTransaction:
         p_str = str(p)
         try:
             if p.exists():
-                _cur: str | None = p.read_text(encoding="utf-8", errors="replace")
+                _cur: bytes | None = p.read_bytes()
             else:
                 _cur = None
         except Exception:
@@ -59,7 +59,8 @@ class WorkspaceTransaction:
                         p.unlink()
                         restored.append(p.name)
                 else:
-                    p.write_text(content, encoding="utf-8")
+                    raw = content if isinstance(content, (bytes, bytearray)) else str(content).encode("utf-8")
+                    p.write_bytes(raw)
                     restored.append(p.name)
             except Exception:
                 pass
@@ -83,7 +84,8 @@ class WorkspaceTransaction:
                     p.unlink()
             else:
                 p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(content, encoding="utf-8")
+                raw = content if isinstance(content, (bytes, bytearray)) else str(content).encode("utf-8")
+                p.write_bytes(raw)
         except Exception as _e:
             return False, f"Restore failed: {_e}"
         return True, str(p)
@@ -105,9 +107,14 @@ class WorkspaceTransaction:
         p_str = str(p)
         if p_str not in self._snapshots:
             return ""
-        before = self._snapshots[p_str]
+        raw_before = self._snapshots[p_str]
+        before = (
+            raw_before.decode("utf-8", errors="replace")
+            if isinstance(raw_before, (bytes, bytearray))
+            else (raw_before or "")
+        )
         try:
-            after = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+            after = p.read_bytes().decode("utf-8", errors="replace") if p.exists() else ""
         except Exception:
             after = ""
         before_lines = (before or "").splitlines()

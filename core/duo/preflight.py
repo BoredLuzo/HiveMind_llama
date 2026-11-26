@@ -559,9 +559,9 @@ def _strip_stale_ctx_notices(msgs: list) -> list:
 def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think, settings=None):
     """Apply preserve_thinking, enable_thinking, and reasoning_effort kwargs to payload."""
     from core.model_sampling import (
-        clamp_reasoning_effort_for_model,
         normalize_reasoning_effort,
         resolve_reasoning_effort,
+        set_disabled_reasoning_effort,
     )
     _mdl = str(payload.get("model") or "")
     _user_eff = normalize_reasoning_effort((settings or {}).get("reasoning_effort"))
@@ -573,10 +573,7 @@ def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think, setting
         ctk = payload.setdefault("chat_template_kwargs", {})
         ctk["enable_thinking"] = False
         ctk.pop("preserve_thinking", None)
-        if not _mdl or clamp_reasoning_effort_for_model(_mdl, "none") == "none":
-            payload["reasoning_effort"] = "none"
-        else:
-            payload.pop("reasoning_effort", None)
+        set_disabled_reasoning_effort(payload, _mdl, empty_keeps_none=True)
         return payload
     _eff = resolve_reasoning_effort(
         settings, profile, thinking=True, model_name=_mdl,
@@ -665,12 +662,14 @@ async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
 
 
 def _git_checkpoints_enabled(ctx) -> bool:
-
+    settings_map = getattr(ctx, "settings", None)
+    if isinstance(settings_map, dict) and settings_map:
+        return bool(settings_map.get("duo_git_checkpoints", False))
     try:
         from settings import load_settings as _ls
         return bool((_ls() or {}).get("duo_git_checkpoints", False))
-    except Exception:
-        return True
+    except (ImportError, OSError, TypeError, ValueError):
+        return False
 
 
 async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
@@ -1025,7 +1024,8 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
                 loop_detected = True
                 ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
                 return True, loop_detected, last_write_round, round_wrote_file
-    elif tn in ("write_file", "write_file_append", "replace_lines"):
+    elif tn in ("write_file", "write_file_append", "replace_lines",
+                "apply_patch", "edit_ast", "lsp_format"):
         read_counts.clear()
         last_write_round = total_tool_rounds
         # WRITE-PROGRESS-FIX (Run 14): like edit_file — a successful

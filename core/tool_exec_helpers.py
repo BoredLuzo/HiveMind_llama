@@ -19,7 +19,11 @@ from pathlib import Path
 logger = logging.getLogger("hivemind.tool_exec_helpers")
 
 from tools.runner import _run_inline_tool
-from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
+from utils.tool import (
+    parse_tool_args as _parse_tool_args,
+    run_bash_confirmed_exit_zero as _run_bash_confirmed_exit_zero,
+    run_bash_failed as _run_bash_failed,
+)
 from tools.errors import (
     tool_call_failed as _tool_call_failed,
     tool_error_has_code as _tool_error_has_code,
@@ -27,6 +31,11 @@ from tools.errors import (
 )
 
 _SYS_PREFIX = "[AUTOMATED TOOL SYSTEM] "
+_READ_LADDER_RESET_TOOLS = frozenset({
+    "write_file", "write_file_append", "edit_file", "patch_file",
+    "replace_lines", "apply_patch", "edit_ast", "lsp_format",
+    "run_bash", "run_python", "run_tests", "install_package", "git_commit",
+})
 
 
 async def _invoke_inline_tool(
@@ -65,9 +74,22 @@ async def _prefetch_readonly_tools(
     cache/tmp races)."""
     _PARALLEL_SAFE = {"read_file", "search_code", "find_files", "list_dir",
                        "get_signatures", "find_references", "git_status", "web_fetch"}
-    _SLOW_STATELESS = {"run_tests"}
+    _approval_on = False
+    try:
+        from tools.runner import _needs_approval as _na
+        _approval_on = bool(_na("run_tests"))
+    except (ImportError, AttributeError, TypeError):
+        _approval_on = False
+    _SLOW_STATELESS = set() if _approval_on else {"run_tests"}
     # web_search excluded: modifies duo_seen_web_queries (mutable set) — not parallel-safe
     _names = [tc.get("function", {}).get("name", "") for tc in (tool_calls or [])]
+    if any(
+        isinstance(_raw_a := (tc.get("function") or {}).get("arguments", {}), str)
+        and _raw_a.strip() not in ("", "{}", "null")
+        and not _parse_tool_args(_raw_a)
+        for tc in (tool_calls or [])
+    ):
+        return {}
     _all_read_only = bool(_names) and all(
         n in _PARALLEL_SAFE or n in _SLOW_STATELESS for n in _names
     ) and sum(n in _SLOW_STATELESS for n in _names) <= 1
@@ -193,8 +215,12 @@ def _note_successful_write(dname, dresult, result, round_state, total_tool_error
 _NOOP_HINT_THRESHOLD = 2
 _EDIT_NO_CHANGE_MARKERS = (
     "EDIT_FILE_NOOP",
+    "EDIT_FILE_OLD_TEXT_NOT_FOUND",
+    "EDIT_FILE_NOT_UNIQUE",
     "EDIT_FILE_NO_BLOCKS_APPLIED",
     "EDIT_FILE_MALFORMED_BLOCK",
+    "WRITE_FILE_NOOP",
+    "APPLY_PATCH_FAILED",
     "PATCH_FILE_OLD_STR_NOT_FOUND",
     "PATCH_FILE_NON_UNIQUE_MATCH",
 )
@@ -255,7 +281,8 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
 
 
 def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
-                        range_read: bool = False) -> None:
+                        range_read: bool = False, count_wide: bool = True,
+                        failed_or_skipped: bool = False) -> None:
     """Read-file ladder tracker (S17) — mutates trs.ladder counters.
 
     PATH-RESET (2026-09-09): only repeated reads of the SAME path escalate.
@@ -266,18 +293,22 @@ def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
     RANGE-READ-NEUTRAL (2026-09-15): start_line/end_line reads are TARGETED
     lookups (e.g. the write-salvage "read the end of the file" guidance),
     not blind exploration — they neither escalate nor reset.
+    PARALLEL-ROUND-CAP (2026-11-26): a parallel batch of N different read_file
+    calls in a single LLM turn counts at most +1 toward `wide_read_streak`
+    (`count_wide=False` after the first read in the round), so reading e.g.
+    8 repo files at once does not immediately fire Read-Ladder.
     """
     if dname == "read_file" and not args_parse_failed:
-        trs.wide_read_streak[0] = trs.wide_read_streak[0] + 1
-        if range_read:
+        if failed_or_skipped or range_read:
             return
+        if count_wide:
+            trs.wide_read_streak[0] = trs.wide_read_streak[0] + 1
         if read_path and trs.last_read_path[0] and read_path != trs.last_read_path[0]:
             trs.consecutive_reads[0] = 1
         else:
             trs.consecutive_reads[0] += 1
         trs.last_read_path[0] = read_path
-    elif dname in ("edit_file", "write_file", "patch_file", "write_file_append",
-                   "replace_lines", "apply_patch", "run_bash", "run_python"):
+    elif dname in _READ_LADDER_RESET_TOOLS:
         trs.consecutive_reads[0] = 0
         trs.wide_read_streak[0] = 0
         trs.read_ladder_fired[0] = False
@@ -389,7 +420,7 @@ async def _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         if _mode_has_tool(tool_mode, "write_file_append"):
             _steps = (
                 "You MUST split the file into chunks:\n"
-                "  1. edit_file(path, <first segment>)\n"
+                "  1. write_file(path, <first segment>)\n"
                 "  2. write_file_append(path, <next segment>)\n"
                 "  3. write_file_append(path, <rest...>)\n"
             )
@@ -450,12 +481,13 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _ef_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"ef_malformed:{_ef_path}") >= 2:
-            _dresult = (
-                f"[SYSTEM] edit_file arguments malformed on '{_ef_path}' repeatedly. "
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _esc = (
+                f"edit_file arguments malformed on '{_ef_path}' repeatedly. "
                 "Pass old_text and new_text (exact match) or edits=[{old_text, new_text}]. "
                 "Alternatively use write_file with the complete updated file content."
             )
-            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + _esc)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -470,11 +502,12 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _pf_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"pf_not_found:{_pf_path}") >= 3:
-            _dresult = (
-                f"[SYSTEM] {_dname} repeatedly failed to match '{_pf_path}'. "
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _esc = (
+                f"{_dname} repeatedly failed to match '{_pf_path}'. "
                 "Switch strategy: call read_file first, then use write_file with the complete updated file content instead."
             )
-            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + _esc)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -489,11 +522,12 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _pf_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"pf_non_unique:{_pf_path}") >= 2:
-            _dresult = (
-                f"[SYSTEM] {_dname} still non-unique on '{_pf_path}'. "
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _esc = (
+                f"{_dname} still non-unique on '{_pf_path}'. "
                 "Include more surrounding lines in old_text or use write_file with the complete file content instead."
             )
-            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + _esc)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -507,11 +541,12 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _fp = _ws / _pf_path if not Path(_pf_path).is_absolute() else Path(_pf_path)
         _is_empty = not _fp.exists() or _fp.stat().st_size == 0
         if _bump(attempts_per_file, f"nb_{_pf_path}") >= 2:
-            _dresult = (
-                f"[SYSTEM] Repeated EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}'. "
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _esc = (
+                f"Repeated EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}'. "
                 "Stop using edit_file here. Use write_file with the complete file content."
             )
-            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + _esc)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             if _is_empty:
@@ -630,9 +665,8 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "EDIT_AST_UNAVAILABLE: AST editor not available. "
-            "Use edit_file with SEARCH/REPLACE blocks as fallback. "
-            "Read the file first, then build a SEARCH block with the "
-            "exact target function/class to replace."
+            "Use edit_file(path, old_text, new_text) as fallback. "
+            "Read the file first, then pass the exact target function/class as old_text."
         ))
 
     elif _tool_error_has_code(_dresult, "GIT_COMMIT_FAILED", "git_commit"):
@@ -728,7 +762,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
             "REPLACE_LINES error: line numbers may be stale. "
             "Call read_file to get current line numbers, then retry. "
-            "If that fails, use edit_file with SEARCH/REPLACE instead."
+            "If that fails, use edit_file(path, old_text, new_text) instead."
         ))
 
     elif _tool_error_has_code(_dresult, "MISSING_ARG", "git_commit"):
@@ -742,12 +776,13 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
     elif _tool_error_has_code(_dresult, "INVALID_ARGUMENT"):
         _matched = True
         if _bump(attempts_per_file, f"ia_{_dname}") >= 2:
-            _dresult = (
-                f"[SYSTEM] Repeated INVALID_ARGUMENT on {_dname}. "
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _esc = (
+                f"Repeated INVALID_ARGUMENT on {_dname}. "
                 f"Do not call {_dname} again until you have verified "
                 f"the exact argument schema. Use a simpler tool if unsure."
             )
-            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_tool_footer(dtool_msgs, _SYS_PREFIX + _esc)
         else:
             _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _append_user_hint(dtool_msgs,
@@ -1001,7 +1036,7 @@ async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hook
             "round": subtask_index + 1,
         }
         result.changed_since_failure = set()
-    else:
+    elif _run_bash_confirmed_exit_zero(_dresult):
         result.verify_last_ok_serial = max(result.verify_last_ok_serial, result.verify_mutation_serial)
         if result.last_run_bash_failure and result.changed_since_failure:
             _files_for_hint = sorted(result.changed_since_failure)[:3]
@@ -1054,7 +1089,8 @@ def _patch_file_fallback_hint(_dname, _dargs, _dresult, attempts_per_file) -> st
 
 def _read_required_and_python_hints(_dname, _dargs, _dresult, tool_error_retries) -> str:
     """S12: READ_REQUIRED cap + run_python hints (from execute_tool_round)."""
-    if _dname in ("read_file", "write_file", "edit_file", "patch_file", "replace_lines"):
+    if _dname in ("read_file", "write_file", "edit_file", "patch_file", "replace_lines",
+                  "apply_patch", "edit_ast", "lsp_format"):
         if "READ_REQUIRED" in _dresult:
             tool_error_retries["READ_REQUIRED_CONSECUTIVE"] = tool_error_retries.get("READ_REQUIRED_CONSECUTIVE", 0) + 1
             if tool_error_retries["READ_REQUIRED_CONSECUTIVE"] >= 3:
@@ -1073,8 +1109,13 @@ def _read_required_and_python_hints(_dname, _dargs, _dresult, tool_error_retries
         _dresult = f"{_dresult}\n\nThe code has errors. Fix them and call run_python again with the corrected code."
 
     if _dname == "run_python" and _tool_error_has_code(_dresult, "RUN_PYTHON_TIMEOUT", "run_python"):
+        _py_to_m = (
+            re.search(r'"timeout_s"\s*:\s*(\d+)', str(_dresult or ""))
+            or re.search(r"timed out after\s+(\d+)s", str(_dresult or ""))
+        )
+        _py_to_s = _py_to_m.group(1) if _py_to_m else "45"
         _dresult = (
-            f"{_dresult}\n\nPython execution timed out after 10s — likely an infinite loop or excessively "
+            f"{_dresult}\n\nPython execution timed out after {_py_to_s}s — likely an infinite loop or excessively "
             f"slow computation. Do NOT re-run the same code. Check for: missing termination conditions, "
             f"unbounded recursion, or operations that can be optimized/replaced."
         )
@@ -1368,6 +1409,10 @@ class ToolRoundState:
     # exploration), so it can never see "read 8 files, wrote nothing" — which
     # is the case the ladder hint talks about. This counter is the wide view.
     wide_read_streak: list = field(default_factory=lambda: [0])
+    # EDIT-LOOP-SOFT-RECOVERY (2026-11-26): allow one soft recovery injection on
+    # the first 3x identical edit_file/patch loop before hard-aborting the run.
+    edit_loop_recoveries: list = field(default_factory=lambda: [0])
+    recovered_loop_sigs: set = field(default_factory=set)
     # WEBSEARCH-BUDGET-STOP (2026-09-17): consecutive budget-exhausted
     # web_search calls; >=2 stops the run (run-persistent ref).
     # SEND-FILE (2026-11-04): true only for runs started by the Telegram

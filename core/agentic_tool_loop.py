@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AgenticToolLoop  ToolLoop subclass with duo_runner's POST+retry logic."""
 from __future__ import annotations
-import asyncio, json, logging, os, re, time
+import asyncio, json, logging, re, time
 from pathlib import Path
 import httpx
 
@@ -483,12 +483,14 @@ class AgenticToolLoop(ToolLoop):
                         text_repetition_drift as _text_drift,
                     )
                     _drift_args_buf = ""
+                    _drift_args_chk = 256
                     _drift_think_buf = ""
                     _drift_cont_buf = ""
                     _drift_think_chk = 320
                     _drift_cont_chk = 320
                     _drift_cut = False
                     _emitted_tool_gen = False
+                    _dr_prompt_timings = None
                     async for _sse_chunk in _t_iter_sse(_resp):
                         self._diag_chunk_n = getattr(self, '_diag_chunk_n', 0) + 1
                         if _ttfb_ms is None:
@@ -550,20 +552,17 @@ class AgenticToolLoop(ToolLoop):
                                     # model (tool execution, loop, waits).
                                     _gen_s = round(
                                         (time.monotonic() - _gen_t0), 1)
-                                    _pre_n = int((locals().get("_dr_prompt_timings")
-                                                  or {}).get("prompt_n") or 0)
-                                    # VRAM-TREND (2026-10-27): the live run got
-                                    # slower the longer it ran. Free VRAM in
-                                    # this line makes the trend visible: falling
-                                    # = checkpoint/KV growth, flat = throttling
-                                    # or engine-side work.
+                                    _pre_n = int((_dr_prompt_timings or {}).get("prompt_n") or 0)
+                                    # VRAM-TREND (2026-10-27): sample free VRAM asynchronously
+                                    # only when INFO logging is enabled (no blocking PDH/nvidia-smi on event loop).
                                     _free_mib = None
-                                    try:
-                                        from backend.llama_vram_table import \
-                                            get_live_gpu_free_mib as _vfree
-                                        _free_mib = _vfree()
-                                    except (ImportError, OSError, AttributeError):
-                                        _free_mib = None
+                                    if logger.isEnabledFor(logging.INFO):
+                                        try:
+                                            from backend.llama_vram_table import \
+                                                get_live_gpu_free_mib as _vfree
+                                            _free_mib = await asyncio.to_thread(_vfree)
+                                        except (ImportError, OSError, AttributeError):
+                                            _free_mib = None
                                     logger.info(
                                         "[CACHE] round=%s prompt=%d cached=%d reuse=%.0f%% "
                                         "gen=%.1fs decode=%.1ft/s prefill_n=%d tok_out=%d "
@@ -593,7 +592,7 @@ class AgenticToolLoop(ToolLoop):
                                                 port=getattr(self.round_state, "port", ""),
                                                 usage=_dr_usage_final,
                                                 timings={"prompt_n": _pre_n,
-                                                         "prompt_ms": (locals().get("_dr_prompt_timings") or {}).get("prompt_ms"),
+                                                         "prompt_ms": (_dr_prompt_timings or {}).get("prompt_ms"),
                                                          "predicted_n": _dr_usage_final.get("completion_tokens"),
                                                          "predicted_per_second": getattr(self.round_state, "decode_tps", None)},
                                             ))
@@ -681,17 +680,19 @@ class AgenticToolLoop(ToolLoop):
                         # deltas below (the name arrives BEFORE the
                         # arguments — reliable, no JSON parsing).
                         _wtc = _sse_delta.get("tool_calls") or []
+                        _had_tc_args = False
                         for _tc_d in _wtc:
+                            _tc_idx = _tc_d.get("index", 0)
+                            _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
+                            _acc_fn = str((_acc.get("function") or {}).get("name", "") or "")
                             _tc_args = str(((_tc_d.get("function") or {}).get("arguments")) or "")
                             if _tc_args:
+                                _had_tc_args = True
                                 _drift_args_buf += _tc_args
-                                _tc_idx = _tc_d.get("index", 0)
-                                _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
-                                _acc_fn = str((_acc.get("function") or {}).get("name", "") or "")
-                                # CARD-ARG-FEED (2026-09-19): alle Gated-Tools
-                                # streamen ihre Argument-Deltas — das Frontend
-                                # zeigt daraus live Pfad/Kommando auf der
-                                # Approval-Card ("welcher file/welcher bash").
+                                if len(_drift_args_buf) > 32768:
+                                    _drift_args_buf = _drift_args_buf[-16384:]
+                                    _drift_args_chk = len(_drift_args_buf) + 64
+                                # CARD-ARG-FEED (2026-09-19): gated tools stream arg deltas for approval card preview.
                                 if _acc_fn in _gated_tool_names or _acc_fn.startswith("mcp_"):
                                     _emitted_tool_gen = True
                                     await self._emit({"type": "tool_gen",
@@ -699,16 +700,8 @@ class AgenticToolLoop(ToolLoop):
                                                       "index": _tc_idx,
                                                       "call_id": str(_acc.get("id") or ""),
                                                       "content": _tc_args})
-                            _tc_idx = _tc_d.get("index", 0)
-                            _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
-                            _stage_fn = str((_acc.get("function") or {}).get("name", "") or "")
-                            # Staging scope: the runner ContextVar (chat-or-
-                            # run id) — the same key the execution gate
-                            # consumes. stage_approval_card is idempotent
-                            # per run; _card_live just skips the per-delta
-                            # calls once this stream staged its card.
-                            if not _card_live and (_stage_fn in _gated_tool_names or _stage_fn.startswith("mcp_")) \
-                                    and _tr_stage._approval_active_for(_stage_fn):
+                            if not _card_live and (_acc_fn in _gated_tool_names or _acc_fn.startswith("mcp_")) \
+                                    and _tr_stage._approval_active_for(_acc_fn):
                                 _stage_args = None
                                 _raw_sa = (_acc.get("function") or {}).get("arguments")
                                 if isinstance(_raw_sa, dict):
@@ -721,19 +714,20 @@ class AgenticToolLoop(ToolLoop):
                                     except ValueError:
                                         _stage_args = None
                                 await _tr_stage.stage_approval_card(
-                                    _appr_scope, _stage_fn, self._emit, args=_stage_args)
+                                    _appr_scope, _acc_fn, self._emit, args=_stage_args)
                                 if _appr_scope:
                                     _card_live = True
-                        # drift check at SSE-delta level (outer loop scope —
-                        # the break below ends the whole stream consumption)
-                        if not _drift_cut and _arg_drift(_drift_args_buf):
-                            _drift_cut = True
-                            _dr_finish_reason = "drift"
-                            if _appr_scope:
-                                _tr_stage._clear_staged_approval(_appr_scope)
-                            await self._emit({"type": "status",
-                                "content": "⚠ repetition drift in tool-call arguments — cutting generation early"})
-                            break
+                        # drift check at SSE-delta level (throttled like think/content drift)
+                        if not _drift_cut and _had_tc_args and len(_drift_args_buf) >= _drift_args_chk:
+                            _drift_args_chk = len(_drift_args_buf) + 64
+                            if _arg_drift(_drift_args_buf):
+                                _drift_cut = True
+                                _dr_finish_reason = "drift"
+                                if _appr_scope:
+                                    _tr_stage._clear_staged_approval(_appr_scope)
+                                await self._emit({"type": "status",
+                                    "content": "⚠ repetition drift in tool-call arguments — cutting generation early"})
+                                break
                         if not _drift_cut and len(_drift_think_buf) >= _drift_think_chk:
                             _drift_think_chk = len(_drift_think_buf) + 64
                             if _text_drift(_drift_think_buf):
@@ -845,24 +839,13 @@ class AgenticToolLoop(ToolLoop):
                         except (ImportError, AttributeError, TypeError,
                                 ValueError):
                             pass
-                        if os.name == "nt":
-                            try:
-                                import ctypes as _ct
-
-                                class _MSX(_ct.Structure):
-                                    _fields_ = [
-                                        ("dwLength", _ct.c_ulong),
-                                        ("dwMemoryLoad", _ct.c_ulong),
-                                        ("ullTotalPhys", _ct.c_ulonglong),
-                                        ("ullAvailPhys", _ct.c_ulonglong)]
-                                _msx = _MSX()
-                                _msx.dwLength = _ct.sizeof(_MSX)
-                                _ct.windll.kernel32.GlobalMemoryStatusEx(
-                                    _ct.byref(_msx))
-                                _diag_free_ram = round(
-                                    _msx.ullAvailPhys / (1024 ** 3), 2)
-                            except (OSError, AttributeError, ValueError):
-                                pass
+                        try:
+                            from backend.llama_manager_utils import _available_ram_gb as _avail_ram
+                            _ram_v = _avail_ram()
+                            if _ram_v is not None:
+                                _diag_free_ram = round(float(_ram_v), 2)
+                        except (ImportError, OSError, TypeError, ValueError):
+                            pass
                         try:
                             # TAIL-READ (2026-10-31, audit): read_text() pulled
                             # the WHOLE slot log (hundreds of MB after a long

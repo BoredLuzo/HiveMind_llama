@@ -60,11 +60,34 @@ _WANT_SUFFIXES = frozenset({
 
 # Cache keyed by resolved path string -> (mtime_ns, size, parsed dict)
 _META_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+# Parent-dir listing cache for detect_sibling_files: parent_str -> (dir_mtime_ns, entries)
+_SIBLING_DIR_CACHE: dict[str, tuple[int, list[tuple[Path, bool, str, str | None]]]] = {}
+
+_TPL_COMMENT_RE = re.compile(r"\{#.*?#\}", re.S)
+_TPL_DEFAULT_PATS = tuple(
+    re.compile(p) for p in (
+        r"_default_reasoning_effort\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]",
+        r"\breasoning_effort\s*\|\s*default\s*\(\s*['\"]([a-zA-Z0-9_]+)['\"]",
+        r"\bdefault_reasoning_effort\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]",
+        r"\breasoning_effort\b[^\n]*\belse\s+['\"]([a-zA-Z0-9_]+)['\"]",
+    )
+)
+_TPL_ELSE_NUM_RE = re.compile(r"\breasoning_effort[^\n]*\belse\s+([0-9]+(?:\.[0-9]+)?)")
+_TPL_EFFORT_MAP_RE = re.compile(r"\beffort_map\s*=\s*\{([^}]+)\}")
+_TPL_MAP_KEY_RE = re.compile(r"['\"]([a-zA-Z0-9_]+)['\"]\s*:")
+_TPL_GUARD_RE = re.compile(r"reasoning_effort[^\n]*\bnot\s+in\s*[\(\[]([^\)\]]+)[\)\]]")
+_TPL_QUOTED_STR_RE = re.compile(r"['\"]([a-zA-Z0-9_]+)['\"]")
+_TPL_BRANCH_RE = re.compile(
+    r"\{%-?\s*(?:el)?if\b([^\n]*?(?<!\.)\b(?:_effort_raw|reasoning_effort|resolved_reasoning_effort|effort)\b[^\n]*?)-?%\}",
+    re.IGNORECASE,
+)
+_TPL_EQ_RE = re.compile(r"(?<!\.)\b(?:_effort_raw|reasoning_effort)\s*==\s*['\"]([a-zA-Z0-9_]+)['\"]")
 
 
 def clear_cache() -> None:
     """Clear the cached GGUF metadata and reasoning-info maps (primarily for tests/rescan)."""
     _META_CACHE.clear()
+    _SIBLING_DIR_CACHE.clear()
     _REASONING_INFO_CACHE.clear()
 
 
@@ -237,40 +260,54 @@ def detect_sibling_files(path: Path) -> dict[str, str | None]:
     stem_set = set(stem_tokens)
 
     try:
-        all_ggufs = sorted(path.parent.glob("*.gguf"), key=lambda p: p.name.lower())
+        dir_mtime = path.parent.stat().st_mtime_ns
     except OSError:
         return found
 
-    other_models: list[Path] = []
-    for p in all_ggufs:
-        if p == path or _is_helper_gguf_name(p.name):
-            continue
-        if _SPLIT_SHARD_RE.sub(r"\g<base>", p.stem) == base_stem:
-            continue
-        other_models.append(p)
+    dir_key = str(path.parent)
+    cached_dir = _SIBLING_DIR_CACHE.get(dir_key)
+    if cached_dir is not None and cached_dir[0] == dir_mtime:
+        entries = cached_dir[1]
+    else:
+        try:
+            all_ggufs = sorted(path.parent.glob("*.gguf"), key=lambda p: p.name.lower())
+        except OSError:
+            return found
+        entries = []
+        for p in all_ggufs:
+            low_name = p.name.lower()
+            kind: str | None = None
+            if "mmproj" in low_name or "projector" in low_name:
+                kind = "mmproj"
+            elif low_name.startswith("mtp-") or "-mtp-draft" in low_name or "_mtp_draft" in low_name:
+                kind = "mtp"
+            elif "dflash" in low_name:
+                kind = "dflash"
+            elif "dspark" in low_name:
+                kind = "dspark"
+            if kind is not None:
+                try:
+                    if not p.is_file() or p.stat().st_size <= 0:
+                        continue
+                except OSError:
+                    continue
+            entries.append((
+                p,
+                _is_helper_gguf_name(p.name),
+                _SPLIT_SHARD_RE.sub(r"\g<base>", p.stem),
+                kind,
+            ))
+        _SIBLING_DIR_CACHE[dir_key] = (dir_mtime, entries)
+
+    has_other_models = any(
+        (not is_helper and p != path and p_base != base_stem)
+        for p, is_helper, p_base, _kind in entries
+    )
 
     best_scores: dict[str, int] = {k: -1 for k in found}
 
-    for sib in all_ggufs:
-        if sib == path:
-            continue
-        low_name = sib.name.lower()
-        kind: str | None = None
-        if "mmproj" in low_name or "projector" in low_name:
-            kind = "mmproj"
-        elif low_name.startswith("mtp-") or "-mtp-draft" in low_name or "_mtp_draft" in low_name:
-            kind = "mtp"
-        elif "dflash" in low_name:
-            kind = "dflash"
-        elif "dspark" in low_name:
-            kind = "dspark"
-        if kind is None:
-            continue
-
-        try:
-            if not sib.is_file() or sib.stat().st_size <= 0:
-                continue
-        except OSError:
+    for sib, _is_helper, _sib_base, kind in entries:
+        if sib == path or kind is None:
             continue
 
         if kind == "mmproj":
@@ -281,7 +318,7 @@ def detect_sibling_files(path: Path) -> dict[str, str | None]:
                     len(sib_tokens) == 1 and sib_tokens[0] in stem_set
                 ):
                     score = 100 + len(sib_tokens)
-            elif not other_models:
+            elif not has_other_models:
                 score = 10
         else:
             sib_tokens = _split_tokens(sib.stem, _SIBLING_NOISE_TOKENS)
@@ -291,7 +328,7 @@ def detect_sibling_files(path: Path) -> dict[str, str | None]:
                 score = 100 + len(sib_tokens)
             elif fam_tokens and all(tok in stem_set for tok in fam_tokens):
                 score = 50 + len(fam_tokens)
-            elif not other_models:
+            elif not has_other_models:
                 score = 10 if (not sib_tokens or not fam_tokens) else 5
 
         if score > best_scores[kind]:
@@ -582,18 +619,13 @@ def _pick_group_canonical_level(tokens: list[str]) -> list[str]:
 
 
 def _extract_template_default_effort(tpl: str) -> str | None:
-    for pat in (
-        r"_default_reasoning_effort\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]",
-        r"\breasoning_effort\s*\|\s*default\s*\(\s*['\"]([a-zA-Z0-9_]+)['\"]",
-        r"\bdefault_reasoning_effort\s*=\s*['\"]([a-zA-Z0-9_]+)['\"]",
-        r"\breasoning_effort\b[^\n]*\belse\s+['\"]([a-zA-Z0-9_]+)['\"]",
-    ):
-        m = re.search(pat, tpl)
+    for rx in _TPL_DEFAULT_PATS:
+        m = rx.search(tpl)
         if m:
             norm = _norm_tpl_effort_token(m.group(1))
             if norm:
                 return norm
-    m_num = re.search(r"\breasoning_effort[^\n]*\belse\s+([0-9]+(?:\.[0-9]+)?)", tpl)
+    m_num = _TPL_ELSE_NUM_RE.search(tpl)
     if m_num:
         try:
             val = float(m_num.group(1))
@@ -616,7 +648,7 @@ def _extract_template_default_effort(tpl: str) -> str | None:
 
 def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False) -> dict[str, Any]:
     """Inspect a Jinja chat template to determine exact supported reasoning controls."""
-    tpl = re.sub(r"\{#.*?#\}", "", str(template_text or ""), flags=re.S)
+    tpl = _TPL_COMMENT_RE.sub("", str(template_text or ""))
     supports_enable_thinking = "enable_thinking" in tpl
     has_effort = "reasoning_effort" in tpl
     if not has_effort:
@@ -640,20 +672,20 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
     found: set[str] = set()
     accepts_none_effort = False
 
-    m_map = re.search(r"\beffort_map\s*=\s*\{([^}]+)\}", tpl)
+    m_map = _TPL_EFFORT_MAP_RE.search(tpl)
     if m_map:
-        raw_keys = [k.strip().lower() for k in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]\s*:", m_map.group(1))]
+        raw_keys = [k.strip().lower() for k in _TPL_MAP_KEY_RE.findall(m_map.group(1))]
         accepts_none_effort = "none" in raw_keys
         for k in raw_keys:
             norm = _norm_tpl_effort_token(k, strict=True)
             if norm:
                 found.add(norm)
     else:
-        m_guard = re.search(r"reasoning_effort[^\n]*\bnot\s+in\s*[\(\[]([^\)\]]+)[\)\]]", tpl)
+        m_guard = _TPL_GUARD_RE.search(tpl)
         _guard_pos: list[str] = []
         _guard_raw: list[str] = []
         if m_guard:
-            _guard_raw = [v.strip().lower() for v in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", m_guard.group(1))]
+            _guard_raw = [v.strip().lower() for v in _TPL_QUOTED_STR_RE.findall(m_guard.group(1))]
             _guard_pos = [
                 n for n in (_norm_tpl_effort_token(v, strict=True) for v in _guard_raw)
                 if n and n != "none"
@@ -665,15 +697,11 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
                 if norm:
                     found.add(norm)
         else:
-            branch_re = re.compile(
-                r"\{%-?\s*(?:el)?if\b([^\n]*?(?<!\.)\b(?:_effort_raw|reasoning_effort|resolved_reasoning_effort|effort)\b[^\n]*?)-?%\}",
-                re.IGNORECASE,
-            )
-            for m_br in branch_re.finditer(tpl):
+            for m_br in _TPL_BRANCH_RE.finditer(tpl):
                 cond = m_br.group(1)
                 if "<|" in cond:
                     continue
-                vals = [v.strip().lower() for v in re.findall(r"['\"]([a-zA-Z0-9_]+)['\"]", cond)]
+                vals = [v.strip().lower() for v in _TPL_QUOTED_STR_RE.findall(cond)]
                 if not vals:
                     continue
                 if "none" in vals:
@@ -681,10 +709,7 @@ def inspect_template_reasoning(template_text: str, *, has_thinking: bool = False
                 for lvl in _pick_group_canonical_level(vals):
                     found.add(lvl)
             if not any(lvl != "none" for lvl in found):
-                for _eq_v in re.findall(
-                    r"(?<!\.)\b(?:_effort_raw|reasoning_effort)\s*==\s*['\"]([a-zA-Z0-9_]+)['\"]",
-                    tpl,
-                ):
+                for _eq_v in _TPL_EQ_RE.findall(tpl):
                     _eq_low = _eq_v.strip().lower()
                     _eq_norm = _norm_tpl_effort_token(_eq_low)
                     if _eq_norm == "none":

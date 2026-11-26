@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regressions for composer reasoning_effort propagation, Inkling medium default,
+"""Regressions for composer reasoning_effort propagation, Inkling low default,
 piped pip-install source-build hints on exit 0, and MoE CPU-offload load_mode none.
 
 Run: python tests/test_reasoning_effort_and_pip_pipe.py
@@ -63,10 +63,10 @@ import routers.config as RC  # noqa: E402
 _ink = json.loads((_ROOT / "model_configs" / "models" / "inkling-2-mini.json").read_text(encoding="utf-8"))
 _smp_ink = _ink.get("sampling") or {}
 check(
-    "inkling-2-mini ships medium effort for thinking/coding and none for non-thinking",
-    _smp_ink.get("sampling_thinking_code", {}).get("reasoning_effort") == "medium"
-    and _smp_ink.get("sampling_thinking_text", {}).get("reasoning_effort") == "medium"
-    and _smp_ink.get("thinking", {}).get("reasoning_effort") == "medium"
+    "inkling-2-mini ships low effort for thinking/coding and none for non-thinking",
+    _smp_ink.get("sampling_thinking_code", {}).get("reasoning_effort") == "low"
+    and _smp_ink.get("sampling_thinking_text", {}).get("reasoning_effort") == "low"
+    and _smp_ink.get("thinking", {}).get("reasoning_effort") == "low"
     and _smp_ink.get("sampling_text", {}).get("reasoning_effort") == "none"
     and _smp_ink.get("non_thinking", {}).get("reasoning_effort") == "none",
 )
@@ -85,14 +85,14 @@ from core.duo_helpers import _apply_thinking_fields, _calculate_thinking_tokens 
 from core.tool_loop import ToolLoop, ToolLoopConfig  # noqa: E402
 import backend.llama_client as LC  # noqa: E402
 
-_p_off = _apply_thinking_kwargs({}, {"reasoning_effort": "medium", "preserve_thinking": True}, thinking=False, coder_tool_think=False)
+_p_off = _apply_thinking_kwargs({}, {"reasoning_effort": "low", "preserve_thinking": True}, thinking=False, coder_tool_think=False)
 _p_on_ink = _apply_thinking_kwargs({}, _smp_ink["sampling_thinking_code"], thinking=True, coder_tool_think=True, settings={"reasoning_effort": "auto"})
 _p_on_user = _apply_thinking_kwargs({}, _smp_ink["sampling_thinking_code"], thinking=True, coder_tool_think=True, settings={"reasoning_effort": "high"})
 check(
-    "_apply_thinking_kwargs sets none when off, honors profile medium on auto, and honors user high",
+    "_apply_thinking_kwargs sets none when off, honors profile low on auto, and honors user high",
     _p_off.get("reasoning_effort") == "none"
     and _p_off.get("chat_template_kwargs", {}).get("enable_thinking") is False
-    and _p_on_ink.get("reasoning_effort") == "medium"
+    and _p_on_ink.get("reasoning_effort") == "low"
     and _p_on_ink.get("chat_template_kwargs", {}).get("preserve_thinking") is True
     and _p_on_user.get("reasoning_effort") == "high",
     repr((_p_off, _p_on_ink, _p_on_user)),
@@ -1038,8 +1038,8 @@ from routers.models import _build_models_profiles  # noqa: E402
 _mp_list = _build_models_profiles(["inkling-2-mini-ud", "lfm2.5:24b"])
 _mp_by_name = {p["name"]: p for p in _mp_list}
 check(
-    "_build_models_profiles exposes reasoning_effort='medium' for Inkling and None for non-reasoning LFM",
-    _mp_by_name.get("inkling-2-mini-ud", {}).get("reasoning_effort") == "medium"
+    "_build_models_profiles exposes reasoning_effort='low' for Inkling and None for non-reasoning LFM",
+    _mp_by_name.get("inkling-2-mini-ud", {}).get("reasoning_effort") == "low"
     and _mp_by_name.get("lfm2.5:24b", {}).get("reasoning_effort") is None,
     repr(_mp_by_name),
 )
@@ -1047,14 +1047,18 @@ check(
 # ── 11. Live stream override status notifications (duo + direct) ─────────────
 _vram_src = (_ROOT / "core" / "duo" / "_vram.py").read_text(encoding="utf-8")
 _direct_src = (_ROOT / "core" / "direct_runner.py").read_text(encoding="utf-8")
+_st_none = MS.format_reasoning_effort_status("inkling-2-mini-ud", "none", supported=True)
+_st_high = MS.format_reasoning_effort_status("inkling-2-mini-ud", "high", supported=True)
+_st_nosup = MS.format_reasoning_effort_status("lfm2.5:24b", "high", supported=False)
 check(
     "Live status notifications surface composer overrides in both duo and direct runners",
-    "Reasoning effort: none (composer override" in _vram_src
-    and "Reasoning effort: {_user_eff} (composer override)" in _vram_src
-    and "Reasoning effort: none (composer override" in _direct_src
-    and "Reasoning effort: {_dt_user_eff} (composer override)" in _direct_src
-    and "Reasoning effort: {_dir_user_eff} (composer override)" in _direct_src
-    and "does not support reasoning" in _direct_src,
+    _st_none is not None and "Reasoning effort: none (composer override" in _st_none
+    and _st_high is not None and "Reasoning effort: high (composer override)" in _st_high
+    and _st_nosup is not None and "does not support reasoning" in _st_nosup
+    and "format_reasoning_effort_status" in _vram_src
+    and "format_reasoning_effort_status" in _direct_src
+    and "_dt_user_eff" in _direct_src
+    and "_dir_user_eff" in _direct_src,
 )
 
 
@@ -1549,7 +1553,7 @@ check(
     and _inloop_sep_max.get("thinking") is True
     and _inloop_sep_max.get("reasoning_effort") == "max"
     and _inloop_auto_decoupled.get("thinking") is True
-    and _inloop_auto_decoupled.get("reasoning_effort") == "medium"
+    and _inloop_auto_decoupled.get("reasoning_effort") == "low"
     and len(_nt_retry_payloads) == 2
     and _nt_retry_payloads[0].get("reasoning_effort") == "high"
     and _nt_retry_payloads[1].get("thinking") is False

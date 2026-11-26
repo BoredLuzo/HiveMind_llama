@@ -57,9 +57,10 @@ def _vram_gb() -> float:
 
 def _load_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+        from deploy._common import load_json_dict as _ljd
+    except ImportError:
+        from _common import load_json_dict as _ljd  # type: ignore[import-not-found]
+    return _ljd(path)
 
 
 def _profile_for(tag: str) -> dict:

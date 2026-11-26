@@ -920,9 +920,13 @@ def _apply_text_edits(text: str, edits: list[dict]) -> str:
     lines = text.split("\n")
 
     def _offset(line: int, character: int) -> int:
-        line = max(0, min(int(line), len(line_starts) - 1))
-        base = line_starts[line]
-        line_text = lines[line] if line < len(lines) else ""
+        line_i = int(line)
+        if line_i < 0:
+            return 0
+        if line_i >= len(line_starts):
+            return len(text)
+        base = line_starts[line_i]
+        line_text = lines[line_i] if line_i < len(lines) else ""
         # LSP columns are UTF-16 code units; python str indices are code
         # points (audit R6): walking the line and counting astral characters
         # (surrogate pairs) as 2 units converts exactly. Beyond the line end
@@ -936,9 +940,12 @@ def _apply_text_edits(text: str, edits: list[dict]) -> str:
         return base + len(line_text)
 
     out = text
-    for edit in sorted(edits, key=lambda e: (
-            (e.get("range", {}).get("start") or {}).get("line", 0),
-            (e.get("range", {}).get("start") or {}).get("character", 0)),
+    for _idx, edit in sorted(enumerate(edits), key=lambda pair: (
+            (pair[1].get("range", {}).get("start") or {}).get("line", 0),
+            (pair[1].get("range", {}).get("start") or {}).get("character", 0),
+            (pair[1].get("range", {}).get("end") or {}).get("line", 0),
+            (pair[1].get("range", {}).get("end") or {}).get("character", 0),
+            pair[0]),
             reverse=True):
         rng = edit.get("range") or {}
         start = rng.get("start") or {}

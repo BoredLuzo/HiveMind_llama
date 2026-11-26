@@ -1,6 +1,8 @@
 # HiveMind — Local Multi-Agent AI Coding Assistant
 from __future__ import annotations
 import asyncio
+from collections import deque
+import itertools
 from utils.bg_tasks import spawn  # noqa: E402
 # Windows: Proactor loop for subprocess compatibility.
 import sys as _sys_early
@@ -20,12 +22,10 @@ from core.state import (
 import json
 import logging
 import traceback
-import sys
 import os
-import hmac
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 import time
 import re
-# platform removed ─ unused (all platform checks use sys.platform)
 import threading
 import contextvars as _contextvars
 from typing import Any
@@ -55,7 +55,6 @@ from vision.preprocess import _vision_cfg
 from core.duo_config import DuoConfig
 
 # ─── Shadow-Def Imports from tools modules ───
-from tools.definitions import _get_inline_tools
 from tools.runner import _run_inline_tool as _run_inline_tool_runner
 from context.chat import (
     init_chat_context,
@@ -79,7 +78,6 @@ from learning.insights import init_insights
 _files_read_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar("_files_read_in_run", default=None)
 import httpx
 from pathlib import Path
-# deque removed ─ unused
 
 # SINGLE SOURCE (2026-11-05): the version lives in core/version.py —
 # infra/mcp_client and infra/lsp_client import it without pulling in server.
@@ -93,15 +91,11 @@ from core.version import HIVEMIND_VERSION
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
-
-# ─── sys.path Bootstrap ─────────────────────────────────────────────────────────
-_THIS_DIR   = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
+_logger = logger
 # llama.cpp-Backend
 from backend import (
     BACKEND as _BACKEND, BACKEND_HOST as OLLAMA_HOST,
-    api_tags as _api_tags, api_ps as _api_ps,
+    api_ps as _api_ps,
     api_generate_load as _api_gen_load,
 )
 try:
@@ -134,10 +128,6 @@ _chat_abort_lock: asyncio.Lock | None = None
 
 # ─── Until-Finished: Budget-Resolver ───────────────────────────────────────────
 
-from core.duo_helpers import (
-    _bucket_stop_reason,
-)
-
 
 from tools.websearch import (
     _safe_web_search,
@@ -146,10 +136,6 @@ from tools.websearch import (
 
 _state._safe_web_search = _safe_web_search
 # ─── Parallel Pre-Explore ───────────────────────────────────────────────────────
-async def _bk_tags() -> list[str]:
-    """All available models."""
-    return await _api_tags()
-
 async def _bk_ps() -> list[dict]:
     """Currently loaded models."""
     return await _api_ps()
@@ -173,11 +159,9 @@ from routers import vram_router
 from routers import mcp_router
 from routers import websearch_router
 from routers import skills_router
-from routers import debug_router, models_router
+from routers import debug_router, models_router, openai_compat_router, voice_router, gateway_router
 from fastapi.responses import (HTMLResponse, StreamingResponse, JSONResponse,
                             FileResponse, Response)
-
-_logger = logging.getLogger("hivemind.server")
 
 # ─── Uvicorn Access-Log Filter ──────────────────────────────────────────────────
 from infra.log_noise import _install_uvicorn_noise_filter
@@ -895,8 +879,6 @@ def get_effective_prompt_with_override(agent_key, preset_name, use_learned):
     return get_effective_prompt(agent_key, preset_name)
 
 
-from tools.errors import tool_error_response as _tool_error_response
-
 from context.chat_util import (
     get_effective_prompt,
 )
@@ -1082,7 +1064,7 @@ _SSE_KEEPALIVE_INTERVAL_S = 15.0
 def _run_journal_touch(run_id: str) -> dict:
     reg = _RUN_JOURNAL.get(run_id)
     if reg is None:
-        reg = {"frames": [], "done": False, "aborted": False, "ts": time.time(),
+        reg = {"frames": deque(), "done": False, "aborted": False, "ts": time.time(),
                "bytes": 0}
         _RUN_JOURNAL[run_id] = reg
         try:
@@ -1251,14 +1233,14 @@ async def stream(req: Request):
                 _ci = min(_ci, 262144)
                 _model_overrides[_ctx_key] = _ci
 
-    # TG-GATEWAY (P10/T, 2026-10-05): per-run direct tools access level —
-    # same lift pattern as the ctx keys; the direct runner reads it from
-    # the run settings snapshot (direct_runner.py:301).
-    if "direct_tools_enabled" in body:
-        _model_overrides["direct_tools_enabled"] = _as_bool(
-            body.get("direct_tools_enabled"))
-    # /tools <off|websearch|python|full> on the phone. Same per-run lift;
-    # invalid values are ignored so an old gateway cannot widen the tools.
+    for _bool_key in (
+        "direct_tools_enabled", "duo_websearch_enabled", "subagent_lite_enabled",
+        "lsp_auto_diagnostics", "lsp_auto_warm_on_write", "smoke_test", "headless",
+    ):
+        if _bool_key in body:
+            _model_overrides[_bool_key] = _as_bool(body.get(_bool_key))
+
+    # /tools <off|websearch|python|full> on the phone. Invalid values ignored.
     if "direct_tools_tier" in body:
         _dt_tier = str(body.get("direct_tools_tier") or "").strip().lower()
         if _dt_tier in ("off", "readonly", "research", "mcp", "python", "full"):
@@ -1266,20 +1248,11 @@ async def stream(req: Request):
         elif _dt_tier in ("websearch", "web"):
             _model_overrides["direct_tools_tier"] = "readonly"
 
-    # CORE-CODER-TIER (2026-11-08): the coder reads duo_coder_tool_tier from
-    # the run settings snapshot. Benchmarks/gateways need to pin it per run;
-    # invalid values are ignored (never widen the tool set by accident).
     if "duo_coder_tool_tier" in body:
         _dct_tier = str(body.get("duo_coder_tool_tier") or "").strip().lower()
         if _dct_tier in ("core", "full", "lean", "mcp", "readonly"):
             _model_overrides["duo_coder_tool_tier"] = _dct_tier
 
-    if "duo_websearch_enabled" in body:
-        _model_overrides["duo_websearch_enabled"] = _as_bool(
-            body.get("duo_websearch_enabled"))
-    if "subagent_lite_enabled" in body:
-        _model_overrides["subagent_lite_enabled"] = _as_bool(
-            body.get("subagent_lite_enabled"))
     if "git_tools_enabled" in body:
         _gt_raw = body.get("git_tools_enabled")
         if isinstance(_gt_raw, bool):
@@ -1292,26 +1265,6 @@ async def stream(req: Request):
                 _model_overrides["git_tools_enabled"] = "true"
             elif _gt_s in ("0", "off", "no", "never"):
                 _model_overrides["git_tools_enabled"] = "false"
-
-    # LSP-RUN-PIN (F10, 2026-11-08): benchmarks/gateways pin the post-write
-    # LSP behavior per request. The keys ride model_overrides into the run
-    # settings snapshot (chat_run lifts it into the tool layer); the LSP
-    # handlers prefer the snapshot for the whole run. Body always wins when
-    # present - explicit False included (same rule as direct_tools_enabled).
-    if "lsp_auto_diagnostics" in body:
-        _model_overrides["lsp_auto_diagnostics"] = _as_bool(
-            body.get("lsp_auto_diagnostics"))
-    if "lsp_auto_warm_on_write" in body:
-        _model_overrides["lsp_auto_warm_on_write"] = _as_bool(
-            body.get("lsp_auto_warm_on_write"))
-    if "smoke_test" in body:
-        _model_overrides["smoke_test"] = _as_bool(body.get("smoke_test"))
-    # HEADLESS-RUN-PIN (2026-11-21): automated/benchmark callers have no UI
-    # to answer destructive_gate or ask_user cards. Marking the run headless
-    # makes destructive_gate fail-closed immediately (0s wait) and ask_user
-    # fall back without blocking the top-level run lock for 600s.
-    if "headless" in body:
-        _model_overrides["headless"] = _as_bool(body.get("headless"))
 
     # G1 (full audit 2026-10-05): the Telegram gateway sends
     # duo_action_approval_enabled=true with its runs so the documented
@@ -1501,7 +1454,7 @@ async def stream(req: Request):
                         while _fr and (len(_fr) > _RUN_JOURNAL_MAX_FRAMES
                                        or int(_state["jr_reg"].get("bytes") or 0)
                                        > _RUN_JOURNAL_MAX_BYTES):
-                            _dropped = _fr.pop(0)
+                            _dropped = _fr.popleft() if isinstance(_fr, deque) else _fr.pop(0)
                             _state["jr_reg"]["bytes"] = int(
                                 _state["jr_reg"].get("bytes") or 0) - len(_dropped)
                     elif not _state["jr_id"]:
@@ -1533,23 +1486,9 @@ async def stream(req: Request):
                     # journal only — do not pile up frames in the orphaned queue.
                     if _state.get("detached"):
                         continue
-                    # backpressure cap for a slow consumer
-                    if _q.qsize() < 5000:
-                        if _state.get("dropped"):
-                            # P0 (edge audit 2026-11-03): tell the consumer
-                            # about the gap instead of silently truncating.
-                            _gap = json.dumps(
-                                {"type": "stream_gap",
-                                 "dropped": int(_state["dropped"])})
-                            await _q.put(("chunk", f"data: {_gap}\n\n"))
-                            _state["dropped"] = 0
-                        await _q.put(("chunk", _chunk))
-                    elif isinstance(_chunk, str) and '"type": "done"' in _chunk:
-                        # DONE-ALWAYS (audit 2026-11-03): the terminal frame
-                        # must not be dropped either — a full queue right at
-                        # the end otherwise left a truncated answer that the
-                        # consumer could not distinguish from a complete one.
-                        # Gap marker + done bypass the cap (two frames).
+                    # backpressure cap for a slow consumer (done always flushes with gap marker)
+                    _is_done_frame = isinstance(_chunk, str) and '"type": "done"' in _chunk
+                    if _q.qsize() < 5000 or _is_done_frame:
                         if _state.get("dropped"):
                             _gap = json.dumps(
                                 {"type": "stream_gap",
@@ -1624,8 +1563,6 @@ async def stream(req: Request):
                     yield ": keepalive\n\n"
                     continue
                 if _kind == "chunk":
-                    _sse_events = _state["events"]
-                    _saw_done = _state["saw_done"]
                     yield _payload
                 elif _kind == "aborted":
                     logger.warning(
@@ -1638,10 +1575,6 @@ async def stream(req: Request):
                     logger.error("/stream unhandled error: mode=%s duo_agentic=%s pre_explore=%s\n%s",
                                  mode, duo_agentic_mode, duo_pre_explore,
                                  _state.get("error_tb") or "(no traceback captured)")
-                    if _state["jr_reg"] is not None:
-                        _state["jr_reg"]["aborted"] = True
-                        _state["jr_reg"]["done"] = True
-                        _state["jr_reg"]["ts"] = time.time()
                     _err = f"{type(_se).__name__}: {str(_se)[:160]}"
                     yield f"data: {json.dumps({'type': 'status', 'content': '⚠️ Internal stream error — fallback answer sent.'}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'error', 'content': _err}, ensure_ascii=False)}\n\n"
@@ -1728,7 +1661,7 @@ async def run_journal(run_id: str = "", after: int = 0):
             "aborted": bool(reg["aborted"]),
             "ts": float(reg["ts"]),
             "chat_id": str(reg.get("chat_id") or ""),
-            "frames": list(_frames[max(0, int(after) - _base):]),
+            "frames": list(itertools.islice(_frames, max(0, int(after) - _base), None)),
         }
     except Exception as e:
         return JSONResponse({"active": False, "error": str(e)[:200]}, status_code=500)
@@ -1738,319 +1671,31 @@ async def favicon():
     _ico = Path(__file__).parent / "static" / "favicon.ico"
     if _ico.exists():
         return FileResponse(_ico)
-    from starlette.responses import Response
     return Response(status_code=204)
 
-# -- OpenAI-Compatible Endpoints (/v1/*) --
-
-async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream):
-    """AGENT MODE: tool-call loop for an OpenAI-compatible endpoint."""
-    _TOOL_PRIORITY = ["granite-4.1:3b", "qwen3.5:2b", "qwen3.5:9b-ud", "rnj-1:8b"]
-    explicit = raw_model[6:].lstrip(":") if ":" in raw_model.replace("agent", "", 1) else ""
-    agent_model = explicit if explicit else next(
-        (m for m in _TOOL_PRIORITY if m in S_models_cache),
-        S_models_cache[0] if S_models_cache else "qwen3.5:9b-ud"
-    )
-
-    from tools.definitions import git_tools_enabled as _gte_openai
-    _OPENAI_WS_ENABLED = bool(settings.get("duo_websearch_enabled", False)) and _WEBSEARCH_AVAILABLE
-    _OPENAI_GIT_ENABLED = _gte_openai(settings)
-    _CODING_TOOLS = _get_inline_tools(
-        include_websearch=_OPENAI_WS_ENABLED, mode="openai_agent",
-        include_git=_OPENAI_GIT_ENABLED, settings=settings)
-    # H-audit: derive the lock like /internal/tool/exec does - ignoring the
-    # configured workspace let agent tools run against the install dir.
-    # WS-ORDER (2026-10-16): the UI-configured project wins over the
-    # run-scoped env - the same order as the workspace resolver and
-    # routers/core.py. The old env-first order pointed the v1 endpoint at
-    # a stale/parallel run's directory while the UI showed another project.
-    _OPENAI_WORKSPACE_LOCK = str(Path(
-        (settings.get("workspace") or "").strip()
-        or os.environ.get("HIVEMIND_WORKSPACE") or "."
-    ).resolve())
-
-    async def _execute_tool(name: str, args: dict, *, model_for_limits: str) -> str:
-        if name == "hivemind_pipeline":
-            query = args.get("query", "")
-            mode = args.get("mode", "auto")
-            try:
-                tokens = []
-                _hivemind_port = str(os.environ.get("HIVEMIND_PORT") or settings.get("server_port") or 8001)  # H-audit: real default
-                async with httpx.AsyncClient(timeout=180) as client:
-                    async with client.stream("POST",
-                        f"http://localhost:{_hivemind_port}/stream",
-                        json={"q": query, "mode": mode}) as resp:
-                        async for line in resp.aiter_lines():
-                            if line.startswith("data:"):
-                                try:
-                                    d = json.loads(line[5:])
-                                    if d.get("type") == "token":
-                                        tokens.append(d["content"])
-                                except Exception:
-                                    pass
-                return "".join(tokens).strip()
-            except Exception as e:
-                return _tool_error_response("PIPELINE_CALL_FAILED",
-                    f"hivemind_pipeline failed: {type(e).__name__}: {str(e)[:220]}",
-                    tool="hivemind_pipeline", mode="openai_agent")
-        _tool_args = dict(args or {})
-        _tool_args["__model__"] = model_for_limits
-        try:
-            # P1 (deep audit 2026-11-03): this OpenAI-compatible endpoint has
-            # no run context by design; without the marker the approval gate
-            # denied every write/exec when the toggle was on.
-            from tools.runner import _external_dispatch as _ext_cv_ag
-            _ext_tok_ag = _ext_cv_ag.set(True)
-            try:
-                return await _run_inline_tool(name, _tool_args,
-                    workspace_lock=_OPENAI_WORKSPACE_LOCK,
-                    tool_mode="openai_agent", include_websearch=_OPENAI_WS_ENABLED,
-                    include_git=_OPENAI_GIT_ENABLED)
-            finally:
-                _ext_cv_ag.reset(_ext_tok_ag)
-        except Exception as e:
-            return _tool_error_response("TOOL_EXEC_EXCEPTION",
-                f"{type(e).__name__}: {str(e)[:220]}",
-                tool=name, mode="openai_agent")
-
-    _agent_state = {
-        "stop_reason": "completed", "tool_calls": 0, "tool_errors": 0,
-        "last_tool_error": None,
-    }
-    system_msg = {"role": "system", "content": (
-        "Use the available tools proactively for file analysis, code execution, and debugging.\\n"
-        "For deep code analysis, combine get_signatures, find_files, and search_code before editing.\\n"
-        "Prefer using tools over guessing when data or execution is required.\\n"
-        "Be precise, concise, and solution-oriented.\\n"
-        "Reply in the same language as the user's latest message.")}
-    current_msgs = list(msgs)
-    if not any(m.get("role") == "system" for m in current_msgs):
-        current_msgs = [system_msg] + current_msgs
-
-    async def _agent_loop():
-        loop_msgs = list(current_msgs)
-        _ag_ctx = _get_num_ctx(agent_model)
-        _ag_opts: dict = {"temperature": temp, "num_predict": max_tok}
-        if _ag_ctx:
-            _ag_opts["num_ctx"] = _ag_ctx
-        async with httpx.AsyncClient(timeout=120) as _agent_client:
-            from backend.llama_server_manager import manager as _lsm4
-            _ag_port = await _lsm4.ensure_loaded(agent_model, num_ctx=_ag_opts.get("num_ctx"))
-            from core.tool_loop import ToolLoop, ToolLoopConfig
-            _loop = ToolLoop(
-                config=ToolLoopConfig(
-                    stream=False, max_rounds=8, max_post_attempts=1,
-                    model=agent_model, temperature=_ag_opts.get("temperature", 0.2),
-                    max_tokens=_ag_opts.get("num_predict", 800),
-                    num_ctx=_ag_opts.get("num_ctx", 4096),
-                    tools=_CODING_TOOLS, tool_mode="openai_agent",
-                    verify_guard=True,
-                ),
-                http_client=_agent_client, port=_ag_port,
-                custom_executor=lambda name, args: _execute_tool(name, args, model_for_limits=agent_model),
-            )
-            async for _ev in _loop.run(loop_msgs):
-                if _ev["type"] == "token":
-                    yield _ev["content"]
-            _agent_state["stop_reason"] = _loop.state.stop_reason
-            _agent_state["tool_calls"] = _loop.state.tool_calls_made
-            _agent_state["tool_errors"] = _loop.state.tool_errors
-
-            if _loop.state.stop_reason == "completed":
-                return
-            if _loop.state.stop_reason in ("verification_required_after_write", "max_tool_rounds"):
-                yield ("Verification required: latest file mutations were not followed by a successful run_bash."
-                       if _loop.state.stop_reason == "verification_required_after_write"
-                       else "[Max tool rounds reached]")
-                return
-
-        _agent_state["stop_reason"] = "max_tool_rounds"
-        try:
-            from backend.llama_server_manager import manager as _lsm4b
-            _final_msgs = list(loop_msgs) + [{"role": "user", "content": (
-                "Tool round limit reached. Provide the best possible final answer now. Do not call tools.")}]
-            _ag_port2 = await _lsm4b.ensure_loaded(agent_model, num_ctx=_ag_opts.get("num_ctx"))
-            async with httpx.AsyncClient(timeout=120) as _fc:
-                _final_resp = await _fc.post(
-                    f"http://127.0.0.1:{_ag_port2}/v1/chat/completions",
-                    json={"model": agent_model, "messages": _final_msgs, "stream": False,
-                          "temperature": _ag_opts.get("temperature", 0.2),
-                          "max_tokens": _ag_opts.get("num_predict", 800)})
-                _final_data = _final_resp.json()
-            if "choices" in _final_data:
-                _final_msg = _final_data["choices"][0].get("message", {}) if _final_data["choices"] else {}
-            else:
-                _final_msg = _final_data.get("message", {})
-            _final_txt = str(_final_msg.get("content", "") or "").strip()
-            if _final_txt:
-                yield _final_txt; return
-        except Exception:
-            pass
-        yield "[Max tool rounds reached]"
-
-    def _stop_bucket(sr):
-        return _bucket_stop_reason(sr)
-
-    if do_stream:
-        async def _agent_stream():
-            async for chunk in _agent_loop():
-                yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'choices': [{'index': 0, 'delta': {'content': chunk}, 'finish_reason': None}]})}\n\n"
-            yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'stop_reason': _agent_state['stop_reason'], 'stop_reason_bucket': _stop_bucket(_agent_state['stop_reason']), '_meta': {'tool_calls': _agent_state['tool_calls'], 'tool_errors': _agent_state['tool_errors'], 'last_tool_error': _agent_state['last_tool_error']}, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(_agent_stream(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    parts = []
-    async for chunk in _agent_loop():
-        parts.append(chunk)
-    _ag_est = max(len(parts), len("".join(parts)) // 3) if parts else 0
-    return {"id": chat_id, "object": "chat.completion", "created": created, "model": raw_model,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(parts)}, "finish_reason": "stop"}],
-            "stop_reason": _agent_state["stop_reason"],
-            "stop_reason_bucket": _stop_bucket(_agent_state["stop_reason"]),
-            "_meta": {"tool_calls": _agent_state["tool_calls"], "tool_errors": _agent_state["tool_errors"], "last_tool_error": _agent_state["last_tool_error"]},
-            "usage": {"prompt_tokens": 0, "completion_tokens": _ag_est, "total_tokens": _ag_est}}
-
-
-async def _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream):
-    """DIRECT MODE (2026-08-31): simple chat via run_stream.
-
-    Runs in-process through the same direct path as the UI (incl. optional
-    chat tools) and returns OpenAI-compatible answers.
-    """
-    _last_user_idx = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
-    if _last_user_idx < 0 or not str(msgs[_last_user_idx].get("content") or "").strip():
-        return JSONResponse({"error": "no user message"}, status_code=400)
-    _user_msg = str(msgs[_last_user_idx].get("content") or "")
-    _prior_msgs = [m for m in msgs[:_last_user_idx] if m.get("content")]
-    if _prior_msgs:
-        _hist_lines = "\n".join(
-            f"[{str(m.get('role') or 'user').title()}]: {m.get('content')}" for m in _prior_msgs
-        )
-        _user_msg = f"Conversation history:\n{_hist_lines}\n\n[User]: {_user_msg}"
-
-    _direct_overrides: dict = {}
-    _direct_agent_ovr: dict = {}
-    _v1_model = str(raw_model or "").strip()
-    if _v1_model and _v1_model.lower() not in ("direct", "default", "auto", "agent"):
-        _direct_overrides["direct_model"] = _v1_model
-        _direct_agent_ovr["model"] = _v1_model
-    if temp is not None:
-        _direct_agent_ovr["temperature"] = float(temp)
-        _direct_overrides["agents_user_sampling_choice"] = {"direct": ["temperature"]}
-    if max_tok is not None and int(max_tok) > 0:
-        _direct_agent_ovr["max_tokens"] = int(max_tok)
-    if _direct_agent_ovr:
-        _base_agents = dict(settings.get("agents") or {})
-        _dir_cfg = dict(_base_agents.get("direct") or {})
-        _dir_cfg.update(_direct_agent_ovr)
-        _base_agents["direct"] = _dir_cfg
-        _direct_overrides["agents"] = _base_agents
-
-    _v1_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-
-    async def _direct_loop():
-        _parts: list = []
-        try:
-            async for _chunk in run_stream(
-                _user_msg, [], "simple", 1, None,
-                constraint_mode=True, force_complexity="simple", chat_id=None,
-                model_overrides=_direct_overrides or None,
-            ):
-                _s = _chunk if isinstance(_chunk, str) else ""
-                if not _s.startswith("data: "):
-                    continue
-                try:
-                    _d = json.loads(_s[6:])
-                except Exception:
-                    continue
-                if _d.get("type") == "usage_meta":
-                    _v1_usage["prompt_tokens"] += int(_d.get("prompt_tokens") or 0)
-                    _v1_usage["completion_tokens"] += int(_d.get("completion_tokens") or 0)
-                elif _d.get("type") == "token" and _d.get("content"):
-                    _txt = str(_d["content"])
-                    _parts.append(_txt)
-                    yield _txt
-                elif _d.get("type") == "done":
-                    if _d.get("prompt_tokens_total"):
-                        _v1_usage["prompt_tokens"] = int(_d["prompt_tokens_total"])
-                    if _d.get("tokens_generated"):
-                        _v1_usage["completion_tokens"] = int(_d["tokens_generated"])
-                    return
-        except Exception as _e:
-            _err = f"[direct error: {type(_e).__name__}: {str(_e)[:200]}]"
-            _parts.append(_err)
-            yield _err
-
-    if do_stream:
-        async def _direct_stream():
-            async for chunk in _direct_loop():
-                yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'choices': [{'index': 0, 'delta': {'content': chunk}, 'finish_reason': None}]})}\n\n"
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(_direct_stream(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-    parts = []
-    async for chunk in _direct_loop():
-        parts.append(chunk)
-    _pt = int(_v1_usage["prompt_tokens"] or 0)
-    _ct = int(_v1_usage["completion_tokens"] or 0) or (max(1, len("".join(parts)) // 3) if parts else 0)
-    return {"id": chat_id, "object": "chat.completion", "created": created, "model": raw_model,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "".join(parts)}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": _pt, "completion_tokens": _ct, "total_tokens": _pt + _ct}}
-
-
-@app.post("/v1/chat/completions")
-async def v1_chat_completions(req: Request):
-    """OpenAI-kompatibler /v1/chat/completions Endpunkt."""
-    body = await req.json()
-    if not isinstance(body, dict):
-        return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
-    _default_model = settings.get("agents", {}).get("direct", {}).get("model", "qwen3.5:9b-ud")
-    raw_model = str(body.get("model") or _default_model)
-    msgs = body.get("messages") or []
-    if not isinstance(msgs, list) or not msgs:
-        return JSONResponse({"error": "messages missing"}, status_code=400)
-    do_stream = bool(body.get("stream", False))
-    _raw_max = body.get("max_tokens")
-    if _raw_max is None:
-        _raw_max = body.get("max_completion_tokens")
-    try:
-        max_tok = int(_raw_max) if _raw_max is not None else 4096
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "max_tokens must be an integer"}, status_code=400)
-    _raw_temp = body.get("temperature")
-    try:
-        temp = float(_raw_temp) if _raw_temp is not None else 0.2
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "temperature must be a number"}, status_code=400)
-
-    chat_id = f"chatcmpl-{int(time.time())}"
-    created = int(time.time())
-
-    use_pipeline = raw_model.startswith("pipeline")
-    use_agent    = raw_model == "agent" or raw_model.startswith("agent:")
-
-    if use_agent:
-        # V1-AGENT-TOKEN (audit 2026-11-03): agent mode hands the local model
-        # run_bash/run_python/MCP tools. Without a token every local process
-        # could drive them (and _external_dispatch skips the approval gate).
-        # Same policy as /internal/tool/exec: disabled unless configured.
-        _v1_tok = os.environ.get("HIVEMIND_INTERNAL_TOKEN", "").strip()
-        if not _v1_tok:
-            return JSONResponse(
-                {"error": "agent mode is disabled without HIVEMIND_INTERNAL_TOKEN "
-                          "(read-only /v1 chat stays available)"},
-                status_code=403)
-        _v1_given = req.headers.get("x-hivemind-internal-token", "").strip()
-        if not hmac.compare_digest(_v1_given, _v1_tok):
-            return JSONResponse(
-                {"error": "invalid X-Hivemind-Internal-Token"}, status_code=403)
-        return await _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream)
-    elif use_pipeline:
-        return JSONResponse({"error": "pipeline mode not yet implemented"}, status_code=501)
-    else:
-        return await _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream)
-
+# -- Extracted routers: re-exports preserve direct server.<handler> imports --
+from routers.openai_compat import (  # noqa: E402, F401
+    _v1_agent_mode,
+    _v1_direct_mode,
+    v1_chat_completions,
+)
+from routers.voice import (  # noqa: E402, F401
+    stt_status,
+    tts_status,
+    tts_voices,
+    tts_preload,
+    tts_fetch,
+    tts_speak,
+    stt_fetch,
+    stt_transcribe,
+    documents_extract,
+)
+from routers.gateway import (  # noqa: E402, F401
+    gateway_heartbeat,
+    gateway_status,
+    gateway_start,
+    gateway_stop,
+)
 
 @app.get("/lsp/status", include_in_schema=False)
 async def lsp_status_ep():
@@ -2125,522 +1770,6 @@ async def health():
         "gateway_overrides": True,
     }
 
-# -- Gateway supervisor (P8-lite, 2026-10-05) -------------------------------
-# The running Telegram gateway POSTs a heartbeat every 5 s (mirror loop);
-# GET /gateway/status exposes liveness to the UI, POST /gateway/start
-# spawns `sys.executable -m hivemind_gateway.main` DETACHED with
-# HIVEMIND_GATEWAY_ENABLED=1 (the user clicked - that IS the deliberate
-# master switch), POST /gateway/stop kills the heartbeat pid after a
-# freshness + process-name check (recycled-pid guard). Loopback +
-# Host-allowlist trust only, same as every other engine endpoint.
-
-# ── Speech-to-text (1.4) ────────────────────────────────────────
-# English only in 1.4 (owner decision, docs/plan_1.4_voice.md). The audio is
-# the RAW REQUEST BODY, not a multipart upload: that keeps python-multipart out
-# of the dependency list and lets the browser POST a Blob directly.
-# Formats: anything libsndfile reads (WAV from the UI, Ogg/Opus from Telegram).
-# The Telegram path calls core.stt_engine directly instead of going over HTTP.
-
-@app.get("/stt/status")
-async def stt_status():
-    """What the Voice card shows: engine/model presence, tier, defaults."""
-    try:
-        from core import stt_engine
-        return await asyncio.to_thread(stt_engine.status, load_settings())
-    except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
-        return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
-
-
-# ── Text-to-speech (1.4) ────────────────────────────────────────
-# Opt-in: nothing starts until tts_enabled is on. The sidecar is Pocket TTS in an
-# isolated uv environment (uvx), so PyTorch never enters HiveMind's venv.
-
-@app.get("/tts/status")
-async def tts_status():
-    """Voice card status: enabled, sidecar running, voice, speed, uv present."""
-    try:
-        from core import tts_engine
-        return await asyncio.to_thread(tts_engine.status, load_settings())
-    except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
-        return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
-
-
-@app.get("/tts/voices")
-async def tts_voices(backend: str = ""):
-    """Voices for the active (or requested) TTS backend (`pocket` | `woof`)."""
-    from core import tts_engine
-    cfg = load_settings()
-    b = (backend or "").strip().lower() or tts_engine.resolve_backend(cfg)
-    if b not in ("pocket", "woof"):
-        b = tts_engine.DEFAULT_BACKEND
-    voices, default_v, attr = tts_engine.voices_for(b)
-    return JSONResponse({
-        "backend": b,
-        "backends": list(tts_engine.BACKENDS),
-        "default": default_v,
-        "max_chars": tts_engine.tts_audio.MAX_CHARS,
-        "attribution": attr,
-        "voices": [{"key": k, "label": label, "note": note, "license": lic,
-                    "source": src}
-                   for k, label, note, lic, src in voices],
-    })
-
-
-@app.post("/tts/preload")
-async def tts_preload():
-    """Start or warm the configured TTS backend ahead of the first sentence.
-
-    Called by the gateway when a phone run starts and by nothing else: the UI
-    warms on page load, a phone run has no page. Returns immediately when TTS is
-    off; the actual start runs in a thread so this endpoint never blocks.
-    """
-    try:
-        from core import tts_engine
-        settings = load_settings()
-    except (ImportError, OSError, ValueError) as exc:
-        return JSONResponse({"warm": False, "error": str(exc)[:200]}, status_code=200)
-    if not settings.get("tts_enabled", False):
-        return JSONResponse({"warm": False, "reason": "TTS_DISABLED"}, status_code=200)
-    warm = await asyncio.to_thread(tts_engine.preload, settings)
-    running = await asyncio.to_thread(tts_engine.is_running, settings)
-    return JSONResponse({"warm": bool(warm),
-                         "running": bool(running)}, status_code=200)
-
-
-@app.post("/tts/fetch")
-async def tts_fetch():
-    """Start deploy/fetch_woof.py in the background (ConwayResearch/Underdog-Woof)."""
-    import subprocess
-    import sys as _sys
-
-    from core import tts_engine, tts_woof
-
-    if tts_woof.fetch_state().get("state") == "running":
-        return JSONResponse(tts_engine.TtsError(
-            "TTS_BUSY", "a voice model download is already running").as_dict(), status_code=409)
-    script = Path(__file__).resolve().parent / "deploy" / "fetch_woof.py"
-    if not script.is_file():
-        return JSONResponse(tts_engine.TtsError(
-            "TTS_FAILED", "deploy/fetch_woof.py is missing").as_dict(), status_code=400)
-    try:
-        subprocess.Popen([_sys.executable, str(script)],
-                         cwd=str(script.parent.parent),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL)
-    except OSError as exc:
-        return JSONResponse(tts_engine.TtsError(
-            "TTS_FAILED", f"could not start the download: {exc}").as_dict(), status_code=500)
-    _logger.info("[TTS-WOOF] download started for ConwayResearch/Underdog-Woof")
-    return JSONResponse({"started": True, "fetch": tts_woof.fetch_state()}, status_code=202)
-
-
-@app.post("/tts")
-async def tts_speak(request: Request):
-    """{"text": ..., "voice"?: ..., "speed"?: ..., "format"?: "wav"|"opus"} -> audio."""
-    from core import tts_audio, tts_engine
-
-    settings = load_settings()
-    if not settings.get("tts_enabled", False):
-        return JSONResponse(tts_engine.TtsError(
-            "TTS_DISABLED", "text-to-speech is disabled in the settings").as_dict(),
-            status_code=409)
-    try:
-        body = await request.json()
-    except (ValueError, TypeError):
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
-    text = str(body.get("text") or "").strip()
-    if not text:
-        return JSONResponse(tts_engine.TtsError("TTS_EMPTY", "nothing to say").as_dict(),
-                            status_code=400)
-    fmt = str(body.get("format") or "wav").lower()
-    try:
-        # THREAD (audit 2026-10-17): the first request starts the sidecar (up to
-        # ~20 s) - on the event loop that froze the whole UI, status polling
-        # included. Every blocking part moves into a worker thread.
-        res = await asyncio.to_thread(
-            tts_engine.synthesize, text, settings,
-            voice=str(body.get("voice") or ""), speed=body.get("speed"))
-        if fmt == "opus":
-            payload = await asyncio.to_thread(tts_audio.to_ogg_opus, res["wav"], 1.0)
-            media = "audio/ogg"
-        else:
-            payload = res["wav"]
-            media = "audio/wav"
-    except tts_engine.TtsError as exc:
-        _logger.warning("[TTS] %s", exc)
-        return JSONResponse(exc.as_dict(), status_code=400)
-    except (ValueError, OSError, RuntimeError) as exc:
-        _logger.warning("[TTS] audio post-processing failed: %s", exc)
-        return JSONResponse(tts_engine.TtsError(
-            "TTS_FAILED", f"audio post-processing failed: {exc}").as_dict(),
-            status_code=500)
-    _logger.info("[TTS] %d chars -> %.1fs %s (%s, %sx)", len(text),
-                 res["duration"], fmt, res["voice"], res["speed"])
-    return Response(content=payload, media_type=media,
-                    headers={"X-HiveMind-Duration": str(res["duration"]),
-                             "X-HiveMind-Voice": res["voice"],
-                             "X-HiveMind-Speed": str(res["speed"])})
-
-
-@app.post("/stt/fetch")
-async def stt_fetch(request: Request):
-    """Start deploy/fetch_whisper.py for one model (binaries come with it)."""
-    import subprocess
-    import sys as _sys
-
-    from core import stt_engine
-
-    try:
-        body = await request.json()
-    except (ValueError, TypeError):
-        body = {}
-    key = str((body or {}).get("model") or "").strip() or stt_engine.resolve_model(load_settings())
-    if key not in stt_engine.MODELS:
-        return JSONResponse(stt_engine.SttError(
-            "STT_NO_MODEL", f"unknown model {key!r}").as_dict(), status_code=400)
-    if stt_engine.fetch_state().get("state") == "running":
-        return JSONResponse(stt_engine.SttError(
-            "STT_BUSY", "a download is already running").as_dict(), status_code=409)
-    script = Path(__file__).resolve().parent / "deploy" / "fetch_whisper.py"
-    if not script.is_file():
-        return JSONResponse(stt_engine.SttError(
-            "STT_NO_ENGINE", "deploy/fetch_whisper.py is missing").as_dict(),
-            status_code=400)
-    try:
-        subprocess.Popen([_sys.executable, str(script), "--model", key,
-                          "--backend", "blas"],
-                         cwd=str(script.parent.parent),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL)
-    except OSError as exc:
-        return JSONResponse(stt_engine.SttError(
-            "STT_FAILED", f"could not start the download: {exc}").as_dict(),
-            status_code=500)
-    _logger.info("[STT] download started for %s", key)
-    return JSONResponse({"started": True, "model": key,
-                         "fetch": stt_engine.fetch_state()}, status_code=202)
-
-
-@app.post("/stt")
-async def stt_transcribe(request: Request):
-    """Transcribe one audio blob (raw body) -> {"text": ...} or {"code": ...}."""
-    from core import stt_audio, stt_engine
-
-    settings = load_settings()
-    if not settings.get("stt_enabled", False):
-        return JSONResponse(stt_engine.SttError(
-            "STT_DISABLED", "speech-to-text is disabled in the settings").as_dict(),
-            status_code=409)
-    try:
-        max_seconds = int(settings.get("stt_max_seconds") or
-                          stt_audio.DEFAULT_MAX_SECONDS)
-    except (TypeError, ValueError):
-        max_seconds = stt_audio.DEFAULT_MAX_SECONDS
-    wav_path = None
-    try:
-        cl_raw = request.headers.get("content-length")
-        if cl_raw is not None:
-            try:
-                cl_val = int(cl_raw)
-            except ValueError:
-                return JSONResponse(
-                    stt_engine.SttError("STT_DECODE_FAILED", "invalid Content-Length header").as_dict(),
-                    status_code=400,
-                )
-            if cl_val < 0 or cl_val > stt_audio.MAX_BYTES:
-                return JSONResponse(
-                    stt_engine.SttError(
-                        "STT_DECODE_FAILED",
-                        f"audio is larger than {stt_audio.MAX_BYTES // (1024 * 1024)} MB",
-                    ).as_dict(),
-                    status_code=413,
-                )
-        raw = await request.body()
-        if len(raw) > stt_audio.MAX_BYTES:
-            return JSONResponse(
-                stt_engine.SttError(
-                    "STT_DECODE_FAILED",
-                    f"audio is larger than {stt_audio.MAX_BYTES // (1024 * 1024)} MB",
-                ).as_dict(),
-                status_code=413,
-            )
-        # THREAD (audit 2026-10-17): decoding + the CLI/model run must not block
-        # the event loop (a long clip blocked SSE and every other request).
-        wav_path, duration = await asyncio.to_thread(
-            stt_audio.to_wav16k, raw, max_seconds=max_seconds)
-        text = await asyncio.to_thread(stt_engine.transcribe, wav_path, settings=settings)
-        if not settings.get("stt_log_transcripts", False):
-            _logger.info("[STT] transcribed %.1fs -> %d chars", duration, len(text))
-        else:
-            _logger.info("[STT] transcript: %s", text[:400])
-        return JSONResponse({"text": text, "duration": round(duration, 2),
-                             "language": stt_engine.resolve_language(settings)})
-    except stt_engine.SttError as exc:
-        _logger.warning("[STT] %s", exc)
-        return JSONResponse(exc.as_dict(), status_code=400)
-    finally:
-        stt_audio.cleanup(wav_path)
-
-
-@app.post("/documents/extract")
-async def documents_extract(request: Request):
-    """Extract text from one uploaded document (raw body) -> {"text": ...}.
-
-    Mirrors /stt: the caller sends bytes, the engine answers text or a DOC_*
-    code. PDF and plain-text (UTF-8/UTF-16) uploads; the size cap keeps a
-    huge upload off the event loop (extraction runs in a worker thread)."""
-    from core import documents as _docs
-
-    settings = load_settings()
-    try:
-        max_chars = int(settings.get("document_max_chars") or _docs.DEFAULT_MAX_CHARS)
-    except (TypeError, ValueError):
-        max_chars = _docs.DEFAULT_MAX_CHARS
-    try:
-        max_pages = int(settings.get("document_max_pages") or _docs.DEFAULT_MAX_PAGES)
-    except (TypeError, ValueError):
-        max_pages = _docs.DEFAULT_MAX_PAGES
-    try:
-        raw = await request.body()
-        if len(raw) > 32 * 1024 * 1024:
-            return JSONResponse({"code": "DOC_TOO_LARGE",
-                                 "error": "document larger than 32 MB"},
-                                status_code=413)
-        info = await asyncio.to_thread(
-            _docs.extract_pdf_text, raw, max_pages=max_pages, max_chars=max_chars)
-        _logger.info("[DOC] extracted %d chars from %d/%d pages (empty=%d, cut=%s)",
-                     len(info["text"]), info["pages_read"], info["pages"],
-                     info["empty_pages"], info["truncated"])
-        return JSONResponse(info)
-    except _docs.DocumentError as exc:
-        _logger.info("[DOC] %s", exc.code)
-        return JSONResponse(exc.as_dict(), status_code=400)
-
-
-@app.post("/gateway/heartbeat", include_in_schema=False)
-async def gateway_heartbeat(req: Request):
-    from infra import gateway_supervisor as _sup
-    if not _sup.is_loopback_request(req):
-        return JSONResponse({"ok": False, "error": "loopback client required"},
-                            status_code=403)
-    try:
-        body = await req.json()
-    except (ValueError, TypeError):
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
-    _pid = _sup.parse_positive_int(body.get("pid"))
-    if _pid <= 0:
-        return JSONResponse({"ok": False, "error": "invalid pid"}, status_code=400)
-    _raw_data = body.get("data")
-    _data = _raw_data if isinstance(_raw_data, dict) else {}
-    if _sup.parse_birth(_data.get("birth")) is None:
-        return JSONResponse({"ok": False, "error": "invalid birth"}, status_code=400)
-    _sup.note_heartbeat(_pid, _data)
-    return {"ok": True}
-
-
-@app.get("/gateway/status", include_in_schema=False)
-async def gateway_status():
-    from infra import gateway_supervisor as _sup
-    return _sup.status()
-
-
-_gateway_start_lock: asyncio.Lock | None = None
-
-
-@app.post("/gateway/start", include_in_schema=False)
-async def gateway_start(req: Request):
-    global _gateway_start_lock
-    from infra import gateway_supervisor as _sup
-    if not _sup.is_loopback_request(req):
-        return JSONResponse({"ok": False, "error": "loopback client required"},
-                            status_code=403)
-    # RE-AUDIT R2 (2026-10-06): the liveness check runs a PowerShell child
-    # (~0.3-0.6 s). Serialized + re-checked under the lock, or a UI
-    # double-click spawns TWO gateways (Telegram getUpdates conflict).
-    if _gateway_start_lock is None:
-        _gateway_start_lock = asyncio.Lock()
-    async with _gateway_start_lock:
-        # START-RACE FIX (2026-10-06, live): "running" is heartbeat-freshness —
-        # after an UNCLEAN gateway kill the stale heartbeat still read as
-        # running for up to ~15 s and the start route answered 409. Verify the
-        # recorded pid is really alive (python + birth match) before refusing;
-        # a dead/recycled pid clears the stale status and starts.
-        _st = _sup.status()
-        if _st.get("running"):
-            _pid = _sup.parse_positive_int(_st.get("pid"))
-            _birth = _sup.parse_birth(_st.get("birth"))
-            _alive = False
-            if _pid > 0 and _birth is not None and os.name != "nt":
-                # X4 (audit r2): posix liveness via /proc (no PowerShell).
-                import subprocess as _sp_l
-                try:
-                    _chk = await asyncio.to_thread(
-                        _sp_l.run,
-                        ["sh", "-c",
-                         f"test -d /proc/{_pid} && "
-                         f"grep -q python /proc/{_pid}/comm && echo py || echo no"],
-                        capture_output=True, text=True, timeout=20)
-                    _alive = _chk.stdout.strip() == "py"
-                except _sp_l.TimeoutExpired:
-                    _alive = False
-            elif _pid > 0 and _birth is not None:
-                _ps = (
-                    "$p = Get-Process -Id " + str(_pid) + " -ErrorAction SilentlyContinue; "
-                    "if (-not $p) { 'no' }"
-                    " elseif ($p.ProcessName -notmatch 'python') { 'recycled' }"
-                    " elseif (" + str(_birth) + " -eq 0) { 'py' }"
-                    " else {"
-                    "  $b = [DateTimeOffset]::FromFileTime(" + str(_birth) + "); "
-                    "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $b.UtcDateTime).TotalSeconds) -gt 1.0)"
-                    "    { 'recycled' } else { 'py' }"
-                    " }"
-                )
-                import subprocess as _sp_start
-                # TIMEOUT (audit 2026-10-30): this probe ran unbounded - a
-                # hung PowerShell (profile load, AV scan) blocked the settings
-                # endpoint forever. 20 s matches the other PowerShell probe.
-                try:
-                    _chk = await asyncio.to_thread(
-                        _sp_start.run,
-                        ["powershell", "-NoProfile", "-Command", _ps],
-                        capture_output=True, text=True, timeout=20)
-                    _alive = _chk.stdout.strip() == "py"
-                except _sp_start.TimeoutExpired:
-                    _alive = False
-            if _alive:
-                return JSONResponse({"ok": False,
-                                     "error": "gateway already running"},
-                                    status_code=409)
-            _sup.clear()
-        import subprocess
-        import sys as _sys
-        _logs = Path(_THIS_DIR) / "logs"
-        try:
-            _logs.mkdir(exist_ok=True)
-            _out = open(_logs / "gateway_supervised.log", "ab")
-        except OSError as _e:
-            return JSONResponse({"ok": False, "error": f"log open failed: {_e}"},
-                                status_code=500)
-        _env = dict(os.environ)
-        _env["HIVEMIND_GATEWAY_ENABLED"] = "1"
-        _flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) \
-            if os.name == "nt" else 0
-        subprocess.Popen([_sys.executable, "-m", "hivemind_gateway.main"],
-                         cwd=str(_THIS_DIR), env=_env,
-                         stdout=_out, stderr=subprocess.STDOUT,
-                         creationflags=_flags)
-        _out.close()
-        return {"ok": True,
-                "hint": "status flips to running within one heartbeat (~5 s)"}
-
-
-@app.post("/gateway/stop", include_in_schema=False)
-async def gateway_stop(req: Request):
-    import subprocess
-    from infra import gateway_supervisor as _sup
-    if not _sup.is_loopback_request(req):
-        return JSONResponse({"ok": False, "error": "loopback client required"},
-                            status_code=403)
-    st = _sup.status()
-    pid = _sup.parse_positive_int(st.get("pid"))
-    birth = _sup.parse_birth(st.get("birth"))
-    if not st.get("running") or pid <= 0:
-        return JSONResponse({"ok": False, "error": "gateway not running"},
-                            status_code=409)
-    if birth is None:
-        _sup.clear()
-        return JSONResponse(
-            {"ok": False, "error": "invalid heartbeat birth - status reset"},
-            status_code=400)
-    # recycled-pid guard (deep audit 2026-10-05): the heartbeat is <=15 s
-    # old, but the pid could have been reused by ANY process in that
-    # window. Verify process name AND the process birth (FILETIME from
-    # the heartbeat) before killing - a mismatch resets the status
-    # instead of killing an innocent process.
-    if os.name != "nt":
-        # X1 (audit r2): the PowerShell birth-check does not exist on
-        # Linux (and FILETIME is meaningless against /proc jiffies) -
-        # posix verifies name+birth via /proc and kills with os.kill.
-        try:
-            _stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-            _comm = _stat.rsplit(")", 1)[0].split("(", 1)[1]
-            _birth_ticks = int(_stat.rsplit(")", 1)[1].split()[19])
-        except (OSError, ValueError, IndexError):
-            _sup.clear()
-            return JSONResponse(
-                {"ok": False, "error": "gateway process not found - status reset"},
-                status_code=409)
-        if "python" not in _comm:
-            _sup.clear()
-            return JSONResponse(
-                {"ok": False, "error": "pid was recycled by another process - refusing, status reset"},
-                status_code=409)
-        if birth and abs(birth - _birth_ticks) > 5:
-            _sup.clear()
-            return JSONResponse(
-                {"ok": False, "error": "pid was recycled by another process - refusing, status reset"},
-                status_code=409)
-        import signal as _sig
-        try:
-            os.kill(pid, _sig.SIGTERM)
-        except OSError as _ke:
-            return JSONResponse({"ok": False, "error": f"kill failed: {_ke}"},
-                                status_code=500)
-        _sup.clear()
-        return {"ok": True}
-    _ps = (
-        "$p = Get-Process -Id " + str(pid) + " -ErrorAction SilentlyContinue; "
-        "if (-not $p) { 'no' }"
-        " elseif ($p.ProcessName -notmatch 'python') { 'no' }"
-        " elseif (" + str(birth) + " -eq 0) { 'py' }"
-        " else {"
-        "  $birth = [DateTimeOffset]::FromFileTime(" + str(birth) + "); "
-        "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $birth.UtcDateTime).TotalSeconds) -gt 1.0)"
-        "    { 'recycled' } else { 'py' }"
-        " }"
-    )
-    try:
-        _chk = await asyncio.to_thread(
-            subprocess.run, ["powershell", "-NoProfile", "-Command", _ps],
-            capture_output=True, text=True, timeout=20)
-    except subprocess.TimeoutExpired:
-        return JSONResponse(
-            {"ok": False, "error": "gateway liveness probe timed out"},
-            status_code=504)
-    _verdict = _chk.stdout.strip()
-    if _verdict not in ("py", "recycled", "no"):
-        return JSONResponse(
-            {"ok": False,
-             "error": f"ps failed rc={_chk.returncode} "
-                      f"out={_chk.stdout[:60]!r} err={_chk.stderr[:100]!r} "
-                      f"pid={pid} birth={birth}"},
-            status_code=500)
-    if _verdict == "recycled":
-        _sup.clear()
-        return JSONResponse(
-            {"ok": False,
-             "error": "pid was recycled by another process - refusing, status reset"},
-            status_code=409)
-    if _verdict != "py":
-        _sup.clear()
-        return JSONResponse(
-            {"ok": False, "error": "gateway process not found - status reset"},
-            status_code=409)
-    try:
-        await asyncio.to_thread(subprocess.run,
-                                 ["taskkill", "/F", "/T", "/PID", str(pid)],
-                                 capture_output=True, timeout=20)
-    except subprocess.TimeoutExpired:
-        return JSONResponse(
-            {"ok": False, "error": "gateway kill timed out"},
-            status_code=504)
-    _sup.clear()
-    return {"ok": True}
-
 # -- Router Registration --
 app.include_router(automap_router)
 app.include_router(automations_router)
@@ -2662,3 +1791,6 @@ app.include_router(vision_router)
 app.include_router(vram_router)
 app.include_router(websearch_router)
 app.include_router(skills_router)
+app.include_router(openai_compat_router)
+app.include_router(voice_router)
+app.include_router(gateway_router)

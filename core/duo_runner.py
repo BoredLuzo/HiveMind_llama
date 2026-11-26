@@ -12,6 +12,15 @@ from functools import partial
 
 logger = logging.getLogger("hivemind.duo")
 
+_DUO_WRITTEN_RE = re.compile(
+    r"\[(?:Datei geschrieben|Written|Appended|(?:edit_file|write_file): (?:created|rewrote) ')([^\s'\(\]]+)"
+)
+_DUO_WRITTEN_COLON_RE = re.compile(r"\[(?:Datei geschrieben|Written|Appended): ([^\(\]\s]+)")
+_DUO_PATCHED_RE = re.compile(r"\[patch_file: ([^\s]+) patched")
+_DUO_EDIT_CREATE_RE = re.compile(r"\[(?:edit_file|write_file): (?:created '|rewrote '|')([^']+)'")
+_DUO_TOOL_ICON_RE = re.compile(r"\n🔧 `[^\n]+`\n")
+_DUO_TOOL_TAG_RE = re.compile(r"\[(?:Written|Datei geschrieben|patch_file|edit_file|run_bash|find_files)[^\]]*\]")
+
 # ── VRAM / Backend ──
 
 # ── Learning ──
@@ -1587,51 +1596,55 @@ async def _duo_exec_round_task(
         _reads_seen = state.setdefault("_reads_seen", {})
         _freshness_warned = state.setdefault("_freshness_warned", {})
         _wide_read_streak = state.setdefault("_wide_read_streak", [0])
+        _edit_loop_recoveries = state.setdefault("_edit_loop_recoveries", [0])
         _last_test_outcome = state.setdefault("_last_test_outcome", [None])
         _superseded_paths = state.setdefault("_superseded_paths", [])
+        _trs = ToolRoundState(
+            cache_horizon=_round_cache_horizon,
+            tool_ctx_lru=_tool_ctx_lru,
+            duo_deadline_at=_duo_deadline_at,
+            grace_extensions_ref=state.setdefault(
+                "_grace_extensions_ref", [0]),
+            verify_mutation_serial=_verify_mutation_serial,
+            verify_last_ok_serial=_verify_last_ok_serial,
+            last_run_bash_failure=_last_run_bash_failure,
+            changed_since_failure=_changed_since_failure,
+            last_learned_insight_sig=_last_learned_insight_sig,
+            last_too_large_path=_last_too_large_ref,
+            attempts_per_file=_attempts_per_file,
+            wedge_state=_wedge_state,
+            tool_error_retries=_tool_error_retries,
+            call_sigs=_call_sigs,
+            recent_focus_paths=_recent_focus_paths,
+            file_changes=_file_changes,
+            run_written_files=_written_files,
+            duo_seen_web_queries=_duo_seen_web_queries,
+            reads_seen=_reads_seen,
+            freshness_warned=_freshness_warned,
+            cached_coder_port=_cached_port_ref,
+            task_complete_blocked_count=_task_complete_blocked,
+            total_tool_errors=_total_tool_errors_ref,
+            tc_consecutive=_tc_consecutive,
+            at_nosuite_nudged=_at_nosuite_nudged,
+            superseded_paths=_superseded_paths,
+            consecutive_reads=_consecutive_reads,
+            last_read_path=_last_read_path,
+            read_ladder_fired=_read_ladder_fired,
+            wide_read_streak=_wide_read_streak,
+            edit_loop_recoveries=_edit_loop_recoveries,
+            recovered_loop_sigs=state.setdefault("_recovered_loop_sigs", set()),
+            ws_budget_streak=_ws_budget_streak,
+            ws_disabled=_ws_disabled,
+            last_test_outcome=_last_test_outcome,
+            allow_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
+            allow_view_image=bool(_allow_view_image),
+        )
         _exec_task = asyncio.create_task(execute_tool_round(
             tool_calls=_dr_tcs,
             dtool_msgs=_dtool_msgs,
             round_state=_duo_state,
             hooks=_tool_exec_hooks,
-            trs=ToolRoundState(
-                cache_horizon=_round_cache_horizon,
-                tool_ctx_lru=_tool_ctx_lru,
-                duo_deadline_at=_duo_deadline_at,
-                grace_extensions_ref=state.setdefault(
-                    "_grace_extensions_ref", [0]),
-                verify_mutation_serial=_verify_mutation_serial,
-                verify_last_ok_serial=_verify_last_ok_serial,
-                last_run_bash_failure=_last_run_bash_failure,
-                changed_since_failure=_changed_since_failure,
-                last_learned_insight_sig=_last_learned_insight_sig,
-                last_too_large_path=_last_too_large_ref,
-                attempts_per_file=_attempts_per_file,
-                wedge_state=_wedge_state,
-                tool_error_retries=_tool_error_retries,
-                call_sigs=_call_sigs,
-                recent_focus_paths=_recent_focus_paths,
-                file_changes=_file_changes,
-                run_written_files=_written_files,
-                duo_seen_web_queries=_duo_seen_web_queries,
-                reads_seen=_reads_seen,
-                freshness_warned=_freshness_warned,
-                cached_coder_port=_cached_port_ref,
-                task_complete_blocked_count=_task_complete_blocked,
-                total_tool_errors=_total_tool_errors_ref,
-                tc_consecutive=_tc_consecutive,
-                at_nosuite_nudged=_at_nosuite_nudged,
-                superseded_paths=_superseded_paths,
-                consecutive_reads=_consecutive_reads,
-                last_read_path=_last_read_path,
-                read_ladder_fired=_read_ladder_fired,
-                wide_read_streak=_wide_read_streak,
-                ws_budget_streak=_ws_budget_streak,
-                ws_disabled=_ws_disabled,
-                last_test_outcome=_last_test_outcome,
-                allow_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
-                allow_view_image=bool(_allow_view_image),
-            ),
+            trs=_trs,
             tool_mode=_tool_mode,
             duo_ws=_duo_ws,
             workspace_lock=_ws_str,
@@ -1703,6 +1716,22 @@ async def _duo_exec_round_task(
         ps.cached_port_ref = _cached_port_ref
 
 
+def _reset_read_and_recovery_state(
+    consecutive_reads: list,
+    last_read_path: list,
+    read_ladder_fired: list,
+    state: dict,
+) -> None:
+    """Reset per-chunk / post-compression read-ladder and recovery counters."""
+    consecutive_reads[0] = 0
+    last_read_path[0] = ""
+    read_ladder_fired[0] = False
+    state.setdefault("_wide_read_streak", [0])[0] = 0
+    state.setdefault("_edit_loop_recoveries", [0])[0] = 0
+    state.setdefault("_recovered_loop_sigs", set()).clear()
+    state.setdefault("_superseded_paths", []).clear()
+
+
 @dataclasses.dataclass
 class _DuoWedgeHandoffState:
     """Wedge-handoff in/out locals (moved verbatim from run_code_duo).
@@ -1738,6 +1767,26 @@ async def _duo_wedge_handoff(
         # notice, continue the chunk with a clean slate.
         if getattr(_exec_result, "wedge_file", "") and not _loop_detected:
             _wedge_path = str(_exec_result.wedge_file)
+            try:
+                from tools.runner import _inline_resolve_path as _w_resolve
+                _wedge_cand = _w_resolve(Path(_ws_str), _wedge_path)
+            except (ImportError, OSError, ValueError):
+                _wedge_cand = (
+                    (Path(_ws_str) / _wedge_path)
+                    if not Path(_wedge_path).is_absolute()
+                    else Path(_wedge_path)
+                )
+            if not _wedge_cand.is_file():
+                _wedge_note_success(_wedge_state, _wedge_path)
+                _dtool_msgs.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM] Repeated edit failures on '{_wedge_path}', which is not an "
+                        f"existing file. Use write_file to create it or find_files to verify the path."
+                    ),
+                })
+                logger.debug("[WEDGE] skipped handoff for non-file target: %s", _wedge_path)
+                return
             _wedge_max = int(ctx.settings.get("duo_wedge_handoff_max_per_run", 2) or 2)
             if _wedge_handoffs_used[0] >= _wedge_max:
                 yield await ctx.emit({"type": "status",
@@ -3041,6 +3090,10 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             ctx.exec_ctrl.iteration = _di + 1
             ctx.exec_ctrl.transition(AgentState.EXPLORE if (_di == 0 and ctx.duo_config.pre_explore) else AgentState.CODING)
             ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
+            if _di > 0:
+                _reset_read_and_recovery_state(
+                    _consecutive_reads, _last_read_path, _read_ladder_fired, state
+                )
             new_transaction().begin()
             # details/semantics see _git_checkpoint_at_chunk_start).
             _ck_out = await _git_checkpoint_at_chunk_start(
@@ -3999,11 +4052,16 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _total_tool_rounds=_total_tool_rounds,
                                 carry={"exec_mdl": exec_mdl},
                             )
+                            _prev_ctx_comp = _ctx_compressions
                             async for _ev in _duo_compress_cycle(ctx, _cc_ps):
                                 yield _ev
                             _MAX_COMPRESSIONS = _cc_ps._MAX_COMPRESSIONS
                             _compress_fail_streak = _cc_ps._compress_fail_streak
                             _ctx_compressions = _cc_ps._ctx_compressions
+                            if _ctx_compressions > _prev_ctx_comp and not _cc_ps.stop:
+                                _reset_read_and_recovery_state(
+                                    _consecutive_reads, _last_read_path, _read_ladder_fired, state
+                                )
                             _ctx_critical_warned = _cc_ps._ctx_critical_warned
                             _ctx_full_skips = _cc_ps._ctx_full_skips
                             _ctx_pressure_warned = _cc_ps._ctx_pressure_warned
@@ -4606,11 +4664,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # abort paths would otherwise lose all writes (observed live 13:25).
                         _recent_focus_paths = _exec_result.recent_focus_paths_updated
                         _active_ws_cont = _eff_run_ws(getattr(ctx, "workspace", ""), _ws_str) or _ws_str
-                        for _wfm in re.findall(r"\[(?:Datei geschrieben|Written|Appended|(?:edit_file|write_file): (?:created|rewrote) ')([^\s'\(\]]+)", "".join(_parts)):
+                        _parts_joined = "".join(_parts)
+                        for _wfm in _DUO_WRITTEN_RE.findall(_parts_joined):
                             _wp = _wfm.strip()
                             if _wp and _wp not in _written_files and _resolve_contained_written_path(_wp, _active_ws_cont) is not None:
                                 _written_files.append(_wp)
-                        for _wfm2 in re.findall(r"\[patch_file: ([^\s]+) patched", "".join(_parts)):
+                        for _wfm2 in _DUO_PATCHED_RE.findall(_parts_joined):
                             _wp2 = _wfm2.strip()
                             if _wp2 and _wp2 not in _written_files and _resolve_contained_written_path(_wp2, _active_ws_cont) is not None:
                                 _written_files.append(_wp2)
@@ -4648,10 +4707,22 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 break
                             _round_tool_results.append(_msg)
                         if _round_tool_results and _dr_tcs:
-                            _all_rejected = all(
-                                _msg.get("content", "").startswith("[TOOL_ERROR")
-                                for _msg in _round_tool_results
-                            )
+                            from tools.errors import parse_tool_error as _parse_dr_err
+                            _INVALID_TOOL_CODES = frozenset({
+                                "INVALID_JSON", "INVALID_ARGUMENT", "MISSING_ARG",
+                                "TOOL_NOT_FOUND", "TOOL_NOT_ALLOWED",
+                                "PHONE_RESTRICTED", "FUNNEL_BYPASS_BLOCKED", "STUB_ECHO_BLOCKED",
+                            })
+                            _all_rejected = True
+                            for _msg in _round_tool_results:
+                                _m_txt = str(_msg.get("content", "") or "")
+                                if not _m_txt.startswith("[TOOL_ERROR"):
+                                    _all_rejected = False
+                                    break
+                                _m_err = _parse_dr_err(_m_txt)
+                                if not _m_err or _m_err.get("code", "") not in _INVALID_TOOL_CODES:
+                                    _all_rejected = False
+                                    break
                             if _all_rejected:
                                 _dr_invalid_tool_retries += 1
                                 if _dr_invalid_tool_retries >= 3:
@@ -4753,7 +4824,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 f"[NO PROGRESS] {_no_write_rounds} tool round(s) without any file edit. "
                                 "If you are stuck diagnosing an issue, verify your last edit did not "
                                 "corrupt a file (re-read it with read_file), or call "
-                                "task_complete(status='blocked', reason='...') instead of looping."
+                                'task_complete(status={"completed": [...], "blockers": ["..."], "build_status": "blocked"}) instead of looping.'
                             )
                             _dtool_msgs.append({"role": "user", "content": _nudge})
                             yield await ctx.emit({"type": "status",
@@ -4966,16 +5037,15 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             yield await ctx.emit({"type": "token", "content": _err})
                             break
 
-            coder_out = "".join(_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
+            _parts_raw = "".join(_parts)
+            coder_out = _parts_raw.strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
             if _is_tool_round:
-                coder_out = re.sub(r"\n🔧 `[^\n]+`\n", "\n", coder_out).strip()
-                coder_out = coder_out.strip()
-                coder_out = re.sub(r"\[(?:Written|Datei geschrieben|patch_file|edit_file|run_bash|find_files)[^\]]*\]", "", coder_out).strip()
+                coder_out = _DUO_TOOL_ICON_RE.sub("\n", coder_out).strip()
+                coder_out = _DUO_TOOL_TAG_RE.sub("", coder_out).strip()
             if _is_tool_round:
-                _parts_raw = "".join(_parts)
-                _written_now_write = re.findall(r"\[(?:Datei geschrieben|Written|Appended): ([^\(\]\s]+)", _parts_raw)
-                _written_now_patch = re.findall(r"\[patch_file: ([^\s]+) patched", _parts_raw)
-                _written_now_edit = re.findall(r"\[(?:edit_file|write_file): (?:created '|rewrote '|')([^']+)'", _parts_raw)
+                _written_now_write = _DUO_WRITTEN_COLON_RE.findall(_parts_raw)
+                _written_now_patch = _DUO_PATCHED_RE.findall(_parts_raw)
+                _written_now_edit = _DUO_EDIT_CREATE_RE.findall(_parts_raw)
                 _all_written_now = _written_now_write + _written_now_patch + _written_now_edit
                 if _all_written_now:
                     _active_ws_critic = _eff_run_ws(getattr(ctx, "workspace", ""), _ws_str) or _ws_str

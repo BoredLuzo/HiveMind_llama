@@ -391,7 +391,7 @@ def _build_dropped_tool_retry(names: list[str]) -> str:
     if any(n == "edit_file" for n in _names):
         return (
             "Your tool-call arguments were malformed or truncated and were DROPPED "
-            f"('{_label}'). Keep SEARCH/REPLACE blocks SMALL (max ~30 lines) and "
+            f"('{_label}'). Keep edit_file old_text/new_text blocks SMALL (max ~30 lines) and "
             "COMPLETE — a truncated JSON payload is dropped. Use multiple blocks per "
             "call if needed, but never an oversized one."
         )
@@ -598,14 +598,8 @@ def _apply_thinking_fields(
         payload["thinking"] = False
         payload["thinking_budget"] = 0
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
-        if _mdl:
-            from core.model_sampling import clamp_reasoning_effort_for_model
-            if clamp_reasoning_effort_for_model(_mdl, "none") == "none":
-                payload["reasoning_effort"] = "none"
-            else:
-                payload.pop("reasoning_effort", None)
-        else:
-            payload["reasoning_effort"] = "none"
+        from core.model_sampling import set_disabled_reasoning_effort
+        set_disabled_reasoning_effort(payload, _mdl, empty_keeps_none=True)
     return payload
 
 
@@ -660,8 +654,13 @@ def _collect_new_explore_paths(tool_calls: list, seen: set[str]) -> list[str]:
                 _p = _v
                 break
         if not _p:
-            continue
-        _norm = _p.replace("\\", "/").lower()
+            if _fn in ("list_dir", "find_files", "search_code"):
+                _p = "."
+                _norm = f"{_fn}:."
+            else:
+                continue
+        else:
+            _norm = _p.replace("\\", "/").lower()
         if _fn == "read_file":
             _norm = f"{_norm}#rng:{_read_range_key(_args)}"
         if _norm not in seen:

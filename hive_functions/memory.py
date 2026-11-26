@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 import json
+import sqlite3
 import time
 import re
 import math
@@ -94,39 +96,40 @@ def _fts_query(text: str) -> str:
     return " OR ".join(parts)
 
 
-def _fts_rank(query: str, docs: list[tuple[int, str]], limit: int) -> list[tuple[int, float]]:
-    """BM25 ranking over (index, text) pairs. Returns [(index, score 0..1)].
-
-    FTS5 (bm25 + porter stemming + prefix match) replaces the old hash-bin
-    cosine as the primary retriever: it ranks real term overlap instead of
-    random bin collisions. Nothing is persisted - the table is built from the
-    in-memory insights, which are capped at 500 entries.
-    """
-    match = _fts_query(query)
-    if not match or not docs:
-        return []
-    import sqlite3
-    try:
-        conn = sqlite3.connect(":memory:")
-        conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body, "
-                     "tokenize='porter unicode61')")
-        conn.executemany("INSERT INTO docs(rowid, body) VALUES (?, ?)",
-                         [(i + 1, text) for i, (_idx, text) in enumerate(docs)])
-        rows = conn.execute(
-            "SELECT rowid, bm25(docs) AS rank FROM docs WHERE docs MATCH ? "
-            "ORDER BY rank LIMIT ?", (match, max(1, int(limit)))).fetchall()
-        conn.close()
-    except Exception:                # FTS5 parse/IO error: caller falls back
-        return []
-    # bm25() is negative and "smaller is better". Its MAGNITUDE depends on the
-    # corpus size (three documents give ~1e-06, so a fixed 0..1 mapping would
-    # filter every hit), so the score is normalized to the best hit instead:
-    # the top result is 1.0 and the rest are relative to it.
+def _fts_query_conn(conn, match: str, limit: int) -> list[tuple[int, float]]:
+    rows = conn.execute(
+        "SELECT rowid, bm25(docs) AS rank FROM docs WHERE docs MATCH ? "
+        "ORDER BY rank LIMIT ?",
+        (match, max(1, int(limit))),
+    ).fetchall()
     strengths = [(int(rowid) - 1, max(0.0, -float(rank))) for rowid, rank in rows]
     best = max((st for _i, st in strengths), default=0.0)
     if best <= 0.0:
         return [(idx, 0.5) for idx, _st in strengths]
     return [(idx, round(st / best, 4)) for idx, st in strengths]
+
+
+def _fts_build_conn(docs_iter):
+    import sqlite3
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body, tokenize='porter unicode61')")
+    conn.executemany("INSERT INTO docs(rowid, body) VALUES (?, ?)", docs_iter)
+    return conn
+
+
+def _fts_rank(query: str, docs: list[tuple[int, str]], limit: int) -> list[tuple[int, float]]:
+    """BM25 ranking over (index, text) pairs. Returns [(index, score 0..1)]."""
+    match = _fts_query(query)
+    if not match or not docs:
+        return []
+    try:
+        conn = _fts_build_conn((i + 1, text) for i, (_idx, text) in enumerate(docs))
+        try:
+            return _fts_query_conn(conn, match, limit)
+        finally:
+            conn.close()
+    except Exception:                # FTS5 parse/IO error: caller falls back
+        return []
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -269,6 +272,9 @@ class Memory:
         self._insight_path: Path | None = None
         self._insights: list[dict] = []
         self._insight_lock = threading.RLock()
+        self._fts_lock = threading.Lock()
+        self._fts_conn = None
+        self._fts_key: tuple | None = None
         # PERF-3 FIX: Debounced persistence — avoid writing the full JSON file on
         # every single insight add. Multiple insights per loop (up to 8) would
         # trigger 8× ~100KB writes under the lock. Instead, mark dirty and let
@@ -370,17 +376,16 @@ class Memory:
         scored: list[dict] = []
 
         # FTS5 first: real term overlap with stemming + prefix match.
+        use_fts = _fts_available()
         ranked: list[tuple[int, float]] = []
-        if _fts_available():
-            docs = [(i, str(rec.get('insight') or ''))
-                    for i, rec in enumerate(insights_snapshot)]
-            ranked = _fts_rank(q, docs, limit * 8)
+        if use_fts:
+            ranked = self._fts_rank_cached(q, insights_snapshot, limit * 8)
 
         def _path_match(rec: dict) -> int:
             rp = _norm_path(rec.get('trigger_path', ''))
             return 1 if (tp and rp and (tp.startswith(rp) or rp.startswith(tp))) else 0
 
-        if ranked or _fts_available():
+        if ranked or use_fts:
             for idx, score in ranked:
                 rec = insights_snapshot[idx]
                 if score >= float(min_score):
@@ -408,6 +413,35 @@ class Memory:
             rec.pop('_pm', None)
             out.append(rec)
         return out
+
+    def _fts_rank_cached(
+        self, query: str, insights_snapshot: list[dict], limit: int
+    ) -> list[tuple[int, float]]:
+        match = _fts_query(query)
+        if not match or not insights_snapshot:
+            return []
+        docs_key = tuple((id(rec), str(rec.get('insight') or '')) for rec in insights_snapshot)
+        with self._fts_lock:
+            if self._fts_conn is None or self._fts_key != docs_key:
+                old = self._fts_conn
+                self._fts_conn = None
+                self._fts_key = None
+                if old is not None:
+                    with suppress(sqlite3.Error):
+                        old.close()
+                try:
+                    self._fts_conn = _fts_build_conn(
+                        (i + 1, text) for i, (_rid, text) in enumerate(docs_key)
+                    )
+                    self._fts_key = docs_key
+                except sqlite3.Error as _e:
+                    logger.debug("[Memory] FTS index build failed: %s", _e)
+                    return []
+            try:
+                return _fts_query_conn(self._fts_conn, match, limit)
+            except sqlite3.Error as _e:
+                logger.debug("[Memory] FTS query failed: %s", _e)
+                return []
 
     def _maybe_persist_insights(self):
         """PERF-3: Debounced persist — only writes if enough time has elapsed."""

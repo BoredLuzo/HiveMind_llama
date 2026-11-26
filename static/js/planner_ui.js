@@ -445,6 +445,7 @@ function startAgent(name, model, role, isRepair) {
   // Otherwise the next agent with thinking (e.g. Direct after Vision-Agent) streams into
   // the think block of the PREVIOUS agent at the top of the chat.
   S._thinkBlockId = null;
+  S._thinkBlockCache = null;
   scrollBtmIfNearBottom(120);
 }
 
@@ -536,6 +537,7 @@ function startDuoAgent(role, label, model, roundInfo) {
   c.appendChild(wrap);
   S.curAgent = {body: body, tid: tid, name: label, lt: _lt};
   S._thinkBlockId = null;
+  S._thinkBlockCache = null;
   scrollBtmIfNearBottom(120);
 }
 

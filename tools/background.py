@@ -52,6 +52,15 @@ def _terminate(entry: dict):
         pass
 
 
+def _append_bg_line(handle: str, line: str) -> bool:
+    with _LOCK:
+        entry = _REGISTRY.get(handle)
+        if entry is None:
+            return False
+        entry["buf"] = (entry["buf"] + line)[-_MAX_OUTPUT_CHARS:]
+        return True
+
+
 def _reader(handle: str, proc: subprocess.Popen):
     try:
         stream = proc.stdout
@@ -62,20 +71,12 @@ def _reader(handle: str, proc: subprocess.Popen):
                 _line = stream.readline(_READ_CHUNK_CHARS)
                 if not _line:
                     break
-                with _LOCK:
-                    _entry = _REGISTRY.get(handle)
-                    if _entry is None:
-                        return
-                    _entry["buf"] = (_entry["buf"] + _line)[-_MAX_OUTPUT_CHARS:]
+                if not _append_bg_line(handle, _line):
+                    return
         else:
             for _line in stream:
-                if not _line:
-                    continue
-                with _LOCK:
-                    _entry = _REGISTRY.get(handle)
-                    if _entry is None:
-                        return
-                    _entry["buf"] = (_entry["buf"] + _line)[-_MAX_OUTPUT_CHARS:]
+                if _line and not _append_bg_line(handle, _line):
+                    return
     except Exception:
         pass
 
@@ -84,10 +85,54 @@ def start_background(cmd: str, cwd: str | Path | None = None) -> dict:
     cmd = (cmd or "").strip()
     if not cmd:
         return {"ok": False, "error": "start_background requires a non-empty 'cmd'."}
+
+    import os as _os_bg
+    import tools.handlers.exec_tools as _et_bg
+    _bg_bash = getattr(_et_bg, "_BASH_BIN", "/bin/sh")
+    _win_bash = ""
+    _win_ps = False
+    if _os_bg.name == "nt":
+        _mode_fn = getattr(_et_bg, "_run_bash_shell_mode", None)
+        _path_fn = getattr(_et_bg, "_windows_bash_path", None)
+        if callable(_mode_fn) and callable(_path_fn):
+            _mode_val = _mode_fn()
+            if _mode_val == "bash":
+                _win_bash = _path_fn() or ""
+            elif _mode_val == "powershell":
+                _win_ps = True
+
+    _bl_fn = getattr(_et_bg, "_bash_blocklisted", None)
+    if callable(_bl_fn):
+        _bl_hit = _bl_fn(cmd)
+        if _bl_hit:
+            return {"ok": False, "error": f"Command blocked: dangerous pattern '{_bl_hit}' detected."}
+
+    _bg_cmd = cmd
+    if _win_bash:
+        _norm_venv_fn = getattr(_et_bg, "_normalize_win_bash_venv_paths", None)
+        _rewrite_drv_fn = getattr(_et_bg, "_rewrite_posix_drive_paths", None)
+        _rewrite_tmp_fn = getattr(_et_bg, "_rewrite_win_tmp_paths", None)
+        _rewrite_null_fn = getattr(_et_bg, "_rewrite_win_native_dev_null", None)
+        _bg_cmd = _norm_venv_fn(cmd) if callable(_norm_venv_fn) else cmd
+        if callable(_rewrite_drv_fn):
+            _bg_cmd = _rewrite_drv_fn(_bg_cmd)
+        if callable(_rewrite_tmp_fn):
+            _bg_cmd = _rewrite_tmp_fn(_bg_cmd)
+        if callable(_rewrite_null_fn):
+            _bg_cmd = _rewrite_null_fn(_bg_cmd)
+        if callable(_bl_fn):
+            _bl_hit = _bl_fn(_bg_cmd)
+            if _bl_hit:
+                return {"ok": False, "error": f"Command blocked: dangerous pattern '{_bl_hit}' detected."}
+
     evicted = None
     with _LOCK:
         if len(_REGISTRY) >= _MAX_PROCESSES:
-            _oldest_handle = min(_REGISTRY, key=lambda h: _REGISTRY[h]["started"])
+            _exited = [
+                h for h, e in _REGISTRY.items()
+                if e.get("proc") is None or e["proc"].poll() is not None
+            ]
+            _oldest_handle = min(_exited or _REGISTRY, key=lambda h: _REGISTRY[h]["started"])
             _oldest_entry = _REGISTRY.pop(_oldest_handle)
         else:
             _oldest_entry = None
@@ -102,20 +147,18 @@ def start_background(cmd: str, cwd: str | Path | None = None) -> dict:
 
     try:
         from tools.sandbox import spawn_kwargs as _spawn_kwargs
-        # POSIX-SHELL (2026-09-19): shell=True läuft auf Ubuntu unter /bin/sh
-        # (dash) — Bash-isms ([[ ]], source, &>) vom Modell sterben dort.
-        # Explizit bash via 'executable'; Windows-cmd bleibt unverändert.
-        import os as _os_bg
-        # X6 (audit r3): bash-less distros - resolve once via exec_tools
-        from tools.handlers.exec_tools import _BASH_BIN as _bg_bash
-        _shell_kwargs = {"executable": _bg_bash} if _os_bg.name != "nt" else {}
+        # POSIX-SHELL (2026-09-19): shell=True runs under /bin/sh (dash) on
+        # Ubuntu where bashisms fail; on Windows match run_bash (Git Bash when
+        # available, fallback shell=True otherwise).
         from infra.child_env import tool_env as _tool_env
         try:
             _bg_env = _tool_env(workspace=cwd) if cwd is not None else _tool_env()
         except TypeError:
             _bg_env = _tool_env()
+
+        _build_win_cmd = getattr(_et_bg, "_build_win_shell_cmd", None)
         _popen_kw = {
-            "shell": True,
+            "shell": False,
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
@@ -124,11 +167,21 @@ def start_background(cmd: str, cwd: str | Path | None = None) -> dict:
             "errors": "replace",
             "env": _bg_env,
             **_spawn_kwargs(),
-            **_shell_kwargs,
         }
         if cwd is not None:
             _popen_kw["cwd"] = str(cwd)
-        proc = subprocess.Popen(cmd, **_popen_kw)
+
+        if _win_bash and callable(_build_win_cmd):
+            _argv = _build_win_cmd(_bg_cmd, mode="bash", win_bash=_win_bash, orig_cmd=cmd)
+            proc = subprocess.Popen(_argv, **_popen_kw)
+        elif _win_ps and callable(_build_win_cmd):
+            _argv = _build_win_cmd(cmd, mode="powershell", orig_cmd=cmd)
+            proc = subprocess.Popen(_argv, **_popen_kw)
+        else:
+            _popen_kw["shell"] = True
+            if _os_bg.name != "nt":
+                _popen_kw["executable"] = _bg_bash
+            proc = subprocess.Popen(cmd, **_popen_kw)
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
 

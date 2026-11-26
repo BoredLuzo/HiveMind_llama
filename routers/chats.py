@@ -816,45 +816,47 @@ async def persist_chat(req: Request):
     now = datetime.now().isoformat(timespec="seconds")
     cid = data.get("chat_id") or None
 
-    def _try_load(_cid):
-        return _load_chat_full(_cid)
+    def _refresh_meta(chat: dict, msgs_list: list) -> None:
+        chat["_msg_count"] = _user_msg_count(msgs_list)
+        chat["_tokens"] = _chat_tokens(msgs_list)
+        _last = msgs_list[-1].get("content", "") if msgs_list else ""
+        chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
 
     if cid:
-        chat = await asyncio.to_thread(_try_load, cid)
-        if chat is not None:
-            def _apply_update():
+        def _locked_persist_update():
+            with _get_chat_save_lock(cid):
+                chat = _load_chat_full(cid)
+                if chat is None:
+                    return False, None
                 with _cache_lock:
                     chat["messages"] = msgs
                     if data.get("title"):
                         chat["title"] = data["title"]
-                    # WS-GUARD (2026-10-25 audit): dead paths are dropped
-                    # (logged), never stored - see create_chat.
+                    # WS-GUARD (2026-10-25 audit): dead paths are dropped (logged), never stored.
                     if data.get("workspace"):
                         _ws_raw = str(data["workspace"]).strip()
                         if _ws_raw and not Path(_ws_raw).exists():
                             logger.warning(
-                                "[CHATS-GUARD] persist: workspace '%s' does "
-                                "not exist - dropped", _ws_raw[:120])
+                                "[CHATS-GUARD] persist: workspace '%s' does not exist - dropped",
+                                _ws_raw[:120],
+                            )
                         else:
                             chat["workspace"] = _ws_raw
                     chat["updated_at"] = now
-                    chat["_msg_count"] = _user_msg_count(msgs)
-                    chat["_tokens"] = _chat_tokens(msgs)
-                    _last = msgs[-1].get("content", "") if msgs else ""
-                    chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-            await asyncio.to_thread(_apply_update)
-            _saved = await asyncio.to_thread(_save_chat, cid, chat,
-                                             data.get("base_rev"))
-            if _saved and _saved.get("conflict"):
+                    _refresh_meta(chat, msgs)
+                return True, _save_chat(cid, chat, data.get("base_rev"))
+
+        _found, _saved = await asyncio.to_thread(_locked_persist_update)
+        if _found:
+            _saved = _saved or {}
+            if _saved.get("conflict"):
                 return JSONResponse({"error": "stale_rev",
                                      "rev": _saved.get("rev")},
                                     status_code=409)
-            if _saved and _saved.get("oversize"):
-                # OVERSIZE-TRUTH (audit 2026-11-03): the beacon/autosave used
-                # to see ok:true while nothing was written.
+            if _saved.get("oversize"):
                 return JSONResponse({"ok": False, "error": "chat_too_large"},
                                     status_code=413)
-            return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
+            return {"ok": True, "id": cid, "rev": _saved.get("rev"),
                     "created": False, "updated": True}
 
     # Create (reuse given chat_id so beacon retries keep a stable file).
@@ -876,10 +878,7 @@ async def persist_chat(req: Request):
                 _ws_raw[:120])
         else:
             chat["workspace"] = _ws_raw
-    _last = msgs[-1].get("content", "") if msgs else ""
-    chat["_msg_count"] = _user_msg_count(msgs)
-    chat["_tokens"] = _chat_tokens(msgs)
-    chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
+    _refresh_meta(chat, msgs)
     _saved = await asyncio.to_thread(_save_chat, cid, chat)
     if _saved and _saved.get("oversize"):
         return JSONResponse({"ok": False, "error": "chat_too_large"},
@@ -1008,12 +1007,7 @@ async def update_chat(chat_id: str, req: Request):
                     chat["workspace"] = str(data["workspace"] or "")
                 if "messages" in data:
                     chat["messages"] = data["messages"]
-                    _msgs = data["messages"]
-                    chat["_msg_count"] = _user_msg_count(_msgs)
-                    chat["_tokens"] = _chat_tokens(_msgs)
-                    _last = _msgs[-1].get("content", "") if _msgs else ""
-                    chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-                elif "messages" in chat:
+                if "messages" in data or "messages" in chat:
                     _msgs = chat.get("messages", [])
                     chat["_msg_count"] = _user_msg_count(_msgs)
                     chat["_tokens"] = _chat_tokens(_msgs)

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from utils.file import _inline_check_workspace
+from utils.file import _inline_check_workspace, _inline_resolve_path
 from tools.errors import tool_error_response as _tool_error_response
+from infra.child_env import scrubbed_env as _scrubbed_env
 import asyncio
 
 from . import _shared
@@ -20,12 +21,13 @@ async def _inline_tool_git_status(args: dict, workspace: Path, _workspace_lock: 
     cmd = args.get("cmd", "status")
     if cmd not in ("status", "diff", "log", "show"):
         cmd = "status"
+    argv = ["git", "log", "-n", "25", "--oneline"] if cmd == "log" else ["git", cmd]
     r = None
     try:
         r = await asyncio.create_subprocess_exec(
-            "git", cmd,
+            *argv,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            cwd=str(workspace))
+            cwd=str(workspace), env=_scrubbed_env())
         out, err = await asyncio.wait_for(r.communicate(), 15)
         stdout_str = out.decode(errors="replace").strip()
         stderr_str = err.decode(errors="replace").strip()
@@ -53,7 +55,8 @@ async def _inline_tool_git_commit(args: dict, workspace: Path, _workspace_lock: 
     message = str(args.get("message", "")).strip()
     if not message:
         return _tool_error_response("MISSING_ARG", "message is required", tool="git_commit")
-    ws = str(args.get("workspace", "")).strip() or str(workspace)
+    raw_ws = str(args.get("workspace", "") or "").strip()
+    ws = str(_inline_resolve_path(workspace, raw_ws)) if raw_ws else str(workspace)
     if err := _inline_check_workspace(Path(ws), _workspace_lock, "git_commit"):
         return err
     # GIT-AUDIT P1-3 (2026-11-01): the model-callable tool did
@@ -131,6 +134,7 @@ async def _inline_tool_git_commit(args: dict, workspace: Path, _workspace_lock: 
         if (
             not _cand_res.is_relative_to(ws_res)
             or _cand_res == ws_res
+            or _cand_res.is_dir()
             or _is_secret_path(_cand_res, ws_res)
             or _is_secret_path(_raw, ws_res)
         ):

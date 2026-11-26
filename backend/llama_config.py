@@ -17,16 +17,25 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _LLAMA_ROOT = _REPO_ROOT / "llama"
 
 
+def _boot_settings() -> dict:
+    try:
+        from settings import load_settings as _ls
+        return _ls() or {}
+    except Exception:
+        return {}
+
+
+_BOOT_CFG = _boot_settings()
+
+
 # ── GPU-Backend ───────────────────────────────────────────────────────────────
-def _resolve_gpu_backend() -> str:
-
-
+def _resolve_gpu_backend(cfg: dict | None = None) -> str:
     _env = os.environ.get("HIVEMIND_GPU_BACKEND", "").strip().lower()
     if _env in ("vulkan", "cuda", "rocm", "cpu"):
         return _env
     try:
-        from settings import load_settings as _ls
-        _g = str(_ls().get("gpu_backend", "") or "").strip().lower()
+        _src = _boot_settings() if cfg is None else cfg
+        _g = str(_src.get("gpu_backend", "") or "").strip().lower()
         if _g in ("vulkan", "cuda", "rocm", "cpu"):
             return _g
     except Exception:
@@ -34,7 +43,7 @@ def _resolve_gpu_backend() -> str:
     return "vulkan"
 
 
-GPU_BACKEND = _resolve_gpu_backend()
+GPU_BACKEND = _resolve_gpu_backend(_BOOT_CFG)
 
 
 def _find_llama_server() -> Path:
@@ -116,7 +125,7 @@ def sync_runtime_backend(gpu_backend: str = "", llama_bin: Path | None = None) -
     return GPU_BACKEND, LLAMA_BIN
 
 
-def find_models_dir() -> Path:
+def find_models_dir(cfg: dict | None = None) -> Path:
     """Models-Ordner finden: Env > settings.json "models_dir" > <repo>/models."""
     _env = os.environ.get("HIVEMIND_MODELS_DIR", "").strip()
     if _env:
@@ -124,8 +133,8 @@ def find_models_dir() -> Path:
     # MODELS-DIR-SETTING (2026-09-01): der Installer schreibt einen benutzerdefinierten
     # models folder from settings.json — the server must find it even WITHOUT an env var.
     try:
-        from settings import load_settings as _ls
-        _cfg = _ls().get("models_dir", "") or ""
+        _src = _boot_settings() if cfg is None else cfg
+        _cfg = _src.get("models_dir", "") or ""
         _cfg = str(_cfg).strip()
         if _cfg:
             return Path(_cfg)
@@ -134,7 +143,7 @@ def find_models_dir() -> Path:
     return _REPO_ROOT / "models"
 
 
-MODELS_DIR = find_models_dir()
+MODELS_DIR = find_models_dir(_BOOT_CFG)
 
 
 # ── Server-Ports ──────────────────────────────────────────────────────────────
@@ -147,8 +156,7 @@ MODELS_DIR = find_models_dir()
 BASE_PORT = int(os.environ.get("HIVEMIND_LLAMA_BASE_PORT", "").strip() or 0)
 if not BASE_PORT:
     try:
-        from settings import load_settings as _ls_port
-        BASE_PORT = int(_ls_port().get("server_port", 0) or 0) + 100
+        BASE_PORT = int(_BOOT_CFG.get("server_port", 0) or 0) + 100
     except Exception:
         BASE_PORT = 0
 if not BASE_PORT or BASE_PORT < 1024:
@@ -156,8 +164,7 @@ if not BASE_PORT or BASE_PORT < 1024:
 
 MAX_SLOTS = 3
 try:
-    from settings import load_settings as _ls_slots
-    _raw_slots = int(_ls_slots().get("llama_max_slots", 3) or 3)
+    _raw_slots = int(_BOOT_CFG.get("llama_max_slots", 3) or 3)
     MAX_SLOTS = max(1, min(16, _raw_slots))
 except (ImportError, OSError, TypeError, ValueError):
     MAX_SLOTS = 3
@@ -424,23 +431,17 @@ def _try_registry_draft_attr(model_key: str, getter_name: str) -> str | None:
 
 def _try_registry_dspark_draft(model_key: str) -> str | None:
     """Per-model registry -> DSpark drafter GGUF filename."""
-    return _try_registry_field(
-        model_key, "get_dspark_draft", predicate=bool, transform=lambda v: str(v).strip(), default=None
-    )
+    return _try_registry_draft_attr(model_key, "get_dspark_draft")
 
 
 def _try_registry_dflash_draft(model_key: str) -> str | None:
     """Per-model registry -> DFlash drafter GGUF filename."""
-    return _try_registry_field(
-        model_key, "get_dflash_draft", predicate=bool, transform=lambda v: str(v).strip(), default=None
-    )
+    return _try_registry_draft_attr(model_key, "get_dflash_draft")
 
 
 def _try_registry_mtp_draft(model_key: str) -> str | None:
     """Per-model registry -> external MTP sidecar filename."""
-    return _try_registry_field(
-        model_key, "get_mtp_draft", predicate=bool, transform=lambda v: str(v).strip(), default=None
-    )
+    return _try_registry_draft_attr(model_key, "get_mtp_draft")
 
 
 def _try_registry_flash_attn_off(model_key: str) -> bool:
@@ -483,9 +484,6 @@ def detect_moe_count(model_key: str) -> int:
     return 0
 
 MLOCK_MODEL = True
-
-_HERMES_V7_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact"
-_HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
 
 _MOE_EXPERT_COUNTS: dict[str, int] = {}
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}

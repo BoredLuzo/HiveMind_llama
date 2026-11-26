@@ -72,7 +72,10 @@ def test_appjs_card_and_persistence():
 
 
 def test_bridge_relays_steer():
-    src = _src("hivemind_gateway/bridge.py")
+    src = "\n".join(
+        _src(f"hivemind_gateway/{name}")
+        for name in ("bridge.py", "bridge_voice.py", "bridge_relay.py", "bridge_commands.py")
+    )
     hits = src.count('etype == "steer"') + src.count('ev.get("type") == "steer"')
     if hits >= 2 and "Steer picked up" in src:
         ok(f"bridge: own-run loop and takeover walker relay steer pickups ({hits})")

@@ -15,7 +15,11 @@ async def _inline_tool_web_search(args: dict, _workspace: Path, _workspace_lock:
             "web_search is unavailable because websearch.py is missing.",
             tool="web_search" )
     query = str(args.get("query", "")).strip()
-    max_results = max(1, min(10, int(args.get("max_results") or 5)))
+    try:
+        max_results = int(args.get("max_results") or 5)
+    except (TypeError, ValueError):
+        max_results = 5
+    max_results = max(1, min(10, max_results))
     if not query:
         return _tool_error_response(
             "INVALID_ARGUMENT",

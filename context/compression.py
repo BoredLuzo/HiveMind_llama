@@ -78,6 +78,7 @@ def evict_stale_reads_for_path(
     if not messages or not path:
         return 0
     evicted = 0
+    superseded_added = False
     cache_horizon = int(cache_horizon or 0)
     _sup = superseded if isinstance(superseded, list) else None
     # oldest first -> keep the newest read of the path alive
@@ -99,6 +100,7 @@ def evict_stale_reads_for_path(
             # LRU markieren; der semantische Hinweis wird als Tail-Note durch
             # den Aufrufer angehaengt (cache-sicher).
             lru.mark_evicted(idx)
+            superseded_added = True
             if _sup is not None and path not in _sup:
                 _sup.append(path)
             continue
@@ -108,7 +110,7 @@ def evict_stale_reads_for_path(
         }
         lru.mark_evicted(idx)
         evicted += 1
-    if evicted:
+    if evicted or superseded_added:
         # SKIP-TRAP-FIX (2026-09-13): the read-guard set still contains the
         # path, so a fresh read_file returned "[SKIP: already read ... full
         # content is in your context]" — which is FALSE after eviction (the

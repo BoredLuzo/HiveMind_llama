@@ -153,6 +153,8 @@ def _resolve_scoped_target(p: str, workspace: str) -> str:
         raise ValueError(f"Invalid pytest node target '{p}'")
     ws_root = Path(workspace).resolve()
     fp = file_part.strip()
+    if fp.startswith("-"):
+        raise ValueError(f"Invalid test target '{p}'")
     cand = (ws_root / fp).resolve() if not os.path.isabs(fp) else Path(fp).resolve()
     try:
         rel = cand.relative_to(ws_root).as_posix()
@@ -160,6 +162,8 @@ def _resolve_scoped_target(p: str, workspace: str) -> str:
         raise ValueError(f"Test target '{p}' resolves outside workspace '{ws_root}'") from exc
     if not rel:
         rel = "."
+    if rel.startswith("-"):
+        raise ValueError(f"Invalid test target '{p}'")
     return f"{rel}::{node_id.strip()}" if sep else rel
 
 
@@ -272,6 +276,8 @@ async def run_tests(
             env["PYTHONPATH"] = os.pathsep.join(pp_parts)
             return env
 
+        _cached_env = _workspace_test_env(workspace)
+
         async def _spawn_decode(run_cmd: str, run_argv: Optional[list[str]] = None) -> tuple[str, int]:
             """Run *run_argv* via exec (built-in runners) or *run_cmd* via shell
             (custom commands), return (output, exit code). Raises TimeoutError
@@ -282,7 +288,7 @@ async def run_tests(
                     cwd=workspace,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
-                    env=_workspace_test_env(workspace),
+                    env=dict(_cached_env),
                     **_spawn_kwargs(),
                 )
             else:
@@ -291,7 +297,7 @@ async def run_tests(
                     cwd=workspace,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
-                    env=_workspace_test_env(workspace),
+                    env=dict(_cached_env),
                     **_spawn_kwargs(),
                 )
             try:

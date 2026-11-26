@@ -64,7 +64,7 @@ def test_start_race():
 
 
 def test_start_route_ast():
-    src = _src("server.py")
+    src = _src("server.py") + "\n" + _src("routers/gateway.py")
     ok1 = "_sup.clear()" in src.split("async def gateway_start")[1].split("async def")[0]
     ok2 = "already running" in src.split("async def gateway_start")[1].split("async def")[0]
     if ok1 and ok2:
@@ -74,7 +74,7 @@ def test_start_route_ast():
 
 
 def test_expired_toasts():
-    src = _src("hivemind_gateway/bridge.py")
+    src = _src("hivemind_gateway/bridge.py") + "\n" + _src("hivemind_gateway/bridge_relay.py")
     hits = src.count('routed == "expired"')
     if hits >= 2 and "already timed out" in src:
         ok(f"bridge: expired routing answered honestly in both paths ({hits})")
@@ -83,7 +83,7 @@ def test_expired_toasts():
 
 
 def test_second_run_note():
-    src = _src("hivemind_gateway/bridge.py")
+    src = _src("hivemind_gateway/bridge_relay.py")
     peek = "other_run_noted" in src and src.count("other_run_noted") >= 3
     msg = "Another engine run is active" in src
     if peek and msg:
@@ -103,7 +103,7 @@ def test_stop_note():
 
 
 def test_fazit_relay_pins():
-    src = _src("hivemind_gateway/bridge.py")
+    src = _src("hivemind_gateway/bridge_relay.py")
     acc = "answer_parts" in src and src.count("answer_parts") >= 3
     tok = 'elif ev.get("type") == "token"' in src
     agent = 'elif ev.get("type") == "agent"' in src

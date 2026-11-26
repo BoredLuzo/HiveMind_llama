@@ -174,12 +174,22 @@ def _read_binary_error(p) -> str:
                 _img_hint = " Use view_image(path=...) to inspect this image visually."
         except ImportError:
             pass
+    _p_disp = str(p)
+    _is_ps = False
+    if sys.platform == "win32":
+        try:
+            from tools.handlers.exec_tools import _run_bash_shell_mode
+            _is_ps = _run_bash_shell_mode() == "powershell"
+        except (ImportError, AttributeError):
+            _is_ps = True
+    if not _is_ps:
+        _p_disp = Path(_p_disp).as_posix()
     _inspect_hint = (
-        "Use run_bash with 'Get-Content -Encoding Byte {p} | Select-Object -First 64' "
+        f"Use run_bash with 'Get-Content -Encoding Byte \"{_p_disp}\" | Select-Object -First 64' "
         "to inspect binary content."
-        if sys.platform == "win32"
-        else "Use run_bash with 'file {p}' to identify the file type, "
-             "or 'xxd {p} | head' to inspect binary content."
+        if _is_ps
+        else f"Use run_bash with 'file \"{_p_disp}\"' to identify the file type, "
+             f"or 'xxd \"{_p_disp}\" | head' to inspect binary content."
     )
     return _tool_error_response(
         "BINARY_FILE",
@@ -197,6 +207,21 @@ def _read_head_bytes(p: Path, n: int = 1024) -> bytes:
             return f.read(n)
     except Exception:
         return b""
+
+
+def _read_full_if_within_cap(p: Path, read_char_cap: int) -> tuple[bool, int, str | None]:
+    """Single-open binary sniff + size check + optional UTF-8 text decode for full reads."""
+    import io
+    with open(p, "rb") as bf:
+        head = bf.read(1024)
+        if _looks_binary_bytes(head):
+            return True, 0, None
+        size_bytes = os.fstat(bf.fileno()).st_size
+        if size_bytes > read_char_cap:
+            return False, size_bytes, None
+        bf.seek(0)
+        with io.TextIOWrapper(bf, encoding="utf-8", errors="replace") as tf:
+            return False, size_bytes, tf.read()
 
 
 def _looks_binary_bytes(b: bytes) -> bool:
@@ -278,14 +303,15 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
         from core.budgets import active as _bgt_active
         _bgt = _bgt_active()
         if _full:
-            _head = await asyncio.to_thread(_read_head_bytes, p, 1024)
-            if _looks_binary_bytes(_head):
+            _is_bin, _size_chars, _full_text = await asyncio.to_thread(
+                _read_full_if_within_cap, p, _bgt.read_char_cap
+            )
+            if _is_bin:
                 return _read_binary_error(p)
-            _size_chars = p.stat().st_size
-            if _size_chars > _bgt.read_char_cap:
+            if _full_text is None:
                 _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
                 _sig = await asyncio.to_thread(_sig_fn, p, _bgt.outline_items) if _sig_fn else (
-                    "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
+                    "(signature extraction unavailable) — use read_file with start_line=1, end_line=50 to inspect the file header first."
                 )
                 return _tool_error_response(
                     "FILE_TOO_LARGE_NEED_RANGE",
@@ -297,8 +323,9 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
                     "Please use 'start_line' and 'end_line' inside read_file to read specific sections.\n\n"
                     f"File Outline / Signatures:\n{_sig}",
                     tool="read_file" )
-
-        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
+            content = _full_text
+        else:
+            content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
 
         # Binary file detection (range-reads; full reads were already caught
@@ -318,36 +345,56 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
 
         # Hallucination guard: validate start_line/end_line against actual file length
         _actual_lines = len(lines)
-        if start_line is not None and int(start_line) > _actual_lines:
+        if start_line is not None and int(start_line) > max(1, _actual_lines):
             return _tool_error_response(
                 "HALLUCINATION_GUARD",
                 f"start_line={start_line} exceeds file length ({_actual_lines} lines). "
                 f"Call read_file('{args.get('path')}') WITHOUT start_line/end_line to read the full file.",
                 tool="read_file")
-        if end_line is not None and int(end_line) > _actual_lines * 2:
+        if end_line is not None and _actual_lines > 0 and int(end_line) > _actual_lines * 2:
             end_line = _actual_lines
 
         if start_line is not None or end_line is not None:
-            s = max(0, int(start_line) - 1) if start_line else 0
-            e = int(end_line) if end_line else len(lines)
-            content_chunk = "".join(lines[s:e])
-            _head = f"[{p} lines {s+1}-{min(e, len(lines))} / {len(lines)}]\n"
+            s = max(0, int(start_line) - 1) if start_line is not None else 0
+            if end_line is not None and int(end_line) < s + 1:
+                return _tool_error_response(
+                    "INVALID_ARGUMENT",
+                    f"end_line ({end_line}) must be >= start_line ({s + 1}).",
+                    tool="read_file",
+                )
+            e = int(end_line) if end_line is not None else len(lines)
+            e_clamped = min(e, len(lines))
+            content_chunk = "".join(lines[s:e_clamped])
             if len(content_chunk) > _bgt.read_char_cap:
                 # TRUNCATION-HONESTY (2026-10-15): header + note must fit
                 # INSIDE the char cap together (the executor re-cap would
                 # otherwise cut exactly this note off), and the note must
-                # carry the full file's line AND char count plus the concrete
-                # continuation line - a bare chunk read as "the write did not
-                # complete" (live: 482-line write, 148-line range read).
-                _cont = min(e, len(lines)) + 1
+                # reflect the ACTUAL last shown line so continue with start_line
+                # never skips unread lines.
+                _max_cont = len(lines) + 1
+                _probe_head = f"[{p} lines {s+1}-{len(lines)} / {len(lines)}]\n"
+                _probe_note = (
+                    f"\n[TRUNCATED: showing the first {_bgt.read_char_cap} chars of this range — "
+                    f"file total: {len(lines)} lines / {len(content)} chars — "
+                    f"continue with start_line={_max_cont}]"
+                )
+                _avail = max(1, _bgt.read_char_cap - len(_probe_head) - len(_probe_note))
+                _shown = content_chunk[:_avail]
+                _nl = _shown.rfind("\n")
+                if _nl >= max(0, _avail // 4):
+                    _shown = _shown[:_nl + 1]
+                _shown_n = max(1, min(e_clamped - s, len(_shown.splitlines())))
+                _shown_end = min(len(lines), s + _shown_n)
+                _cont = _shown_end + 1
+                _head = f"[{p} lines {s+1}-{_shown_end} / {len(lines)}]\n"
                 _note = (
                     f"\n[TRUNCATED: showing the first {_bgt.read_char_cap} chars of this range — "
                     f"file total: {len(lines)} lines / {len(content)} chars — "
                     f"continue with start_line={_cont}]"
                 )
-                _avail = max(0, _bgt.read_char_cap - len(_head) - len(_note))
-                _chunk = content_chunk[:_avail] + _note
+                _chunk = _shown + _note
             else:
+                _head = f"[{p} lines {s+1}-{e_clamped} / {len(lines)}]\n"
                 _chunk = content_chunk
             return _head + _chunk
 
@@ -548,78 +595,72 @@ _BIG_FILE_NOTE = ("\n"
     "start_line/end_line ranges. The file on disk is complete.")
 
 
+def _extract_py_top_defs(src: str) -> dict[str, str]:
+    """Parse Python source once and map public top-level symbol names to source lines."""
+    if not src:
+        return {}
+    import ast as _ast
+    lines = src.splitlines()
+    out: dict[str, str] = {}
+    for node in _ast.parse(src).body:
+        hint = lines[node.lineno - 1].strip()[:160] if 0 < node.lineno <= len(lines) else ""
+        names: list[str] = []
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+            names.append(node.name)
+        elif isinstance(node, _ast.Assign):
+            for t in node.targets:
+                if isinstance(t, _ast.Name):
+                    names.append(t.id)
+        elif isinstance(node, _ast.AnnAssign) and isinstance(node.target, _ast.Name):
+            names.append(node.target.id)
+        elif isinstance(node, _ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    names.append(alias.asname or alias.name)
+        for n in names:
+            if not n.startswith("_") and n not in out:
+                out[n] = hint
+    return out
+
+
 def _missing_top_level_py_symbols(p: Path, old_src: str, new_src: str) -> list[str]:
     if p.suffix.lower() != ".py" or not old_src or not new_src:
         return []
     try:
-        import ast as _ast
-
-        def _top_names(src: str) -> set[str]:
-            names: set[str] = set()
-            for node in _ast.parse(src).body:
-                if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
-                    names.add(node.name)
-                elif isinstance(node, _ast.Assign):
-                    for t in node.targets:
-                        if isinstance(t, _ast.Name):
-                            names.add(t.id)
-                elif isinstance(node, _ast.AnnAssign) and isinstance(node.target, _ast.Name):
-                    names.add(node.target.id)
-                elif isinstance(node, _ast.ImportFrom):
-                    for alias in node.names:
-                        if alias.name != "*":
-                            names.add(alias.asname or alias.name)
-            return {n for n in names if not n.startswith("_")}
-
-        return sorted(_top_names(old_src) - _top_names(new_src))
+        old_defs = _extract_py_top_defs(old_src)
+        new_defs = _extract_py_top_defs(new_src)
+        return sorted(set(old_defs) - set(new_defs))
     except (SyntaxError, ValueError, TypeError):
         return []
 
 
-def _symbol_definition_hints(old_src: str, names: list[str], limit: int = 3) -> str:
-    """Return the original source line for up to `limit` dropped symbols.
-
-    A bare name list ("MODE") tells a small model what it lost but not how to
-    restore it. The original assignment/def line is a much stronger hint and
-    prevents the retry loop seen on multi_config. Best-effort only: any parse
-    problem means no hint, never a failed edit.
-    """
+def _symbol_definition_hints(old_src: str, names: list[str], limit: int = 3, *, _defs: dict[str, str] | None = None) -> str:
+    """Return the original source line for up to `limit` dropped symbols."""
     if not old_src or not names:
         return ""
-    wanted = set(names[:limit])
-    lines = old_src.splitlines()
     try:
-        import ast as _ast
-        found: dict[str, str] = {}
-        for node in _ast.parse(old_src).body:
-            _hint = ""
-            _names: set[str] = set()
-            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
-                _names.add(node.name)
-                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
-            elif isinstance(node, _ast.Assign):
-                for t in node.targets:
-                    if isinstance(t, _ast.Name):
-                        _names.add(t.id)
-                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
-            elif isinstance(node, _ast.AnnAssign) and isinstance(node.target, _ast.Name):
-                _names.add(node.target.id)
-                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
-            elif isinstance(node, _ast.ImportFrom):
-                for alias in node.names:
-                    if alias.name != "*":
-                        _names.add(alias.asname or alias.name)
-                _hint = lines[node.lineno - 1].strip() if 0 < node.lineno <= len(lines) else ""
-            for _n in _names & wanted:
-                if _hint:
-                    found[_n] = _hint[:160]
+        defs = _defs if _defs is not None else _extract_py_top_defs(old_src)
+        found = [(n, defs[n]) for n in names[:limit] if defs.get(n)]
         if not found:
             return ""
-        return "\nKeep definition: " + "; ".join(
-            f"{_n}: {found[_n]}" for _n in names[:limit] if _n in found
-        )
+        return "\nKeep definition: " + "; ".join(f"{n}: {h}" for n, h in found)
     except (SyntaxError, ValueError, TypeError, IndexError):
         return ""
+
+
+def _check_py_symbol_loss(p_target: Path, old_src: str, new_src: str) -> tuple[list[str], str]:
+    """Single-parse check returning (dropped_names, formatted_definition_hints)."""
+    if p_target.suffix.lower() != ".py" or not old_src or not new_src:
+        return [], ""
+    try:
+        old_defs = _extract_py_top_defs(old_src)
+        new_defs = _extract_py_top_defs(new_src)
+        dropped = sorted(set(old_defs) - set(new_defs))
+        if not dropped:
+            return [], ""
+        return dropped, _symbol_definition_hints(old_src, dropped, _defs=old_defs)
+    except (SyntaxError, ValueError, TypeError):
+        return [], ""
 
 
 async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
@@ -651,6 +692,11 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             tool="write_file")
 
     existed = p.exists()
+    if existed and p.is_dir():
+        return _tool_error_response(
+            "WRITE_FILE_IS_DIR",
+            f"'{p}' is a directory, not a file.",
+            tool="write_file")
     _had_crlf = False
     _old_n = 0
     if existed:
@@ -692,7 +738,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
                 tool="write_file")
     if (existed and p.suffix.lower() == ".py" and _old_raw
             and not args.get("allow_overwrite") and not args.get("confirm_shrink")):
-        _dropped_syms = _missing_top_level_py_symbols(p, _old_raw, content)
+        _dropped_syms, _sym_hints = _check_py_symbol_loss(p, _old_raw, content)
         if _dropped_syms:
             return _tool_error_response(
                 "WOULD_DROP_SYMBOLS",
@@ -701,7 +747,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
                 "Use edit_file to modify existing files while preserving constants, "
                 "classes, functions, and re-exports, or pass \"allow_overwrite\": true "
                 "if removing those symbols is intentional."
-                f"{_symbol_definition_hints(_old_raw, _dropped_syms)}",
+                f"{_sym_hints}",
                 details={"dropped": _dropped_syms[:8]},
                 tool="write_file")
 
@@ -769,12 +815,8 @@ def _unique_ws_normalized_replace(
     """
     if not old_n or not old_n.strip():
         return None
-    if old_n.endswith("\n") and (new_n.endswith("\n") or new_n == ""):
-        old_lines = old_n[:-1].split("\n")
-        new_lines = [] if new_n == "" else new_n[:-1].split("\n")
-    else:
-        old_lines = old_n.split("\n")
-        new_lines = new_n.split("\n")
+    old_lines = (old_n[:-1] if old_n.endswith("\n") else old_n).split("\n")
+    new_lines = [] if new_n == "" else (new_n[:-1] if new_n.endswith("\n") else new_n).split("\n")
     w_lines = working.split("\n")
     blen = len(old_lines)
     if blen == 0 or len(w_lines) < blen:
@@ -940,15 +982,15 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     new_text = str(args.get("new_text", ""))
 
     # MARKER-PARSE (2026-09-17): models naturally emit SEARCH/REPLACE blocks —
-    # accept them instead of rejecting. If old_text contains a block, extract
-    # the search and replace text from within the markers.
-    _block_re = re.compile(
-        r"<{5,}\s*SEARCH\s*\n(.*?)\n[ \t]*={3,}[ \t]*\n(.*?)\n[ \t]*>{5,}\s*REPLACE",
-        re.DOTALL)
-    _bm = _block_re.search(old_text)
-    if _bm:
-        old_text = _bm.group(1)
-        if not new_text.strip():
+    # accept them instead of rejecting when new_text is omitted. When new_text is
+    # explicitly provided, keep old_text literal so files containing markers stay editable.
+    if not new_text.strip():
+        _block_re = re.compile(
+            r"<{5,}\s*SEARCH\s*\n(.*?)\n[ \t]*={3,}[ \t]*\n(.*?)\n[ \t]*>{5,}\s*REPLACE",
+            re.DOTALL)
+        _bm = _block_re.search(old_text)
+        if _bm:
+            old_text = _bm.group(1)
             new_text = _bm.group(2)
 
     # FOREIGN-TRUNCATION SNIFF: a cut-off call in a foreign marker style
@@ -971,7 +1013,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
         return _tool_error_response(
             "EDIT_FILE_EMPTY_NEW_TEXT",
             "new_text is empty — replace the passage with the corrected version "
-            "instead, or use run_bash if you truly need an empty result.",
+            'instead, or use edits=[{"old_text": ..., "new_text": ""}] to delete a block.',
             tool="edit_file")
 
     try:
@@ -1075,7 +1117,7 @@ def _check_edit_shrink(
 def _check_edit_symbol_loss(p_target: Path, old_src: str, working_txt: str, args_d: dict) -> str | None:
     if args_d.get("confirm_shrink") or args_d.get("allow_overwrite"):
         return None
-    _dropped_ed = _missing_top_level_py_symbols(p_target, old_src, working_txt)
+    _dropped_ed, _sym_hints = _check_py_symbol_loss(p_target, old_src, working_txt)
     if not _dropped_ed:
         return None
     _dlist_ed = ", ".join(_dropped_ed[:10])
@@ -1085,7 +1127,7 @@ def _check_edit_symbol_loss(p_target: Path, old_src: str, working_txt: str, args
         f"{_dlist_ed}. Keep existing module-level constants, functions, "
         "classes, and re-exports (or re-export moved symbols via "
         "'from new_module import symbol'). The file on disk was NOT modified."
-        f"{_symbol_definition_hints(old_src, _dropped_ed)}",
+        f"{_sym_hints}",
         tool="edit_file",
     )
 

@@ -27,6 +27,14 @@ import sys
 logger = logging.getLogger("hivemind.runtime_sync")
 
 
+def _sync_loaded_backend_attr(mod_names: tuple[str, ...], attr: str, value) -> None:
+    """Propagate an updated global onto any already-imported backend submodules."""
+    for mod_name in mod_names:
+        mod = sys.modules.get(f"backend.{mod_name}")
+        if mod is not None and hasattr(mod, attr):
+            setattr(mod, attr, value)
+
+
 def sync_loader_settings(settings: dict) -> None:
     """Apply the load-time settings from `settings` to the backend globals."""
     if not isinstance(settings, dict):
@@ -85,30 +93,24 @@ def sync_loader_settings(settings: dict) -> None:
         ).strip().lower()
         if _kv_raw in ("f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"):
             _lc.KV_CACHE_TYPE = _kv_raw
-            for _mod_name in ("llama_server_manager", "manager_load", "llama_start_phases", "llama_vram_table"):
-                _mod = sys.modules.get(f"backend.{_mod_name}")
-                if _mod is not None and hasattr(_mod, "KV_CACHE_TYPE"):
-                    setattr(_mod, "KV_CACHE_TYPE", _kv_raw)
+            _sync_loaded_backend_attr(
+                ("llama_server_manager", "manager_load", "llama_start_phases", "llama_vram_table"),
+                "KV_CACHE_TYPE", _kv_raw,
+            )
     except (TypeError, ValueError, AttributeError):
         logger.debug("runtime sync: kv_cache_type skipped")
 
-    # VRAM budget for the pre-flight gate. The load/evict/health modules bind
-    # it BY VALUE (`from backend.llama_manager_utils import VRAM_BUDGET_GB`),
-    # so writing one module attribute is a no-op for the code that actually
-    # gates loads - every importer has to be updated. Modules not imported yet
-    # pick up the new value from llama_manager_utils at import time.
     try:
         _raw = settings.get("vram_budget_gb")
         if _raw is not None:
             _budget = float(_raw)
             import backend.llama_manager_utils as _lmu
             _lmu.VRAM_BUDGET_GB = _budget
-            for _mod_name in ("llama_server_manager", "manager_load",
-                              "manager_evict", "manager_health",
-                              "manager_prefetch", "manager_process",
-                              "llama_start_phases"):
-                _mod = sys.modules.get(f"backend.{_mod_name}")
-                if _mod is not None and hasattr(_mod, "VRAM_BUDGET_GB"):
-                    setattr(_mod, "VRAM_BUDGET_GB", _budget)
+            _sync_loaded_backend_attr(
+                ("llama_server_manager", "manager_load", "manager_evict",
+                 "manager_health", "manager_prefetch", "manager_process",
+                 "llama_start_phases"),
+                "VRAM_BUDGET_GB", _budget,
+            )
     except (TypeError, ValueError):
         logger.warning("runtime sync: vram_budget_gb ignored (bad value)")

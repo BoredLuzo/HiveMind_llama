@@ -325,19 +325,21 @@ if q36_mtp:
               Path(_mj.get("qwen3.6:35b-a3b-mtp", "")).name == _f_mtp.name,
               f"({_mj})")
 
-# ── Inkling-2-Mini UD-IQ3_XXS (optional Tier-4 Looped MoE + Vision) ──────
+# ── Inkling-2-Mini GSQ-RCO-IQ3_XS (optional Tier-4 Looped MoE + Vision) ────
 ink = specs.get("inkling-2-mini")
 check("inkling-2-mini is in the catalog as optional upgrade",
       ink is not None and "inkling-2-mini" not in fm.ESSENTIAL_KEYS)
 if ink:
-    check("inkling-2-mini repo pinned to unsloth/Inkling-2-Mini-GGUF",
-          ink["repo"] == "unsloth/Inkling-2-Mini-GGUF", f"({ink['repo']})")
-    check("inkling-2-mini file_regex matches UD-IQ3_XXS and rejects other variants",
-          any(re.match(p, "Inkling-2-Mini-UD-IQ3_XXS.gguf") for p in ink["file_regex"])
-          and not any(re.match(p, "Inkling-2-Mini-UD-Q4_K_M.gguf") for p in ink["file_regex"])
+    check("inkling-2-mini repo pinned to abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF",
+          ink["repo"] == "abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF", f"({ink['repo']})")
+    check("inkling-2-mini file_regex matches GSQ-RCO-IQ3_XS and rejects other variants",
+          any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ3_XS.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ4_XS.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ2_XS.gguf") for p in ink["file_regex"])
           and not any(re.match(p, "dspark-Inkling-2-Mini-Q8_0.gguf") for p in ink["file_regex"]))
-    check("inkling-2-mini mmproj matches F16 with unique dest and ships no DSpark sidecar yet",
-          any(re.match(p, "mmproj-F16.gguf") for p in ink["mmproj_regex"])
+    check("inkling-2-mini mmproj matches BF16/F16 with unique dest and ships no DSpark sidecar yet",
+          any(re.match(p, "mmproj-Inkling-2-Mini-BF16.gguf") for p in ink["mmproj_regex"])
+          and any(re.match(p, "mmproj-F16.gguf") for p in ink["mmproj_regex"])
           and ink.get("mmproj_dest") == "mmproj-Inkling-2-Mini-F16.gguf"
           and not ink.get("sidecar"))
 
@@ -358,7 +360,7 @@ if ink:
 
     with _tempfile_ink.TemporaryDirectory() as _tmp_ink:
         _mdir_i = Path(_tmp_ink)
-        _f_ink = _mdir_i / "Inkling-2-Mini-UD-IQ3_XXS.gguf"
+        _f_ink = _mdir_i / "Inkling-2-Mini-GSQ-RCO-IQ3_XS.gguf"
         _f_mm = _mdir_i / "mmproj-Inkling-2-Mini-F16.gguf"
         _f_ink.write_bytes(b"inkling")
         _f_mm.write_bytes(b"mmproj")
@@ -388,15 +390,36 @@ if ink:
         _lm_i._filename_tag_map = None
         try:
             _res_canon = _lm_i.resolve_model_path("inkling-2-mini")
-            _res_legacy = _lm_i.resolve_model_path("inkling-2-mini-ud")
+            _res_alias = _lm_i.resolve_model_path("inkling-2-mini-gsq-rco")
             _avail = _lm_i.list_available_models(force_refresh=True)
-            check("llama_models resolves both inkling-2-mini and legacy inkling-2-mini-ud without duplicates",
-                  _res_canon == _f_ink and _res_legacy == _f_ink
-                  and "inkling-2-mini" in _avail and "inkling-2-mini-ud" not in _avail,
-                  f"(canon={_res_canon}, legacy={_res_legacy}, avail={_avail})")
+            check("llama_models resolves both inkling-2-mini and inkling-2-mini-gsq-rco without duplicates",
+                  _res_canon == _f_ink and _res_alias == _f_ink
+                  and "inkling-2-mini" in _avail and "inkling-2-mini-gsq-rco" not in _avail,
+                  f"(canon={_res_canon}, alias={_res_alias}, avail={_avail})")
         finally:
             (_lm_i.MODELS_DIR, _lm_i._MODELS_JSON, _lm_i._index_cache,
              _lm_i._index_ts, _lm_i._index_stamp, _lm_i._names_cache,
              _lm_i._names_cache_ts, _lm_i._filename_tag_map) = _orig_lm_dirs
+
+    with _tempfile_ink.TemporaryDirectory() as _tmp_ink_ud:
+        _mdir_u = Path(_tmp_ink_ud)
+        _f_ud = _mdir_u / "Inkling-2-Mini-UD-IQ3_XXS.gguf"
+        _f_ud.write_bytes(b"\x00" * (1024 * 1024 + 4096))
+        _orig_lm_dirs_u = (_lm_i.MODELS_DIR, _lm_i._MODELS_JSON, _lm_i._index_cache,
+                           _lm_i._index_ts, _lm_i._index_stamp, _lm_i._names_cache,
+                           _lm_i._names_cache_ts, _lm_i._filename_tag_map)
+        _lm_i.MODELS_DIR = _mdir_u
+        _lm_i._MODELS_JSON = _mdir_u / "missing_models.json"
+        _lm_i._index_cache = None
+        _lm_i._names_cache = None
+        _lm_i._filename_tag_map = None
+        try:
+            _res_ud = _lm_i.resolve_model_path("inkling-2-mini")
+            check("llama_models still maps legacy UD-IQ3_XXS filename to inkling-2-mini",
+                  _res_ud == _f_ud, repr(_res_ud))
+        finally:
+            (_lm_i.MODELS_DIR, _lm_i._MODELS_JSON, _lm_i._index_cache,
+             _lm_i._index_ts, _lm_i._index_stamp, _lm_i._names_cache,
+             _lm_i._names_cache_ts, _lm_i._filename_tag_map) = _orig_lm_dirs_u
 
 sys.exit(h.finish("model_catalog"))

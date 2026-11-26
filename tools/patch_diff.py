@@ -144,6 +144,22 @@ def _unquote(raw: str) -> str:
     return p
 
 
+def _strip_header_timestamp(raw: str) -> str:
+    """Strip tab-separated diff -u timestamp suffix while respecting quoted names."""
+    s = raw.strip()
+    if s.startswith('"'):
+        i = 1
+        while i < len(s):
+            if s[i] == "\\" and i + 1 < len(s):
+                i += 2
+                continue
+            if s[i] == '"':
+                return s[:i + 1]
+            i += 1
+        return s
+    return s.split("\t", 1)[0]
+
+
 def sanitize_patch_path(raw: str | None) -> str | None:
     """Normalize a ---/+++ path; None for /dev/null; raises PATCH_PATH_INVALID.
 
@@ -151,7 +167,7 @@ def sanitize_patch_path(raw: str | None) -> str | None:
     the path must name a file DIRECTLY under the workspace."""
     if raw is None:
         return None
-    p = _unquote(raw)
+    p = _unquote(_strip_header_timestamp(raw))
     if p.lower() in ("/dev/null", "nul", "/nul"):
         return None
     p = strip_prefix(p).replace("\\", "/")

@@ -114,20 +114,6 @@ function normalizeToolThinkingMode(v) {
     : 'off';
 }
 
-function onDuoToolThinkingModeChange(v) {
-  S.duoToolThinkingMode = normalizeToolThinkingMode(v);
-  S.duoToolThinkingEnabled = (S.duoToolThinkingMode !== 'off');
-  var rb = document.getElementById('ttm_' + S.duoToolThinkingMode);
-  if (rb) rb.checked = true;
-  // Wenn Toggle "always" an ist, bleibt always aktiv — segmented control ist Fallback
-  postSettings({
-    duo_coder_tool_thinking: S.duoToolThinkingAlways || S.duoToolThinkingEnabled,
-    duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : S.duoToolThinkingMode,
-  });
-  if (typeof _renderReasoningEffortUI === 'function') _renderReasoningEffortUI(S.reasoningEffort);
-}
-
-
 var _duoCtxCommitTimer = null;
 function scheduleDuoCtxCommit() {
   if (_duoCtxCommitTimer) clearTimeout(_duoCtxCommitTimer);
@@ -702,7 +688,8 @@ async function loadModels() {
   // After a successful retry: re-render the agent cards so dropdowns show all models.
   async function _fetchModels() {
     try {
-      const d = await (await fetch('/models')).json();
+      const p = S._modelsInFlight || (S._modelsInFlight = fetch('/models').then(function(r) { return r.json(); }).finally(function() { S._modelsInFlight = null; }));
+      const d = await p;
       // show server-side errors in the console
       if (d.error) console.warn('[/models] Server error:', d.error);
       // cache profiles for agent dropdowns
@@ -855,6 +842,7 @@ function refreshAllSelects() {
 async function loadSettings() {
   try {
     const s = await (await fetch('/settings')).json();
+    S._lastSettings = s;
 
     S.iters          = s.max_iterations || 2;
     S.mode           = (s.mode === 'automap' ? 'auto'
@@ -928,7 +916,6 @@ async function loadSettings() {
         if (_plannerTog) { _plannerTog.checked = S.duoPlannerEnabled; }
     S.duoCodingMode = s.duo_coding_mode !== false;   // default true
     S.duoPreExplore  = s.duo_pre_explore   || false;
-    updatePreExploreAdv();
     S.duoPreExploreMaxTools = s.duo_pre_explore_max_tools || 12;
     S.duoPassFiles = s.duo_pass_explore_files || 'touched';
     updatePassFilesButtons();
@@ -987,12 +974,8 @@ async function loadSettings() {
     S.askUserAutoAnswer = s.ask_user_auto_answer || 'Use best judgment, document decision in commit message.';
     _syncAskUserAutoProceedUI(!!s.ask_user_auto_proceed);
     // Ensure chunk-dependent toggles are correctly shown/hidden.
-    // persist=false: a render must never write derived state back (see
-    // onChunkingChange header — this post reverted saved values on reload).
+    // persist=false: a render must never write derived state back.
     onChunkingChange(false);
-    // Until-finished is always ∞ — no cap field anymore
-        // restore chunking state
-        onChunkingChange(false);
     updateAgenticCombinedWarn();
     setDuoSubMode(S.duoAgenticMode ? 'agentic' : 'critic', {persist: false});
     updateComplexityVisibility();
@@ -1114,14 +1097,16 @@ async function loadSettings() {
       var _storedModel = (S.duoCompressModel && _dcmsEl.querySelector('option[value="' + S.duoCompressModel + '"]')) ? S.duoCompressModel : 'auto';
       _dcmsEl.value = _storedModel;
     }
-    _syncFlagCheck('duo-error-rollup-toggle', S.duoErrorRollup);
-    _syncFlagCheck('duo-pin-static-map-toggle', S.duoPinStaticMap);
-    _syncFlagCheck('duo-write-guard-toggle', S.duoWriteGuard);
-    _syncFlagCheck('duo-noop-hint-toggle', S.duoNoopHint);
-    _syncFlagCheck('duo-wedge-handoff-toggle', S.duoWedgeHandoff);
-    _syncFlagCheck('duo-partial-compression-toggle', S.duoPartialCompr);
-    _syncFlagCheck('duo-compress-local-only-toggle', S.duoCompressLocal);
-_syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
+    [
+      ['duo-error-rollup-toggle', S.duoErrorRollup],
+      ['duo-pin-static-map-toggle', S.duoPinStaticMap],
+      ['duo-write-guard-toggle', S.duoWriteGuard],
+      ['duo-noop-hint-toggle', S.duoNoopHint],
+      ['duo-wedge-handoff-toggle', S.duoWedgeHandoff],
+      ['duo-partial-compression-toggle', S.duoPartialCompr],
+      ['duo-compress-local-only-toggle', S.duoCompressLocal],
+      ['mcp-client-toggle', S.mcpClientEnabled],
+    ].forEach(function (pair) { _syncFlagCheck(pair[0], pair[1]); });
     // Planner / Coder TTL
     S.duoPlannerTtl = parseInt(s.duo_planner_ttl_seconds || 0) || 0;
     S.duoCoderTtl = parseInt(s.duo_coder_ttl_seconds || 0) || 0;
@@ -1251,34 +1236,31 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
   S.automapDuoPreExplore = s.duo_pre_explore === true;
   S.automapDuoParallelPreexplore = s.duo_parallel_preexplore === true;
   S.automapPipelineWebsearch = s.pipeline_websearch_enabled === true;
-  var _amCode = document.getElementById('automap-code-duo-toggle');
-  if (_amCode) _amCode.checked = S.automapCodeDuoEnabled;
-  var _amPre = document.getElementById('automap-duo-preexplore-toggle');
-  if (_amPre) _amPre.checked = S.automapDuoPreExplore;
-  var _amPar = document.getElementById('automap-duo-parallel-toggle');
-  if (_amPar) _amPar.checked = S.automapDuoParallelPreexplore;
-  var _amPipeWs = document.getElementById('automap-pipeline-websearch-toggle');
-  if (_amPipeWs) _amPipeWs.checked = S.automapPipelineWebsearch;
+  [
+    ['automap-code-duo-toggle', S.automapCodeDuoEnabled],
+    ['automap-duo-preexplore-toggle', S.automapDuoPreExplore],
+    ['automap-duo-parallel-toggle', S.automapDuoParallelPreexplore],
+    ['automap-pipeline-websearch-toggle', S.automapPipelineWebsearch],
+  ].forEach(function (pair) { _syncFlagCheck(pair[0], pair[1]); });
   updateAutomapAdvancedInterlocks();
   updateAutomapAdvancedVisibility();
 
     updateWebsearchHint();
-    // Keep-Awake (2026-08-24)
-    var _kaEl = document.getElementById('keepawake-toggle');
-    if (_kaEl) _kaEl.checked = s.keep_awake_during_run !== false;  // default an
-    // Subagent-lite (2026-08-24)
     S.subagentLite = !!s.subagent_lite_enabled;  // default off
-    var _saTgl = document.getElementById('subagent-lite-toggle');
-    if (_saTgl) _saTgl.checked = S.subagentLite;
+    S.duoToolSandbox = s.duo_tool_sandbox !== false;  // default an
+    [
+      ['keepawake-toggle', s.keep_awake_during_run !== false],
+      ['subagent-lite-toggle', S.subagentLite],
+      ['tool-sandbox-toggle', S.duoToolSandbox],
+      ['startup-preload-toggle', s.startup_preload_enabled === true],
+      ['judge-keepalive-toggle', s.judge_keepalive_enabled === true],
+      ['pin-direct-toggle', s.pin_direct_after_response === true],
+    ].forEach(function (pair) { _syncFlagCheck(pair[0], pair[1]); });
     var _saLadder = document.getElementById('subagent-ladder-inp');
     if (_saLadder) _saLadder.value = (s.subagent_lite_model_ladder || []).join(', ');
     var _saCtx = document.getElementById('subagent-ctx-inp');
     if (_saCtx) _saCtx.value = s.subagent_lite_ctx_default || 8192;
     syncSubagentUI();
-    // Tool Sandbox (2026-08-24)
-    S.duoToolSandbox = s.duo_tool_sandbox !== false;  // default an
-    var _sbTgl = document.getElementById('tool-sandbox-toggle');
-    if (_sbTgl) _sbTgl.checked = S.duoToolSandbox;
     // Git Integration
     loadGitConfig(s);
     // LPM Toggle
@@ -1287,14 +1269,6 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
       lpmEl.checked = s.learning_preset_mode || false;
       document.getElementById('lpm-info').style.display = lpmEl.checked ? 'block' : 'none';
     }
-    // Startup Preload Toggle
-        var suEl = document.getElementById('startup-preload-toggle');
-    if (suEl) suEl.checked = s.startup_preload_enabled === true;
-    var jkaEl = document.getElementById('judge-keepalive-toggle');
-    if (jkaEl) jkaEl.checked = s.judge_keepalive_enabled === true;
-    // Analyst Sub-Toggle
-    var pdEl = document.getElementById('pin-direct-toggle');
-    if (pdEl) pdEl.checked = s.pin_direct_after_response === true;
     // Vision-Agent state
     S.visionAgentEnabled = s.vision_agent_enabled || false;
     S.visionAgentModel   = s.vision_agent_model   || '';
@@ -1306,8 +1280,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     _applyPipelineVisionRolesUI();
     // AGENT-CTX: per-agent context-size overrides from settings.ctx_overrides
     S.ctxOverrides = (s.ctx_overrides && s.ctx_overrides.roles) ? s.ctx_overrides.roles : {};
-    var vaEl = document.getElementById('va-enabled-toggle');
-    if (vaEl) vaEl.checked = S.visionAgentEnabled;
+    _syncFlagCheck('va-enabled-toggle', S.visionAgentEnabled);
     // CODER ALWAYS-VISION (2026-10-06): preload the projector for the coder
     // so image steers don't pay the mid-run upgrade stall. Opt-in (VRAM).
     S.coderAlwaysVision = !!s.duo_coder_always_vision;
@@ -1315,8 +1288,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     // wins over the role checkbox and the always-vision toggle (backend
     // resolve_image_plan + steer drains honor it).
     S.coderImagesOff = !!s.duo_coder_images_off;
-    var _cioEl = document.getElementById('coder-images-off-toggle');
-    if (_cioEl) _cioEl.checked = S.coderImagesOff;
+    _syncFlagCheck('coder-images-off-toggle', S.coderImagesOff);
     // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted.
     S.imageMode = '';
     // DUO IMAGE PLAN (2026-10-01): sentinel None = derived client-side the

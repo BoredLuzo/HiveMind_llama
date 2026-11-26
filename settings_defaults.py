@@ -457,6 +457,8 @@ DEFAULT_SETTINGS = {
     "duo_tool_sandbox_max_procs": 64,
     # POSIX only (Linux/macOS): RLIMIT_CPU seconds per tool child. 0 = unset.
     "duo_tool_sandbox_max_cpu_s": 0,
+    # POSIX only: opt-in enforcement of RLIMIT_AS/RLIMIT_NPROC (off by default).
+    "duo_tool_sandbox_posix_rlimits": False,
 
     # DEBUG API (2026-10-18, audit): /debug/tasks returns asyncio task stacks with
     # file paths, /debug/models registry and filesystem internals, /thinking/debug

@@ -76,6 +76,45 @@ def resolve_planner_effort_settings(settings: dict | None) -> dict:
     return s
 
 
+def format_reasoning_effort_status(
+    model_name: str,
+    user_eff: str,
+    *,
+    supported: bool | None = None,
+    scope_label: str = "Reasoning effort",
+    source_label: str = "composer",
+    disable_target: str = "thinking",
+) -> str | None:
+    """Format the UI/log status line for an explicit reasoning_effort override."""
+    if user_eff == "none":
+        return f"🧠 {scope_label}: none ({source_label} override — {disable_target} disabled)"
+    if user_eff in POSITIVE_REASONING_EFFORTS:
+        is_sup = model_supports_thinking(model_name) if supported is None else bool(supported)
+        if is_sup:
+            mapped = clamp_reasoning_effort_for_model(model_name, user_eff)
+            sfx = f" → {mapped}" if (mapped and mapped != user_eff) else ""
+            return f"🧠 {scope_label}: {user_eff} ({source_label} override){sfx}"
+        return f"ℹ️ {scope_label} ({user_eff}) skipped — {model_name} does not support reasoning"
+    return None
+
+
+def set_disabled_reasoning_effort(
+    payload: dict, model_name: str, *, empty_keeps_none: bool = True
+) -> bool:
+    """Apply 'none' or strip payload['reasoning_effort'] safely for model_name."""
+    if model_name:
+        if clamp_reasoning_effort_for_model(model_name, "none") == "none":
+            payload["reasoning_effort"] = "none"
+            return True
+        payload.pop("reasoning_effort", None)
+        return False
+    if empty_keeps_none:
+        payload["reasoning_effort"] = "none"
+        return True
+    payload.pop("reasoning_effort", None)
+    return False
+
+
 def clamp_reasoning_effort_for_model(model_name: str, effort: str) -> str:
     """Map normalized reasoning_effort safely onto what model_name's template accepts."""
     eff = normalize_reasoning_effort(effort)

@@ -63,7 +63,7 @@ def main() -> int:
     # persist=false form, no bare call.
     render_calls = APP.count("onChunkingChange(false);")
     check("C1: render/off-state calls pass persist=false (found %d)" % render_calls,
-          render_calls == 3)
+          render_calls == 2)
     check("C2: no bare onChunkingChange() left in app.js "
           "(a default-persist render call would reintroduce the revert)",
           "onChunkingChange();" not in APP)

@@ -93,7 +93,8 @@ check("app.js reads the setting",
 check("app.js defaults it to on when absent (backend default)",
       "!== false" in _js.split("S.duoWedgeHandoff")[1][:60])
 check("app.js syncs the checkbox",
-      "_syncFlagCheck('duo-wedge-handoff-toggle', S.duoWedgeHandoff);" in _js)
+      "_syncFlagCheck('duo-wedge-handoff-toggle', S.duoWedgeHandoff)" in _js
+      or ("['duo-wedge-handoff-toggle', S.duoWedgeHandoff]" in _js and "_syncFlagCheck(" in _js))
 
 # ── (d) cache buster ────────────────────────────────────────────────────────
 _m = re.search(r'app\.js\?v=(\d{8})-(\d+)', _html)
@@ -113,6 +114,8 @@ check("docs/settings.md documents it", "`duo_wedge_handoff_enabled`" in _doc)
 
 # every id referenced by _syncFlagCheck must exist in the HTML
 _ids = re.findall(r"_syncFlagCheck\('([^']+)'", _js)
+for _tbl in re.findall(r"\[\s*(?:\[[^\]]+\],?\s*)+\]\s*\.forEach\([^)]*_syncFlagCheck", _js):
+    _ids.extend(re.findall(r"\['([^']+)'", _tbl))
 _missing = [i for i in _ids if f'id="{i}"' not in _html]
 check("every synced toggle id exists in index.html", not _missing,
       f" (missing {_missing})")

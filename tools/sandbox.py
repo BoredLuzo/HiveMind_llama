@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
-import logging
+import functools
 import os
 import signal
 import subprocess
@@ -71,14 +71,16 @@ def enabled() -> bool:
         return True
 
 
-def _int_setting(key: str, default: int) -> int:
+def _int_setting(key: str, default: int, _settings_map: dict | None = None) -> int:
     try:
-        from settings import load_settings
-        val = load_settings().get(key, default)
+        if _settings_map is None:
+            from settings import load_settings
+            _settings_map = load_settings()
+        val = (_settings_map or {}).get(key, default)
         if val is None or val == "":
             return default
         return int(val)
-    except Exception:
+    except (ImportError, OSError, TypeError, ValueError):
         return default
 
 
@@ -92,59 +94,69 @@ def _posix_preexec():
 
     rlimits are the closest equivalent that needs no cgroups and no root:
     RLIMIT_AS (address space, the memory cap), RLIMIT_NPROC (process count for
-    this uid) and RLIMIT_CPU (CPU seconds). They use the SAME settings keys as the
-    Windows job object, so one value works on both platforms, and every limit is
-    0 = unset (default behaviour unchanged).
+    this uid) and RLIMIT_CPU (CPU seconds). Note that settings_defaults ships
+    4096 MB / 64 procs for Windows Job Objects; applying those to POSIX UID-wide
+    RLIMIT_NPROC or V8/Go virtual address reservations breaks normal runs unless
+    explicitly opted in via `duo_tool_sandbox_posix_rlimits`. `RLIMIT_CPU` stays
+    independently configurable via `duo_tool_sandbox_max_cpu_s` (default 0).
 
     preexec_fn runs in the child between fork and exec. Python documents that as
-    unsafe in threaded programs; this process IS threaded (uvicorn), so the
-    function stays tiny: it only calls resource.setrlimit and admits a failure to
-    the log instead of raising. Worst case: a limit is not applied.
+    unsafe in multi-threaded programs, so _apply() must remain minimal, perform
+    zero imports, and never acquire Python logging locks.
     """
     try:
         from settings import load_settings as _ls
         _s = _ls()
     except (ImportError, OSError, ValueError, TypeError):
         return None
-    _mem_mb = _int_setting("duo_tool_sandbox_max_mem_mb", 0)
-    _procs = _int_setting("duo_tool_sandbox_max_procs", 0)
-    _cpu_s = _int_setting("duo_tool_sandbox_max_cpu_s", 0)
-    if not (_mem_mb or _procs or _cpu_s):
+    if not bool((_s or {}).get("duo_tool_sandbox", True)):
         return None
-    _lg = logging.getLogger(__name__)
+    _posix_rlimits = bool((_s or {}).get("duo_tool_sandbox_posix_rlimits", False))
+    _mem_mb = _int_setting("duo_tool_sandbox_max_mem_mb", 0, _s) if _posix_rlimits else 0
+    _procs = _int_setting("duo_tool_sandbox_max_procs", 0, _s) if _posix_rlimits else 0
+    _cpu_s = _int_setting("duo_tool_sandbox_max_cpu_s", 0, _s)
+    if not (_mem_mb > 0 or _procs > 0 or _cpu_s > 0):
+        return None
+    try:
+        import resource as _r
+    except ImportError:
+        return None
+    _setrlimit = getattr(_r, "setrlimit", None)
+    _getrlimit = getattr(_r, "getrlimit", None)
+    if _setrlimit is None:
+        return None
+    _rlim_inf = getattr(_r, "RLIM_INFINITY", -1)
+    _want: list[tuple[int, int]] = []
+    if _mem_mb > 0:
+        _rlim_as = getattr(_r, "RLIMIT_AS", None)
+        if _rlim_as is not None:
+            _want.append((_rlim_as, _mem_mb * 1024 * 1024))
+    if _procs > 0:
+        _rlim_nproc = getattr(_r, "RLIMIT_NPROC", None)
+        if _rlim_nproc is not None:
+            _want.append((_rlim_nproc, _procs))
+    if _cpu_s > 0:
+        _rlim_cpu = getattr(_r, "RLIMIT_CPU", None)
+        if _rlim_cpu is not None:
+            _want.append((_rlim_cpu, _cpu_s))
+    if not _want:
+        return None
 
-    def _apply() -> None:            # runs in the CHILD
-        try:
-            import resource as _r
-        except ImportError:
-            return
-        # getattr guards: the rlimit constants are POSIX-only and every
-        # mainstream POSIX target (Linux) has them - a platform that lacks
-        # one simply skips that limit instead of aborting the preexec.
-        _setrlimit = getattr(_r, "setrlimit", None)
-        if _setrlimit is None:
-            return
-        _want: list = []
-        if _mem_mb > 0:
-            _rlim_as = getattr(_r, "RLIMIT_AS", None)
-            if _rlim_as is not None:
-                _want.append((_rlim_as, _mem_mb * 1024 * 1024))
-        if _procs > 0:
-            _rlim_nproc = getattr(_r, "RLIMIT_NPROC", None)
-            if _rlim_nproc is not None:
-                _want.append((_rlim_nproc, _procs))
-        if _cpu_s > 0:
-            _rlim_cpu = getattr(_r, "RLIMIT_CPU", None)
-            if _rlim_cpu is not None:
-                _want.append((_rlim_cpu, _cpu_s))
+    def _apply() -> None:            # runs in the CHILD — no imports, no logging
         for _res, _val in _want:
             try:
-                _setrlimit(_res, (_val, _val))
-            except (OSError, ValueError) as _exc:
-                # the child continues without that limit; the parent never sees
-                # this directly, so it goes to the log for post-mortems
-                _lg.debug("[SANDBOX] rlimit %s=%s not applied: %s",
-                          _res, _val, _exc)
+                _soft = _val
+                _hard = _val
+                if callable(_getrlimit):
+                    _cur = _getrlimit(_res)
+                    if isinstance(_cur, tuple) and len(_cur) == 2:
+                        _, _cur_hard = _cur
+                        if _cur_hard != _rlim_inf:
+                            _hard = min(_val, int(_cur_hard))
+                            _soft = _hard
+                _setrlimit(_res, (_soft, _hard))
+            except (OSError, ValueError):
+                continue
     return _apply
 
 
@@ -223,6 +235,7 @@ async def kill_tree_and_reap(proc, taskkill_timeout: int = 5) -> None:
         pass
 
 
+@functools.lru_cache(maxsize=1)
 def _k32():
     _win_dll = getattr(ctypes, "WinDLL")
     k = _win_dll("kernel32", use_last_error=True)

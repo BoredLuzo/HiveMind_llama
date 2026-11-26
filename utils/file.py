@@ -68,6 +68,8 @@ _SECRET_PATH_RE = re.compile(
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_SEARCH_ROW_RE = re.compile(r"^(.+?):(?:\d+:|$)")
+_WIN_DRIVE_PREFIX_RE = re.compile(r"^/[A-Za-z]:[/\\]")
 
 
 def _normalize_secret_part(part: str) -> str:
@@ -140,19 +142,19 @@ def is_secret_path(p: Path | str, workspace_lock: Path | str | None = None) -> b
         except (OSError, RuntimeError, ValueError):
             pass
         return False
-    except (TypeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         return _matches_secret_parts(raw.replace("\\", "/"))
 
 
-def filter_secret_search_rows(output: str) -> str:
+def filter_secret_search_rows(output: str, workspace: str | Path | None = None) -> str:
     """Drop grep/rg/findstr result lines whose file path matches `is_secret_path`."""
     if not output:
         return output
     kept: list[str] = []
     for line in output.splitlines():
         clean = _ANSI_ESCAPE_RE.sub("", line)
-        m = re.match(r"^(.+):(?:\d+:|$)", clean)
-        if m and is_secret_path(m.group(1)):
+        m = _SEARCH_ROW_RE.match(clean)
+        if m and is_secret_path(m.group(1), workspace):
             continue
         kept.append(line)
     return "\n".join(kept)
@@ -306,12 +308,16 @@ def _inline_check_workspace(p: Path, workspace_lock, tool_name=""):
             )
     if _is_protected_path(p):
         from tools.errors import tool_error_response as _tool_error_response
+        try:
+            _prot_path = str(p.resolve())
+        except (OSError, RuntimeError):
+            _prot_path = str(p)
         return _tool_error_response(
             "PATH_PROTECTED",
             f"'{p.name}' is a HiveMind internal file and cannot be "
             f"modified by the coder.",
             tool=tool_name,
-            details={"path": str(p.resolve())},
+            details={"path": _prot_path},
         )
     if is_secret_path(p, workspace_lock):
         from tools.errors import tool_error_response as _tool_error_response
@@ -342,7 +348,7 @@ def _inline_check_workspace(p: Path, workspace_lock, tool_name=""):
     try:
         p.resolve().relative_to(Path(workspace_lock).resolve())
         return None
-    except ValueError:
+    except (ValueError, OSError, RuntimeError):
         from tools.errors import tool_error_response as _tool_error_response
         return _tool_error_response(
             "PATH_OUTSIDE_WORKSPACE",
@@ -362,6 +368,9 @@ def normalize_tool_path(file_path: str, workspace: str | Path | None = None) -> 
     """
     if not file_path:
         return ""
+    file_path = str(file_path)
+    if os.name == "nt" and _WIN_DRIVE_PREFIX_RE.match(file_path):
+        file_path = file_path[1:]
     try:
         p = Path(file_path)
         if not p.is_absolute() and workspace:

@@ -34,7 +34,6 @@ import os
 import random
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -653,27 +652,9 @@ class ServerConn:
 
 
 async def _kill_tree(proc, *, force: bool = False) -> None:
-    """Best effort: kill the whole process tree of the child.
-
-    C6 (2026-10-31): taskkill ran as a blocking subprocess.run inside the
-    event loop - up to 10 s of frozen loop per killed server. to_thread
-    keeps the loop serving while the kill runs.
-    """
-    pid = getattr(proc, "pid", None)
-    if not pid:
-        return
-    try:
-        if sys.platform == "win32":
-            await asyncio.to_thread(
-                subprocess.run,
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True, timeout=10,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        else:
-            sig = signal.SIGKILL if force else signal.SIGTERM
-            os.killpg(os.getpgid(pid), sig)
-    except (OSError, subprocess.SubprocessError, ProcessLookupError):
-        pass
+    """Best effort: kill the whole process tree of the child (via asyncio.to_thread)."""
+    from infra.proc_kill import kill_tree as _shared_kill_tree
+    await _shared_kill_tree(proc, force=force, to_thread=asyncio.to_thread)
 
 
 _VERSION_TOKEN = re.compile(r"\d{4}-\d{2}-\d{2}")

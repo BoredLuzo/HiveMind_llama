@@ -267,7 +267,9 @@ def _plan_file_navigation(url: str, workspace) -> tuple[str, str]:
     if not _path.exists():
         return "", f"file not found: {_path}"
     _port = _ensure_file_server(str(_ws))
-    return f"http://127.0.0.1:{_port}/{_path.relative_to(_ws).as_posix()}", ""
+    from urllib.parse import quote as _url_quote
+    _rel_q = _url_quote(_path.relative_to(_ws).as_posix(), safe="/")
+    return f"http://127.0.0.1:{_port}/{_rel_q}", ""
 
 
 def _ensure_file_server(root: str) -> int:
@@ -464,20 +466,20 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
         return _snapshot(page)
 
     if action == "screenshot":
-        path = str(args.get("path", "screenshot.png")).strip().replace("\\", "/")
-        path = path.lstrip("/") or "screenshot.png"
-        # SCREENSHOT-WORKSPACE (2026-09-29): screenshots belong to the project,
-        # not to the HiveMind install dir — the path used to be stripped to its
-        # basename before saving, so playwright wrote into the server CWD.
-        import pathlib as _pl  # F821 fix: _pl was only imported in _plan_file_navigation
-        _ws = str(workspace or "").strip()
-        _out = (_pl.Path(_ws) / path) if _ws else _pl.Path(path)
-        # H5 (deep audit 2026-10-06): the only path-taking tool without a
-        # containment check - "../../x.png" wrote anywhere on disk. Resolve
-        # and gate like every other file tool.
-        from utils.file import _inline_check_workspace as _bws_check
+        _raw_p = str(args.get("path") or "").strip() or "screenshot.png"
+        from utils.file import (
+            _inline_check_workspace as _bws_check,
+            _inline_resolve_path as _bws_resolve,
+        )
+        _ws_str = str(workspace or "").strip()
+        _ws_path = Path(_ws_str) if _ws_str else Path(".")
+        _out = _bws_resolve(_ws_path, _raw_p)
         if _err := _bws_check(_out, workspace_lock, "browser"):
             return _err
+        try:
+            _hint_path = _out.resolve().relative_to(_ws_path.resolve()).as_posix()
+        except (OSError, ValueError, RuntimeError):
+            _hint_path = _raw_p
         _out.parent.mkdir(parents=True, exist_ok=True)
         full = bool(args.get("full_page", False))
         page.screenshot(path=str(_out), full_page=full)
@@ -490,7 +492,7 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
                         "this image. Inspect the page via browser snapshot/evaluate "
                         "text output instead.)")
             if _vt is True:
-                return f"[browser] screenshot saved to {_out} (call view_image(path='{path}') to inspect it visually)"
+                return f"[browser] screenshot saved to {_out} (call view_image(path='{_hint_path}') to inspect it visually)"
         except Exception:
             pass
         return f"[browser] screenshot saved to {_out}"
@@ -592,10 +594,13 @@ def _dispatch_on_executor(args: dict, workspace, workspace_lock=None) -> str:
 async def browser_tool(args: dict, workspace, workspace_lock) -> str:
     """Inline-Tool-Handler (blocking Playwright sync API, pinned to ONE thread)."""
     loop = asyncio.get_running_loop()
+    if _blocked_navigations.get(None) is None:
+        _blocked_navigations.set({})
+    _ctx = contextvars.copy_context()
     try:
         return await asyncio.wait_for(
             loop.run_in_executor(
-                _BROWSER_EXECUTOR, _dispatch_on_executor,
+                _BROWSER_EXECUTOR, _ctx.run, _dispatch_on_executor,
                 args or {}, workspace, workspace_lock,
             ),
             timeout=65.0,

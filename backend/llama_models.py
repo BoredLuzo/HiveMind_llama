@@ -20,6 +20,7 @@ _MODELS_JSON = _THIS_DIR / "models.json"
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
 _index_cache: dict[str, Path] | None = {}     # canonical_name → Path (None = invalidated)
+_index_norm_cache: dict[str, Path] = {}
 _index_ts: float = 0.0
 _index_stamp: tuple | None = None
 _INDEX_TTL: float = 30.0
@@ -31,6 +32,8 @@ _INDEX_TTL: float = 30.0
 _names_cache: list[str] | None = []
 _names_cache_ts: float = 0.0
 _NAMES_TTL: float = min(60.0, _INDEX_TTL)
+_overrides_cache: dict[str, str] | None = None
+_overrides_stamp: tuple[int, int] | None = None
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -182,6 +185,7 @@ _BUILTIN_FILENAME_TAGS: dict[str, str] = {
     "nemotron-3.5-bolt-e4b-q4_k_m.gguf": "nvidia-nemotron-3.5-bolt:e4b",
     "twil-8b-q4_k_m-balanced.gguf": "twil:8b",
     "cyber-tiel-coder-35b-a3b-mtp-ud-iq4_xs.gguf": "cyber-tiel-coder:35b-a3b-mtp-ud",
+    "inkling-2-mini-gsq-rco-iq3_xs.gguf": "inkling-2-mini",
     "inkling-2-mini-ud-iq3_xxs.gguf": "inkling-2-mini",
 }
 
@@ -278,6 +282,7 @@ def _build_index() -> dict[str, Path]:
     # kept the SMALLER file, which replaced an already-registered quant
     # with a worse one the moment a second file appeared.
     _name_cands: dict[str, list[Path]] = {}
+    _known_tags = _known_filename_tags()
 
     for gguf in gguf_files:
         fname_lower = gguf.name.lower()
@@ -305,7 +310,7 @@ def _build_index() -> dict[str, Path]:
         # KNOWN-FILENAME (2026-09-12): manifest tag wins, parsed names stay as
         # aliases. Insert at the front so the dedup in list_available_models
         # (keeps the longest name per file) never drops the canonical tag.
-        _known_tag = _known_filename_tags().get(fname_lower)
+        _known_tag = _known_tags.get(fname_lower)
         if _known_tag and _known_tag not in canonical_names:
             canonical_names = [_known_tag] + [n for n in canonical_names if n != _known_tag]
 
@@ -429,8 +434,17 @@ def _models_dir_stamp() -> tuple | None:
         return None
 
 
+def _rebuild_norm_cache(index: dict[str, Path]) -> dict[str, Path]:
+    norm_map: dict[str, Path] = {}
+    for idx_name, idx_path in index.items():
+        nk = _normalize(idx_name.replace(":", "-"))
+        if nk not in norm_map:
+            norm_map[nk] = idx_path
+    return norm_map
+
+
 def _get_index() -> dict[str, Path]:
-    global _index_cache, _index_ts, _index_stamp
+    global _index_cache, _index_norm_cache, _index_ts, _index_stamp
     now = _time_module.time()
     if not _index_cache or (now - _index_ts) > _INDEX_TTL:
         stamp = _models_dir_stamp()
@@ -443,6 +457,7 @@ def _get_index() -> dict[str, Path]:
             _age = now - _index_ts
             _logger.info(f"GGUF index cache expired (age={_age:.0f}s > TTL={_INDEX_TTL:.0f}s) — rebuilding (trigger={_index_trigger_callers()})")
         _index_cache = _build_index()
+        _index_norm_cache = _rebuild_norm_cache(_index_cache)
         _index_stamp = stamp
         _index_ts = _time_module.time()
     return _index_cache
@@ -515,8 +530,16 @@ def _resolve_ollama_blob(model_name: str) -> Path | None:
 
 
 def _load_overrides() -> dict[str, str]:
-    if not _MODELS_JSON.exists():
+    global _overrides_cache, _overrides_stamp
+    try:
+        st = _MODELS_JSON.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _overrides_cache = None
+        _overrides_stamp = None
         return {}
+    if _overrides_cache is not None and _overrides_stamp == stamp:
+        return dict(_overrides_cache)
     try:
         data = json.loads(_MODELS_JSON.read_text(encoding="utf-8"))
     except Exception:
@@ -528,7 +551,9 @@ def _load_overrides() -> dict[str, str]:
         if k.startswith("_"):
             continue
         out[k] = v
-    return out
+    _overrides_cache = out
+    _overrides_stamp = stamp
+    return dict(out)
 
 
 def _resolve_from_overrides(model_name: str, overrides: dict[str, str]) -> Path | None:
@@ -566,8 +591,7 @@ def resolve_model_path(model_name: str, *, quiet: bool = False) -> Path | None:
 
     # 1. models.json explicit path — user override has highest priority
     overrides = _load_overrides()
-    _mmproj_keys = {k for k in overrides if k.endswith("_mmproj")}
-    if model in overrides and model not in _mmproj_keys:
+    if model in overrides and not model.endswith("_mmproj"):
         p = _resolve_from_overrides(model, overrides)
         if p:
             return p
@@ -581,9 +605,11 @@ def resolve_model_path(model_name: str, *, quiet: bool = False) -> Path | None:
 
     # 2b. Normalisierter Lookup: Punkte/Striche normalisieren
     model_norm = _normalize(model.replace(":", "-"))
+    norm_hit = _index_norm_cache.get(model_norm) if _index_norm_cache else None
+    if norm_hit is not None:
+        return norm_hit
     for idx_name, idx_path in index.items():
-        idx_norm = _normalize(idx_name.replace(":", "-"))
-        if model_norm == idx_norm:
+        if _normalize(idx_name.replace(":", "-")) == model_norm:
             return idx_path
 
     # 3. models.json fallback (remaining overrides like base-name aliases)
@@ -651,13 +677,25 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
                 _cand = MODELS_DIR / _reg_fn
                 if _cand.exists():
                     return _cand
-                for _cand in MODELS_DIR.rglob(_reg_fn):
-                    if _cand.is_file():
-                        return _cand
                 _reg_fn_low = _reg_fn.lower()
+                _reg_rel = "/" in _reg_fn or "\\" in _reg_fn
+                _reg_posix = _reg_fn.replace("\\", "/")
+                _ci_match: Path | None = None
                 for _cand in MODELS_DIR.rglob("*"):
-                    if _cand.is_file() and _cand.name.lower() == _reg_fn_low:
+                    if not _cand.is_file():
+                        continue
+                    if _reg_rel:
+                        try:
+                            if _cand.relative_to(MODELS_DIR).as_posix() == _reg_posix:
+                                return _cand
+                        except ValueError:
+                            pass
+                    elif _cand.name == _reg_fn:
                         return _cand
+                    if _ci_match is None and _cand.name.lower() == _reg_fn_low:
+                        _ci_match = _cand
+                if _ci_match is not None:
+                    return _ci_match
             elif _reg_p.exists():
                 return _reg_p
     except (ImportError, OSError, ValueError, TypeError, AttributeError) as _e:
@@ -797,19 +835,12 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
                 pass
 
     try:
-        settings_path = _THIS_DIR / "settings.json"
-        if settings_path.exists():
-            sd = json.loads(settings_path.read_text(encoding="utf-8"))
-            for ag in sd.get("agents", {}).values():
-                m = ag.get("model", "") if isinstance(ag, dict) else ""
-                # AVAILABLE-ONLY (2026-10-05): shipped default agent models
-                # (qwen3.5:4b-mtp, lfm2.5:2.6b, judge …) land here on every
-                # fresh install — listing them without a GGUF on disk made
-                # /models (and the Telegram /models) offer models that
-                # cannot load. Only settings models whose GGUF is in the
-                # index get listed.
-                if m and (m in index or _strip_alias(m) in index):
-                    names.add(_strip_alias(m))
+        from settings import load_settings as _load_settings
+        sd = _load_settings() or {}
+        for ag in (sd.get("agents") or {}).values():
+            m = ag.get("model", "") if isinstance(ag, dict) else ""
+            if m and (m in index or _strip_alias(m) in index):
+                names.add(_strip_alias(m))
     except Exception:
         pass
 
@@ -852,6 +883,7 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
     _clean_overrides = {_strip_alias(k): v for k, v in overrides.items() if isinstance(k, str)}
     _override_keys = set(_clean_overrides.keys())
 
+    _to_remove: set[str] = set()
     for path_key, name_list in file_to_names.items():
         if len(name_list) > 1:
             _pk_fname = Path(path_key).name.lower()
@@ -878,8 +910,10 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
                 if dup in _override_names and _norm_path_key(
                         str(_clean_overrides.get(dup, ""))) != path_key:
                     continue
-                if dup in result:
-                    result.remove(dup)
+                _to_remove.add(dup)
+
+    if _to_remove:
+        result = [r for r in result if r not in _to_remove]
 
     _names_cache = result
     _names_cache_ts = _time_module.time()
@@ -918,11 +952,14 @@ def invalidate_caches() -> None:
     list did not rebuild the index behind it. Callers: save_model_mapping,
     add_model, and anything that touches files under MODELS_DIR.
     """
-    global _index_cache, _index_ts, _index_stamp, _names_cache, _names_cache_ts
-    global _filename_tag_map
+    global _index_cache, _index_norm_cache, _index_ts, _index_stamp, _names_cache, _names_cache_ts
+    global _filename_tag_map, _overrides_cache, _overrides_stamp
     _index_cache = None
+    _index_norm_cache = {}
     _index_ts = 0.0
     _index_stamp = None
     _names_cache = None
     _names_cache_ts = 0.0
     _filename_tag_map = None
+    _overrides_cache = None
+    _overrides_stamp = None

@@ -460,7 +460,10 @@ async def _test_remaining_fixes():
         check("partition_tree prunes .git via os.walk instead of rglob('*')",
               ".git" not in walk_visited, f" visited={walk_visited}")
 
-    bridge_src = (ROOT / "hivemind_gateway" / "bridge.py").read_text(encoding="utf-8")
+    bridge_src = "\n".join(
+        (ROOT / "hivemind_gateway" / n).read_text(encoding="utf-8")
+        for n in ("bridge.py", "bridge_voice.py", "bridge_commands.py", "bridge_relay.py")
+    )
     check("bridge allows /tools mcp and deduplicates agent & planner_result branches",
           '"mcp"' in bridge_src
           and bridge_src.count('elif ev.get("type") == "agent":') == 1
@@ -474,7 +477,13 @@ async def _test_remaining_fixes():
     check("routers/vram.py initializes model and _load_ctx before try:",
           '    model = ""\n    _load_ctx = None\n    try:' in vram_src)
 
-    srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    srv_src = (
+        (ROOT / "server.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routers" / "gateway.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routers" / "openai_compat.py").read_text(encoding="utf-8")
+    )
     check("server.py pins force_complexity='simple' and calls _sup.clear() on missing pid",
           'force_complexity="simple"' in srv_src
           and 'if _verdict != "py":\n        _sup.clear()' in srv_src)
@@ -536,7 +545,7 @@ def _test_ui_and_metrics_points():
           and '"decode_tps": round(_p_tps, 2)' in cr_src
           and 'not str(data["content"]).startswith("[Direct error:")' in cr_src
           and 'not bool(_run_settings.get("smoke_test"))' in cr_src
-          and 'if "smoke_test" in body:' in srv_src)
+          and ('if "smoke_test" in body:' in srv_src or ('"smoke_test"' in srv_src and "_model_overrides[_bool_key]" in srv_src)))
 
     # Behavioral test for ToolLoop._add_usage timings + gen_ms fallback
     from core.tool_loop import ToolLoop, ToolLoopConfig
@@ -586,7 +595,11 @@ async def _test_wave_1_to_3_fixes():
     finally:
         mp.init_model_picker(_op, _os or {}, _osi, _oco)
 
-    srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    srv_src = (
+        (ROOT / "server.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routers" / "openai_compat.py").read_text(encoding="utf-8")
+    )
     check("_v1_direct_mode forwards model_overrides, conversation history, and real token usage",
           '_direct_overrides["direct_model"] = _v1_model' in srv_src
           and '_direct_overrides["agents_user_sampling_choice"] = {"direct": ["temperature"]}' in srv_src

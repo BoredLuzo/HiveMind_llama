@@ -210,8 +210,14 @@ def test_test_runner_tree_kill():
 
 def test_anti_spoof_executor():
     src = (ROOT / "core" / "tool_executor.py").read_text(encoding="utf-8")
-    checks = ["ANTI-SPOOF (2026-09-13)", "_ec_matches[-1]", 'if _at_name == "run_bash"']
-    bad = [c for c in checks if c not in src]
+    src_ut = (ROOT / "utils" / "tool.py").read_text(encoding="utf-8")
+    checks = [
+        ("tool_executor", "_run_bash_confirmed_exit_zero(content)", src),
+        ("tool_executor", "ec_matches[-1]", src),
+        ("utils/tool", "int(matches[-1]) == 0", src_ut),
+        ("utils/tool", "int(matches[-1]) != 0", src_ut),
+    ]
+    bad = [f"{name}:{needle}" for name, needle, hay in checks if needle not in hay]
     if not bad:
         ok("Executor: last-exit-code match + cmd-evidence Anti-Spoof")
     else:

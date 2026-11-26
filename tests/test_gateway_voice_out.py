@@ -29,7 +29,12 @@ def read(rel: str) -> str:
 
 send_src = read("hivemind_gateway/send.py")
 main_src = read("hivemind_gateway/main.py")
-bridge_src = read("hivemind_gateway/bridge.py")
+bridge_src = "\n".join([
+    read("hivemind_gateway/bridge.py"),
+    read("hivemind_gateway/bridge_voice.py"),
+    read("hivemind_gateway/bridge_commands.py"),
+    read("hivemind_gateway/bridge_relay.py"),
+])
 config_src = read("hivemind_gateway/config.py")
 
 # ── (a) send.py ───────────────────────────────────────────────────────────
@@ -167,8 +172,9 @@ check("the preload skips a pure text result",
 client_src = (ROOT / "hivemind_gateway" / "hive_client.py").read_text(
     encoding="utf-8", errors="replace")
 check("the client calls the preload endpoint", '"/tts/preload"' in client_src)
-server_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
-check("the engine exposes it", '@app.post("/tts/preload")' in server_src)
+server_src = read("server.py") + "\n" + read("routers/voice.py")
+check("the engine exposes it",
+      '@app.post("/tts/preload")' in server_src or '@router.post("/tts/preload")' in server_src)
 check("the endpoint does not block the loop",
       "asyncio.to_thread(tts_engine.preload" in server_src)
 

@@ -442,7 +442,11 @@ def test_voice_and_server():
             leftover = list(Path(tmp_wav_dir).iterdir())
             check("stt_audio cleans temp file on write error", len(leftover) == 0, f"({leftover})")
 
-    srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
+    srv_src = (
+        (ROOT / "server.py").read_text(encoding="utf-8")
+        + "\n"
+        + (ROOT / "routers" / "voice.py").read_text(encoding="utf-8")
+    )
     check(
         "server.py checks Content-Length before body and offloads tts_status",
         "await asyncio.to_thread(tts_engine.status" in srv_src

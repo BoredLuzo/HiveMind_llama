@@ -83,11 +83,15 @@ _TOOL_OP_MAP: dict[str, str] = {
     "write_file_append": "edit",
     "write_file":      "edit",
     "patch_file":      "edit",
+    "apply_patch":     "edit",
     "edit_ast":        "edit",
+    "lsp_format":      "edit",
     "undo_last":       "edit",
     "run_bash":        "run",
     "run_python":      "run",
+    "run_tests":       "run",
     "search_code":     "search",
+    "find_references": "search",
     "find_files":      "search",
     "list_dir":        "list",
     "ask_user":        "ask",
@@ -399,7 +403,8 @@ class PlanTracker:
     # ── Backward-compat: should_advance / advance ───────────────────────────
 
     _ADVANCING_TOOLS = frozenset({
-        "edit_file", "write_file", "write_file_append", "edit_ast",
+        "edit_file", "write_file", "write_file_append", "replace_lines",
+        "apply_patch", "edit_ast", "lsp_format",
         "undo_last", "run_bash", "run_tests", "git_commit",
     })
 
@@ -709,7 +714,7 @@ class PlanTracker:
             f"Current step: {step_label}\n"
             "Your next action MUST be one of:\n"
             "  (a) A tool call that directly fixes the blocking issue.\n"
-            "  (b) task_complete(status='blocked', reason='...').\n"
+            '  (b) task_complete(status={"completed": [...], "blockers": ["..."], "build_status": "blocked"}).\n'
             "Do NOT re-read files already in your context. Do NOT output a plan."
         )
 

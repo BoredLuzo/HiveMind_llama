@@ -73,7 +73,7 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_python",
         "description": (
-            "Run quick standalone Python snippet (10s timeout, workspace cwd). Not for servers; use run_bash or run_tests."
+            "Run quick standalone Python snippet (45s timeout, workspace cwd). Not for servers; use run_bash or run_tests."
         ),
         "parameters": {"type": "object", "properties": {
             "code": {"type": "string", "description": "Python snippet (use print() for output)"}
@@ -118,7 +118,8 @@ _INLINE_CODING_TOOLS = [
                              "old_text": {"type": "string", "description": "Exact unique text"},
                              "new_text": {"type": "string", "description": "Replacement text"}
                          }, "required": ["old_text", "new_text"]}},
-            "confirm_shrink": {"type": "boolean", "description": "Allow replacing most of file"}
+            "confirm_shrink": {"type": "boolean", "description": "Allow replacing most of file"},
+            "allow_overwrite": {"type": "boolean", "description": "Allow dropping existing top-level symbols"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
@@ -139,7 +140,8 @@ _INLINE_CODING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
             "content": {"type": "string", "maxLength": 20000, "description": "Complete plain file content"},
-            "confirm_shrink": {"type": "boolean", "description": "Allow large file shrink"}
+            "confirm_shrink": {"type": "boolean", "description": "Allow large file shrink"},
+            "allow_overwrite": {"type": "boolean", "description": "Allow dropping existing top-level symbols"}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
@@ -199,7 +201,9 @@ _INLINE_CODING_TOOLS = [
             "timeout": {"type": "integer", "description": "Timeout s (default 90, max 300)", "default": 90},
             "lang_override": {"type": "string",
                               "enum": ["python", "javascript", "typescript", "astro", "docker", "java", "rust", "go", "csharp", "cpp"],
-                              "description": "Force language", "default": ""}
+                              "description": "Force language", "default": ""},
+            "paths": {"type": "array", "items": {"type": "string"},
+                      "description": "Optional workspace-relative test targets"}
         }, "required": []}
     }},
     {"type": "function", "function": {
@@ -241,7 +245,7 @@ _INLINE_CODING_TOOLS = [
                                   "description": "Implemented/verified items"},
                     "blockers": {"type": "array", "items": {"type": "string"},
                                  "description": "Remaining blockers (empty if none)"},
-                    "build_status": {"type": "string", "enum": ["passing", "failing", "untested"],
+                    "build_status": {"type": "string", "enum": ["passing", "failing", "untested", "blocked"],
                                      "description": "Final verification status"}
                 },
                 "required": ["completed", "blockers", "build_status"]

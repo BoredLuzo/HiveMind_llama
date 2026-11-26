@@ -342,6 +342,7 @@ function _toolGenStream(d) {
       var _tkPre = document.getElementById(S._thinkBlockId);
       if (_tkPre) _tkPre.classList.remove('live');
       S._thinkBlockId = null;
+      S._thinkBlockCache = null;
     }
     var idx = (d.index != null) ? d.index : 0;
     var _cid = d.call_id || '';

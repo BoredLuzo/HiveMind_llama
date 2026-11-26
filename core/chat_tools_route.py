@@ -43,16 +43,10 @@ def _tool_system_prompt(ws_ok: bool) -> str:
     return _note + _TOOL_STOP_RULE
 
 
-def _tool_signatures(msg: dict) -> list[str]:
-    """Deprecated alias: shared implementation in core.tool_guards."""
-    from core.tool_guards import tool_signatures
-    return tool_signatures(msg)
-
-
-def _repeat_guard():
-    """Deprecated alias: shared implementation in core.tool_guards."""
-    from core.tool_guards import repeat_guard
-    return repeat_guard()
+from core.tool_guards import (
+    repeat_guard as _repeat_guard,
+    tool_signatures as _tool_signatures,  # noqa: F401 (re-export)
+)
 
 
 def _tool_round_limit(cfg: dict) -> int:
