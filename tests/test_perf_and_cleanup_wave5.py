@@ -159,7 +159,17 @@ check("tool_executor._scan_verify_history tracks edit, skip, timeout, and append
 
 
 # ── Phase 3: Modular splits & persistent state ──────────────────────────────
-route_paths = {getattr(r, "path", "") for r in SRV.app.routes}
+route_paths: set[str] = set()
+for _r in SRV.app.routes:
+    _p = getattr(_r, "path", "")
+    if _p:
+        route_paths.add(_p)
+    _orig = getattr(_r, "original_router", None)
+    if _orig is not None:
+        for _sr in getattr(_orig, "routes", ()) or ():
+            _sp = getattr(_sr, "path", "")
+            if _sp:
+                route_paths.add(_sp)
 check("routers export and mount openai_compat, voice, and gateway routers",
       all(n in routers.__all__ for n in ("openai_compat_router", "voice_router", "gateway_router"))
       and {"/v1/chat/completions", "/tts", "/stt", "/gateway/status"} <= route_paths
