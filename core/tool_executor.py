@@ -483,9 +483,9 @@ def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, da
                       "this content never reached the file. Do NOT assume file state from it - "
                       "read_file the path before any further write/edit.]")
     else:
-        _stub_text = (f"[executed {dname}: {_alen} arg chars (sha {_dig}) - "
-                      "content NOT in context anymore - read_file this path before "
-                      "any further write/edit to avoid full-file rewrites]")
+        _stub_text = (f"[executed {dname}: {_alen} arg chars written completely to disk (sha {_dig}) - "
+                      "content NOT in context anymore - no need to re-read to verify; "
+                      "call read_file only if you need to edit this path later]")
     _stub = json.dumps({
         "path": _path,
         "content": _stub_text,
