@@ -572,7 +572,7 @@ matching your GPU VRAM and system RAM. The list lives in `deploy/fetch_models.py
 | `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | 8–12 GB power tier: heavy dense vision coder (MTP) | 5.9 GB + 0.9 GB mmproj |
 | `air:26b-a4b` | webAI-Official/Air-26B-A4B-gguf | Hybrid MoE / 16+ GB tier: 26B/4B active Gemma 4 reasoning (128K ctx, q4_0 KV) | 12.6 GB |
 | `qwen3.6:35b-a3b-mtp` | unsloth/Qwen3.6-35B-A3B-MTP-GGUF | Flagship MoE / 24+ GB or 8 GB+32 GB RAM tier: 35B/3B coder (`UD-IQ4_XS` + MTP) | 17.0 GB + 0.9 GB mmproj |
-| `inkling-2-mini` | abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF | Hybrid MoE / 16+ GB or 8 GB+32 GB RAM tier: looped-MoE coder / reasoning + vision (`GSQ-RCO-IQ3_XS`, needs b12600+) | 10.8 GB + 0.6 GB mmproj |
+| `inkling-2-mini` | ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF | Hybrid MoE / 16+ GB or 8 GB+32 GB RAM tier: looped-MoE coder / reasoning + vision (`GSQ-RCO-Q2_K_XL`, needs b12600+) | 9.8 GB + 0.6 GB mmproj |
 
 **Hardware tier recommendations (`deploy/recommend_models.py --plan`):**
 

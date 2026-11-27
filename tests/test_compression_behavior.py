@@ -332,6 +332,68 @@ async def amain():
           "TASK: implement feature X" in out5[1]["content"])
     check("tool_ctx: read paths condensed", "C:/repo/src/app.py" in condensed,
           f"{condensed}")
+    check("tool_ctx: post-compress summary does not forbid re-reading compressed files",
+          "do NOT read/list these again" not in out5[1]["content"]
+          and "do NOT re-read already written files" not in out5[1]["content"]
+          and "call read_file" in out5[1]["content"],
+          out5[1]["content"][:300])
+
+    # Relative paths and paths with spaces from assistant read_file tool_calls / headers
+    # must also be extracted into condensed_files so the read-guard unlocks re-reads.
+    msgs_rel = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "fix index.html"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {
+                "name": "read_file", "arguments": '{"path": "index.html"}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file",
+         "content": "[C:/Users/demo/My Project/index.html total lines: 10]\n<html></html>"},
+        {"role": "assistant", "content": "working"},
+        {"role": "tool", "name": "run_bash", "content": "ok"},
+    ]
+    _, cond_rel, _ = await _compress_tool_context(
+        msgs_rel, "m", 1, FakeCompressClient(), "sysprompt", "fix index.html",
+        [], [], local_only=True, keep_recent_msgs=2)
+    check("tool_ctx: condenses relative assistant read_file path and spaced header path",
+          "index.html" in cond_rel and "C:/Users/demo/My Project/index.html" in cond_rel,
+          f"{cond_rel}")
+
+    # Tail-tool-cap truncating a kept read_file output must release its path for the read-guard
+    # in both _compress_tool_context and _compress_rule_based.
+    msgs_tail_cap = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "edit main.js"},
+        {"role": "assistant", "content": "old step"},
+        {"role": "tool", "name": "run_bash", "content": "ok"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "tc_main", "type": "function", "function": {
+                "name": "read_file", "arguments": '{"path": "js/main.js"}'}},
+        ]},
+        {"role": "tool", "tool_call_id": "tc_main", "name": "read_file",
+         "content": "[C:/repo/js/main.js total lines: 200]\n" + ("x" * 400)},
+    ]
+    out_tc, cond_tc, _ = await _compress_tool_context(
+        msgs_tail_cap, "m", 1, FakeCompressClient(), "sysprompt", "edit main.js",
+        [], [], local_only=True, keep_recent_msgs=2, tail_tool_max_chars=80)
+    check("tool_ctx: tail-tool-cap truncates kept read_file and releases path for read-guard",
+          out_tc[-1]["content"].startswith("[... first ")
+          and "C:/repo/js/main.js" in cond_tc and "js/main.js" in cond_tc,
+          f"cond={cond_tc}")
+
+    rb_out, rb_evicted = _compress_rule_based(
+        msgs_tail_cap, target_tokens=50000, keep_recent_msgs=2, tail_tool_max_chars=80)
+    check("rule_based: tail-tool-cap truncates kept read_file and releases path for read-guard",
+          rb_out[-1]["content"].startswith("[... first ")
+          and "C:/repo/js/main.js" in rb_evicted and "js/main.js" in rb_evicted,
+          f"evicted={rb_evicted}")
+
+    # Pre-explore bridge wording must not unconditionally forbid re-reading trimmed files.
+    _setup_src = (Path(__file__).resolve().parent.parent / "core" / "duo_dtool_setup.py").read_text(encoding="utf-8")
+    check("duo_dtool_setup: bridge distinguishes trimmed vs full pre-explore history",
+          "_explore_trimmed" in _setup_src
+          and "older tool outputs were trimmed" in _setup_src
+          and "Files already read (avoid re-reading unless a tool error requires it):" not in _setup_src)
     check("tool_ctx: usage empty without an LLM call", usage == {})
     tail = out5[-1]["content"]
     check("tool_ctx: tail tool output capped, tail kept",

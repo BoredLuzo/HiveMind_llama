@@ -17,7 +17,69 @@ logger = logging.getLogger("hivemind.compression")
 _RE_READ_PATH = re.compile(
     r"(?:(?<![A-Za-z])[A-Za-z]:[\\/](?![\\/])[^\s\]'\"]+|(?<![A-Za-z0-9_/:])/(?:[^\s\]'\"/:]+/)+[^\s\]'\"/:]+)"
 )
+# matches read_file header `[<path> total lines: N]` / `[<path> lines a-b / N]` (incl. spaces / relative paths)
+_RE_READ_HEADER_PATH = re.compile(r"^\[([^\[\]\r\n]+?)\s+(?:total lines:|lines\s+\d+-)")
 _RE_THINK_BLOCK = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_read_file_paths(msg: dict) -> list[str]:
+    """Extract read_file target paths from an assistant tool_call or tool result message."""
+    if not isinstance(msg, dict):
+        return []
+    out: list[str] = []
+    role = msg.get("role")
+    if role == "assistant":
+        import json as _json
+        for tc in (msg.get("tool_calls") or ()):
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            if not isinstance(fn, dict) or fn.get("name") != "read_file":
+                continue
+            raw_args = fn.get("arguments")
+            if isinstance(raw_args, str):
+                try:
+                    raw_args = _json.loads(raw_args)
+                except ValueError:
+                    raw_args = {}
+            if isinstance(raw_args, dict):
+                p = str(raw_args.get("path") or "").strip()
+                if p:
+                    out.append(p)
+        return out
+    if role == "tool" and msg.get("name") == "read_file":
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") if isinstance(p, dict) else str(p)
+                for p in content
+            )
+        text = str(content or "")
+        hdr = _RE_READ_HEADER_PATH.match(text)
+        if hdr:
+            out.append(hdr.group(1).strip())
+        for rm in _RE_READ_PATH.finditer(text):
+            out.append(rm.group())
+    return out
+
+
+def _read_paths_for_tool_msg(msgs: list, idx: int) -> list[str]:
+    """Extract read_file paths from tool message ``msgs[idx]`` and its matching assistant call."""
+    msg = msgs[idx]
+    paths = _extract_read_file_paths(msg)
+    if isinstance(msg, dict) and msg.get("role") == "tool" and msg.get("name") == "read_file":
+        tid = str(msg.get("tool_call_id") or "")
+        if tid:
+            for j in range(idx - 1, -1, -1):
+                prev = msgs[j]
+                if not isinstance(prev, dict) or prev.get("role") != "assistant":
+                    continue
+                for tc in (prev.get("tool_calls") or ()):
+                    if isinstance(tc, dict) and str(tc.get("id") or "") == tid:
+                        paths.extend(_extract_read_file_paths({"role": "assistant", "tool_calls": [tc]}))
+                        return paths
+                break
+    return paths
 
 _ERROR_MARKERS = ("[TOOL_ERROR", "Error:", "Traceback", "FAILED", "[stderr]", "SyntaxError", "TypeError")
 
@@ -359,7 +421,10 @@ def _drop_whole_oldest(
             _i = _j
             continue
         for _x in _group:
-            if _x.get("role") == "tool":
+            _ep = _extract_read_file_paths(_x)
+            if _ep:
+                evicted.extend(_ep)
+            elif _x.get("role") == "tool":
                 evicted.extend(_RE_READ_PATH.findall(str(_x.get("content") or "")))
         _est -= _estimate_ctx_tokens(_group)
         dropped += len(_group)
@@ -435,7 +500,7 @@ def _compress_rule_based(messages: list, target_tokens: int = 0,
         _old = _m["content"]
         if not _old or _old.startswith("[System: Content of"):
             continue
-        _paths_in = _RE_READ_PATH.findall(_old)
+        _paths_in = _extract_read_file_paths(_m) or _RE_READ_PATH.findall(_old)
         _p0 = (_paths_in[0] if _paths_in else (_m.get("name") or "tool output"))
         _marker = _recall_marker(str(_p0))
         _est -= (len(_old) // 3) - (len(_marker) // 3)
@@ -471,6 +536,7 @@ def _compress_rule_based(messages: list, target_tokens: int = 0,
                 continue
             _c = str(_m.get("content") or "")
             if len(_c) > _cap:
+                _evicted_paths.extend(_read_paths_for_tool_msg(out, _i))
                 _dropped_chars = len(_c) - _cap
                 out[_i] = {
                     **_m,
@@ -553,7 +619,8 @@ def _build_local_fallback_summary(original_task: str, written_files: list,
         for _p in list(dict.fromkeys(_fb_parts))[:12]:
             _summary += f"- partition: {_p}\n"
     _summary += (
-        "\nContinue implementing — do NOT re-read already written files."
+        "\nContinue implementing — do not re-write completed files unless fixing a bug; "
+        "call read_file before inspecting or editing any file whose content was compressed."
     )
     return _summary
 
@@ -621,16 +688,8 @@ async def _compress_tool_context(
 
     _condensed_files: set = set()
     for _om in _older_msgs:
-        if _om.get("role") != "tool" or _om.get("name") != "read_file":
-            continue
-        _omc = _om.get("content", "")
-        if isinstance(_omc, list):
-            _omc = " ".join(
-                p.get("text", "") if isinstance(p, dict) else str(p)
-                for p in _omc
-            )
-        for _rm in _RE_READ_PATH.finditer(_omc):
-            _condensed_files.add(_rm.group())
+        for _rp in _extract_read_file_paths(_om):
+            _condensed_files.add(_rp)
 
     _history_text = []
     for m in _older_msgs:
@@ -812,10 +871,10 @@ async def _compress_tool_context(
             f"[CONTEXT SUMMARY — previous tool calls compressed]\n{_summary}\n"
             f"[END SUMMARY]\n\n"
             f"[RECENT CONTEXT KEPT RAW: {len(_recent_tail_msgs)} latest messages]\n\n"
-            f"ALREADY EXPLORED (do NOT read/list these again):\n{_explored_str}\n\n"
-            f"[FILES ALREADY WRITTEN — do not re-read or re-write unless fixing a bug]:\n"
+            f"PREVIOUSLY EXPLORED (earlier file contents were compressed — call read_file if you need to inspect or edit a file):\n{_explored_str}\n\n"
+            f"[FILES ALREADY WRITTEN — do not re-write unless fixing a bug; call read_file before editing]:\n"
             + ("\n".join(f"  - {f}" for f in written_files) if written_files else "  (none yet)") + "\n\n"
-            + "Continue implementing directly — exploration phase is complete."
+            + "Continue implementing directly — re-read any compressed file before editing it."
         )
     }
     # BUG-F FIX: goal_pin (role:user) followed by _summary_msg (role:user) = consecutive user turns
@@ -841,6 +900,9 @@ async def _compress_tool_context(
                 # and diffs stand at the END of a tool output; keeping the
                 # head would hide exactly the part the next round needs.
                 # Head is dropped with a visible marker instead.
+                # Release read_file paths whose head was dropped so the
+                # read-guard never answers "[SKIP: full content is above]".
+                _condensed_files.update(_read_paths_for_tool_msg(_recent_tail_msgs, _i))
                 _dropped = len(_c) - _cap
                 _recent_tail_msgs[_i] = dict(_m)
                 _recent_tail_msgs[_i]["content"] = (
@@ -868,6 +930,7 @@ async def _compress_tool_context(
                             continue
                     _new_parts.append(_p)
                 if _part_changed:
+                    _condensed_files.update(_read_paths_for_tool_msg(_recent_tail_msgs, _i))
                     _recent_tail_msgs[_i] = dict(_m)
                     _recent_tail_msgs[_i]["content"] = _new_parts
                     _capped += 1

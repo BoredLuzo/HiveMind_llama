@@ -1,3 +1,25 @@
+## [1.6.6] - 2026-11-27
+
+Modularized routers, gateway bridge, and UI panels, hot-path audit hardening,
+post-compression & tail-cap read-guard fixes, Duo preloop ctx-cascade pinning,
+and updated `inkling-2-mini` installer quant (`ISTA-DASLab` `GSQ-RCO-Q2_K_XL`).
+
+### Changed
+- **Installer `inkling-2-mini` quant (`deploy/fetch_models.py`, `backend/llama_models.py`, `model_configs/gguf_filename_tags.json`, `model_configs/models/inkling-2-mini.json`, `docs/guide.md`, `tests/test_model_catalog.py`):**
+  - Switched the optional Tier-4 `inkling-2-mini` download target to `ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF` (`Inkling-2-Mini-GSQ-RCO-Q2_K_XL.gguf`, ~9.8 GB + 0.6 GB `mmproj-Inkling-2-Mini-BF16.gguf` -> `mmproj-Inkling-2-Mini-F16.gguf`) while keeping backwards-compatible canonical tag mapping for existing `GSQ-RCO-IQ3_XS` and `UD-IQ3_XXS` files.
+- **Modularized backend, gateway, deploy, and UI modules (`routers/{gateway,openai_compat,voice}.py`, `hivemind_gateway/bridge_{commands,relay,voice}.py`, `static/js/panels_{automations,special_agents,token_stats}.js`, `deploy/_common.py`, `infra/proc_kill.py`, `model_configs/profile_validation.py`, `tools/handlers/_win_shims.py`):**
+  - Extracted focused submodules from monolithic files and deduplicated shared helpers across deploy scripts, process cleanup, Windows shell shims, and profile validation.
+
+### Fixed
+- **Post-compression & pre-explore read-guard consistency (`context/compression.py`, `core/duo_dtool_setup.py`, `tests/test_compression_behavior.py`):**
+  - Replaced contradictory `"ALREADY EXPLORED (do NOT read/list these again)"` and `"do NOT re-read already written files"` post-compression prompts with explicit guidance to call `read_file` before inspecting or editing compressed files.
+  - Extracted `read_file` target paths from compressed `assistant` `tool_calls`, `[<path> total lines: ...]` headers (including relative paths and paths with spaces), and kept-tail `read_file` outputs truncated by `tail_tool_max_chars` (in both `_compress_tool_context` and `_compress_rule_based`), preventing false `[SKIP: already read]` blocks after compression.
+  - Computed the 8000-char pre-explore history cap in `core/duo_dtool_setup.py` before composing the bridge message so trimmed pre-explore histories never instruct the coder to avoid re-reading missing file contents.
+- **Duo preloop VRAM/timeout ctx-cascade reload loop (`core/duo_coder_preloop.py`, `tests/test_perf_and_cleanup_wave5.py`):**
+  - Pins `_coder_ctx_override` whenever the preloop downshifts context during a VRAM/timeout cascade, preventing an immediate `Cached port ctx mismatch` kill/reload loop on the next round.
+- **Hot-path reliability & concurrency hardening (`backend/llama_client.py`, `core/duo_runner.py`, `hivemind_gateway/bridge.py`, `static/js/markdown.js`, `routers/{chats,git,mcp,openai_compat,soul,voice}.py`, `tools/sandbox.py`):**
+  - Fixed `LlamaClient` slot `in_flight` leak/double-release across recovery retries and cancellations; removed stale `ToolRoundState` chunk caching; latched `RunBridge` approval-card state synchronously before awaiting send; fixed `markdown.js` >25 KB trailing live-render tick drops; preserved live `load_settings()` reads and exact `persist_chat` / workspace resolution semantics in routers; fixed `tools/sandbox.py` `getrlimit` typing and FastAPI 0.146 `_IncludedRouter` test introspection.
+
 ## [1.6.5] - 2026-11-25
 
 Template-driven reasoning effort controls & OpenRouter effort ratios, decoupled

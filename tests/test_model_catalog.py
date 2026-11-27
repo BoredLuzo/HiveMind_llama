@@ -325,17 +325,18 @@ if q36_mtp:
               Path(_mj.get("qwen3.6:35b-a3b-mtp", "")).name == _f_mtp.name,
               f"({_mj})")
 
-# ── Inkling-2-Mini GSQ-RCO-IQ3_XS (optional Tier-4 Looped MoE + Vision) ────
+# ── Inkling-2-Mini GSQ-RCO-Q2_K_XL (optional Tier-4 Looped MoE + Vision) ───
 ink = specs.get("inkling-2-mini")
 check("inkling-2-mini is in the catalog as optional upgrade",
       ink is not None and "inkling-2-mini" not in fm.ESSENTIAL_KEYS)
 if ink:
-    check("inkling-2-mini repo pinned to abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF",
-          ink["repo"] == "abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF", f"({ink['repo']})")
-    check("inkling-2-mini file_regex matches GSQ-RCO-IQ3_XS and rejects other variants",
-          any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ3_XS.gguf") for p in ink["file_regex"])
-          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ4_XS.gguf") for p in ink["file_regex"])
-          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ2_XS.gguf") for p in ink["file_regex"])
+    check("inkling-2-mini repo pinned to ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF",
+          ink["repo"] == "ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF", f"({ink['repo']})")
+    check("inkling-2-mini file_regex matches GSQ-RCO-Q2_K_XL and rejects other variants",
+          any(re.match(p, "Inkling-2-Mini-GSQ-RCO-Q2_K_XL.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ3_XXS.gguf") for p in ink["file_regex"])
+          and not any(re.match(p, "Inkling-2-Mini-GSQ-RCO-IQ2_S.gguf") for p in ink["file_regex"])
           and not any(re.match(p, "dspark-Inkling-2-Mini-Q8_0.gguf") for p in ink["file_regex"]))
     check("inkling-2-mini mmproj matches BF16/F16 with unique dest and ships no DSpark sidecar yet",
           any(re.match(p, "mmproj-Inkling-2-Mini-BF16.gguf") for p in ink["mmproj_regex"])
@@ -360,7 +361,7 @@ if ink:
 
     with _tempfile_ink.TemporaryDirectory() as _tmp_ink:
         _mdir_i = Path(_tmp_ink)
-        _f_ink = _mdir_i / "Inkling-2-Mini-GSQ-RCO-IQ3_XS.gguf"
+        _f_ink = _mdir_i / "Inkling-2-Mini-GSQ-RCO-Q2_K_XL.gguf"
         _f_mm = _mdir_i / "mmproj-Inkling-2-Mini-F16.gguf"
         _f_ink.write_bytes(b"inkling")
         _f_mm.write_bytes(b"mmproj")

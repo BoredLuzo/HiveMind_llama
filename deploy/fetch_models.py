@@ -425,13 +425,13 @@ SPECS: list[dict] = [
         "key": "inkling-2-mini",
         "tag": "inkling-2-mini",
         "tier": "Hybrid MoE / 16+ GB VRAM or 8 GB+32 GB RAM (Looped MoE Vision Coder)",
-        "disk_gb": "~11.5 GB",
+        "disk_gb": "~10.4 GB",
         "hw_req": "16+ GB VRAM  OR  8 GB VRAM + 32+ GB RAM (Looped CPU-MoE Offload, b12600+)",
         "role_hint": "Upgrade: Looped-MoE Agentic Coder + Vision (~15-16 tok/s on 8GB+32GB)",
-        "desc": "Inkling-2-Mini GSQ-RCO-IQ3_XS (looped MoE coder/reasoning + vision, ~10.8GB + mmproj, needs b12600+)",
-        "repo": "abenzerps/Inkling-2-Mini-GSQ-RCO-GGUF",
+        "desc": "Inkling-2-Mini GSQ-RCO-Q2_K_XL (looped MoE coder/reasoning + vision, ~9.8GB + mmproj, needs b12600+)",
+        "repo": "ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF",
         "file_regex": [
-            r"(?i)^inkling-2-mini-gsq-rco-iq3_xs\.gguf$",
+            r"(?i)^inkling-2-mini-gsq-rco-q2_k_xl\.gguf$",
         ],
         "mmproj_regex": [
             r"(?i)^mmproj-inkling-2-mini-bf16\.gguf$",

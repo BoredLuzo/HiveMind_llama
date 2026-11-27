@@ -203,13 +203,42 @@ async def _duo_dtool_setup(ctx, ps):
             _bridge_explore = budget_explore_window(
                 _bridge_explore, _BRIDGE_EXPLORE_CAP, _coder_map_budget,
             )
+        # Bridge message always injects _explore_ctx (contracts) into coder prompt.
+        # Compute capped _explore_history first so the bridge wording accurately
+        # reflects whether earlier pre-explore file contents were trimmed.
+        _explore_history_full = [
+            m for m in (_pre_explore_msgs[2:] if len(_pre_explore_msgs) > 2 else [])
+            if not (m.get("role") == "user"
+                    and str(m.get("content", "")).startswith(TREE_HEADER_PREFIX))
+        ]
+        _explore_history = _explore_history_full
+        if _explore_history:
+            _history_chars = sum(len(str(m.get("content", ""))) for m in _explore_history)
+            if _history_chars > 8000:
+                _explore_history_capped: list = []
+                _budget = 8000
+                for m in reversed(_explore_history):
+                    _msg_len = len(str(m.get("content", "")))
+                    if _budget - _msg_len < 0:
+                        break
+                    _explore_history_capped.insert(0, m)
+                    _budget -= _msg_len
+                _explore_history = _explore_history_capped
+        _explore_trimmed = len(_explore_history) < len(_explore_history_full)
+        _already_read_header = (
+            "Files explored earlier (older tool outputs were trimmed — call read_file "
+            "before editing any file whose full content is not shown above):"
+            if _explore_trimmed
+            else "Files explored above (avoid re-reading files whose full content is "
+                 "already shown above; call read_file if a file's content is missing or truncated):"
+        )
         _bridge_msg = {
             "role": "user",
             "content": (
                 (f"## Workspace Structure\n{_tree_ctx}\n\n" if _tree_ctx else "") +
                 f"STOP EXPLORING — START IMPLEMENTING NOW.\n\n"
                 f"The tool calls above are your completed codebase exploration.\n"
-                f"Files already read (avoid re-reading unless a tool error requires it):\n{_already_read_str}\n\n"
+                f"{_already_read_header}\n{_already_read_str}\n\n"
                 f"Task: {ctx.user_input}\n\n"
                 f"Plan from exploration:\n{_bridge_explore}\n\n"
                 f"Workspace root: {str(_ws_str).replace(chr(92), '/')}\n"
@@ -229,26 +258,6 @@ async def _duo_dtool_setup(ctx, ps):
                 f"do NOT run the project test suite for those."
             )
         }
-        # Bridge message always injects _explore_ctx (contracts) into coder prompt.
-        # Toggle controls whether FILE CONTENTS from pre-explore are also included.
-        _explore_history_full = [
-            m for m in (_pre_explore_msgs[2:] if len(_pre_explore_msgs) > 2 else [])
-            if not (m.get("role") == "user"
-                    and str(m.get("content", "")).startswith(TREE_HEADER_PREFIX))
-        ]
-        _explore_history = _explore_history_full
-        if _explore_history:
-            _history_chars = sum(len(str(m.get("content", ""))) for m in _explore_history)
-            if _history_chars > 8000:
-                _explore_history_capped: list = []
-                _budget = 8000
-                for m in reversed(_explore_history):
-                    _msg_len = len(str(m.get("content", "")))
-                    if _budget - _msg_len < 0:
-                        break
-                    _explore_history_capped.insert(0, m)
-                    _budget -= _msg_len
-                _explore_history = _explore_history_capped
         _dtool_base = _build_dtool_base(
             _dtool_sys_eff,
             _explore_history,
