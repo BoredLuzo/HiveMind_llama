@@ -245,6 +245,46 @@ def test_backend_transcript_sanitization() -> None:
             tr_only == [{"role": "user", "content": "Q1"}, {"role": "user", "content": "Q2"}],
             repr(tr_only),
         )
+
+        # 6. Agentic task_complete turns with empty `content` recover clean summary
+        #    from saved HTML (inline or blob) so multi-turn follow-ups keep history!
+        cid_ag = "6666ffff"
+        tc_html_1 = (
+            '<div class="think-block"><div class="think-body">plan</div></div>'
+            '<div class="tool-call-row" data-tool-name="write_file">'
+            '<span class="tool-call-chip">📝 write_file · main.js</span></div>'
+            '<details class="tool-result-block"><summary>'
+            '<span style="color:#22c55e">passing</span>'
+            '<span class="tr-name">✅ task_complete</span></summary>'
+            '<pre class="tool-result-pre">[task_complete] Build: passing\n'
+            'Completed:\n  - Created main.js &amp; ui.js</pre></details>'
+        )
+        tc_blob_id = hashlib.sha256(tc_html_1.encode("utf-8")).hexdigest()[:16]
+        tc_bdir = ws / f"{cid_ag}.blobs"
+        tc_bdir.mkdir(parents=True, exist_ok=True)
+        (tc_bdir / tc_blob_id).write_bytes(b"HIVEBLOB1\n" + tc_html_1.encode("utf-8"))
+        (ws / f"2026-11-27T08-00-00_agentic_{cid_ag}.json").write_text(
+            json.dumps({
+                "id": cid_ag,
+                "messages": [
+                    {"role": "user", "content": "Build simulator"},
+                    {"role": "assistant", "content": "", "html": {"_ref": tc_blob_id}},
+                    {"role": "user", "content": "Add collisions"},
+                ],
+            }),
+            encoding="utf-8",
+        )
+        seed_ag, src_ag = CC.history_seed_provenance(cid_ag)
+        check(
+            "agentic task_complete turns recover summary from blob HTML for continuous history",
+            src_ag == "json"
+            and len(seed_ag) == 2
+            and seed_ag[0] == {"role": "user", "content": "Build simulator"}
+            and seed_ag[1]["role"] == "assistant"
+            and "Created main.js & ui.js" in seed_ag[1]["content"]
+            and "write_file" not in seed_ag[1]["content"],
+            repr((src_ag, seed_ag)),
+        )
     finally:
         CC._SESSIONS_DIR = prev_dir
         shutil.rmtree(ws, ignore_errors=True)
@@ -347,7 +387,18 @@ const body = E('div', 'abody', [
   ])
 ]);
 const res = _historyTextOnly(body);
-console.log(JSON.stringify({ res, toolOnly: _historyTextOnly(E('div', 'abody', [E('div', 'tool-call-row', [T('🔍web_search · q')])])) }));
+const tcBody = E('div', 'abody', [
+  E('div', 'think-block', [E('div', 'think-body', [T('hidden')])]),
+  E('details', 'tool-result-block', [
+    E('summary', '', [E('span', 'tr-name', [T('✅ task_complete')])]),
+    E('pre', 'tool-result-pre', [T('[task_complete] Build: passing\nCompleted:\n  - Fixed spawning')])
+  ])
+]);
+console.log(JSON.stringify({
+  res,
+  toolOnly: _historyTextOnly(E('div', 'abody', [E('div', 'tool-call-row', [T('🔍web_search · q')])])),
+  tcOnly: _historyTextOnly(tcBody),
+}));
 """
         proc = subprocess.run(
             ["node", "-e", js_harness],
@@ -374,6 +425,11 @@ console.log(JSON.stringify({ res, toolOnly: _historyTextOnly(E('div', 'abody', [
                 "JS _historyTextOnly returns empty string for tool-only bubble",
                 data["toolOnly"] == "",
                 repr(data["toolOnly"]),
+            )
+            check(
+                "JS _historyTextOnly preserves task_complete summary when no prose outside chrome",
+                "Fixed spawning" in data["tcOnly"] and "hidden" not in data["tcOnly"],
+                repr(data["tcOnly"]),
             )
 
 

@@ -55,11 +55,13 @@ check("2a essential keys exist in the catalog", ESSENTIAL_KEYS <= _keys,
       f"(unknown: {ESSENTIAL_KEYS - _keys})")
 check("2b essential set is small", len(ESSENTIAL_KEYS) <= 5, f"({len(ESSENTIAL_KEYS)})")
 check("2c the 20 GB model is NOT essential", "qwen3.6:35b-a3b-mtp" not in ESSENTIAL_KEYS)
-for _need in ("qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "lfm3:1.7b-qad",
-              "minicpm5:2b-sharp"):
+for _need in ("qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "lfm3:1.7b-qad"):
     check(f"2d default route in the essential set: {_need}", _need in ESSENTIAL_KEYS)
-check("2f the Q6 sharp tier is the one, not the Q4",
-      "minicpm5:2b-sharp-q4" not in ESSENTIAL_KEYS)
+check("2f minicpm5:2b-sharp, twil:8b and air:26b-a4b removed from installer catalog",
+      "minicpm5:2b-sharp" not in _keys
+      and "minicpm5:2b-sharp-q4" not in ESSENTIAL_KEYS
+      and "twil:8b" not in _keys
+      and "air:26b-a4b" not in _keys)
 check("2g the old refiner model is not essential", "qwen3.5:2b-mtp" not in ESSENTIAL_KEYS)
 check("2e --essential filters BY whitelist",
       "or s.get('key') in ESSENTIAL_KEYS" in FM)

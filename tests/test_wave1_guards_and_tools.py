@@ -256,7 +256,7 @@ def test_6_and_7_read_ladder_and_edit_loop_recovery() -> None:
     TEH._update_read_ladder(trs, "edit_ast", False, "a.py")
     check("6c edit_ast resets Read-Ladder streaks", trs.wide_read_streak[0] == 0)
 
-    # Suppressed Read-Ladder must NOT set read_ladder_fired=True or emit fake UI banner
+    # Cross-file reads must NEVER emit a Read-Ladder UI banner or set read_ladder_fired
     emitted: list = []
 
     async def _cap_emit(ev):
@@ -267,13 +267,9 @@ def test_6_and_7_read_ladder_and_edit_loop_recovery() -> None:
     trs2 = ToolRoundState(
         tool_ctx_lru=ToolContextLRU(default_ttl=3),
         duo_deadline_at=time.monotonic() + 300,
-        wide_read_streak=[7],
     )
     sat_msgs = [
         {"role": "system", "content": "sys"},
-        {"role": "user", "content": "[SYSTEM] hint 1"},
-        {"role": "user", "content": "[SYSTEM] hint 2"},
-        {"role": "user", "content": "[SYSTEM] hint 3"},
     ]
     calls = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "z.py"}'}}]
     sat_msgs.append({"role": "assistant", "content": "", "tool_calls": calls})
@@ -285,7 +281,7 @@ def test_6_and_7_read_ladder_and_edit_loop_recovery() -> None:
             exec_has_thinking=False, tool_think_auto_mode="off",
             run_id_global="r2", chat_id="c2", subtask_index=0,
         ))
-    check("6d suppressed Read-Ladder does not fake UI banner or lock read_ladder_fired",
+    check("6d no Read-Ladder UI banner emitted on normal file read",
           not trs2.read_ladder_fired[0]
           and not any("Read-Ladder:" in str(e.get("content", "")) for e in emitted),
           f"fired={trs2.read_ladder_fired[0]} emitted={emitted}")

@@ -234,7 +234,8 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "task_complete",
         "description": (
-            "Signal coding task finished after edits & verification (requires completed, blockers, build_status)."
+            "Signal the ENTIRE task done after edits & verification (completed, blockers, build_status). "
+            "Ends the run unless more_work_remaining=true (use true to checkpoint a subtask and continue)."
         ),
         "parameters": {"type": "object", "properties": {
             "status": {
@@ -249,7 +250,12 @@ _INLINE_CODING_TOOLS = [
                                      "description": "Final verification status"}
                 },
                 "required": ["completed", "blockers", "build_status"]
-            }
+            },
+            "more_work_remaining": {
+                "type": "boolean",
+                "default": False,
+                "description": "True to log a subtask checkpoint and keep the run open; false when all work is done.",
+            },
         }, "required": ["status"]}
     }},
     {"type": "function", "function": {

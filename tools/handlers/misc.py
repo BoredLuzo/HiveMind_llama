@@ -103,7 +103,18 @@ async def _inline_tool_task_complete(args: dict, _workspace: Path, _workspace_lo
     if _reason and _reason not in blockers:
         blockers.append(_reason)
     build_status = status.get("build_status", "untested")
-    lines = [f"[task_complete] Build: {build_status}"]
+    _more_raw = args.get("more_work_remaining")
+    if _more_raw is None:
+        _more_raw = status.get("more_work_remaining")
+    _more_work = (
+        _more_raw is True
+        or (isinstance(_more_raw, str) and _more_raw.strip().lower() in ("true", "1", "yes"))
+        or str(build_status or "").strip().lower() in ("in_progress", "partial")
+    )
+    if _more_work:
+        lines = [f"[task_complete: CHECKPOINT - continuing run] Build: {build_status}"]
+    else:
+        lines = [f"[task_complete] Build: {build_status}"]
     if completed:
         lines.append("Completed:\n  - " + "\n  - ".join(completed))
     else:
@@ -112,4 +123,10 @@ async def _inline_tool_task_complete(args: dict, _workspace: Path, _workspace_lo
         lines.append("Blockers:\n  - " + "\n  - ".join(blockers))
     else:
         lines.append("Blockers: none")
+    if _more_work:
+        lines.append(
+            "Next: more_work_remaining=true — the run stays OPEN. Continue immediately "
+            "with the remaining work using tools; call task_complete with "
+            "more_work_remaining=false once the ENTIRE request is complete."
+        )
     return "\n".join(lines)

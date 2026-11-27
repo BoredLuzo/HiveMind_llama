@@ -151,7 +151,8 @@ def _direct_tool_summary(tool_mode: str, ws_ok: bool = False,
 def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
                        git_ok: bool = False,
                        send_file_ok: bool = False,
-                       concise_write_thinking: bool = False) -> str:
+                       concise_write_thinking: bool = False,
+                       workspace: str = "") -> str:
     """TIER-AWARE (2026-09-02): only advertise tools the selected direct tier
     actually provides. The old note always listed read_file + web, which was
     wrong for the Websearch-only tier (models then called read_file and hit
@@ -167,6 +168,18 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False,
         "WITHOUT calling another tool. "
         "Never call a tool that is not listed above."
     )
+    _ws_clean = str(workspace or "").strip()
+    if _ws_clean and tool_mode in ("direct_research", "direct_mcp", "direct_python", "direct_full"):
+        if tool_mode == "direct_full":
+            note += (
+                f"\nActive workspace: {_ws_clean} — you HAVE full read/write/exec access "
+                "inside this folder (relative paths resolve here; absolute paths inside it also work)."
+            )
+        else:
+            note += (
+                f"\nActive workspace: {_ws_clean} "
+                "(relative paths resolve inside this folder)."
+            )
     if concise_write_thinking and tool_mode == "direct_full":
         from core.duo_helpers import CONCISE_WRITE_THINKING_HINT
         note += "\n\n" + CONCISE_WRITE_THINKING_HINT
@@ -897,12 +910,14 @@ async def _run_direct_inner(ctx):
         _direct_tg = str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")
         _direct_sf = _direct_tg and _direct_tool_mode in ("direct_full", "direct_mcp")
         if _direct_tools_active:
+            _direct_ws = str(getattr(ctx, "workspace", "") or "").strip()
             sys_p += _direct_tools_note(
                 _direct_tool_mode,
                 ws_ok=_direct_ws_enabled,
                 git_ok=_direct_git_ok,
                 send_file_ok=_direct_sf,
                 concise_write_thinking=bool((getattr(ctx, "settings", None) or {}).get("duo_concise_write_thinking", False)),
+                workspace=_direct_ws,
             )
             if _direct_sf:
                 _write_hint = (
@@ -915,7 +930,6 @@ async def _run_direct_inner(ctx):
                     "queue it with send_file. Do not paste the complete file content into "
                     "the chat. Only say it was sent after send_file returned [FILE_QUEUED]."
                 )
-            _direct_ws = str(getattr(ctx, "workspace", "") or "").strip()
             _direct_first_turn = not bool(getattr(ctx, "pipeline_sess_msgs", None))
             if _direct_ws and _direct_first_turn:
                 try:

@@ -205,7 +205,7 @@ _roles_8gb32 = rm._pick_roles_from_rows(
 )
 check("recommend_models keeps core GPU defaults and surfaces MoE RAM offload as optional upgrade",
       _roles_8gb32["direct"] == "gemma-4:e4b-it-qat"
-      and _roles_8gb32["judge"] == "minicpm5:2b-sharp"
+      and _roles_8gb32["judge"] == "lfm3:1.7b-qad"
       and _roles_8gb32["duo_coder"] == "qwen3.5:4b-mtp"
       and _roles_8gb32["planner"] == "qwen3.5:4b-mtp"
       and _roles_8gb32["duo_coder_heavy_moe"] == "qwen3.6:35b-a3b-mtp",

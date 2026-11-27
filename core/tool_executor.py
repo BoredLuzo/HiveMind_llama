@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Awaitable, cast
 
 from tools.runner import _run_inline_tool
-from tools.limits import READ_LADDER_SAME_PATH, READ_LADDER_WIDE
+from tools.limits import READ_SAME_FILE_ABORT
 from utils.tool import (
     parse_tool_args as _parse_tool_args,
     run_bash_confirmed_exit_zero as _run_bash_confirmed_exit_zero,
@@ -34,18 +34,17 @@ from core.agentic_duo_state import DuoRoundState
 from core import wedge_handoff as _wedge
 from core.tool_exec_helpers import (
     ToolRoundState,
-    _READ_LADDER_RESET_TOOLS,
     _SYS_PREFIX,
     _invoke_inline_tool,
     _prefetch_readonly_tools, _warn_duplicate_write_targets, _track_focus_path,
-    _note_successful_write, _update_read_ladder,
+    _note_successful_write, _track_same_file_read,
     _handle_too_large, _inject_tool_error_hints,
     _append_tool_footer,
     _handle_ask_user, _execute_one_tool, _maybe_activate_reactive_think,
     _run_bash_fail_fix_pass_insight, _patch_file_fallback_hint,
     _read_required_and_python_hints, _unknown_error_hint,
     _track_file_changes, _register_context_lru, _track_edit_noop,
-    _recovery_saturated, _mode_can_write,
+    _recovery_saturated,
 )
 
 if TYPE_CHECKING:
@@ -821,7 +820,6 @@ async def _execute_tool_round_impl(
             break
 
     _pre_results: dict[int, str] = pre_results if pre_results is not None else {}
-    _round_counted_wide_read = False
 
     for _i, _dtc_call in enumerate(tool_calls):
         # P3 (audit 2026-11-03): same truthiness guard as the prefetch above —
@@ -1111,6 +1109,12 @@ async def _execute_tool_round_impl(
             if _hint_matched:
                 pass
             elif _dname == "task_complete":
+                if "[task_complete: CHECKPOINT" in str(_dresult):
+                    trs.tc_consecutive[0] = 0
+                    dtool_msgs.append({"role": "tool", "content": _dresult,
+                                        "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+                    _logger.info("[TASK-COMPLETE-CHECKPOINT] more_work_remaining=True — keeping run open")
+                    continue
                 # TC-DE-NAG (2026-09-10): a task_complete re-call WITHOUT any
                 # other tool in between means the model ignored the previous
                 # feedback — accept instead of nagging again (each blocked call
@@ -1577,30 +1581,17 @@ async def _execute_tool_round_impl(
         # ── Context LRU registration ──
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
-        # ── Read-file ladder tracker (persistent across rounds) ──
-        _rl_range_read = bool(
-            _dname == "read_file"
-            and (isinstance(_dargs, dict) and (_dargs.get("start_line") or _dargs.get("end_line")))
+        # ── Same-file repeat-read loop tracker (persistent across rounds) ──
+        _, _same_file_read_cnt = _track_same_file_read(
+            trs,
+            _dname,
+            _args_parse_failed,
+            _focus_path or "",
+            dargs=_dargs if isinstance(_dargs, dict) else None,
+            is_tool_error=_tool_call_failed(_dresult, _dname),
         )
-        _rl_failed_or_skip = bool(
-            _tool_call_failed(_dresult, _dname)
-            or str(_dresult or "").startswith("[SKIP:")
-        )
-        _update_read_ladder(
-            trs, _dname, _args_parse_failed, _focus_path or "",
-            range_read=_rl_range_read,
-            count_wide=(not _round_counted_wide_read),
-            failed_or_skipped=_rl_failed_or_skip,
-        )
-        if _dname == "read_file" and not _args_parse_failed and not _rl_range_read and not _rl_failed_or_skip:
-            _round_counted_wide_read = True
-        elif _dname in _READ_LADDER_RESET_TOOLS:
-            _round_counted_wide_read = False
         if _dname != "task_complete":
             trs.tc_consecutive[0] = 0
-        _consecutive_reads = trs.consecutive_reads[0]
-        _wide_read_streak = trs.wide_read_streak[0]
-        _read_ladder_fired = trs.read_ladder_fired[0]
 
         # ── Loop detection ──
         if isinstance(_dargs, dict):
@@ -1707,42 +1698,26 @@ async def _execute_tool_round_impl(
                     'task_complete(status={"completed": [...], "blockers": ["..."], "build_status": "blocked"}).'
                 ))
 
-        # ── Read-file ladder: reads without any write/edit ──
-        # READ-LADDER FIX (2026-10-17): the old condition additionally required
-        # a write/bash call SOMEWHERE in the history - a model that read ten
-        # files before its first edit never got the hint. What matters is
-        # whether this MODE can write at all (read-only modes stay silent).
-        # Two triggers, because `consecutive_reads` resets on every path change
-        # (PATH-RESET 2026-09-09): the same path read 3x, or 8 reads across
-        # different paths with no write at all - the case the text describes.
-        # NOTE for the same-path trigger: three IDENTICAL repeat calls are
-        # caught earlier by the loop detector, and same-path reads with
-        # different line ranges are `range_read` and do not count - so in
-        # practice the WIDE trigger is the live one. The same-path condition
-        # stays as a safety net if the loop detector changes.
-        elif (_consecutive_reads >= READ_LADDER_SAME_PATH
-              or _wide_read_streak >= READ_LADDER_WIDE) \
-                and not _read_ladder_fired \
-                and _mode_can_write(tool_mode, duo_ws):
-            _ladder_n = max(_consecutive_reads, _wide_read_streak)
-            _ladder_kind = ("same file" if _consecutive_reads >= READ_LADDER_SAME_PATH
-                            else "different files")
-            if not _recovery_saturated(dtool_msgs):
-                _logger.info("[READ-LADDER] fired consecutive=%d wide=%d kind=%s",
-                             _consecutive_reads, _wide_read_streak, _ladder_kind)
-                _append_tool_footer(dtool_msgs, _SYS_PREFIX + (
-                    f"[READ LADDER] {_ladder_n} read_file calls ({_ladder_kind}) without any write/edit. "
-                    f"You are exploring but not implementing. Pick the MOST RELEVANT file you've read and "
-                    f"call write_file or edit_file on it NOW. Do NOT read any more files until you've "
-                    f"made a change."
-                ))
-                await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_ladder_n}x reads without a write — hint injected]\n"})
-                trs.read_ladder_fired[0] = True
-                trs.consecutive_reads[0] = 0
-                trs.wide_read_streak[0] = 0
-            else:
-                _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d wide=%d",
-                             _consecutive_reads, _wide_read_streak)
+        # ── Same-file repeat-read loop abort (2026-11-27) ──
+        # Replaces the old Read-Ladder hint: reading many DIFFERENT files (or
+        # distinct line ranges of a big file) never injects a hint. Looping on
+        # the SAME file/slice (including [SKIP: ... already read] repeats) with
+        # no write/edit/test/bash in between aborts cleanly as loop_detected.
+        elif _same_file_read_cnt >= READ_SAME_FILE_ABORT:
+            await hooks.emit({
+                "type": "status",
+                "content": f"[Tool loop: read_file repeated {_same_file_read_cnt}x on '{_focus_path}' — aborted]",
+            })
+            _append_tool_footer(dtool_msgs, "[loop-detection: aborted]")
+            _pair_unexecuted_tool_calls(
+                dtool_msgs, tool_calls, _i + 1, "[loop-detection: aborted]"
+            )
+            _logger.warning(
+                "[EXEC-LD-RAW] loop_detected gesetzt (tool=read_file, same_file=%s, count=%d)",
+                _focus_path, _same_file_read_cnt,
+            )
+            result.loop_detected = True
+            break
 
         _cur_sig = trs.call_sigs[-1] if trs.call_sigs else ""
         if (

@@ -1596,6 +1596,7 @@ async def _duo_exec_round_task(
         _reads_seen = state.setdefault("_reads_seen", {})
         _freshness_warned = state.setdefault("_freshness_warned", {})
         _wide_read_streak = state.setdefault("_wide_read_streak", [0])
+        _same_file_reads = state.setdefault("_same_file_reads", {})
         _edit_loop_recoveries = state.setdefault("_edit_loop_recoveries", [0])
         _last_test_outcome = state.setdefault("_last_test_outcome", [None])
         _superseded_paths = state.setdefault("_superseded_paths", [])
@@ -1631,6 +1632,7 @@ async def _duo_exec_round_task(
             last_read_path=_last_read_path,
             read_ladder_fired=_read_ladder_fired,
             wide_read_streak=_wide_read_streak,
+            same_file_reads=_same_file_reads,
             edit_loop_recoveries=_edit_loop_recoveries,
             recovered_loop_sigs=state.setdefault("_recovered_loop_sigs", set()),
             ws_budget_streak=_ws_budget_streak,
@@ -1727,6 +1729,7 @@ def _reset_read_and_recovery_state(
     last_read_path[0] = ""
     read_ladder_fired[0] = False
     state.setdefault("_wide_read_streak", [0])[0] = 0
+    state.setdefault("_same_file_reads", {}).clear()
     state.setdefault("_edit_loop_recoveries", [0])[0] = 0
     state.setdefault("_recovered_loop_sigs", set()).clear()
     state.setdefault("_superseded_paths", []).clear()
@@ -2853,6 +2856,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _verify_mutation_serial = 0
         _verify_last_ok_serial = 0
         _task_complete_blocked = [0]
+        _last_task_complete_summary = ""
         # RUN-PERSISTENT-REFS (2026-09-11): ToolRoundState is re-created every
         # round; these must survive the whole run, so they live as list refs
         # here and are passed into each round's ToolRoundState.
@@ -4777,6 +4781,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _duo_deadline_at = _tc_ps.duo_deadline_at
                             _grace_round_active = _tc_ps.grace_round_active
                             if _tc_ps.action == "break":
+                                for _tcm in reversed(_dtool_msgs):
+                                    if _tcm.get("role") == "tool" and _tcm.get("name") == "task_complete":
+                                        _tc_c = str(_tcm.get("content") or "").strip()
+                                        if _tc_c:
+                                            _last_task_complete_summary = _tc_c[:4000]
+                                            break
                                 break
                             _gate_vetoed = not _exec_result.task_complete_called
                         _total_tool_rounds += 1
@@ -5496,6 +5506,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                 "coder_mdl": coder_mdl,
                 "final_verdict": final_verdict,
                 "run_peer_ratings": run_peer_ratings,
+                "_last_task_complete_summary": _last_task_complete_summary,
             },
         )
         async for _ev in _duo_session_epilogue(ctx, _epi_ps):

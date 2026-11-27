@@ -52,6 +52,14 @@ def _python_header(lines: list[str], lineno: int, max_lines: int = 24) -> str:
     return merged[:220]
 
 
+def _python_assign_header(lines: list[str], lineno: int) -> str:
+    i = max(0, lineno - 1)
+    if i >= len(lines):
+        return ""
+    raw = lines[i].rstrip("\r\n").strip()
+    return re.sub(r"\s+", " ", raw)[:160]
+
+
 def _iter_py_assign_names(node: ast.AST) -> list[str]:
     names: list[str] = []
     if isinstance(node, ast.Assign):
@@ -227,7 +235,7 @@ def _python_signatures(path: Path, text: str, max_items: int) -> str:
                     for var_name in _iter_py_assign_names(child):
                         if count >= max_items:
                             break
-                        v_header = _python_header(lines, child.lineno)
+                        v_header = _python_assign_header(lines, child.lineno)
                         out.append(f"  variable {node.name}.{var_name} @L{child.lineno}: {v_header}")
                         count += 1
 
@@ -240,7 +248,7 @@ def _python_signatures(path: Path, text: str, max_items: int) -> str:
             for var_name in _iter_py_assign_names(node):
                 if count >= max_items:
                     break
-                v_header = _python_header(lines, node.lineno)
+                v_header = _python_assign_header(lines, node.lineno)
                 out.append(f"variable {var_name} @L{node.lineno}: {v_header}")
                 count += 1
 
@@ -258,6 +266,13 @@ def _js_ts_signatures(path: Path, text: str, max_items: int) -> str:
     fn_re = re.compile(r"^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)")
     arrow_re = re.compile(r"^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>")
     fnexpr_re = re.compile(r"^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\(([^)]*)\)")
+    proto_re = re.compile(
+        r"^([A-Za-z_$][\w$]*)\.prototype\.([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\s*\(([^)]*)\)|\(([^)]*)\)\s*=>)"
+    )
+    export_assign_re = re.compile(
+        r"^((?:window|globalThis|self)\.[A-Za-z_$][\w$.]*|module\.exports(?:\.[A-Za-z_$][\w$.]*)?|exports\.[A-Za-z_$][\w$.]*)\s*="
+    )
+    iife_re = re.compile(r"^\(?\s*(?:async\s+)?(?:function\s*\([^)]*\)|\([^)]*\)\s*=>)\s*\{")
     var_re = re.compile(r"^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b")
     method_re = re.compile(
         r"^(?:(?:public|private|protected|static|readonly|async|get|set)\s+)*"
@@ -266,6 +281,7 @@ def _js_ts_signatures(path: Path, text: str, max_items: int) -> str:
 
     keywords = {"if", "for", "while", "switch", "catch", "with", "return"}
     brace_level = 0
+    top_level = 0
     active_class: str | None = None
     class_base_level: int = -1
 
@@ -275,7 +291,12 @@ def _js_ts_signatures(path: Path, text: str, max_items: int) -> str:
         stripped = raw.strip()
         if not stripped or stripped.startswith("//"):
             brace_level += raw.count("{") - raw.count("}")
+            if brace_level == 0:
+                top_level = 0
             continue
+
+        if brace_level == 0 and iife_re.match(stripped):
+            top_level = 1
 
         m_class = class_re.match(stripped)
         if m_class:
@@ -294,28 +315,41 @@ def _js_ts_signatures(path: Path, text: str, max_items: int) -> str:
                     out.append(f"  method {active_class}.{m_name} @L{idx}: {stripped[:220]}")
                     count += 1
 
-        if brace_level == 0 and count < max_items:
+        if brace_level <= top_level and count < max_items:
             m_fn = fn_re.match(stripped)
             if m_fn:
                 out.append(f"function {m_fn.group(1)} @L{idx}: {stripped[:220]}")
                 count += 1
             else:
-                m_arrow = arrow_re.match(stripped)
-                if m_arrow:
-                    out.append(f"function {m_arrow.group(1)} @L{idx}: {stripped[:220]}")
+                m_proto = proto_re.match(stripped)
+                if m_proto:
+                    out.append(f"method {m_proto.group(1)}.{m_proto.group(2)} @L{idx}: {stripped[:220]}")
                     count += 1
                 else:
-                    m_fnexpr = fnexpr_re.match(stripped)
-                    if m_fnexpr:
-                        out.append(f"function {m_fnexpr.group(1)} @L{idx}: {stripped[:220]}")
+                    m_arrow = arrow_re.match(stripped)
+                    if m_arrow:
+                        out.append(f"function {m_arrow.group(1)} @L{idx}: {stripped[:220]}")
                         count += 1
                     else:
-                        m_var = var_re.match(stripped)
-                        if m_var:
-                            out.append(f"variable {m_var.group(1)} @L{idx}: {stripped[:220]}")
+                        m_fnexpr = fnexpr_re.match(stripped)
+                        if m_fnexpr:
+                            out.append(f"function {m_fnexpr.group(1)} @L{idx}: {stripped[:220]}")
                             count += 1
+                        else:
+                            m_exp = export_assign_re.match(stripped)
+                            if m_exp:
+                                out.append(f"variable {m_exp.group(1)} @L{idx}: {stripped[:220]}")
+                                count += 1
+                            else:
+                                m_var = var_re.match(stripped)
+                                if m_var:
+                                    out.append(f"variable {m_var.group(1)} @L{idx}: {stripped[:220]}")
+                                    count += 1
 
         brace_level += raw.count("{") - raw.count("}")
+        if brace_level <= 0:
+            brace_level = 0
+            top_level = 0
         if active_class is not None and brace_level <= class_base_level:
             active_class = None
             class_base_level = -1

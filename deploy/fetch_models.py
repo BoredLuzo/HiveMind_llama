@@ -4,11 +4,10 @@ fetch_models.py
 Downloads the condensed performance-class HiveMind models from Hugging Face
 and populates models.json with all GGUFs found in the models folder.
 
-Essential Starter Set (`--essential`, 4 models, ~12.8 GB, fits any 8 GB GPU):
+Essential Starter Set (`--essential`, 3 models, ~8.6 GB, fits any 8 GB GPU):
   gemma-4:e4b-it-qat          UD-Q4_K_XL — Direct / Vision / All-rounder (+MTP)
   qwen3.5:4b-mtp              Q4_K_M     — Duo Coder / Planner (MTP + Vision)
-  minicpm5:2b-sharp           Q6_K_XL    — Light All-rounder / Judge / Refiner (+DSpark)
-  lfm3:1.7b-qad               Q4_0       — Tool-calling subagent (~1 GB, lowest latency)
+  lfm3:1.7b-qad               Q4_0       — Tool-calling subagent / Judge (~1 GB, lowest latency)
 
 Usage:
   python deploy\\fetch_models.py --models-dir <path> [options]
@@ -164,7 +163,6 @@ def _persist_models_dir(mdir: Path) -> None:
 ESSENTIAL_KEYS = {
     "gemma-4:e4b-it-qat",
     "qwen3.5:4b-mtp",
-    "minicpm5:2b-sharp",
     "lfm3:1.7b-qad",
 }
 # kept for callers that only want to know the one optional extra
@@ -220,30 +218,6 @@ SPECS: list[dict] = [
         ],
         "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
         "mmproj_dest": "mmproj-Qwen3.5-4B-F16.gguf",
-    },
-    {
-        "key": "minicpm5:2b-sharp",
-        "tag": "minicpm5:2b-sharp",
-        "tier": "Essential (Ultra-fast All-rounder/Judge + DSpark)",
-        "disk_gb": "~2.8 GB",
-        "hw_req": "4+ GB VRAM (100% GPU)",
-        "role_hint": "Recommended Judge / Refiner (~70+ tok/s)",
-        "desc": "Sharp-MiniCPM5-2B Q6_K_XL (fast all-rounder/judge, ~2.1GB + DSpark drafter)",
-        "repo": "peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF",
-        "file_regex": [
-            r"(?i)^sharp-minicpm5-2b-q6_k_xl\.gguf$",
-        ],
-        "mmproj_regex": [],
-        "extra_files": [
-            {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
-        ],
-        "sidecar": [
-            {
-                "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",
-                "path": "MiniCPM5-2.6B-DSpark.gguf",
-                "note": "DSpark spec-dec drafter (~650MB)",
-            },
-        ],
     },
     {
         "key": "lfm3:1.7b-qad",
@@ -342,37 +316,27 @@ SPECS: list[dict] = [
     {
         "key": "nvidia-nemotron-3.5-bolt:e4b",
         "tag": "nvidia-nemotron-3.5-bolt:e4b",
-        "tier": "8 GB Power Class (Top Quality Reasoning/Code + DFlash)",
-        "disk_gb": "~5.1 GB",
+        "tier": "8 GB Power Class (Top Quality Reasoning/Code + Vision + DFlash)",
+        "disk_gb": "~5.8 GB",
         "hw_req": "8+ GB VRAM (100% GPU)",
-        "role_hint": "Upgrade: Top 8GB Reasoning/Coder + DFlash (~33 tok/s)",
-        "desc": "Nemotron-3.5-Bolt E4B UD-Q4_K_XL (strongest 8GB reasoning/code, 64K SWA, ~4.7GB + DFlash)",
-        "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
+        "role_hint": "Upgrade: Top 8GB Reasoning/Coder + Vision + DFlash",
+        "desc": "Nemotron-3.5-Bolt E4B GSQ-RCO-IQ4_XS (strongest 8GB reasoning/code + vision, 64K SWA, ~4.8GB + mmproj + DFlash)",
+        "repo": "abenzerps/Nemotron-3.5-Bolt-E4B-GSQ-RCO-GGUF",
         "file_regex": [
-            r"(?i)^nvidia-nemotron-3\.5-bolt-e4b-ud-q4_k_xl\.gguf$",
+            r"(?i)^nemotron-3\.5-bolt-e4b-gsq-rco-iq4_xs\.gguf$",
         ],
-        "mmproj_regex": [],
+        "mmproj_regex": [
+            r"(?i)^mmproj[-_.]q8_0\.gguf$",
+            r"(?i)^mmproj[-_.]bf16\.gguf$",
+        ],
+        "mmproj_dest": "mmproj-nvidia-nemotron-3.5-bolt-e4b-q8_0.gguf",
         "sidecar": [
             {
-                "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
-                "path": "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf",
-                "note": "DFlash spec-dec drafter Q8_0 (~370MB)",
+                "repo": "abenzerps/Nemotron-3.5-Bolt-E4B-GSQ-RCO-GGUF",
+                "path": "Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf",
+                "note": "DFlash spec-dec drafter Q8_0 (~400MB)",
             },
         ],
-    },
-    {
-        "key": "twil:8b",
-        "tag": "twil:8b",
-        "tier": "Specialist / Math Footnote (Dense 8.8B Math/IF — slower ~14 t/s)",
-        "disk_gb": "~5.0 GB",
-        "hw_req": "8+ GB VRAM (100% GPU)",
-        "role_hint": "Specialist Math/IF (slower ~14 tok/s vs 34+ tok/s dense/MoE options)",
-        "desc": "TwIL-8B Q4_K_M Balanced (8.8B Granite 4.2 math/code/IF specialist, ~5.0GB)",
-        "repo": "webAI-Official/TwIL-8B",
-        "file_regex": [
-            r"(?i)^twil-8b-q4_k_m-balanced\.gguf$",
-        ],
-        "mmproj_regex": [],
     },
     {
         "key": "qwen3.5:9b-mtp",
@@ -390,20 +354,6 @@ SPECS: list[dict] = [
         "mmproj_dest": "mmproj-Qwen3.5-9B-F16.gguf",
     },
     # ── Tier 4: Hybrid / Heavy MoE Class (8 GB+32 GB RAM or 16-24+ GB VRAM)
-    {
-        "key": "air:26b-a4b",
-        "tag": "air:26b-a4b",
-        "tier": "Hybrid MoE / 16+ GB VRAM (26B Gemma-4 Reasoning)",
-        "disk_gb": "~12.6 GB",
-        "hw_req": "16+ GB VRAM  OR  8 GB VRAM + 32+ GB RAM (CPU-MoE RAM-Offload)",
-        "role_hint": "Upgrade: 26B MoE via RAM-Offload (~25-29 tok/s on 32GB RAM)",
-        "desc": "Air-26B-A4B MoE (25.2B/4B active Gemma 4 reasoning, 128K ctx, ~12.6GB)",
-        "repo": "webAI-Official/Air-26B-A4B-gguf",
-        "file_regex": [
-            r"(?i)^air-26b-a4b\.gguf$",
-        ],
-        "mmproj_regex": [],
-    },
     {
         "key": "qwen3.6:35b-a3b-mtp",
         "tag": "qwen3.6:35b-a3b-mtp",
@@ -448,11 +398,11 @@ HARDWARE_TIERS: list[dict] = [
         "id": "low_vram",
         "label": "4-6 GB VRAM (or CPU-only)",
         "summary": "Keep weights under ~3.5 GB so VRAM stays spill-free. Any model can still be downloaded and tried.",
-        "essential": ["lfm3:1.7b-qad", "minicpm5:2b-sharp", "qwen3.5:4b-mtp"],
+        "essential": ["lfm3:1.7b-qad", "qwen3.5:4b-mtp"],
         "upgrades": ["lfm3-omni:2b", "lfm3:1.7b-uncensored-ad"],
         "roles": {
-            "direct": "minicpm5:2b-sharp (or lfm3-omni:2b for vision)",
-            "duo_coder": "qwen3.5:4b-mtp (at 8k-16k ctx) or minicpm5:2b-sharp",
+            "direct": "qwen3.5:4b-mtp (or lfm3-omni:2b for vision)",
+            "duo_coder": "qwen3.5:4b-mtp (at 8k-16k ctx)",
             "duo_critic": "lfm3:1.7b-qad (keep != duo_coder)",
             "judge / refiner": "lfm3:1.7b-qad",
             "subagent": "lfm3:1.7b-qad",
@@ -461,56 +411,56 @@ HARDWARE_TIERS: list[dict] = [
     {
         "id": "8gb_16gb",
         "label": "8 GB VRAM + <=24 GB RAM",
-        "summary": "Core 2B-9B dense models run 100% in GPU VRAM. Heavy 26B/35B MoEs need 32+ GB RAM for expert offload.",
-        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
+        "summary": "Core 2B-9B dense models run 100% in GPU VRAM. Heavy MoEs need 32+ GB RAM for expert offload.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "lfm3:1.7b-qad"],
         "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default]",
             "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default]",
-            "duo_critic": "minicpm5:2b-sharp (co-resident; keep != duo_coder)",
-            "judge / refiner": "minicpm5:2b-sharp (+DSpark)",
+            "duo_critic": "gemma-4:e4b-it-qat (keep != duo_coder)",
+            "judge / refiner": "lfm3:1.7b-qad",
             "subagent": "lfm3:1.7b-qad",
         },
     },
     {
         "id": "8gb_32gb",
         "label": "8 GB VRAM + 32+ GB RAM (Hybrid CPU-MoE Capable)",
-        "summary": "8 GB defaults run 100% in GPU VRAM (fast). 26B/35B MoEs work ONLY because your 32+ GB System RAM holds CPU-offloaded experts.",
-        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"],
+        "summary": "8 GB defaults run 100% in GPU VRAM (fast). Heavy MoEs work ONLY because your 32+ GB System RAM holds CPU-offloaded experts.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "lfm3:1.7b-qad"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"],
         "roles": {
             "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default, 100% GPU]",
             "duo_coder / planner": "qwen3.5:4b-mtp (+MTP) [Recommended Default, 100% GPU]",
-            "duo_critic": "minicpm5:2b-sharp (co-resident; keep != duo_coder)",
-            "judge / refiner": "minicpm5:2b-sharp (+DSpark) [Recommended Default]",
+            "duo_critic": "gemma-4:e4b-it-qat (keep != duo_coder)",
+            "judge / refiner": "lfm3:1.7b-qad [Recommended Default]",
             "subagent": "lfm3:1.7b-qad [Recommended Default]",
         },
     },
     {
         "id": "12gb_16gb",
         "label": "12-16 GB VRAM",
-        "summary": "Heavy 8B-9B models stay 100% GPU-resident with huge context; 26B-35B MoEs offload minimally.",
-        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "air:26b-a4b", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"],
+        "summary": "Heavy 4B-9B models stay 100% GPU-resident with huge context; large MoEs offload minimally.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "lfm3:1.7b-qad"],
+        "upgrades": ["nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp", "qwen3.6:35b-a3b-mtp", "inkling-2-mini"],
         "roles": {
-            "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default] or qwen3.5:9b-mtp",
+            "direct / vision": "gemma-4:e4b-it-qat (+MTP) [Recommended Default] or nvidia-nemotron-3.5-bolt:e4b",
             "duo_coder / planner": "qwen3.5:4b-mtp (fast GPU) or qwen3.6:35b-a3b-mtp",
-            "duo_critic": "minicpm5:2b-sharp (co-resident; keep != duo_coder)",
-            "judge / refiner": "minicpm5:2b-sharp",
+            "duo_critic": "gemma-4:e4b-it-qat (keep != duo_coder)",
+            "judge / refiner": "lfm3:1.7b-qad",
             "subagent": "lfm3:1.7b-qad",
         },
     },
     {
         "id": "24gb_plus",
         "label": "24+ GB VRAM",
-        "summary": "Flagship 26B-35B MoEs run with maximum GPU offload alongside fast dense defaults.",
-        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "minicpm5:2b-sharp", "lfm3:1.7b-qad"],
-        "upgrades": ["qwen3.6:35b-a3b-mtp", "inkling-2-mini", "air:26b-a4b", "nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
+        "summary": "Flagship MoEs run with maximum GPU offload alongside fast dense defaults.",
+        "essential": ["gemma-4:e4b-it-qat", "qwen3.5:4b-mtp", "lfm3:1.7b-qad"],
+        "upgrades": ["qwen3.6:35b-a3b-mtp", "inkling-2-mini", "nvidia-nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp"],
         "roles": {
-            "direct / vision": "gemma-4:e4b-it-qat (+MTP) or qwen3.5:9b-mtp",
+            "direct / vision": "gemma-4:e4b-it-qat (+MTP) or nvidia-nemotron-3.5-bolt:e4b",
             "duo_coder / planner": "qwen3.6:35b-a3b-mtp (or qwen3.5:4b-mtp for max speed)",
-            "duo_critic": "minicpm5:2b-sharp / gemma-4:e4b-it-qat (keep != duo_coder)",
-            "judge / refiner": "minicpm5:2b-sharp / nvidia-nemotron-3.5-bolt:e4b",
+            "duo_critic": "gemma-4:e4b-it-qat (keep != duo_coder)",
+            "judge / refiner": "lfm3:1.7b-qad / nvidia-nemotron-3.5-bolt:e4b",
             "subagent": "lfm3:1.7b-qad",
         },
     },

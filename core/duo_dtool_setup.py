@@ -232,10 +232,38 @@ async def _duo_dtool_setup(ctx, ps):
             else "Files explored above (avoid re-reading files whose full content is "
                  "already shown above; call read_file if a file's content is missing or truncated):"
         )
+        _prior_chat_block = ""
+        if _coder_msgs and len(_coder_msgs) > 2:
+            _prior_lines: list[str] = []
+            _prior_budget = 3000
+            for _pm_prev in reversed(_coder_msgs[1:-1]):
+                _pr = _pm_prev.get("role")
+                if _pr not in ("user", "assistant"):
+                    continue
+                _pc = _pm_prev.get("content")
+                if isinstance(_pc, list):
+                    _pc = " ".join(
+                        str(x.get("text", "")) for x in _pc if isinstance(x, dict)
+                    )
+                _ps = str(_pc or "").strip()
+                if not _ps:
+                    continue
+                _line = f"[{_pr.upper()}]: {_ps[:800]}"
+                if _prior_budget - len(_line) < 0 and _prior_lines:
+                    break
+                _prior_lines.insert(0, _line)
+                _prior_budget -= len(_line)
+            if _prior_lines:
+                _prior_chat_block = (
+                    "## Previous Conversation in This Chat\n"
+                    + "\n".join(_prior_lines)
+                    + "\n\n"
+                )
         _bridge_msg = {
             "role": "user",
             "content": (
                 (f"## Workspace Structure\n{_tree_ctx}\n\n" if _tree_ctx else "") +
+                _prior_chat_block +
                 f"STOP EXPLORING — START IMPLEMENTING NOW.\n\n"
                 f"The tool calls above are your completed codebase exploration.\n"
                 f"{_already_read_header}\n{_already_read_str}\n\n"

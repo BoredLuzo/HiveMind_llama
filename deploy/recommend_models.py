@@ -206,7 +206,7 @@ def _pick_roles_from_rows(rows: list[dict], vram_total: float, vram_free: float,
     # (working via 32+ GB RAM offload) & 8 GB power dense models appear as optional upgrades.
     curated_orders = {
         "direct": prefs.get("direct") or ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "minicpm5:2b-sharp"],
-        "judge": prefs.get("judge") or ["minicpm5:2b-sharp", "lfm3:1.7b-qad", "qwen3.5:4b-mtp"],
+        "judge": prefs.get("judge") or ["lfm3:1.7b-qad", "qwen3.5:4b-mtp", "minicpm5:2b-sharp"],
         "duo_coder": prefs.get("duo_coder") or ["qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "gemma-4:e4b-it-qat"],
         "planner": prefs.get("duo_coder") or ["qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "gemma-4:e4b-it-qat"],
     }

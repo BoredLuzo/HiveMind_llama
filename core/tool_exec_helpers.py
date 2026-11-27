@@ -280,6 +280,43 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
     )
 
 
+def _track_same_file_read(
+    trs,
+    dname: str,
+    args_parse_failed: bool,
+    read_path: str = "",
+    dargs: dict | None = None,
+    is_tool_error: bool = False,
+) -> tuple[str, int]:
+    """Track repeated read_file calls targeting the SAME file/range without a write.
+
+    - Different files have distinct keys and never accumulate toward each other.
+    - Different line ranges of a large file (`start_line`/`end_line`) have
+      distinct keys so sequential chunk reading never false-triggers.
+    - `[SKIP: ... already read]` repeats DO count (they are the classic stuck
+      re-read loop), whereas actual tool errors (e.g. file not found) do not.
+    - Any write/edit/test/bash tool resets the map.
+    """
+    if dname == "read_file" and not args_parse_failed:
+        if is_tool_error or not read_path:
+            return "", 0
+        norm = str(read_path).replace("\\", "/").strip().lower()
+        s_line = ""
+        e_line = ""
+        if isinstance(dargs, dict):
+            if dargs.get("start_line") is not None:
+                s_line = str(dargs.get("start_line"))
+            if dargs.get("end_line") is not None:
+                e_line = str(dargs.get("end_line"))
+        key = f"{norm}|{s_line}|{e_line}"
+        cnt = int(trs.same_file_reads.get(key, 0)) + 1
+        trs.same_file_reads[key] = cnt
+        return key, cnt
+    if dname in _READ_LADDER_RESET_TOOLS:
+        trs.same_file_reads.clear()
+    return "", 0
+
+
 def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
                         range_read: bool = False, count_wide: bool = True,
                         failed_or_skipped: bool = False) -> None:
@@ -1409,6 +1446,10 @@ class ToolRoundState:
     # exploration), so it can never see "read 8 files, wrote nothing" — which
     # is the case the ladder hint talks about. This counter is the wide view.
     wide_read_streak: list = field(default_factory=lambda: [0])
+    # SAME-FILE-READ-LOOP (2026-11-27): per-(path, start_line, end_line) repeat
+    # read counts without an intervening write/edit/test/bash. Replaces the
+    # cross-file Read-Ladder hint with an exact same-file loop abort.
+    same_file_reads: dict = field(default_factory=dict)
     # EDIT-LOOP-SOFT-RECOVERY (2026-11-26): allow one soft recovery injection on
     # the first 3x identical edit_file/patch loop before hard-aborting the run.
     edit_loop_recoveries: list = field(default_factory=lambda: [0])

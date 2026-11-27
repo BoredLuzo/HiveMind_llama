@@ -1,3 +1,32 @@
+## [1.6.7] - 2026-11-27
+
+Continuous multi-turn Agentic chat history, `task_complete` checkpoint
+continuation, signature-rich static repo-map & JS IIFE/prototype extraction,
+same-file read-loop abort replacing the cross-file Read-Ladder hint, Direct-mode
+Action Approval & active workspace prompt, and a streamlined 9-model downloader
+featuring `Nemotron-3.5-Bolt-E4B` `GSQ-RCO-IQ4_XS` (+ DFlash + Vision).
+
+### Added
+- **Subtask checkpoint continuation for `task_complete` (`tools/definitions.py`, `tools/handlers/misc.py`, `core/tool_executor.py`, `hive_functions/prompts.py`, `tests/test_execute_tool_round.py`):**
+  - Added optional boolean `more_work_remaining` parameter (plus nested `more_work_remaining` and `build_status` `"in_progress"`/`"partial"` handling) so models can log a subtask checkpoint (`[task_complete: CHECKPOINT - continuing run]`) and continue working inside the open run instead of ending prematurely after one subtask.
+- **Direct-mode Action Approval controls & active workspace prompt (`index.html`, `static/js/settings_io.js`, `core/direct_runner.py`):**
+  - Moves the Action Approval and Auto-answer `ask_user` controls into *Direct Chat Tools* whenever Direct/Auto mode uses a tier above `MCP` (`Python` or `Full`), restoring them to the Code-Duo panel otherwise without duplicating DOM IDs.
+  - Announces `Active workspace: <path>` inside Direct tool-capable system prompts so models know their mounted workspace folder and write permissions.
+
+### Changed
+- **Streamlined model downloader & Nemotron `GSQ-RCO-IQ4_XS` + DFlash + Vision (`deploy/fetch_models.py`, `deploy/apply_model_defaults.py`, `deploy/recommend_models.py`, `backend/llama_models.py`, `model_configs/models/nvidia-nemotron-3.5-bolt_e4b.json`, `tests/test_model_catalog.py`, `tests/test_installer_download_skip.py`, `tests/test_default_config.py`):**
+  - Switched `nvidia-nemotron-3.5-bolt:e4b` to `abenzerps/Nemotron-3.5-Bolt-E4B-GSQ-RCO-GGUF` (`Nemotron-3.5-Bolt-E4B-GSQ-RCO-IQ4_XS.gguf`, ~4.8 GB) with `Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf` and `mmproj-Q8_0.gguf` (`mmproj-nvidia-nemotron-3.5-bolt-e4b-q8_0.gguf`, enabling `capabilities.vision: true`).
+  - Removed `air:26b-a4b`, `twil:8b`, and `minicpm5:2b-sharp` from the downloader catalog while preserving their shipped `model_configs/models/` profiles for existing local GGUFs, reducing the Essential Starter Set to 3 models (~8.6 GB: `gemma-4:e4b-it-qat`, `qwen3.5:4b-mtp`, `lfm3:1.7b-qad`) and total catalog to 9 models.
+- **Same-file read-loop abort replacing cross-file Read-Ladder (`tools/limits.py`, `core/tool_exec_helpers.py`, `core/tool_executor.py`, `core/duo_runner.py`, `tests/test_read_ladder.py`, `tests/test_execute_tool_round.py`, `tests/test_wave1_guards_and_tools.py`):**
+  - Removed the cross-file `[READ LADDER]` hint so reading many distinct repo files (including after compression) or sequential line ranges never triggers false hints.
+  - Tracks repeated `read_file` calls per `(path, start_line, end_line)` — including `[SKIP: already read]` repeats — and aborts cleanly as `loop_detected` at `READ_SAME_FILE_ABORT = 5` (resetting on writes/edits/tests/bash and compression).
+
+### Fixed
+- **Multi-turn Agentic chat history continuity (`static/js/voice.js`, `index.html`, `context/chat.py`, `core/duo_runner.py`, `core/duo_epilogue.py`, `core/duo_dtool_setup.py`, `tests/test_chat_history_chrome_strip.py`):**
+  - Preserves `task_complete` summaries in saved chat `content` and recovers them from persisted HTML/HIVEBLOB1 blobs for existing chats, populates Duo session history fallbacks, and carries recent conversation turns into pre-explore bridges so follow-up Agentic runs no longer start with an empty context.
+- **Static repo-map signatures & JS IIFE/prototype/C++ extraction (`hive_functions/static_repomap.py`, `hive_functions/hivemind_feature/ast_tools.py`, `tests/test_static_repomap.py`, `tests/run_regressions.py`):**
+  - Emits compact parameter lists, return types, class prefixes, exports, and `@L` line numbers in `static_repomap.py` instead of bare symbol names, adds JS/TS IIFE, `var X = function(...)`, `X.prototype.m = ...`, arrow function, namespace export, and C/C++ declarator extraction, and fixes Python variable multi-line header bleed and JS IIFE skipping in `ast_tools.py`.
+
 ## [1.6.6] - 2026-11-27
 
 Modularized routers, gateway bridge, and UI panels, hot-path audit hardening,

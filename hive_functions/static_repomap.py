@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -72,6 +73,37 @@ class PartitionMap:
     files: list[FileInfo] = field(default_factory=list)
 
 
+_WS_RE = re.compile(r"\s+")
+_SIG_TAIL_RE = re.compile(r"(\([^)]*\))(?:\s*(->\s*[^:{=]+|:\s*[^={]+))?")
+
+
+def _compact_params(raw: str, max_len: int = 72) -> str:
+    s = _WS_RE.sub(" ", raw or "").strip()
+    if not s:
+        return ""
+    if not s.startswith("("):
+        s = f"({s})"
+    if len(s) > max_len:
+        s = s[: max_len - 2].rstrip(", ") + "…)"
+    return s
+
+
+def _compact_return(raw: str, max_len: int = 32) -> str:
+    s = _WS_RE.sub(" ", raw or "").strip()
+    if not s:
+        return ""
+    if s.startswith("->"):
+        s = s[2:].strip()
+    elif s.startswith(":"):
+        s = s[1:].strip()
+    s = s.rstrip("{;").strip()
+    if not s:
+        return ""
+    if len(s) > max_len:
+        s = s[: max_len - 1].rstrip() + "…"
+    return f" -> {s}"
+
+
 def _extract_symbols_from_report(report: str) -> list[str]:
     lines = report.splitlines()
     classes: list[str] = []
@@ -88,20 +120,33 @@ def _extract_symbols_from_report(report: str) -> list[str]:
             continue
         tag = stripped.split()[0].lower() if stripped.split() else ""
         colon_pos = stripped.find(": ")
-        if colon_pos > 0:
-            stripped = stripped[:colon_pos]
+        head = stripped[:colon_pos] if colon_pos > 0 else stripped
+        tail = stripped[colon_pos + 2:].strip() if colon_pos > 0 else ""
+
+        formatted = head
+        if tail and tag in ("function", "def", "async", "method", "class"):
+            m_sig = _SIG_TAIL_RE.search(tail)
+            if m_sig:
+                params = _compact_params(m_sig.group(1))
+                ret = _compact_return(m_sig.group(2) or "") if tag != "class" else ""
+                if " @L" in head:
+                    prefix, loc = head.rsplit(" @L", 1)
+                    formatted = f"{prefix}{params}{ret} @L{loc}"
+                else:
+                    formatted = f"{head}{params}{ret}"
+
         if tag == "class":
-            classes.append(stripped)
+            classes.append(formatted)
         elif tag in ("function", "def", "async"):
-            functions.append(stripped)
+            functions.append(formatted)
         elif tag == "method":
-            methods.append(stripped)
+            methods.append(formatted)
         elif tag == "variable":
-            variables.append(stripped)
-        elif stripped.startswith("L") and ":" in stripped:
-            functions.append(stripped)
+            variables.append(head)
+        elif head.startswith("L") and ":" in stripped:
+            functions.append(stripped[:110])
         else:
-            functions.append(stripped)
+            functions.append(formatted[:110])
     return classes + functions + methods + variables[:4]
 
 
@@ -179,6 +224,69 @@ _TS_DEF_TYPES: dict[str, dict[str, str]] = {
 _TS_SYMBOL_CAP = 200
 
 
+_TS_JS_LANGS = frozenset({"javascript", "typescript", "tsx"})
+_TS_FUNC_VALUE_TYPES = frozenset({"function_expression", "arrow_function", "generator_function"})
+_TS_EXPORT_PREFIXES = ("window.", "globalThis.", "self.", "module.exports", "exports.")
+
+
+def _ts_text(node) -> str:
+    if node is None:
+        return ""
+    return node.text.decode("utf-8", "replace").strip()
+
+
+def _ts_func_sig(node) -> tuple[str, str]:
+    """Return compact (params, return_type) strings for a function/method node."""
+    params_node = (
+        node.child_by_field_name("parameters")
+        or node.child_by_field_name("formal_parameters")
+        or node.child_by_field_name("parameter")
+    )
+    params = _compact_params(_ts_text(params_node)) if params_node is not None else "()"
+    ret_node = node.child_by_field_name("return_type") or node.child_by_field_name("result")
+    ret = _compact_return(_ts_text(ret_node)) if ret_node is not None else ""
+    return params, ret
+
+
+def _ts_cpp_func_name_and_params(node) -> tuple[str, str]:
+    """Unwrap C/C++ function_definition declarator to (name, compact_params)."""
+    decl = node.child_by_field_name("declarator")
+    for _ in range(6):
+        if decl is None:
+            return "", ""
+        if decl.type == "function_declarator":
+            inner = decl.child_by_field_name("declarator")
+            params_node = decl.child_by_field_name("parameters")
+            return _ts_text(inner), _compact_params(_ts_text(params_node))
+        decl = decl.child_by_field_name("declarator")
+    return "", ""
+
+
+def _ts_is_iife(node) -> bool:
+    """True if node is a JS/TS IIFE like `(function(){...})()` or `(() => {...})()`."""
+    if node.type not in _TS_FUNC_VALUE_TYPES:
+        return False
+    cur = node.parent
+    while cur is not None and cur.type == "parenthesized_expression":
+        cur = cur.parent
+    return cur is not None and cur.type == "call_expression" and cur.child_by_field_name("function") == (
+        node.parent if node.parent is not None and node.parent.type == "parenthesized_expression" else node
+    )
+
+
+def _ts_object_keys(obj_node, max_keys: int = 6) -> list[str]:
+    keys: list[str] = []
+    for ch in obj_node.children:
+        if ch.type in ("pair", "shorthand_property_identifier", "method_definition"):
+            knode = ch.child_by_field_name("key") or ch.child_by_field_name("name") or ch
+            k = _ts_text(knode).strip("'\"")
+            if k and k not in keys:
+                keys.append(k)
+                if len(keys) >= max_keys:
+                    break
+    return keys
+
+
 def _extract_symbols_tree_sitter(
     abs_path: str,
     raw_bytes: Optional[bytes] = None,
@@ -207,21 +315,87 @@ def _extract_symbols_tree_sitter(
 
     symbols: list[str] = []
     seen: set[str] = set()
+    is_js = lang in _TS_JS_LANGS
 
-    def _walk(node) -> None:
-        if node.type in def_types:
-            name_node = node.child_by_field_name("name")
-            if name_node is not None:
-                name = name_node.text.decode("utf-8", "replace").strip()
-                if name:
-                    entry = f"{def_types[node.type]} {name}"
-                    if entry not in seen:
-                        seen.add(entry)
-                        symbols.append(entry)
+    def _add(entry: str) -> None:
+        if entry and entry not in seen and len(symbols) < _TS_SYMBOL_CAP:
+            seen.add(entry)
+            symbols.append(entry)
+
+    def _walk(node, enclosing_class: Optional[str] = None, fn_depth: int = 0) -> None:
         if len(symbols) >= _TS_SYMBOL_CAP:
             return
+        ntype = node.type
+        lineno = node.start_point[0] + 1
+        next_class = enclosing_class
+        next_depth = fn_depth
+
+        if ntype in def_types:
+            kind = def_types[ntype]
+            if kind == "func" and lang in ("c", "cpp") and ntype == "function_definition":
+                name, params = _ts_cpp_func_name_and_params(node)
+                if name and fn_depth == 0:
+                    qual = f"{enclosing_class}.{name}" if enclosing_class and "::" not in name else name
+                    label = "method" if enclosing_class else "func"
+                    _add(f"{label} {qual}{params} @L{lineno}")
+                next_depth = fn_depth + 1
+            else:
+                name_node = node.child_by_field_name("name")
+                name = _ts_text(name_node)
+                if name:
+                    if kind == "class":
+                        _add(f"class {name} @L{lineno}")
+                        next_class = name
+                        next_depth = 0
+                    elif kind == "func":
+                        if fn_depth == 0:
+                            params, ret = _ts_func_sig(node)
+                            if enclosing_class:
+                                _add(f"method {enclosing_class}.{name}{params}{ret} @L{lineno}")
+                            else:
+                                _add(f"func {name}{params}{ret} @L{lineno}")
+                        next_depth = fn_depth + 1
+                    else:
+                        if fn_depth == 0:
+                            _add(f"{kind} {name} @L{lineno}")
+        elif is_js and fn_depth == 0 and ntype == "variable_declarator":
+            name = _ts_text(node.child_by_field_name("name"))
+            val = node.child_by_field_name("value")
+            if name and val is not None:
+                if val.type in _TS_FUNC_VALUE_TYPES:
+                    params, ret = _ts_func_sig(val)
+                    _add(f"func {name}{params}{ret} @L{lineno}")
+                    return  # don't walk into function body for nested noise
+                if val.type == "class":
+                    _add(f"class {name} @L{lineno}")
+                    next_class = name
+        elif is_js and fn_depth == 0 and ntype == "assignment_expression":
+            left = _ts_text(node.child_by_field_name("left"))
+            right = node.child_by_field_name("right")
+            if left and right is not None:
+                if right.type in _TS_FUNC_VALUE_TYPES:
+                    params, ret = _ts_func_sig(right)
+                    if ".prototype." in left:
+                        qual = left.replace(".prototype.", ".")
+                        _add(f"method {qual}{params}{ret} @L{lineno}")
+                        return
+                    if any(left.startswith(p) for p in _TS_EXPORT_PREFIXES):
+                        _add(f"func {left}{params}{ret} @L{lineno}")
+                        return
+                elif any(left.startswith(p) for p in _TS_EXPORT_PREFIXES):
+                    if right.type == "object":
+                        keys = _ts_object_keys(right)
+                        kstr = f" {{{', '.join(keys)}}}" if keys else ""
+                        _add(f"export {left}{kstr} @L{lineno}")
+                    elif right.type in ("identifier", "member_expression"):
+                        _add(f"export {left} = {_ts_text(right)} @L{lineno}")
+                    return
+        elif is_js and ntype in _TS_FUNC_VALUE_TYPES:
+            if not _ts_is_iife(node):
+                next_depth = fn_depth + 1
+
         for child in node.children:
-            _walk(child)
+            _walk(child, next_class, next_depth)
             if len(symbols) >= _TS_SYMBOL_CAP:
                 return
 
@@ -397,8 +571,10 @@ def _format_repomap(
         for fi in ranked:
             file_line = fi.rel_path
             entry_lines = [file_line]
-            for sym in fi.symbols[:12]:
+            for sym in fi.symbols[:16]:
                 entry_lines.append(f"  {sym}")
+            if len(fi.symbols) > 16:
+                entry_lines.append(f"  ... (+{len(fi.symbols) - 16} more symbols)")
             if fi.imports:
                 imp_str = ", ".join(fi.imports[:8])
                 entry_lines.append(f"  imports: {imp_str}")

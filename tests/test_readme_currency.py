@@ -54,7 +54,7 @@ check("the README links the privacy doc", "docs/privacy.md" in _RD)
 
 # ── (a) catalog parity ──────────────────────────────────────────────────────
 _installer = re.findall(r'"key":\s*"([^"]+)"', _FM)
-check("installer lists models", len(_installer) >= 10, f" ({len(_installer)})")
+check("installer lists models", len(_installer) >= 9, f" ({len(_installer)})")
 # EXPERIMENTAL-MODELS (2026-11-01): these ship in the installer catalog but
 # are deliberately NOT advertised in the README (owner decision: Groot stays
 # experimental until it is ready to ship).

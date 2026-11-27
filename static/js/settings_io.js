@@ -208,6 +208,29 @@ function updateWebsearchHint() {
 function updateDirectToolsHint() {
   var opts = document.getElementById('direct-tools-opts');
   if (opts) opts.style.display = S.directToolsEnabled ? 'block' : 'none';
+  updateDirectApprovalVisibility();
+}
+
+// DIRECT-ACTION-APPROVAL (2026-11-27): move the Action Approval + ask_user
+// auto-answer toggles into Direct Tools whenever Direct/Auto mode has tier > MCP
+// (python or full, where code exec / file writes are active). Restores home
+// into the Code-Duo panel otherwise so DOM IDs stay unique.
+function updateDirectApprovalVisibility() {
+  var apBlock = document.getElementById('action-approval-block');
+  var directSlot = document.getElementById('direct-approval-slot');
+  if (!apBlock || !directSlot) return;
+  var mode = S.mode || 'auto';
+  var tier = (S.directToolsTier || 'readonly').toString();
+  var showInDirect = (mode === 'simple' || mode === 'auto')
+    && !!S.directToolsEnabled
+    && (tier === 'python' || tier === 'full');
+  if (showInDirect) {
+    _ctxMoveTo(apBlock, directSlot);
+    directSlot.style.display = 'block';
+  } else {
+    _ctxRestore(apBlock);
+    directSlot.style.display = 'none';
+  }
 }
 
 // TOOLS-OPTIONALS-CARD (2026-11-12): single card in #chat-tools-section for
@@ -244,6 +267,7 @@ function updateChatToolsSectionVisibility() {
     _ctxRestore(card);
     sec.style.display = 'none';
   }
+  updateDirectApprovalVisibility();
 }
 
 // REASONING-CARD (2026-11-25): single card in #chat-reasoning-section for
@@ -315,6 +339,7 @@ function setDirectToolsTier(v) {
   S.directToolsTier = v;
   postSettings({direct_tools_tier: v});
   updateDirectToolsTierHint();
+  updateDirectApprovalVisibility();
   updateChatToolsBadge();
 }
 

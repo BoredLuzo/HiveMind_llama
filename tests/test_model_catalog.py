@@ -24,7 +24,7 @@ check = h.check
 
 
 specs = {s["key"]: s for s in fm.SPECS}
-check("catalog is non-empty condensed performance set", len(specs) >= 10, f"({len(specs)} entries)")
+check("catalog is non-empty condensed performance set", len(specs) >= 9, f"({len(specs)} entries)")
 
 # ── Shipped profiles preserved for unlisted local models ────────────────
 prof_spark_p = ROOT / "model_configs" / "models" / "spark-x2.6_4b.json"
@@ -38,18 +38,29 @@ if prof_spark_p.exists():
           (p.get("sampling") or {}).get("thinking", {}).get("temperature") in (None, 1.0),
           f"({(p.get('sampling') or {}).get('thinking')})")
 
-# ── Nemotron-3.5-Bolt E4B + DFlash Q8_0 (in condensed catalog) ──────────
+# ── Nemotron-3.5-Bolt E4B GSQ-RCO-IQ4_XS + mmproj + DFlash Q8_0 ────────
 nem = specs.get("nvidia-nemotron-3.5-bolt:e4b")
 check("nvidia-nemotron-3.5-bolt:e4b is in the condensed catalog", nem is not None)
 if nem:
-    check("nemotron repo pinned to unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
-          nem["repo"] == "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF", f"({nem['repo']})")
-    check("nemotron regex matches UD-Q4_K_XL",
-          any(re.match(p, "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf") for p in nem["file_regex"]))
+    check("nemotron repo pinned to abenzerps/Nemotron-3.5-Bolt-E4B-GSQ-RCO-GGUF",
+          nem["repo"] == "abenzerps/Nemotron-3.5-Bolt-E4B-GSQ-RCO-GGUF", f"({nem['repo']})")
+    check("nemotron regex matches GSQ-RCO-IQ4_XS",
+          any(re.match(p, "Nemotron-3.5-Bolt-E4B-GSQ-RCO-IQ4_XS.gguf") for p in nem["file_regex"]))
+    check("nemotron ships mmproj Q8_0/BF16 with unique dest",
+          any(re.match(p, "mmproj-Q8_0.gguf") for p in nem.get("mmproj_regex") or [])
+          and nem.get("mmproj_dest") == "mmproj-nvidia-nemotron-3.5-bolt-e4b-q8_0.gguf")
     side_nem = (nem.get("sidecar") or [])
     check("nemotron ships DFlash Q8_0 drafter sidecar",
-          len(side_nem) == 1 and side_nem[0]["path"] == "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf",
+          len(side_nem) == 1
+          and side_nem[0]["repo"] == "abenzerps/Nemotron-3.5-Bolt-E4B-GSQ-RCO-GGUF"
+          and side_nem[0]["path"] == "Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf",
           f"({side_nem})")
+    import json as _json_nem
+    _np = _json_nem.loads((ROOT / "model_configs" / "models" / "nvidia-nemotron-3.5-bolt_e4b.json").read_text(encoding="utf-8"))
+    check("nemotron profile enables vision, mmproj and DFlash Q8_0",
+          (_np.get("capabilities") or {}).get("vision") is True
+          and _np.get("mmproj_filename") == "mmproj-nvidia-nemotron-3.5-bolt-e4b-q8_0.gguf"
+          and _np.get("dflash_draft_filename") == "Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf")
 
 # ── Redundant bloated entries condensed out of catalog ──────────────────
 for dropped in (
@@ -60,13 +71,17 @@ for dropped in (
     "groot:19b-a3b-261023",
     "qwen3.5:2b-mtp",
     "qwen3.5:0.8b-ud",
+    "minicpm5:2b-sharp",
+    "twil:8b",
+    "air:26b-a4b",
 ):
     check(f"condensed catalog omits redundant {dropped}", dropped not in specs)
 
 # ── Drafter werden nie als Modell registriert ───────────────────────────
 from backend.llama_models import is_non_model_gguf as _is_non_model  # noqa: E402
 check("drafter names are excluded from models.json",
-      _is_non_model("dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf")
+      _is_non_model("Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf")
+      and _is_non_model("dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf")
       and _is_non_model("mtp-gemma-4-E4B-it.gguf")
       and _is_non_model("MiniCPM5-2.6B-DSpark.gguf"))
 
@@ -204,75 +219,30 @@ check("minicpm5:2b-sharp-q4 removed from installer catalog",
 check("qwen3.6:35b-a3b-ud consolidated to qwen3.6:35b-a3b-mtp in installer catalog",
       "qwen3.6:35b-a3b-ud" not in specs and "qwen3.6:35b-a3b-mtp" in specs)
 
-# ── TwIL-8B (webAI-Official, Granite 4.2 8.8B dense reasoning) ───────────
-twil = specs.get("twil:8b")
-check("twil:8b is in the catalog", twil is not None)
-if twil:
-    check("twil repo pinned to webAI-Official/TwIL-8B",
-          twil["repo"] == "webAI-Official/TwIL-8B", f"({twil['repo']})")
-    check("twil regex matches balanced default GGUF",
-          any(re.match(p, "TwIL-8B-Q4_K_M-balanced.gguf") for p in twil["file_regex"]))
-    check("twil regex rejects verbose variant",
-          not any(re.match(p, "TwIL-8B-Q4_K_M-verbose.gguf") for p in twil["file_regex"]))
-    check("twil tag is twil:8b", twil.get("tag") == "twil:8b")
-    twil_prof_p = ROOT / "model_configs" / "models" / "twil_8b.json"
-    check("twil profile exists", twil_prof_p.exists())
-    if twil_prof_p.exists():
-        import json as _json_tw
-        tp = _json_tw.loads(twil_prof_p.read_text(encoding="utf-8"))
-        check("twil profile targets twil:8b", tp.get("model") == "twil:8b")
-        check("twil profile uses 8 GB-safe 16384 ctx, jinja, flash_attn on, q4_0 KV & reasoning on",
-              tp.get("num_ctx") == 16384
-              and tp.get("jinja") is True
-              and tp.get("reasoning") == "on"
-              and tp.get("flash_attn") is True
-              and tp.get("kv_cache_type") == "q4_0"
-              and tp.get("moe") is False
-              and int(tp.get("moe_cpu_experts") or 0) == 0)
-        ts = (tp.get("sampling") or {}).get("thinking") or {}
-        check("twil profile sampling matches card (temp=1.0, top_p=0.95)",
-              ts.get("temperature") == 1.0 and ts.get("top_p") == 0.95, f"({ts})")
+# ── TwIL-8B & Air-26B-A4B: removed from downloader, shipped profiles preserved ──
+twil_prof_p = ROOT / "model_configs" / "models" / "twil_8b.json"
+check("twil shipped profile preserved for existing GGUFs", twil_prof_p.exists())
+if twil_prof_p.exists():
+    import json as _json_tw
+    tp = _json_tw.loads(twil_prof_p.read_text(encoding="utf-8"))
+    check("twil profile targets twil:8b", tp.get("model") == "twil:8b")
 
-# ── Air-26B-A4B (webAI-Official, Gemma 4 26B-A4B MoE reasoning) ──────────
-air = specs.get("air:26b-a4b")
-check("air:26b-a4b is in the catalog", air is not None)
-if air:
-    check("air repo pinned to webAI-Official/Air-26B-A4B-gguf",
-          air["repo"] == "webAI-Official/Air-26B-A4B-gguf", f"({air['repo']})")
-    check("air regex matches Air-26B-A4B.gguf",
-          any(re.match(p, "Air-26B-A4B.gguf") for p in air["file_regex"]))
-    check("air regex rejects projector file",
-          not any(re.match(p, "mmproj-Air-26B-A4B-f16.gguf") for p in air["file_regex"]))
-    check("air tag is air:26b-a4b", air.get("tag") == "air:26b-a4b")
-    air_prof_p = ROOT / "model_configs" / "models" / "air_26b-a4b.json"
-    check("air profile exists", air_prof_p.exists())
-    if air_prof_p.exists():
-        import json as _json_air
-        ap = _json_air.loads(air_prof_p.read_text(encoding="utf-8"))
-        check("air profile targets air:26b-a4b", ap.get("model") == "air:26b-a4b")
-        check("air profile sets 131072 ctx, jinja, reasoning on, MoE=26, q4_0 KV",
-              ap.get("num_ctx") == 131072
-              and ap.get("jinja") is True
-              and ap.get("reasoning") == "on"
-              and ap.get("moe") is True
-              and int(ap.get("moe_cpu_experts") or 0) == 26
-              and ap.get("kv_cache_type") == "q4_0")
-        asmp = (ap.get("sampling") or {}).get("thinking") or {}
-        check("air profile sampling matches card (temp=1.0, top_p=0.95, top_k=64)",
-              asmp.get("temperature") == 1.0
-              and asmp.get("top_p") == 0.95
-              and asmp.get("top_k") == 64,
-              f"({asmp})")
-    from backend.llama_config import is_moe_model, moe_kv_cache_types
-    from backend.llama_models import _parse_gguf_filename
-    from backend.llama_vram_table import moe_cfg_for
-    check("air:26b-a4b is recognized as MoE with 26 calibrated experts & q4_0 KV",
-          is_moe_model("air:26b-a4b")
-          and moe_kv_cache_types("air:26b-a4b") == "q4_0"
-          and (moe_cfg_for("air:26b-a4b") or {}).get("calibrated_n_cpu_moe") == 26)
-    check("_parse_gguf_filename maps TwIL & Air GGUFs cleanly",
-          "twil:8b" in _parse_gguf_filename("TwIL-8B-Q4_K_M-balanced.gguf")
-          and _parse_gguf_filename("Air-26B-A4B.gguf")[0] == "air:26b-a4b")
+air_prof_p = ROOT / "model_configs" / "models" / "air_26b-a4b.json"
+check("air shipped profile preserved for existing GGUFs", air_prof_p.exists())
+if air_prof_p.exists():
+    import json as _json_air
+    ap = _json_air.loads(air_prof_p.read_text(encoding="utf-8"))
+    check("air profile targets air:26b-a4b", ap.get("model") == "air:26b-a4b")
+from backend.llama_config import is_moe_model, moe_kv_cache_types
+from backend.llama_models import _parse_gguf_filename
+from backend.llama_vram_table import moe_cfg_for
+check("air:26b-a4b is recognized as MoE with 26 calibrated experts & q4_0 KV",
+      is_moe_model("air:26b-a4b")
+      and moe_kv_cache_types("air:26b-a4b") == "q4_0"
+      and (moe_cfg_for("air:26b-a4b") or {}).get("calibrated_n_cpu_moe") == 26)
+check("_parse_gguf_filename maps TwIL & Air GGUFs cleanly",
+      "twil:8b" in _parse_gguf_filename("TwIL-8B-Q4_K_M-balanced.gguf")
+      and _parse_gguf_filename("Air-26B-A4B.gguf")[0] == "air:26b-a4b")
 
 # ── Qwen3.6 35B-A3B MTP + sharp Jinja template ────────────────────────────
 q36_mtp = specs.get("qwen3.6:35b-a3b-mtp")

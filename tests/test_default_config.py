@@ -53,13 +53,13 @@ check("2c the coder preference starts with the essential coder",
 check("2d direct prefers a vision model",
       AMD.ROLE_PREFERENCE["direct"][0] == "gemma-4:e4b-it-qat")
 check("2e the judge prefers the cheapest model",
-      AMD.ROLE_PREFERENCE["judge"][0] == "minicpm5:2b-sharp")
+      AMD.ROLE_PREFERENCE["judge"][0] == "lfm3:1.7b-qad")
 
 # ── 3. the wiring script respects an existing configuration ────────────────
 td = Path(tempfile.mkdtemp(prefix="hm_defaults_"))
 (td / "models.json").write_text(json.dumps({
     "gemma-4:e4b-it-qat": "x", "gemma-4:e4b_it-qat_mmproj": "y",
-    "qwen3.5:4b-mtp": "x", "minicpm5:2b-sharp": "x", "lfm3:1.7b-qad": "x",
+    "qwen3.5:4b-mtp": "x", "lfm3:1.7b-qad": "x",
 }), encoding="utf-8")
 (td / "settings.json").write_text(json.dumps({
     "agents": {"direct": {"model": "gemma-4:e4b-it-qat"},

@@ -488,6 +488,8 @@
                 onchange="S.directToolsRounds=parseInt(this.value);postSettings({direct_tools_max_rounds:S.directToolsRounds})">
               <span id="direct-tools-rounds-v" style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#60a0e0;min-width:20px;text-align:right">12</span>
             </div>
+            <!-- Action Approval slot (moved here in Direct/Auto when tier > MCP: python/full) -->
+            <div id="direct-approval-slot" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.06)"></div>
           </div>
         </div>
 
@@ -892,7 +894,9 @@
 
         <!-- Action Approval Gate (2026-09-18): pairs with Until Finished —
              the safety valve for unlimited runs. Toggling applies to the NEXT
-             tool call, mid-run, no restart. -->
+             tool call, mid-run, no restart. Also moved into Direct Tools when
+             tier > MCP (python/full). -->
+        <div id="action-approval-block">
         <div class="opt-row" style="margin-top:4px">
           <div class="opt-row-left">
             <span class="opt-name">&#x1F6E1; Action Approval</span>
@@ -930,6 +934,7 @@
             chat asks again too). Includes an optional message to the
             agent; toggling applies immediately mid-run.
           </div>
+        </div>
         </div>
 
         <div class="opt-row" style="margin-top:2px" id="duo-test-feedback-final-row">
@@ -3048,8 +3053,8 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <script src="/static/js/markdown.js?v=20261126-02"></script>
         <script src="/static/js/scroll.js?v=20261123-06"></script>
         <script src="/static/js/reasoning.js?v=20261126-01"></script>
-        <script src="/static/js/voice.js?v=20261123-06"></script>
-        <script src="/static/js/settings_io.js?v=20261126-01"></script>
+        <script src="/static/js/voice.js?v=20261127-01"></script>
+        <script src="/static/js/settings_io.js?v=20261127-01"></script>
         <script src="/static/js/agent_cards_presets.js?v=20261123-06"></script>
         <script src="/static/js/planner_ui.js?v=20261126-01"></script>
         <script src="/static/js/code_panel.js?v=20261126-01"></script>

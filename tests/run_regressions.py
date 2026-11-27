@@ -159,6 +159,7 @@ SUITES = [
     ("stuck_edit_false_positive", "tests/test_stuck_edit_false_positive.py",   120),
     ("error_rollup",              "tests/test_error_rollup.py",                  60),
     ("repomap_pin",               "tests/test_repomap_pin.py",                   60),
+    ("static_repomap",            "tests/test_static_repomap.py",                60),
     ("toolcall_sanitize",         "tests/test_toolcall_sanitize.py",             60),
     ("ctx_fit_and_floor_guard",   "tests/test_ctx_fit_and_floor_guard.py",       60),
     ("write_guard_and_explore_truth", "tests/test_write_guard_and_explore_truth.py", 60),

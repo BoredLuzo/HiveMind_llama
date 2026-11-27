@@ -589,11 +589,33 @@ function _historyTextOnly(bodyEl) {
     if (isBlock) pushNl();
   }
   walk(clone);
-  return out.join('')
+  var cleaned = out.join('')
     .replace(/\r\n/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+  if (cleaned) return cleaned;
+  // Agentic Duo runs finish via `task_complete` inside a `.tool-result-block`
+  // with no plain text outside tool chrome. Keep that summary in saved chat
+  // history so follow-up turns retain continuous conversation context, while
+  // other tool-only bubbles (e.g. web_search) still return ''.
+  try {
+    var blocks = bodyEl.querySelectorAll('.tool-result-block');
+    for (var bi = blocks.length - 1; bi >= 0; bi--) {
+      var blk = blocks[bi];
+      var sums = blk.querySelectorAll('summary');
+      var sumTxt = sums.length ? String(sums[0].textContent || '') : '';
+      if (sumTxt.indexOf('task_complete') === -1) continue;
+      var pres = blk.querySelectorAll('.tool-result-pre');
+      var tcTxt = pres.length ? String(pres[0].textContent || '') : '';
+      tcTxt = tcTxt
+        .replace(/\[UNTRUSTED CONTENT - source:[^\]]*\][\s\S]*?\[END UNTRUSTED CONTENT\]/g, '')
+        .replace(/\r\n/g, '\n')
+        .trim();
+      if (tcTxt) return tcTxt.slice(0, 4000);
+    }
+  } catch (e) {}
+  return '';
 }
 
 

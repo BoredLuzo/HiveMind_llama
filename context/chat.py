@@ -1,5 +1,6 @@
 """Chat-Context-Persistenz (aus server.py extrahiert)."""
 from __future__ import annotations
+from html import unescape as _html_unescape
 from html.parser import HTMLParser
 import json, logging, os, re, threading, time
 from pathlib import Path
@@ -139,6 +140,39 @@ _DOM_TOOL_CHIP_RE = re.compile(
 _UNTRUSTED_BLOCK_RE = re.compile(
     r"\[UNTRUSTED CONTENT - source:[^\]]*\][\s\S]*?\[END UNTRUSTED CONTENT\]"
 )
+_TASK_COMPLETE_BLOCK_RE = re.compile(
+    r"<details\b[^>]*class=\"[^\"]*\btool-result-block\b[^\"]*\"[^>]*>"
+    r"\s*<summary\b[^>]*>(.*?)</summary>\s*"
+    r"<pre\b[^>]*class=\"[^\"]*\btool-result-pre\b[^\"]*\"[^>]*>(.*?)</pre>\s*</details>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _extract_task_complete_from_html(html_str: str) -> str:
+    """Recover the final `task_complete` summary from an Agentic turn's saved HTML."""
+    if not html_str or "task_complete" not in html_str:
+        return ""
+    matches = list(_TASK_COMPLETE_BLOCK_RE.finditer(html_str))
+    for m in reversed(matches):
+        if "task_complete" not in (m.group(1) or ""):
+            continue
+        body = _html_unescape(m.group(2) or "")
+        body = _UNTRUSTED_BLOCK_RE.sub("", body)
+        body = re.sub(r"\r\n", "\n", body)
+        body = re.sub(r"\n{3,}", "\n\n", body).strip()
+        if body:
+            return body[:4000]
+    return ""
+
+
+def _load_msg_html(chat_id: str, msg: dict) -> str | None:
+    """Return a message's saved HTML string (inline or resolved HIVEBLOB1 blob)."""
+    raw_html = msg.get("html")
+    if isinstance(raw_html, str) and raw_html.strip():
+        return raw_html
+    if isinstance(raw_html, dict) and "_ref" in raw_html:
+        return _read_html_blob(chat_id, raw_html.get("_ref"))
+    return None
 
 
 class _AnswerHtmlExtractor(HTMLParser):
@@ -325,14 +359,15 @@ def _sanitize_assistant_transcript(chat_id: str, msg: dict, content: str) -> str
     """
     if not _looks_like_dom_scraped_tool_chrome(content):
         return content
-    raw_html = msg.get("html")
-    html_str: str | None = None
-    if isinstance(raw_html, str) and raw_html.strip():
-        html_str = raw_html
-    elif isinstance(raw_html, dict) and "_ref" in raw_html:
-        html_str = _read_html_blob(chat_id, raw_html.get("_ref"))
+    html_str = _load_msg_html(chat_id, msg)
     if html_str:
-        return _extract_answer_from_html(html_str)
+        extracted = _extract_answer_from_html(html_str)
+        if extracted:
+            return extracted
+        tc_summary = _extract_task_complete_from_html(html_str)
+        if tc_summary:
+            return tc_summary
+        return ""
     cleaned = _UNTRUSTED_BLOCK_RE.sub("", content)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
@@ -345,8 +380,11 @@ def load_chat_transcript(chat_id: str, limit: int = 40) -> list:
     chat json in sessions/. Legacy assistant turns whose `content` was
     DOM-scraped from `.abody.textContent` are cleaned via their saved HTML
     (inline or blob) so tool chips and `[UNTRUSTED CONTENT]` dumps never
-    poison follow-up turns. The sidecar "session" key demotes to a fallback
-    for chats without a json (or run-state-only sidecars)."""
+    poison follow-up turns. Agentic turns that ended via `task_complete`
+    (leaving `content` empty after chrome stripping) recover their clean
+    `task_complete` summary from saved HTML so continuous follow-ups keep
+    full turn history. The sidecar "session" key demotes to a fallback for
+    chats without a json (or run-state-only sidecars)."""
     data = _read_chat_json(chat_id)
     if not data:
         return []
@@ -361,12 +399,19 @@ def load_chat_transcript(chat_id: str, limit: int = 40) -> list:
         # model history so raw thinking does not crowd the token budget.
         if m.get("part"):
             continue
-        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            if role == "assistant":
-                content = _sanitize_assistant_transcript(chat_id, m, content)
-                if not content.strip():
-                    continue
+        if role == "user" and isinstance(content, str) and content.strip():
             out.append({"role": role, "content": content})
+        elif role == "assistant":
+            if isinstance(content, str) and content.strip():
+                content = _sanitize_assistant_transcript(chat_id, m, content)
+            else:
+                html_str = _load_msg_html(chat_id, m)
+                content = (
+                    _extract_answer_from_html(html_str)
+                    or _extract_task_complete_from_html(html_str)
+                ) if html_str else ""
+            if isinstance(content, str) and content.strip():
+                out.append({"role": role, "content": content})
     return out[-limit:]
 
 

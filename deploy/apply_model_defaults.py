@@ -42,9 +42,9 @@ ROLE_PREFERENCE: dict[str, list[str]] = {
     "critic": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:4b-mtp", "twil:8b", "minicpm5:2b-sharp"],
     "synthesizer": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:4b-mtp", "twil:8b", "minicpm5:2b-sharp"],
     # short rewrite of constraints: fast + cheap
-    "refiner": ["minicpm5:2b-sharp", "qwen3.5:4b-mtp", "lfm3:1.7b-qad", "gemma-4:e4b-it-qat"],
+    "refiner": ["lfm3:1.7b-qad", "qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "minicpm5:2b-sharp"],
     # 120-token verdict: co-resident small model
-    "judge": ["minicpm5:2b-sharp", "lfm3:1.7b-qad", "qwen3.5:4b-mtp", "gemma-4:e4b-it-qat"],
+    "judge": ["lfm3:1.7b-qad", "qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "minicpm5:2b-sharp"],
     # coding: Essential 4B coder first, upgrades (Nemotron/Qwen9B/Qwen3.6/Inkling/Air/TwIL) if installed instead
     "duo_coder": [
         "qwen3.5:4b-mtp", "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "qwen3.5:9b-mtp",
@@ -52,17 +52,17 @@ ROLE_PREFERENCE: dict[str, list[str]] = {
     ],
     # Critic-Duo rule: prefer a small co-resident reviewer so coder stays pinned without thrashing
     "duo_critic": [
-        "minicpm5:2b-sharp", "gemma-4:e4b-it-qat", "lfm3:1.7b-qad",
+        "gemma-4:e4b-it-qat", "lfm3:1.7b-qad", "minicpm5:2b-sharp",
         "nvidia-nemotron-3.5-bolt:e4b", "nemotron-3.5-bolt:e4b", "ling-3.0-tiny",
         "qwen3.5:4b-mtp", "qwen3.5:9b-mtp", "qwen3.6:35b-a3b-mtp", "inkling-2-mini", "air:26b-a4b", "twil:8b",
     ],
     # the image preprocessor needs vision (keep coder slot free of projector reloads)
-    "vision_agent": ["gemma-4:e4b-it-qat", "lfm3-omni:2b", "qwen3.5:4b-mtp", "qwen3.5:9b-mtp", "inkling-2-mini"],
+    "vision_agent": ["gemma-4:e4b-it-qat", "nvidia-nemotron-3.5-bolt:e4b", "lfm3-omni:2b", "qwen3.5:4b-mtp", "qwen3.5:9b-mtp", "inkling-2-mini"],
 }
 
 # Subagent ladder: smallest first - the ladder walks up only when a tier
 # fails, so the cheap model belongs at the front.
-SUBAGENT_LADDER = ["lfm3:1.7b-qad", "lfm3-omni:2b", "minicpm5:2b-sharp", "qwen3.5:4b-mtp"]
+SUBAGENT_LADDER = ["lfm3:1.7b-qad", "lfm3-omni:2b", "qwen3.5:4b-mtp", "minicpm5:2b-sharp"]
 
 
 def _installed_models(root: Path) -> set[str]:

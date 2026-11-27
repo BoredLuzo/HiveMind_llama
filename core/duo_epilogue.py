@@ -155,6 +155,18 @@ async def _duo_session_epilogue(ctx, ps):
     # ChunkState.combine_outputs() handles the merging + completion notes.
     _combined_coder_out = ps._cs.combine_outputs(fallback_coder_out=ps.coder_out)
     _duo_session_out = _combined_coder_out
+    if not str(_duo_session_out or "").strip():
+        _tc_sum = str(ps.carry.get("_last_task_complete_summary") or "").strip()
+        if _tc_sum:
+            _duo_session_out = _tc_sum
+        elif _written_files:
+            _wf_list = sorted(set(_written_files))
+            _duo_session_out = (
+                f"[Completed agentic run; files changed ({len(_wf_list)}): "
+                + ", ".join(_wf_list[:12])
+                + ("..." if len(_wf_list) > 12 else "")
+                + "]"
+            )
 
     _ratings_agentic = bool(ctx.settings.get("duo_peer_ratings_agentic", False))
     _rating_source = _combined_coder_out or coder_out

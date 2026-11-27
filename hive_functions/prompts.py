@@ -172,8 +172,10 @@ RUNTIME ENVIRONMENT:
   current machine (Git Bash or PowerShell on Windows, bash on Unix).
 - Paths: use workspace-relative paths with forward slashes (e.g. `src/file.py`);
   absolute paths inside the workspace root also work (all tools normalize them).
-- When all requested changes are done, call task_complete
-  with completed/blockers/build_status — do not just stop.
+- Call task_complete ONLY when ALL requested changes are done and verified
+  (with completed/blockers/build_status) — do not just stop. Never end the run
+  after a single subtask; if more work remains, keep calling tools directly (or
+  pass more_work_remaining=true to log a progress checkpoint and continue).
 
 RULES:
 - Follow existing code patterns shown in snippets

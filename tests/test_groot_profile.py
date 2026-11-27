@@ -95,13 +95,14 @@ else:
               blk.get("temperature") == 0.6 and blk.get("presence_penalty") == 0.0,
               f"({blk.get('temperature')}/{blk.get('presence_penalty')})")
 
-# models.json alias
+# models.json alias (only when Groot GGUF is installed on this host)
 if MODELS.exists():
     m = json.loads(MODELS.read_text(encoding="utf-8"))
     alias = m.get("groot:19b-a3b-261023")
-    check("models.json alias present", bool(alias), str(alias)[-40:] if alias else "")
-    check("alias points at the Q4_K_M gguf",
-          bool(alias) and alias.lower().endswith("groot-19b-a3b-261023-q4_k_m.gguf"))
+    if alias or (_MODELS / "Groot-19B-A3B-261023-Q4_K_M.gguf").exists():
+        check("models.json alias present", bool(alias), str(alias)[-40:] if alias else "")
+        check("alias points at the Q4_K_M gguf",
+              bool(alias) and alias.lower().endswith("groot-19b-a3b-261023-q4_k_m.gguf"))
     # b12001 knows arch lfm3 (PR #31252); b11889 did not. The alias is
     # legitimate now - it just needs the right build.
     check("lfm3 alias present (needs b12001+, arch lfm3)",

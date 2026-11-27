@@ -135,7 +135,7 @@ from unittest import mock  # noqa: E402
 from backend import llama_server_manager as LSM, llama_start_phases as LSP, manager_load as ML  # noqa: E402
 
 check("nemotron-3.5-bolt:e4b declares DFlash drafter n_max=7",
-      REG.get_dflash_draft("nemotron-3.5-bolt:e4b") == "Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf"
+      REG.get_dflash_draft("nemotron-3.5-bolt:e4b") == "Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf"
       and REG.get_dflash_draft_n_max("nemotron-3.5-bolt:e4b") == 7)
 _fake_mgr = LSM.LlamaServerManager.__new__(LSM.LlamaServerManager)
 check("_speculation_planned returns True for DFlash-configured model",

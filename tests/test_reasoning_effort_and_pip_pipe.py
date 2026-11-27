@@ -29,6 +29,32 @@ check = h.check
 # ── 1. normalize_reasoning_effort, resolve_reasoning_effort & schema meta ─────
 import settings_defaults as SD  # noqa: E402
 import core.model_sampling as MS  # noqa: E402
+import backend.gguf_meta as _GM_HERMETIC  # noqa: E402
+
+# Keep this suite hermetic on hosts that do not have Inkling-2-Mini-UD-IQ3_XXS.gguf
+# on disk: when get_effective_reasoning_info finds no local GGUF template for
+# "inkling-2-mini-ud", supply the model's known GGUF effort capabilities.
+_orig_eff_ri = _GM_HERMETIC.get_effective_reasoning_info
+
+
+def _hermetic_eff_ri(model_name: str):
+    info = _orig_eff_ri(model_name)
+    if (
+        str(model_name or "").strip().lower() == "inkling-2-mini-ud"
+        and info.get("template_source") == "none"
+    ):
+        return {
+            "mode": "effort",
+            "levels": ["none", "minimal", "low", "medium", "high", "max"],
+            "accepts_none_effort": True,
+            "supports_enable_thinking": True,
+            "template_default": "medium",
+            "template_source": "gguf",
+        }
+    return info
+
+
+_GM_HERMETIC.get_effective_reasoning_info = _hermetic_eff_ri
 
 check(
     "DEFAULT_SETTINGS + SETTINGS_UI_META expose reasoning_effort='auto'",

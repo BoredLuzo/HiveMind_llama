@@ -2,7 +2,7 @@
   "model": "nvidia-nemotron-3.5-bolt:e4b",
   "capabilities": {
     "thinking": true,
-    "vision": false,
+    "vision": true,
     "tool_call": true
   },
   "vision_preprocessing": false,
@@ -17,12 +17,13 @@
   "moe_cpu_experts": 0,
   "mtp": false,
   "gpu_layers": null,
-  "mmproj_filename": null,
+  "mmproj_filename": "mmproj-nvidia-nemotron-3.5-bolt-e4b-q8_0.gguf",
   "vram_gb_override": null,
   "kv_bytes_per_token": 5120,
   "draft_overhead_mib": 950,
-  "dflash_draft_filename": "Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf",
+  "dflash_draft_filename": "Nemotron-3.5-Bolt-E4B-DFlash-Q8_0.gguf",
   "dflash_draft_alternates": [
+    "Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf",
     "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf"
   ],
   "dflash_draft_n_max": 7,

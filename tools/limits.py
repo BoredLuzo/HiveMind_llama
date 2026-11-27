@@ -30,14 +30,12 @@ PREFILL_MIN_PROMPT_TOKENS = 512
 # core/budgets.py persists a per-model EMA from prompt_n/prompt_ms telemetry.
 PREFILL_TPS_DEFAULT = 20.0
 
-# ── read-ladder thresholds (2026-10-17) ─────────────────────────────────────
-# READ_LADDER_SAME_PATH: repeated reads of ONE path with no write in between
-# (the model is stuck on that file). READ_LADDER_WIDE: reads across DIFFERENT
-# paths with no write at all (explores but never implements) - the case the
-# hint text describes. Deliberately late so normal multi-file exploration of a
-# fresh codebase does not nag; any write/bash resets both counters.
-READ_LADDER_SAME_PATH = 3
-READ_LADDER_WIDE = 8
+# ── same-file read-loop abort threshold (2026-11-27) ───────────────────────
+# Reading many DIFFERENT files (or sequential line ranges of a big file) is
+# normal repo work and must never inject a Read-Ladder hint. Only looping on
+# the SAME file/slice (including repeated [SKIP:] calls) with no write/edit/
+# test/bash in between aborts the run as loop_detected.
+READ_SAME_FILE_ABORT = 5
 
 # ── fractions of n_ctx (the actual dials) ───────────────────────────────────
 # Tool-result cap:      0.12 × n_ctx × cpt, clamp(TOOL_RESULT_MIN/MAX)

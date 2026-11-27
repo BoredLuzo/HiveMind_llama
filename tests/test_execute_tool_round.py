@@ -331,46 +331,49 @@ res, hooks, msgs, rs, seen, ltl = run_round(
     duo_deadline_at=_deadline)
 check("deadline-grace not on failure", run_round.last_trs.duo_deadline_at < time.monotonic() + 299)
 
-# ── 15. READ-LADDER PATH-RESET (2026-09-09): only same-path re-reads
-#        escalate; different files reset the counter. ──────────────────────
+# ── 15. SAME-FILE READ-LOOP GUARD (2026-11-27): replaces Read-Ladder;
+#        only repeated reads of the SAME file abort (5x), different files stay silent. ──
 _HANDLERS["read_file"] = "content"
-# 3x SAME path with differing args (identical calls are caught earlier by
-# the sig-based loop detection, so vary the args like a real re-read does)
 _prior_write = [{"role": "tool", "name": "write_file", "content": "[write_file: ok]", "tool_call_id": "w1"}]
+# 5x SAME path with differing non-range args -> aborts as loop_detected
 res, hooks, msgs, rs, seen, ltl = run_round([
     tc("read_file", {"path": "a.py", "offset": 1}),
     tc("read_file", {"path": "a.py", "offset": 2}),
     tc("read_file", {"path": "a.py", "offset": 3}),
+    tc("read_file", {"path": "a.py", "offset": 4}),
+    tc("read_file", {"path": "a.py", "offset": 5}),
 ], dtool_msgs=list(_prior_write))
-check("ladder fires on same-path x3", any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
-# 3x DIFFERENT paths -> NO ladder (this was the false positive)
+check("same-file read loop aborts at 5x without READ LADDER hint",
+      res.loop_detected is True and not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# 3x DIFFERENT paths -> no abort, no hint
 res, hooks, msgs, rs, seen, ltl = run_round([
     tc("read_file", {"path": "a.py"}),
     tc("read_file", {"path": "b.py"}),
     tc("read_file", {"path": "c.py"}),
 ])
-check("ladder silent across different paths",
-      not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
-# A-B-A pattern: path change resets, so no ladder
+check("different paths stay silent without abort",
+      res.loop_detected is False and not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# A-B-A pattern: below threshold, no abort
 res, hooks, msgs, rs, seen, ltl = run_round([
     tc("read_file", {"path": "a.py"}),
     tc("read_file", {"path": "b.py"}),
     tc("read_file", {"path": "a.py"}),
 ])
-check("ladder silent on A-B-A reads",
-      not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
-# write between re-reads resets (existing behavior, regression guard)
+check("A-B-A reads stay silent without abort",
+      res.loop_detected is False and not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# write between re-reads resets counter
 _HANDLERS["write_file"] = "[write_file: created 'w.txt']"
 res, hooks, msgs, rs, seen, ltl = run_round([
-    tc("read_file", {"path": "a.py"}),
-    tc("read_file", {"path": "a.py"}),
+    tc("read_file", {"path": "a.py", "offset": 1}),
+    tc("read_file", {"path": "a.py", "offset": 2}),
+    tc("read_file", {"path": "a.py", "offset": 3}),
     tc("write_file", {"path": "w.txt", "content": "x"}),
-    tc("read_file", {"path": "a.py"}),
+    tc("read_file", {"path": "a.py", "offset": 4}),
+    tc("read_file", {"path": "a.py", "offset": 5}),
 ])
-check("ladder silent after write reset",
-      not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+check("same-file read counter resets after write", res.loop_detected is False)
 
-# ── 16. LADDER-PERSIST (2026-09-09): the counter survives across rounds ──
+# ── 16. SAME-FILE READ COUNTER PERSISTS ACROSS ROUNDS ──
 from core.tool_exec_helpers import ToolRoundState as _TRS
 _slot_defs = dict(
     tool_ctx_lru=_LRU(), duo_deadline_at=time.monotonic() + 60,
@@ -383,15 +386,18 @@ _slot_defs = dict(
 )
 _persist_trs = _TRS(**_slot_defs)
 _prior_write = [{"role": "tool", "name": "write_file", "content": "[write_file: ok]", "tool_call_id": "w1"}]
-# round 1: one read (counter=1, was lost before the fix)
-run_round([tc("read_file", {"path": "a.py"})], trs=_persist_trs, dtool_msgs=list(_prior_write))
-# round 2: two more same-path reads (differing args -> distinct sigs)
-# -> ladder fires on the 3rd TOTAL read
-res, hooks, msgs, rs, seen, ltl = run_round([
+# round 1: 3 reads on same file (varying non-range args) -> not yet at 5x
+run_round([
+    tc("read_file", {"path": "a.py", "offset": 1}),
     tc("read_file", {"path": "a.py", "offset": 2}),
     tc("read_file", {"path": "a.py", "offset": 3}),
 ], trs=_persist_trs, dtool_msgs=list(_prior_write))
-check("ladder persists across rounds", any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# round 2: 2 more reads on same file -> reaches 5x total across rounds and aborts
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py", "offset": 4}),
+    tc("read_file", {"path": "a.py", "offset": 5}),
+], trs=_persist_trs, dtool_msgs=list(_prior_write))
+check("same-file read counter persists across rounds and aborts at 5x", res.loop_detected is True)
 
 # ── RUN-BASH-REPEAT HINT (2026-10-16): identical failing run_bash twice
 # with nothing changed in between -> hint injected (no abort, no loop flag).
@@ -474,5 +480,74 @@ _tc_r2, _, _, _, _, _ = run_round([tc("task_complete", {"summary": "done"})],
                                   trs=_tc_trs2, dtool_msgs=_tc_msgs2)
 check("0-mutation task_complete recognizes [run_bash: exit 0] verification",
       _tc_r2.task_complete_called is True)
+
+# ── 18. TASK-COMPLETE CHECKPOINT / MORE_WORK_REMAINING (2026-11-27) ───────
+from tools.handlers.misc import _inline_tool_task_complete
+from tools.definitions import _INLINE_CODING_TOOLS
+
+_tc_def = next(t["function"] for t in _INLINE_CODING_TOOLS if t["function"]["name"] == "task_complete")
+_tc_props = _tc_def["parameters"]["properties"]
+check("task_complete schema exposes optional boolean more_work_remaining",
+      _tc_props.get("more_work_remaining", {}).get("type") == "boolean"
+      and _tc_props.get("more_work_remaining", {}).get("default") is False
+      and _tc_def["parameters"].get("required") == ["status"])
+
+_cp_top = asyncio.run(_inline_tool_task_complete({
+    "status": {"completed": ["part 1"], "blockers": [], "build_status": "passing"},
+    "more_work_remaining": True,
+}, ".", False))
+check("task_complete handler emits CHECKPOINT marker when more_work_remaining=True",
+      "[task_complete: CHECKPOINT - continuing run]" in _cp_top
+      and "the run stays OPEN" in _cp_top)
+
+_cp_nested = asyncio.run(_inline_tool_task_complete({
+    "status": {"completed": ["part 1"], "blockers": [], "build_status": "untested",
+               "more_work_remaining": "true"},
+}, ".", False))
+check("task_complete handler accepts nested string more_work_remaining='true'",
+      "[task_complete: CHECKPOINT - continuing run]" in _cp_nested)
+
+_cp_inprog = asyncio.run(_inline_tool_task_complete({
+    "status": {"completed": ["part 1"], "blockers": [], "build_status": "in_progress"},
+}, ".", False))
+check("task_complete handler treats build_status='in_progress' as checkpoint",
+      "[task_complete: CHECKPOINT - continuing run]" in _cp_inprog)
+
+_cp_final = asyncio.run(_inline_tool_task_complete({
+    "status": {"completed": ["part 1", "part 2"], "blockers": [], "build_status": "passing"},
+    "more_work_remaining": False,
+}, ".", False))
+check("task_complete handler emits normal [task_complete] when more_work_remaining=False",
+      _cp_final.startswith("[task_complete] Build: passing")
+      and "CHECKPOINT" not in _cp_final)
+
+_HANDLERS["task_complete"] = _cp_top
+_cp_trs = _TRS(**{**_slot_defs, "tool_error_retries": {}, "call_sigs": []})
+_cp_msgs = [
+    {"role": "tool", "name": "run_bash", "tool_call_id": "rb_cp",
+     "content": "[run_bash: exit 0]\nAll checks passed"},
+]
+_cp_r1, _, _cp_m1, _, _, _ = run_round(
+    [tc("task_complete", {
+        "status": {"completed": ["subtask 1"], "blockers": [], "build_status": "passing"},
+        "more_work_remaining": True,
+    })],
+    trs=_cp_trs, dtool_msgs=_cp_msgs,
+)
+check("checkpoint task_complete keeps run open and resets tc_consecutive",
+      _cp_r1.task_complete_called is False
+      and _cp_trs.tc_consecutive == [0]
+      and any("[task_complete: CHECKPOINT" in str(m.get("content", "")) for m in _cp_m1))
+
+_HANDLERS["task_complete"] = _cp_final
+_cp_r2, _, _, _, _, _ = run_round(
+    [tc("task_complete", {
+        "status": {"completed": ["subtask 1", "subtask 2"], "blockers": [], "build_status": "passing"},
+        "more_work_remaining": False,
+    })],
+    trs=_cp_trs, dtool_msgs=_cp_m1,
+)
+check("final task_complete after checkpoint ends run cleanly",
+      _cp_r2.task_complete_called is True)
 
 sys.exit(h.finish("execute_tool_round"))
