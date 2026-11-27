@@ -2045,7 +2045,12 @@ def _enforce_read_write_guards(
                         f"Fix: Call read_file('{_ap_raw}') first, then retry apply_patch."
                     ), _resolve_hint
 
-    if name == "read_file" and "path" in args:
+    _is_batch_read_post = (
+        name == "read_file"
+        and isinstance(args.get("paths"), list)
+        and len(args.get("paths") or []) > 0
+    )
+    if name == "read_file" and "path" in args and not _is_batch_read_post:
         _rp_str = _normalize_tool_path(args["path"], workspace)
         _ctx_set = _files_in_context.get(None)
         if _ctx_set and _rp_str in _ctx_set:
@@ -2112,7 +2117,7 @@ def _enforce_read_write_guards(
         return _err, _resolve_hint
     _path_based_tools = {"read_file", "get_signatures", "patch_file", "edit_file", "write_file", "replace_lines", "search_code"}
     _WRITE_TOOLS_NO_FUZZY = {"patch_file", "edit_file", "write_file", "write_file_append", "replace_lines"}
-    if name in _path_based_tools and "path" in args:
+    if name in _path_based_tools and "path" in args and not _is_batch_read_post:
         requested = args["path"]
         try:
             _req_exists = _inline_resolve_path(workspace, requested).exists()
@@ -2161,7 +2166,12 @@ async def _post_dispatch_inline_hooks(
         # so the model reads the guidance together with the outcome
         _result = f"{_result}\n[USER NOTE]: {_appr_note}"
 
-    if name == "read_file" and "path" in args:
+    _is_batch_read_post = (
+        name == "read_file"
+        and isinstance(args.get("paths"), list)
+        and len(args.get("paths") or []) > 0
+    )
+    if name == "read_file" and "path" in args and not _is_batch_read_post:
         _is_range_read = bool(args.get("start_line") or args.get("end_line"))
         _rp_ok = _normalize_tool_path(args["path"], workspace)
         if _result.startswith("[TOOL_ERROR"):

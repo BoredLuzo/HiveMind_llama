@@ -254,7 +254,122 @@ def _fast_newline_count(p: Path, cap: int = 401) -> tuple:
     return _count, False
 
 
+_MAX_BATCH_READ_FILES = 20
+
+
+async def _read_multiple_files_batch(
+    raw_paths: list[str],
+    workspace: Path,
+    workspace_lock: str | None,
+) -> str:
+    from core.budgets import active as _bgt_active
+    from tools.runner import (
+        _files_read_in_run as _batch_read_cv,
+        _files_seen_in_run as _batch_seen_cv,
+        _normalize_tool_path as _batch_ntp,
+        _read_signatures as _batch_sigs,
+        _record_read_file_stat as _batch_stat,
+    )
+
+    deduped: list[str] = []
+    seen_req: set[str] = set()
+    for item in raw_paths:
+        s = str(item or "").strip()
+        if s and s not in seen_req:
+            seen_req.add(s)
+            deduped.append(s)
+    if not deduped:
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            "read_file batch requires at least one non-empty file path.",
+            tool="read_file",
+        )
+
+    deferred: list[str] = []
+    if len(deduped) > _MAX_BATCH_READ_FILES:
+        deferred.extend(deduped[_MAX_BATCH_READ_FILES:])
+        deduped = deduped[:_MAX_BATCH_READ_FILES]
+
+    total_cap = max(8000, int(getattr(_bgt_active(), "read_char_cap", 16000) or 16000))
+    footer_reserve = 300
+    read_set = _batch_read_cv.get(None)
+    seen_set = _batch_seen_cv.get(None)
+
+    blocks: list[str] = []
+    used_chars = 0
+    for idx, req_path in enumerate(deduped):
+        fp = _inline_resolve_path(workspace, req_path)
+        if err := _inline_check_workspace(fp, workspace_lock, "read_file"):
+            blocks.append(f"=== [{req_path}] ===\n{err}")
+            used_chars += len(blocks[-1]) + 2
+            continue
+        if not fp.exists() or not fp.is_file():
+            blocks.append(f"=== [{req_path}] ===\n[read_file error: file not found or is a directory: '{req_path}']")
+            used_chars += len(blocks[-1]) + 2
+            continue
+        try:
+            is_bin, sz_bytes, full_text = await asyncio.to_thread(
+                _read_full_if_within_cap, fp, total_cap
+            )
+        except OSError as exc:
+            blocks.append(f"=== [{req_path}] ===\n[read_file error: {exc}]")
+            used_chars += len(blocks[-1]) + 2
+            continue
+        if is_bin:
+            blocks.append(f"=== [{req_path}] ===\n[binary file skipped]")
+            used_chars += len(blocks[-1]) + 2
+            continue
+        if full_text is None:
+            blocks.append(
+                f"=== [{req_path}] ===\n"
+                f"[FILE_TOO_LARGE_FOR_BATCH: ~{sz_bytes} chars > {total_cap} cap — "
+                "call get_signatures or read_file with start_line/end_line]"
+            )
+            used_chars += len(blocks[-1]) + 2
+            continue
+        n_lines = len(full_text.splitlines())
+        entry = f"=== [{fp} total lines: {n_lines}] ===\n{full_text}"
+        if blocks and (used_chars + len(entry) + 2 > total_cap - footer_reserve):
+            deferred = deduped[idx:] + deferred
+            break
+        blocks.append(entry)
+        used_chars += len(entry) + 2
+        try:
+            fp_res = fp.resolve()
+            st = fp_res.stat()
+            norm_k = _batch_ntp(str(fp_res), workspace)
+            if isinstance(read_set, set) and norm_k:
+                read_set.add(norm_k)
+            if isinstance(seen_set, set) and norm_k:
+                seen_set.add(norm_k)
+            if norm_k:
+                if norm_k not in _batch_sigs:
+                    while len(_batch_sigs) >= 2048:
+                        _batch_sigs.pop(next(iter(_batch_sigs)), None)
+                _batch_sigs[norm_k] = (st.st_mtime_ns, st.st_size)
+                _batch_stat(norm_k, len(full_text))
+        except OSError:
+            pass
+
+    out = "\n\n".join(blocks)
+    if deferred:
+        next_slice = deferred[:_MAX_BATCH_READ_FILES]
+        out += (
+            f"\n\n[BATCH READ CAP REACHED ({total_cap} chars): {len(deferred)} file(s) deferred — "
+            f"call read_file(path={json.dumps(next_slice[0])}, paths={json.dumps(next_slice[1:])}) next]"
+        )
+    return out
+
+
 async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
+    raw_paths = args.get("paths")
+    if isinstance(raw_paths, list) and raw_paths:
+        merged_paths = ([str(args["path"])] if str(args.get("path") or "").strip() else []) + [
+            str(x) for x in raw_paths if str(x or "").strip()
+        ]
+        if len(merged_paths) > 1 or not str(args.get("path") or "").strip():
+            return await _read_multiple_files_batch(merged_paths, workspace, workspace_lock)
+        args = {**args, "path": merged_paths[0]}
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "read_file"):
         return err

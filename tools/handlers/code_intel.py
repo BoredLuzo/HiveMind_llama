@@ -33,7 +33,7 @@ _HAS_REGEX_META = re.compile(r"[.^$*+?()\[\]{}|\\]")
 from .linting import _auto_lint_result
 
 async def _inline_tool_get_signatures(args: dict, workspace: Path, workspace_lock: str | None) -> str:
-    p = _inline_resolve_path(workspace, args.get("path", ""))
+    p = _inline_resolve_path(workspace, args.get("path", "."))
     if err := _inline_check_workspace(p, workspace_lock, "get_signatures"):
         return err
     try:
@@ -41,13 +41,35 @@ async def _inline_tool_get_signatures(args: dict, workspace: Path, workspace_loc
     except (TypeError, ValueError):
         max_items = 400
     max_items = max(20, min(400, max_items))  # H-audit: schema says max 400
+    try:
+        offset = max(0, int(args.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
     _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
+    if _sig_fn is None:
+        try:
+            from hive_functions.hivemind_feature.ast_tools import get_signatures_report as _sig_fn
+        except ImportError:
+            _sig_fn = None
     if _sig_fn is None:
         return _tool_error_response(
             "GET_SIGNATURES_UNAVAILABLE",
             "get_signatures: runtime dependencies not initialized.",
             tool="get_signatures" )
     try:
+        if p.is_dir():
+            from core.budgets import active as _bgt_sig
+            from hive_functions.hivemind_feature.ast_tools import get_directory_signatures_report
+            _sec_root = workspace_lock or workspace
+            _cap = int(getattr(_bgt_sig(), "read_char_cap", 16000) or 16000)
+            return await asyncio.to_thread(
+                get_directory_signatures_report,
+                p,
+                max_items,
+                offset=offset,
+                char_cap=_cap,
+                exclude_fn=lambda fp: is_secret_path(fp, _sec_root),
+            )
         return await asyncio.to_thread(_sig_fn, p, max_items)
     except Exception as e:
         return _tool_error_response(
@@ -220,6 +242,15 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
     if err := _inline_check_workspace(base, workspace_lock, "find_files"):
         return err
     try:
+        offset = max(0, int(args.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = max(1, min(500, int(args.get("limit") or _FIND_LIMIT)))
+    except (TypeError, ValueError):
+        limit = _FIND_LIMIT
+    stop_after = min(5000, offset + limit)
+    try:
         base_resolved = base.resolve()
         lock_resolved = Path(workspace_lock).resolve() if workspace_lock is not None else base_resolved
 
@@ -264,9 +295,9 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
                 for m in sorted(base.glob(pattern)):
                     if _entry_allowed(m):
                         found.append(m)
-                        if len(found) > _FIND_LIMIT:
-                            return found[:_FIND_LIMIT], True
-                return found, False
+                        if len(found) > stop_after:
+                            return found[offset:stop_after], True
+                return found[offset:stop_after], False
 
             _has_full_match = hasattr(PurePosixPath, "full_match")
             _glob_rx = None
@@ -301,12 +332,14 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
                     if _is_protected_path(fp):
                         continue
                     found.append(fp)
-                    if len(found) > _FIND_LIMIT:
-                        return found[:_FIND_LIMIT], True
-            return found, False
+                    if len(found) > stop_after:
+                        return found[offset:stop_after], True
+            return found[offset:stop_after], False
 
         files, has_more = await asyncio.to_thread(_collect)
         if not files:
+            if offset > 0:
+                return f"(no more matches for '{pattern}' at offset={offset} in {base})"
             return f"(no matches for '{pattern}' in {base})"
         lines = []
         for m in files:
@@ -317,7 +350,17 @@ async def _inline_tool_find_files(args: dict, workspace: Path, workspace_lock: s
             lines.append(str(rel))
         result = "\n".join(lines)
         if has_more:
-            result += f"\n… (more than {_FIND_LIMIT} matches — narrow pattern or path)"
+            next_off = offset + len(files)
+            if offset == 0 and limit == _FIND_LIMIT:
+                result += (
+                    f"\n… (more than {_FIND_LIMIT} matches — pass offset={next_off} or limit=500 "
+                    "for next batch, or narrow pattern/path)"
+                )
+            else:
+                result += (
+                    f"\n… (showing {offset + 1}-{next_off}; more matches exist — "
+                    f"pass offset={next_off} for next batch)"
+                )
         return result
     except Exception as e:
         return _tool_error_response(

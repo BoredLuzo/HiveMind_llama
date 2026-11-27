@@ -298,9 +298,18 @@ def _track_same_file_read(
     - Any write/edit/test/bash tool resets the map.
     """
     if dname == "read_file" and not args_parse_failed:
-        if is_tool_error or not read_path:
+        _batch_ps = dargs.get("paths") if isinstance(dargs, dict) else None
+        if is_tool_error or (not read_path and not _batch_ps):
             return "", 0
-        norm = str(read_path).replace("\\", "/").strip().lower()
+        if isinstance(_batch_ps, list) and _batch_ps:
+            _joined = sorted({
+                str(x).replace("\\", "/").strip().lower()
+                for x in ([read_path, *_batch_ps] if read_path else _batch_ps)
+                if str(x or "").strip()
+            })
+            norm = ",".join(_joined)
+        else:
+            norm = str(read_path).replace("\\", "/").strip().lower()
         s_line = ""
         e_line = ""
         if isinstance(dargs, dict):

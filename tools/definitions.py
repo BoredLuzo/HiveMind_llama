@@ -16,22 +16,24 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "read_file", "description": (
             "Read raw file content (ALWAYS call read_file before edit_file). "
-            "Returns header with total/selected line range; large files require start_line/end_line after get_signatures."
+            "Pass paths=[...] to batch-read up to 20 files within the read cap; large files require start_line/end_line after get_signatures."
         ),
         "parameters": {"type": "object", "properties": {
             "path":       {"type": "string", "description": "File path"},
-            "start_line": {"type": "integer", "description": "Start line (1-indexed)"},
-            "end_line":   {"type": "integer", "description": "End line (inclusive)"}
+            "paths":      {"type": "array", "items": {"type": "string"}, "description": "Extra paths (batch)"},
+            "start_line": {"type": "integer", "description": "1-based start"},
+            "end_line":   {"type": "integer", "description": "Inclusive end"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
         "name": "get_signatures",
         "description": (
-            "Return compact structural outline (classes, functions, line numbers) before read_file on large .py/.ts/.js files."
+            "Return compact structural outline (classes, functions, line numbers) for one file OR a whole directory tree (paginate via offset)."
         ),
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "File path"},
-            "max_items": {"type": "integer", "description": "Max signature lines (default 400)"}
+            "path": {"type": "string", "description": "File or dir path"},
+            "max_items": {"type": "integer", "description": "Max items (400)"},
+            "offset": {"type": "integer", "description": "Dir offset (0)"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
@@ -41,24 +43,26 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "symbol": {"type": "string", "description": "Symbol name"},
-            "path":   {"type": "string", "description": "Scan root (default workspace)"},
-            "max_items": {"type": "integer", "description": "Max results (default 160)"}
+            "path":   {"type": "string", "description": "Scan root"},
+            "max_items": {"type": "integer", "description": "Max results (160)"}
         }, "required": ["symbol"]}
     }},
     {"type": "function", "function": {
         "name": "list_dir", "description": "List immediate entries (files + subdirs, non-recursive, max 200) of a directory.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Directory path (default root)"}
+            "path": {"type": "string", "description": "Dir path"}
         }, "required": []}
     }},
     {"type": "function", "function": {
         "name": "find_files",
         "description": (
-            "Find files by glob pattern (e.g. '**/*.py', 'test_*.py'). For file contents use search_code."
+            "Find files by glob pattern (e.g. '**/*.py'). Supports offset and limit (up to 500) for large repos."
         ),
         "parameters": {"type": "object", "properties": {
             "pattern": {"type": "string", "description": "Glob pattern"},
-            "path":    {"type": "string", "description": "Search root (default .)"}
+            "path":    {"type": "string", "description": "Root (.)"},
+            "offset":  {"type": "integer", "description": "Offset (0)"},
+            "limit":   {"type": "integer", "description": "Limit (<=500)"}
         }, "required": ["pattern"]}
     }},
     {"type": "function", "function": {
@@ -111,15 +115,15 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "path":     {"type": "string", "description": "File path"},
-            "old_text": {"type": "string", "description": "Exact unique text from read_file"},
+            "old_text": {"type": "string", "description": "Unique verbatim old text"},
             "new_text": {"type": "string", "description": "Replacement text"},
-            "edits":    {"type": "array", "description": "Up to 20 ordered {old_text,new_text} replacements",
+            "edits":    {"type": "array", "description": "Up to 20 {old_text,new_text} pairs",
                          "items": {"type": "object", "properties": {
-                             "old_text": {"type": "string", "description": "Exact unique text"},
-                             "new_text": {"type": "string", "description": "Replacement text"}
+                             "old_text": {"type": "string", "description": "Unique old text"},
+                             "new_text": {"type": "string", "description": "New text"}
                          }, "required": ["old_text", "new_text"]}},
-            "confirm_shrink": {"type": "boolean", "description": "Allow replacing most of file"},
-            "allow_overwrite": {"type": "boolean", "description": "Allow dropping existing top-level symbols"}
+            "confirm_shrink": {"type": "boolean", "description": "Allow large shrink"},
+            "allow_overwrite": {"type": "boolean", "description": "Allow dropping symbols"}
         }, "required": ["path"]}
     }},
     {"type": "function", "function": {
@@ -156,10 +160,10 @@ _INLINE_CODING_TOOLS = [
         }, "required": ["cmd"]}
     }},
     {"type": "function", "function": {
-        "name": "git_commit", "description": "Commit the files you wrote in this run to git (scoped add + scoped commit; the whole index is never swept). Use after completing a chunk or a significant implementation step. Message should be a concise one-line description of what was implemented.",
+        "name": "git_commit", "description": "Scoped git commit for files modified in this run (never sweeps the whole index).",
         "parameters": {"type": "object", "properties": {
-            "message": {"type": "string", "description": "Commit message (one line, imperative mood, max 72 chars)"},
-            "paths": {"type": "array", "items": {"type": "string"}, "description": "Files to commit (workspace-relative, the files you changed in this run)"},
+            "message": {"type": "string", "description": "Concise one-line commit message (max 72 chars)"},
+            "paths": {"type": "array", "items": {"type": "string"}, "description": "Workspace-relative paths changed in this run"},
             "workspace": {"type": "string", "description": "Git repo root (omit: workspace)"}
         }, "required": ["message", "paths"]}
     }},
@@ -261,31 +265,24 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "browser",
         "description": (
-            "Headless browser (stays open across calls). Actions: navigate, snapshot "
-            "(page text + console/errors), screenshot, click, type, evaluate (JS), "
-            "console, close. In-workspace file:// URLs are auto-served over loopback "
-            "HTTP (ES modules/fetch work); outside-workspace file:// is rejected."
+            "Headless browser (stays open). Actions: navigate, snapshot, screenshot, click, type, evaluate, console, close. "
+            "Workspace file:// URLs auto-serve over loopback HTTP; outside-workspace file:// is rejected."
         ),
         "parameters": {"type": "object", "properties": {
             "action":   {"type": "string", "enum": ["navigate", "snapshot", "screenshot", "click", "type", "evaluate", "console", "close"],
-                         "description": "Which browser action to perform"},
-            "url":      {"type": "string", "description": "URL to navigate to (for action='navigate')"},
-            "selector": {"type": "string", "description": "CSS selector (for action='click'/'type')"},
-            "text":     {"type": "string", "description": "Text to type (for action='type')"},
-            "path":     {"type": "string", "description": "Output PNG path relative to the WORKSPACE (for action='screenshot', e.g. screenshots/ui.png)"},
-            "js":       {"type": "string", "description": "JavaScript expression (for action='evaluate')"},
+                         "description": "Browser action"},
+            "url":      {"type": "string", "description": "Target URL (navigate)"},
+            "selector": {"type": "string", "description": "CSS selector (click/type)"},
+            "text":     {"type": "string", "description": "Input text (type)"},
+            "path":     {"type": "string", "description": "Workspace PNG path (screenshot)"},
+            "js":       {"type": "string", "description": "JS expression (evaluate)"},
             "full_page": {"type": "boolean", "default": False,
-                          "description": "Capture full scrollable page (screenshot)"}
+                          "description": "Full-page screenshot"}
         }, "required": ["action"]}
     }},
     {"type": "function", "function": {
         "name": "get_datetime",
-        "description": (
-            "Return the current local date, time, weekday and timezone offset. "
-            "Use when the exact current date/time matters: date questions "
-            "('what date is it today?'), deadlines/relative dates, timestamps, "
-            "or checking whether something is recent."
-        ),
+        "description": "Return current local date, time, weekday and timezone offset.",
         "parameters": {"type": "object", "properties": {}, "required": []}
     }},
     {
@@ -295,18 +292,13 @@ _INLINE_CODING_TOOLS = [
             # facts itself - same HiveMindMemory the auto-extraction feeds,
             # so the fact is injected into every later run.
             "name": "remember",
-            "description": "Save a durable fact to long-term memory "
-                           "(key/value). Use for stable user/project facts "
-                           "the user wants kept across chats ('the_name = "
-                           "Pumuckel', 'deploy = 1.3.2'). An empty value "
-                           "DELETES the key.",
+            "description": "Save a durable user/project fact to long-term memory (key/value); omit/empty value deletes key.",
             "parameters": {"type": "object", "properties": {
                 "key": {"type": "string",
                         "description": "Short key, e.g. 'deploy' or "
                                        "'user_name'"},
                 "value": {"type": "string",
-                          "description": "The fact to store. Omit/empty to "
-                                         "DELETE the key."}
+                          "description": "Fact to store (empty deletes key)"}
             }, "required": ["key"]}
         }
     },
@@ -924,10 +916,8 @@ def _apply_budget_texts(tools: list, budgets) -> list:
         fn = t.get("function", {})
         if fn.get("name") == "read_file":
             out.append({**t, "function": {**fn, "description": (
-                "Read file content. ALWAYS read_file before edit_file on "
-                "existing files. Raw content, total-lines header. Over "
-                f"~{_rc} chars REFUSED (get_signatures first); capped at "
-                f"{_rc} chars — use start_line/end_line for sections."
+                f"Read file content up to {_rc} chars (pass paths=[...] to batch up to 20 files; over ~{_rc} chars REFUSED — get_signatures first, then start_line/end_line). "
+                "ALWAYS read_file before edit_file."
             )}})
         else:
             out.append(t)

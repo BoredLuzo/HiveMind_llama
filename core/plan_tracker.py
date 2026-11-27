@@ -582,8 +582,15 @@ class PlanTracker:
         if final_status == "NONE" and step.expected_ops:
             op = _TOOL_OP_MAP.get(tool_name, "read")
             if op not in step.expected_ops:
-                # Allow 'read' as fallback — reading before editing is normal
-                if not (op == "read" and "edit" in step.expected_ops):
+                # Read/search/list operations are non-destructive context gathering:
+                # never classify them as hard DEVIATES (at most soft MAYBE).
+                if op in ("read", "search", "list"):
+                    if "edit" not in step.expected_ops:
+                        reasons.append(
+                            f"tool '{tool_name}' (op={op}) used for context gathering during {step.expected_ops}"
+                        )
+                        final_status = "MAYBE"
+                else:
                     reasons.append(f"tool '{tool_name}' (op={op}) not in step expected_ops {step.expected_ops}")
                     final_status = "DEVIATES"
 
@@ -629,7 +636,9 @@ class PlanTracker:
 
         # ── Step 5: Classifier (only if MAYBE) ─────────────────────────────
         if final_status == "MAYBE" and self._classifier == "heuristic":
-            resolved = self._heuristic_classify(step, tool_summary, touched_paths)
+            resolved = self._heuristic_classify(
+                step, tool_summary, touched_paths, is_read_op=_is_read_op,
+            )
             if resolved == "DEVIATES":
                 final_status = "DEVIATES"
             # ALIGNED: keep MAYBE — soft warning surfaces via reminder()
@@ -653,12 +662,17 @@ class PlanTracker:
             self._plan.deviation.reasons.clear()
 
     def _heuristic_classify(self, step: PlanStep, tool_summary: str,
-                            touched_paths: list[str]) -> str:
+                            touched_paths: list[str], *,
+                            is_read_op: bool = False) -> str:
         """Heuristic classifier for MAYBE cases.
 
         Returns 'DEVIATES' if the evidence strongly suggests deviation,
-        'ALIGNED' (NONE) otherwise.
+        'ALIGNED' (NONE) otherwise. Non-destructive read/search/list calls
+        never escalate to hard DEVIATES so multi-file repo exploration does
+        not exhaust the replan budget after ~30 reads.
         """
+        if is_read_op:
+            return "ALIGNED"
         # Count total keyword overlap across all touched paths and summary
         combined = tool_summary + " " + " ".join(touched_paths)
         if step.keywords:

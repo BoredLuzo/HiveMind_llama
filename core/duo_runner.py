@@ -3980,6 +3980,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # emits the collected status events and keeps the
                         # LLM compression cycle below.
                         _can_compress = (_MAX_COMPRESSIONS != -1 or _force_compress_next)
+                        _shr_masked_paths: list[str] = []
                         _shr = _ctx_shrink_round(
                             dtool_ctx=_dtool_ctx,
                             compress_threshold=_compress_threshold,
@@ -3995,6 +3996,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             recent_focus_paths=_recent_focus_paths,
                             mask_enabled=bool(ctx.settings.get("duo_mask_before_compress", True)),
                             cache_horizon=int(_coder_real_at_msgs_len[0] or 0),
+                            evicted_paths_out=_shr_masked_paths,
                         )
                         _est_tokens = _shr.est_tokens
                         _guard_tokens = _shr.guard_tokens
@@ -4002,6 +4004,35 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         _compress_ok = _shr.compress_ok
                         for _shr_ev in _shr.events:
                             yield await ctx.emit(_shr_ev)
+                        if _shr_masked_paths:
+                            _masked_norms = {
+                                str(p).replace("\\", "/").rstrip("/").lower()
+                                for p in _shr_masked_paths if p
+                            }
+                            if _masked_norms:
+                                _seen_explore_paths.difference_update({
+                                    sp for sp in _seen_explore_paths
+                                    if any(
+                                        sp.split("#", 1)[0] == mn or sp.split("#", 1)[0].endswith("/" + mn)
+                                        for mn in _masked_norms
+                                    )
+                                })
+                                for _rk_m in list(_read_counts):
+                                    _rk_base = _rk_m.split("#", 1)[0].replace("\\", "/").lower()
+                                    if any(_rk_base == mn or _rk_base.endswith("/" + mn) for mn in _masked_norms):
+                                        _read_counts.pop(_rk_m, None)
+                                _sfr_map = state.get("_same_file_reads")
+                                if isinstance(_sfr_map, dict):
+                                    for _sf_k in list(_sfr_map):
+                                        _sf_base = _sf_k.split("|", 1)[0].replace("\\", "/").lower()
+                                        if any(_sf_base == mn or _sf_base.endswith("/" + mn) for mn in _masked_norms):
+                                            _sfr_map.pop(_sf_k, None)
+                        if _shr.masked_n > 0 and not _compress_ok:
+                            if _lifetime_tool_rounds < max(600, _max_tool_rounds * 10):
+                                _total_tool_rounds = 0
+                                _dr = -1
+                                _limit_warned = False
+                                ctx.exec_ctrl.sync_tool_rounds(0)
                         if _compress_ok:
                             # OUTSOURCED (split 2.8): the compression cycle → _duo_compress_cycle();
                             # the fail-streak round-loop exit comes back as ps.stop.
@@ -4066,6 +4097,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _reset_read_and_recovery_state(
                                     _consecutive_reads, _last_read_path, _read_ladder_fired, state
                                 )
+                                _sfr_cmp = state.get("_same_file_reads")
+                                if isinstance(_sfr_cmp, dict):
+                                    _sfr_cmp.clear()
+                                if _cc_ps._total_tool_rounds == 0:
+                                    _dr = -1
+                                    _limit_warned = False
                             _ctx_critical_warned = _cc_ps._ctx_critical_warned
                             _ctx_full_skips = _cc_ps._ctx_full_skips
                             _ctx_pressure_warned = _cc_ps._ctx_pressure_warned
@@ -4222,6 +4259,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         if _tbg.action == "break":
                             break
                         if _tbg.action == "continue":
+                            _dr -= 1
                             continue
                         # TOOLCALL-SANITIZE (2026-09-06): never send assistant
                         # tool_calls with malformed JSON args (llama 500 re-parse).
@@ -4399,6 +4437,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             # the block's only continue source is force_compress.
                             _force_compress_next = _force_compress_next or bool(
                                 (_wait_ps.result or {}).get("force_compress"))
+                            _dr -= 1
                             continue
                         _dr_tcs = _wait_ps.dr_tcs
                         _drop_len = (" — finish_reason=length (output token limit reached)"
@@ -4823,7 +4862,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         if _round_wrote_file:
                             _no_write_rounds = 0
                             _no_write_nudged = False
-                        else:
+                        elif not _read_only_task and not _eg.explored_new:
                             _no_write_rounds += 1
                         _round_wrote_file = False
                         _no_write_threshold = 14 if ctx.duo_config.until_finished else 8

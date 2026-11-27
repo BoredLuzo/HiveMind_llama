@@ -43,7 +43,7 @@ from core.duo_helpers import (
     _RE_UNIX_PATH, _RE_WIN_PATH, _compress_fail_streak_update,
 )
 from core.run_context import is_ctx_aborted
-from utils.file import normalize_tool_path as _normalize_tool_path
+from utils.file import is_secret_path as _is_secret_path, normalize_tool_path as _normalize_tool_path
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
 
 logger = logging.getLogger("hivemind.duo")
@@ -86,6 +86,9 @@ def _resolve_duo_compress_mode(ctx) -> str:
 # collected files and the cap are unchanged.
 _COMPRESS_INVENTORY_IGNORE_DIRS = ("node_modules", ".git", "dist",
                                    ".hive_uploads", "__pycache__")
+_FORMAT_EXTRA_IGNORE_PREFIXES = (
+    ".venv/", "venv/", "build/", ".pytest_cache/", ".ruff_cache/", ".mypy_cache/",
+)
 
 
 def _walk_workspace_inventory(ws_str: str, cap: int = 80) -> list[str]:
@@ -108,6 +111,70 @@ def _walk_workspace_inventory(ws_str: str, cap: int = 80) -> list[str]:
         if _inv_n >= cap:
             break
     return sorted(_inv)
+
+
+def _format_compress_inventory(
+    inv: list[str],
+    ws_str: str,
+    read_paths: Iterable[str] | None = None,
+    *,
+    sample_cap: int = 80,
+) -> str:
+    """Format post-compress workspace inventory with read/unread coverage tracking."""
+    if not inv:
+        return ""
+    filtered_inv = [
+        rel for rel in inv
+        if not rel.lower().startswith(_FORMAT_EXTRA_IGNORE_PREFIXES)
+        and not _is_secret_path(rel)
+    ]
+    if not filtered_inv:
+        return ""
+    inv = filtered_inv
+    ws_norm = _normalize_tool_path(ws_str, ws_str).rstrip("/")
+    read_rel: set[str] = set()
+    for rp in (read_paths or ()):
+        rp_n = str(rp or "").replace("\\", "/").rstrip("/").lower()
+        if not rp_n:
+            continue
+        if ws_norm and rp_n.startswith(ws_norm + "/"):
+            rp_n = rp_n[len(ws_norm) + 1:]
+        read_rel.add(rp_n.lstrip("./"))
+
+    if len(inv) <= sample_cap and not read_rel:
+        return (
+            "[PROJECT FILES - these exist in the workspace right now]\n"
+            + "\n".join(inv[:sample_cap])
+            + "\nread_file any file before editing it - do not edit from memory."
+        )
+
+    already_read: list[str] = []
+    unread: list[str] = []
+    for rel in inv:
+        if rel.lower() in read_rel:
+            already_read.append(rel)
+        else:
+            unread.append(rel)
+
+    lines: list[str] = ["[PROJECT FILES - these exist in the workspace right now]"]
+    if already_read or len(inv) > sample_cap:
+        lines.append(
+            f"[EXPLORATION PROGRESS: {len(already_read)}/{len(inv)} workspace files read in this run; "
+            f"{len(unread)} unread remaining]"
+        )
+    if unread:
+        if already_read:
+            lines.append("Next unread files:")
+        lines.extend(unread[:sample_cap])
+        if len(unread) > sample_cap:
+            lines.append(
+                f"… ({len(unread) - sample_cap} more unread files — use find_files(offset=...) "
+                "or get_signatures(path='.', offset=...) to inspect further batches)"
+            )
+    if already_read and len(inv) <= sample_cap:
+        lines.append("Already read in this run: " + ", ".join(already_read))
+    lines.append("read_file any file before editing it - do not edit from memory.")
+    return "\n".join(lines)
 
 
 def _merge_compress_usage(u1: dict | None, u2: dict | None) -> dict | None:
@@ -646,7 +713,7 @@ async def _duo_compress_cycle(ctx, ps):
         if _ctx_compressions < _MAX_COMPRESSIONS:
             _total_tool_rounds = 0
             ctx.exec_ctrl.sync_tool_rounds(0)
-            if _lifetime_tool_rounds >= _max_tool_rounds * 6:
+            if _lifetime_tool_rounds >= max(600, _max_tool_rounds * 10):
                 _MAX_COMPRESSIONS = -1
                 yield await ctx.emit({
                     "type": "system_warning",
@@ -797,13 +864,21 @@ async def _duo_compress_cycle(ctx, ps):
     # compression (when messages were rewritten) with a fresh workspace inventory.
     if _ws_str and _compression_rewrote_msgs:
         try:
-            _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
+            _s_inv = getattr(ctx, "settings", None)
+            _inv_cap = 2000
+            if isinstance(_s_inv, dict):
+                try:
+                    _inv_cap = max(80, min(5000, int(_s_inv.get("duo_index_max_files", 2000) or 2000)))
+                except (TypeError, ValueError):
+                    _inv_cap = 2000
+            _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str, _inv_cap)
             if _inv:
-                _inv_txt = (
-                    "[PROJECT FILES - these exist in the workspace right now]\n"
-                    + "\n".join(_inv[:80])
-                    + "\nread_file any file before editing it - do not edit from memory."
-                )
+                try:
+                    from tools.runner import get_read_file_stats as _get_rfs
+                    _rpaths = (_get_rfs() or {}).get("paths") or ()
+                except (ImportError, AttributeError, TypeError):
+                    _rpaths = ()
+                _inv_txt = _format_compress_inventory(_inv, _ws_str, _rpaths)
                 _append_or_merge_user_msg(_dtool_msgs, _inv_txt)
         except (OSError, RuntimeError, ValueError, TypeError) as _inv_err:
             logger.debug("[COMPRESS-INVENTORY] workspace inventory skipped: %s", _inv_err)

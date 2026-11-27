@@ -1,12 +1,16 @@
 ## [1.6.7] - 2026-11-27
 
-Continuous multi-turn Agentic chat history, `task_complete` checkpoint
-continuation, signature-rich static repo-map & JS IIFE/prototype extraction,
-same-file read-loop abort replacing the cross-file Read-Ladder hint, Direct-mode
-Action Approval & active workspace prompt, and a streamlined 9-model downloader
+Large-repo exploration (400+ files across Agentic & Direct modes), continuous
+multi-turn Agentic chat history, `task_complete` checkpoint continuation,
+signature-rich static repo-map & JS IIFE/prototype extraction, same-file
+read-loop abort replacing the cross-file Read-Ladder hint, Direct-mode Action
+Approval & active workspace prompt, and a streamlined 9-model downloader
 featuring `Nemotron-3.5-Bolt-E4B` `GSQ-RCO-IQ4_XS` (+ DFlash + Vision).
 
 ### Added
+- **Large-repository exploration: directory `get_signatures`, batch `read_file`, paginated `find_files`, Direct rolling compaction & unread coverage tracking (`hive_functions/hivemind_feature/ast_tools.py`, `tools/handlers/code_intel.py`, `tools/handlers/file_ops.py`, `tools/runner.py`, `tools/definitions.py`, `core/tool_guards.py`, `core/direct_runner.py`, `core/chat_tools_route.py`, `core/duo_compress_cycle.py`, `tests/test_large_repo_exploration.py`):**
+  - Extended `get_signatures` to scan whole directory trees with `offset` pagination inside the active read budget (secret-filtered), added `offset` + `limit` (up to `500`) to `find_files`, and added `paths=[...]` multi-file batch reading (up to 20 files per call) to `read_file` with automatic read-guard registration and budget deferral hints.
+  - Added deterministic sliding tool-context compaction (`make_tool_context_compactor`) to Direct Mode and Tool-Agent loops, and upgraded Agentic post-compression workspace re-anchors (up to `duo_index_max_files = 2000`, secret-filtered) with `[EXPLORATION PROGRESS: X/N workspace files read; M unread remaining]` plus next unread batches.
 - **Subtask checkpoint continuation for `task_complete` (`tools/definitions.py`, `tools/handlers/misc.py`, `core/tool_executor.py`, `hive_functions/prompts.py`, `tests/test_execute_tool_round.py`):**
   - Added optional boolean `more_work_remaining` parameter (plus nested `more_work_remaining` and `build_status` `"in_progress"`/`"partial"` handling) so models can log a subtask checkpoint (`[task_complete: CHECKPOINT - continuing run]`) and continue working inside the open run instead of ending prematurely after one subtask.
 - **Direct-mode Action Approval controls & active workspace prompt (`index.html`, `static/js/settings_io.js`, `core/direct_runner.py`):**
@@ -22,6 +26,9 @@ featuring `Nemotron-3.5-Bolt-E4B` `GSQ-RCO-IQ4_XS` (+ DFlash + Vision).
   - Tracks repeated `read_file` calls per `(path, start_line, end_line)` — including `[SKIP: already read]` repeats — and aborts cleanly as `loop_detected` at `READ_SAME_FILE_ABORT = 5` (resetting on writes/edits/tests/bash and compression).
 
 ### Fixed
+- **30-file exploration stall & false-positive Agentic exploration aborts (`core/plan_tracker.py`, `core/duo_runner.py`, `core/duo_ctx_meter.py`, `context/compression.py`, `core/duo_explore_gate.py`, `core/duo_helpers.py`, `core/tool_executor.py`, `tests/test_large_repo_exploration.py`):**
+  - Fixed `PlanTracker` classifying non-destructive `read_file`/`get_signatures`/`search_code`/`find_files`/`list_dir` calls on unrelated repo files as hard `DEVIATES`, which previously exhausted the replan cap and injected `[CRITICAL STALL]` after ~30 reads.
+  - Fixed `_dr` not resetting after context compression or observation masking, released masked `read_file` paths from `_seen_explore_paths`/`_read_counts`/`_same_file_reads`, suppressed `[NO PROGRESS]` nudges during new-target exploration, softened `[CTX CRITICAL]` while compressions remain available, and added a rolling `+240s` deadline lease every 10 newly read distinct files.
 - **Multi-turn Agentic chat history continuity (`static/js/voice.js`, `index.html`, `context/chat.py`, `core/duo_runner.py`, `core/duo_epilogue.py`, `core/duo_dtool_setup.py`, `tests/test_chat_history_chrome_strip.py`):**
   - Preserves `task_complete` summaries in saved chat `content` and recovers them from persisted HTML/HIVEBLOB1 blobs for existing chats, populates Duo session history fallbacks, and carries recent conversation turns into pre-explore bridges so follow-up Agentic runs no longer start with an empty context.
 - **Static repo-map signatures & JS IIFE/prototype/C++ extraction (`hive_functions/static_repomap.py`, `hive_functions/hivemind_feature/ast_tools.py`, `tests/test_static_repomap.py`, `tests/run_regressions.py`):**

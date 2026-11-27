@@ -498,6 +498,7 @@ SUITES = [
     ("wave3_guards_tools_prompts", "tests/test_wave3_guards_tools_prompts.py", 60),
     ("wave4_audit_consolidation", "tests/test_wave4_audit_consolidation.py", 60),
     ("perf_and_cleanup_wave5", "tests/test_perf_and_cleanup_wave5.py", 45),
+    ("large_repo_exploration", "tests/test_large_repo_exploration.py", 45),
 
 ]
 

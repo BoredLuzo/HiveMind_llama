@@ -267,7 +267,10 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         from tools.definitions import _get_inline_tools as _tools_fn
         from backend.llama_client import manager as _mgr
         from core.tool_loop import ToolLoop, ToolLoopConfig
-        from core.tool_guards import repeat_guard as _repeat_guard
+        from core.tool_guards import (
+            make_tool_context_compactor as _make_tool_compactor,
+            repeat_guard as _repeat_guard,
+        )
         import httpx as _httpx
     except Exception as _e:
         _direct_log.warning("[Direct-Tools] unavailable: %s", _e)
@@ -443,6 +446,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                 settings=_settings_dict,
                 # Direct chat: a plain answer without tools is a valid final answer.
                 require_tool_call=False,
+                compress_enabled=True,
                 retry_on_5xx=True, retry_on_grammar_crash=True,
                 retry_on_context_overflow=True,
             ),
@@ -462,6 +466,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             pause_gate=_tool_pause_gate,
             on_tool_result=_capture_tool_result,
             on_before_post=_capture_msgs,
+            on_compress=_make_tool_compactor(int(_num_ctx or 8192)),
             # NO-PROGRESS (2026-11-08): identical repeated tool calls get one
             # nudge instead of silently burning rounds.
             on_after_round=_repeat_guard(),

@@ -27,6 +27,7 @@ _TEXT_FALLBACK_EXTS = {
 _REFERENCE_SKIP_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
     "dist", "build", ".idea", ".vscode",
+    ".pytest_cache", ".ruff_cache", ".mypy_cache", "coverage", ".tox", ".next", ".nuxt",
 }
 
 
@@ -359,10 +360,130 @@ def _js_ts_signatures(path: Path, text: str, max_items: int) -> str:
     return "\n".join(out)
 
 
+def _compact_file_outline(root: Path, fp: Path, max_per_file: int = 10) -> str | None:
+    try:
+        st = fp.stat()
+    except OSError:
+        return None
+    rel = fp.relative_to(root).as_posix() if fp.is_relative_to(root) else fp.as_posix()
+    if st.st_size > 512 * 1024:
+        return f"### {rel} (~{st.st_size // 1024} KB — skipped large file; use read_file with start_line/end_line)"
+    try:
+        text = fp.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    sample = text[:512]
+    if sample and (sum(1 for c in sample if ord(c) == 0 or (ord(c) < 32 and c not in "\n\r\t")) / len(sample)) > 0.10:
+        return None
+    n_lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+    ext = fp.suffix.lower()
+    if ext == ".py":
+        rep = _python_signatures(fp, text, max_items=max(20, max_per_file * 2))
+    elif ext in _JS_TS_EXTS:
+        rep = _js_ts_signatures(fp, text, max_items=max(20, max_per_file * 2))
+    elif ext in _REFERENCE_EXTS:
+        rep_lines = []
+        generic_re = re.compile(
+            r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:export\s+|async\s+|static\s+|final\s+|abstract\s+)*"
+            r"(?:class|def|function|fn|func|struct|enum|trait|interface|type)\s+[A-Za-z_]"
+        )
+        for idx, line in enumerate(text.splitlines(), 1):
+            if generic_re.search(line):
+                rep_lines.append(f"L{idx}: {line.strip()[:120]}")
+                if len(rep_lines) >= max_per_file:
+                    break
+        rep = "\n".join(rep_lines)
+    else:
+        return f"### {rel} ({n_lines}L)"
+
+    items: list[str] = []
+    for ln in rep.splitlines():
+        s = ln.strip()
+        if not s or s.startswith("[signatures]") or s.startswith("language=") or s.startswith("(no "):
+            continue
+        if ": " in s:
+            head, tail = s.split(": ", 1)
+            m_par = re.search(r"(\([^)]*\))", tail)
+            if m_par and not head.startswith("variable "):
+                par = re.sub(r"\s+", " ", m_par.group(1)).strip()
+                if len(par) > 48:
+                    par = par[:45].rstrip(", ") + "…)"
+                if " @L" in head:
+                    pfx, loc = head.rsplit(" @L", 1)
+                    s = f"{pfx}{par} @L{loc}"
+                else:
+                    s = f"{head}{par}"
+            else:
+                s = head
+        items.append(s[:100])
+        if len(items) >= max_per_file:
+            break
+    if not items:
+        return f"### {rel} ({n_lines}L)"
+    return f"### {rel} ({n_lines}L)\n  " + "\n  ".join(items)
+
+
+def get_directory_signatures_report(
+    dirpath: str | Path,
+    max_items: int = 400,
+    *,
+    offset: int = 0,
+    char_cap: int = 16000,
+    exclude_fn=None,
+) -> str:
+    p = Path(dirpath)
+    if not p.exists():
+        return f"[get_signatures error: path not found: {p}]"
+    if not p.is_dir():
+        return get_signatures_report(p, max_items=max_items)
+    all_files = _iter_reference_files(p, max_files=3000, exclude_fn=exclude_fn)
+    total = len(all_files)
+    if total == 0:
+        return f"[directory signatures] {p} — (no source/text files found)"
+    off = max(0, int(offset or 0))
+    if off >= total:
+        return (
+            f"[directory signatures] {p} — offset {off} is at/past total files ({total}). "
+            "All files in this directory have been listed."
+        )
+    page_max_files = max(10, min(200, int(max_items or 120)))
+    budget = max(2000, int(char_cap or 16000))
+    footer_reserve = 260
+    blocks: list[str] = []
+    used_chars = 80
+    idx = off
+    while idx < total and len(blocks) < page_max_files:
+        fp = all_files[idx]
+        entry = _compact_file_outline(p, fp)
+        idx += 1
+        if entry is None:
+            continue
+        add_len = len(entry) + 2
+        if blocks and (used_chars + add_len > budget - footer_reserve):
+            idx -= 1
+            break
+        blocks.append(entry)
+        used_chars += add_len
+
+    header = f"[directory signatures] {p} (files {off + 1}-{idx} of {total})"
+    body = "\n".join(blocks) if blocks else "(no readable text files in this slice)"
+    if idx < total:
+        rem = total - idx
+        footer = (
+            f"\n[more files: {rem} remaining — call get_signatures(path='{p.as_posix()}', offset={idx}) "
+            "for the next batch, or read_file(path=..., paths=[...]) on target files]"
+        )
+    else:
+        footer = f"\n[end of directory signatures: all {total} files covered]"
+    return f"{header}\n{body}{footer}"
+
+
 def get_signatures_report(filepath: str | Path, max_items: int = 400) -> str:
     p = Path(filepath)
     if not p.exists():
         return f"[get_signatures error: file not found: {p}]"
+    if p.is_dir():
+        return get_directory_signatures_report(p, max_items=max_items)
     if not p.is_file():
         return f"[get_signatures error: not a file: {p}]"
 

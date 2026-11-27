@@ -155,15 +155,19 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
             _tool_model, num_ctx=_tool_opts.get("num_ctx", 4096),
             vision=bool(effective_images))
         async with httpx.AsyncClient(timeout=_tool_http_timeout) as _tc:
+            from core.tool_guards import make_tool_context_compactor as _make_tool_compactor
             from core.tool_loop import ToolLoop, ToolLoopConfig
+            _ta_ctx = int(_tool_opts.get("num_ctx", 4096) or 4096)
             _loop = ToolLoop(
                 config=ToolLoopConfig(
                     stream=False, max_rounds=_tool_max_rounds, max_post_attempts=3,
                     model=_tool_model, temperature=_tool_opts.get("temperature", 0.2),
                     max_tokens=_tool_opts.get("num_predict", 1200),
-                    num_ctx=_tool_opts.get("num_ctx", 4096),
+                    num_ctx=_ta_ctx,
                     tools=_active_tools, tool_mode="tool_agent",
                     require_tool_call=False,
+                    compress_enabled=True,
+                    retry_on_context_overflow=True,
                     include_websearch=_tool_ws,
                     include_git=_tool_git,
                     settings=(ps.run_settings if ps.run_settings is not None else settings),
@@ -173,6 +177,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                 workspace=_ws_str,
                 run_id=run_id,
                 abort_check=_aborted,
+                on_compress=_make_tool_compactor(_ta_ctx),
                 on_after_round=_repeat_guard(),
             )
             async for _ev in _loop.run(_tool_loop_msgs):

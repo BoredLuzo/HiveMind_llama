@@ -1399,14 +1399,38 @@ async def _execute_tool_round_impl(
         # run-persistent dicts; test_execute_tool_round pins both paths.
         try:
             if _dname == "read_file":
-                _rbp = str((_dargs or {}).get("path", "") or "")
-                if _rbp:
+                _prev_seen_n = len(trs.reads_seen)
+                _cand_rpaths = [str((_dargs or {}).get("path", "") or "")]
+                if isinstance((_dargs or {}).get("paths"), list):
+                    _cand_rpaths.extend(str(x or "") for x in (_dargs.get("paths") or []))
+                for _rbp in _cand_rpaths:
+                    if not _rbp:
+                        continue
                     _rbn = os.path.normcase(os.path.normpath(_rbp))
                     # PERF-TELEMETRY: a read of an already-read path is a
                     # re-read (driven by truncation or compaction).
                     if _rbn in trs.reads_seen:
                         _perf["reread_count"] += 1
                     trs.reads_seen[_rbn] = True
+                _new_seen_n = len(trs.reads_seen)
+                # EXPLORE-PROGRESS LEASE: every 10 newly read distinct files in
+                # large-repo exploration refreshes a bounded +240s deadline lease
+                # (up to 60x = 600+ files). Stuck loops re-reading the same files
+                # never grow trs.reads_seen and still hit the wall-clock timeout.
+                if (
+                    trs.duo_deadline_at > 0
+                    and _new_seen_n > _prev_seen_n
+                    and (_new_seen_n // 10) > (_prev_seen_n // 10)
+                    and (_new_seen_n // 10) <= 60
+                ):
+                    _read_lease_at = time.monotonic() + 240.0
+                    if _read_lease_at > trs.duo_deadline_at:
+                        trs.duo_deadline_at = _read_lease_at
+                        result.deadline_extended_to = _read_lease_at
+                        _logger.info(
+                            "[EXPLORE-LEASE] %d distinct files read — deadline extended to +240s",
+                            _new_seen_n,
+                        )
             elif (_dname in _EDIT_TOOLS
                     and not _tool_call_failed(_dresult, _dname)
                     and len(trs.freshness_warned) < 4):

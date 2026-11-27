@@ -1002,6 +1002,11 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
             return True, loop_detected, last_write_round, round_wrote_file
     elif tn == "read_file":
         _raw_fp = str(ta.get("path", "") or "")
+        _batch_fp = ta.get("paths") if isinstance(ta, dict) else None
+        if isinstance(_batch_fp, list) and _batch_fp:
+            _raw_fp = ",".join(
+                sorted({str(x).strip() for x in ([_raw_fp, *_batch_fp] if _raw_fp else _batch_fp) if str(x or "").strip()})
+            )
         fp = os.path.normcase(os.path.normpath(_raw_fp)).replace("\\", "/")
         for _pfx in (
             (os.path.normcase(os.path.normpath(ws_str or "")).replace("\\", "/") + "/"),

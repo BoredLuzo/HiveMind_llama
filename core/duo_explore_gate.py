@@ -16,13 +16,17 @@ from hive_functions.chunking import compute_bash_changed, resolve_explore_reset
 
 logger = logging.getLogger("hivemind.duo")
 
-_EXPLORE_TOOLS = {"find_files", "search_code", "list_dir", "read_file"}
+_EXPLORE_TOOLS = {
+    "find_files", "search_code", "list_dir", "read_file",
+    "get_signatures", "find_references",
+}
 _WRITE_TOOLS = set(_BASE_WRITE_TOOLS) | {"undo_last", "run_bash", "run_python", "run_tests"}
 
 
 @dataclasses.dataclass
 class _ExploreRoundResult:
     explore_only_rounds: int = 0
+    explored_new: bool = False
     loop_detected: bool = False
     action: str = "proceed"          # "break" when the threshold is reached
     events: list = dataclasses.field(default_factory=list)
@@ -39,6 +43,7 @@ async def _explore_round_gate(
     res = _ExploreRoundResult(explore_only_rounds=explore_only_rounds)
     if round_tool_names and round_tool_names.issubset(_EXPLORE_TOOLS):
         _new_explore = _collect_new_explore_paths(dr_tcs, seen_explore_paths)
+        res.explored_new = bool(_new_explore)
         if not _new_explore:
             res.explore_only_rounds += 1
         _total_exports = sum(len(c.get("exports", [])) for c in (contracts_raw or []))

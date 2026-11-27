@@ -99,12 +99,17 @@ def _ctx_meter_round(
                     res.force_compress_next = True
     _ctx_pct = int((guard_tokens / dtool_ctx) * 100) if dtool_ctx > 0 else 0
     if _ctx_pct >= 85 and not res.ctx_critical_warned:
+        _can_still_compress = (max_compressions > 0 and ctx_compressions < max_compressions)
+        _crit_body = (
+            "Context will auto-compress shortly — prefer batching or targeted reads until compression runs."
+            if _can_still_compress
+            else "Stop reading new files. Complete current edits and call task_complete."
+        )
         res.messages.append({
             "role": "user",
             "content": (
                 "[RUNTIME NOTICE] "
-                f"[CTX CRITICAL: ~{_ctx_pct}% full] Stop reading new files. "
-                "Complete current edits and call task_complete."
+                f"[CTX CRITICAL: ~{_ctx_pct}% full] {_crit_body}"
             ),
         })
         res.ctx_critical_warned = True
@@ -137,6 +142,7 @@ def _ctx_shrink_round(
     can_compress, force_compress_next, total_tool_rounds, dtool_msgs,
     tool_ctx_lru, coder_real_prompt_tokens, coder_est_at_real,
     recent_focus_paths, mask_enabled, cache_horizon: int = 0,
+    evicted_paths_out: list[str] | None = None,
 ) -> _CtxShrinkResult:
     """Emergency-evict + mask-before-compress decision.
 
@@ -184,6 +190,7 @@ def _ctx_shrink_round(
             hard_floor_tokens=int(dtool_ctx * _EVICT_HARD_FLOOR_PCT),
             protect_paths=recent_focus_paths,
             cache_horizon=cache_horizon,
+            evicted_paths_out=evicted_paths_out,
         )
         if _evicted_n > 0:
             _real_before_evict = int(res.guard_tokens)
@@ -239,6 +246,7 @@ def _ctx_shrink_round(
                 hard_floor_tokens=int(dtool_ctx * _EVICT_HARD_FLOOR_PCT),
                 protect_paths=recent_focus_paths,
                 cache_horizon=cache_horizon,
+                evicted_paths_out=evicted_paths_out,
             )
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
                 AttributeError, IndexError) as _mask_err:

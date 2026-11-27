@@ -225,6 +225,7 @@ def _evict_stale_tool_outputs(
     hard_floor_tokens: int,
     protect_paths: list[str] | None = None,
     cache_horizon: int = 0,
+    evicted_paths_out: list[str] | None = None,
 ) -> int:
     """
     Phase 2 semantic eviction:
@@ -303,6 +304,8 @@ def _evict_stale_tool_outputs(
     # read ... the full content is in your context above]" while the content
     # was gone.
     if _evicted_read_paths:
+        if evicted_paths_out is not None:
+            evicted_paths_out.extend(_evicted_read_paths)
         _drop_read_guard_paths(_evicted_read_paths)
         # READ-DEDUP CONSISTENCY (audit 2026-10-24): the re-read dedup in
         # read_file answers "UNCHANGED — the content in your context above is
